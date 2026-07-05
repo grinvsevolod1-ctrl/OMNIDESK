@@ -31,10 +31,16 @@ export default async function AdminAccountsPage() {
         description="Централизованное подключение и управление аккаунтами Telegram, WhatsApp, VK и MAX. Каждому аккаунту обязательно назначается прокси — один прокси обслуживает не более одного аккаунта каждого типа."
       />
 
-      {!workerOnline ? (
+      {!isWorkerConfigured ? (
         <p className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-2.5 text-sm text-warning">
+          Воркер не настроен — задайте WORKER_SECRET и WORKER_URL, затем
+          запустите процесс воркера на VPS. Без него недоступен вход в Telegram
+          (VK и MAX подключаются без воркера).
+        </p>
+      ) : !workerOnline ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">
           Воркер не в сети — Telegram-вход требует запущенного процесса воркера
-          на VPS. VK и MAX подключаются без воркера.
+          на VPS (проверьте pm2). VK и MAX подключаются без воркера.
         </p>
       ) : null}
 
