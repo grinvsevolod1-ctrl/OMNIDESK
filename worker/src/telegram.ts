@@ -19,6 +19,15 @@ import { onInbound as onAutopilotInbound } from './autopilot.js'
 const TG_SEND_MIN_INTERVAL_MS = 1_200
 const TG_SEND_JITTER_MS = 800
 
+// History backfill. On connect we pull the last N messages of the most-recent
+// chats so an opened conversation shows real history instead of only the
+// messages that arrive live after connecting. Bounded + throttled so we never
+// trip Telegram's flood limits (a full sweep of every chat would get banned).
+const TG_DIALOG_LIMIT = 200
+const TG_BACKFILL_MAX_CHATS = 40
+const TG_BACKFILL_PER_CHAT = 25
+const TG_BACKFILL_THROTTLE_MS = 400
+
 /**
  * Extract a persistable peer record (kind + id + access_hash) from a GramJS
  * entity. Returns null for entities we can't address (e.g. deleted accounts).
@@ -399,8 +408,10 @@ export class TelegramSession {
     await repo.setSession(this.channelId, 'online', { markConnected: true })
     logger.info({ channelId: this.channelId }, 'Telegram session online')
     // Import existing chats so the inbox isn't empty after connecting. Runs in
-    // the background so going "online" isn't blocked by the history fetch.
-    void this.syncDialogs()
+    // the background so going "online" isn't blocked by the history fetch. This
+    // path also backfills recent per-chat message history so opened threads show
+    // real conversation, not just messages that arrive after connecting.
+    void this.syncDialogs({ backfill: true })
   }
 
   /**
@@ -408,13 +419,16 @@ export class TelegramSession {
    * manager sees their real conversation list, not just messages that arrive
    * after connecting. Idempotent: re-running just refreshes previews/unread.
    */
-  private async syncDialogs(): Promise<void> {
+  private async syncDialogs(opts?: { backfill?: boolean }): Promise<void> {
     if (!this.client) return
     // Don't backfill history into the inbox while paused.
     if (this.ingestPaused) return
     try {
-      const dialogs = await this.client.getDialogs({ limit: 100 })
+      const dialogs = await this.client.getDialogs({ limit: TG_DIALOG_LIMIT })
       let imported = 0
+      // How many chats we've backfilled message history for this sweep. Bounded
+      // by TG_BACKFILL_MAX_CHATS so a huge dialog list can't trigger a flood.
+      let backfilled = 0
       for (const dialog of dialogs) {
         try {
           // Skip Telegram's own service/notifications "channel" feed but keep
@@ -467,16 +481,101 @@ export class TelegramSession {
             lastFromMe: fromMe,
           })
           imported++
+
+          // Backfill recent message history for the most-recent chats so an
+          // opened thread shows real history. getDialogs returns newest-first,
+          // so the first N are the ones a manager is most likely to open.
+          if (
+            opts?.backfill &&
+            dialog.message && // skip empty chats
+            backfilled < TG_BACKFILL_MAX_CHATS
+          ) {
+            backfilled++
+            await this.backfillDialogHistory(entity, handle, isUser, name)
+            // Throttle between chats to stay well under Telegram flood limits.
+            await new Promise((r) => setTimeout(r, TG_BACKFILL_THROTTLE_MS))
+          }
         } catch (err) {
           logger.warn({ err }, 'telegram dialog import skipped')
         }
       }
       logger.info(
-        { channelId: this.channelId, imported },
+        { channelId: this.channelId, imported, backfilled },
         'Telegram dialogs synced',
       )
     } catch (err) {
       logger.error({ err }, 'telegram dialog sync failed')
+    }
+  }
+
+  /**
+   * Pull the last TG_BACKFILL_PER_CHAT messages of a single chat into the inbox
+   * so an opened conversation shows real history. Idempotent: ingestInbound
+   * de-duplicates on providerMessageId, so re-connecting never creates dupes,
+   * and countUnread:false means backfilling old chats doesn't light up unread
+   * badges. Uses only cached sender data (no per-message network calls) to keep
+   * the sweep flood-safe.
+   */
+  private async backfillDialogHistory(
+    entity: Api.User | Api.Chat | Api.Channel,
+    handle: string,
+    isUser: boolean,
+    contactName: string,
+  ): Promise<void> {
+    if (!this.client) return
+    try {
+      const messages = await this.client.getMessages(entity, {
+        limit: TG_BACKFILL_PER_CHAT,
+      })
+      // getMessages returns newest-first; ingest oldest-first so the stored
+      // thread keeps natural chronological order.
+      for (const msg of [...messages].reverse()) {
+        if (!msg) continue
+        const media = classifyTgMedia(msg)
+        const text = msg.message || (media ? media.placeholder : '')
+        if (!text && !media) continue // skip service/empty messages
+        const out = Boolean(msg.out)
+
+        // For groups, prefix the sender name using cached data only (msg.sender
+        // is populated by getMessages) — never await getSender() per message.
+        let body = text
+        if (!isUser && !out) {
+          const s = msg.sender as Api.User | null
+          const senderName =
+            s && 'firstName' in s
+              ? [s.firstName, s.lastName].filter(Boolean).join(' ') ||
+                (s.username ? `@${s.username}` : 'Участник')
+              : 'Участник'
+          body = `${senderName}: ${text}`
+        }
+
+        await repo.ingestInbound({
+          channelId: this.channelId,
+          managerId: this.managerId,
+          channelType: 'telegram',
+          contactName,
+          contactHandle: handle,
+          body,
+          direction: out ? 'out' : 'in',
+          author: out ? 'Вы' : undefined,
+          providerMessageId: String(msg.id),
+          createdAt: msg.date ? new Date(msg.date * 1000) : undefined,
+          countUnread: false,
+          ...(media
+            ? {
+                mediaType: media.mediaType,
+                mediaMime: media.mediaMime,
+                mediaName: media.mediaName,
+                mediaRef: { peer: handle, msgId: String(msg.id) },
+              }
+            : {}),
+        })
+      }
+    } catch (err) {
+      logger.warn(
+        { channelId: this.channelId, handle, err: errMessage(err) },
+        'telegram history backfill skipped',
+      )
     }
   }
 

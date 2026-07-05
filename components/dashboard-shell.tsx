@@ -2,7 +2,12 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useEffect, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import {
   BarChart3,
   Bot,
@@ -105,8 +110,42 @@ function NavLinks({
   collapsed?: boolean
   onNavigate?: () => void
 }) {
+  const navRef = useRef<HTMLElement>(null)
+  const activeRef = useRef<HTMLAnchorElement | null>(null)
+  // Position/size of the sliding "liquid" highlight behind the active item.
+  // Null until measured on the client so SSR doesn't render a misplaced pill.
+  const [pill, setPill] = useState<{ top: number; height: number } | null>(null)
+
+  useEffect(() => {
+    function measure() {
+      const el = activeRef.current
+      if (!el) {
+        setPill(null)
+        return
+      }
+      setPill({ top: el.offsetTop, height: el.offsetHeight })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+    // Re-measure when the route changes or the sidebar collapses (item metrics
+    // change), so the highlight glides to the newly active item.
+  }, [pathname, collapsed, nav])
+
   return (
-    <nav className="flex flex-col gap-1">
+    <nav ref={navRef} className="relative flex flex-col gap-1">
+      {/* macOS-style sliding highlight: a single element that springs between
+          items instead of each item toggling its own background instantly. */}
+      {pill ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 z-0 rounded-lg bg-sidebar-accent transition-[transform,height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+          style={{
+            transform: `translateY(${pill.top}px)`,
+            height: pill.height,
+          }}
+        />
+      ) : null}
       {nav.map((item) => {
         const active =
           pathname === item.href || pathname.startsWith(item.href + '/')
@@ -115,23 +154,23 @@ function NavLinks({
           <Link
             key={item.href}
             href={item.href}
+            ref={active ? activeRef : undefined}
             onClick={onNavigate}
             aria-label={item.label}
             className={cn(
-              'group relative flex items-center gap-2.5 rounded-lg text-sm font-medium transition-colors',
+              'group relative z-10 flex items-center gap-2.5 rounded-lg text-sm font-medium transition-colors duration-200',
               collapsed ? 'justify-center px-0 py-2.5' : 'px-3 py-2',
               active
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                ? 'text-sidebar-accent-foreground'
+                : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            {active ? (
-              <span
-                className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-foreground"
-                aria-hidden
-              />
-            ) : null}
-            <Icon className="size-4 shrink-0" />
+            <Icon
+              className={cn(
+                'size-4 shrink-0 transition-transform duration-200',
+                active && 'scale-110',
+              )}
+            />
             {!collapsed ? item.label : null}
           </Link>
         )
@@ -339,10 +378,26 @@ export function DashboardShell({
           </header>
 
           {fullBleed ? (
-            <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
+            <main className="min-h-0 flex-1 overflow-hidden">
+              {/* Keyed on the route so switching tabs replays a quick fade —
+                  the full-bleed inbox keeps its own height, so fade only. */}
+              <div
+                key={pathname}
+                className="flex h-full min-h-0 flex-col animate-in fade-in-0 duration-200 ease-out"
+              >
+                {children}
+              </div>
+            </main>
           ) : (
             <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-6 lg:px-8">
-              <div className="mx-auto w-full max-w-6xl">{children}</div>
+              {/* macOS-style page transition: fast fade + subtle rise, replayed
+                  on every route change via the pathname key. */}
+              <div
+                key={pathname}
+                className="mx-auto w-full max-w-6xl animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out"
+              >
+                {children}
+              </div>
             </main>
           )}
         </div>
