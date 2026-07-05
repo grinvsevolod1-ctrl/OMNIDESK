@@ -670,8 +670,8 @@ export async function listManagerAssignedProxies(
 ): Promise<Proxy[]> {
   const rows = await query<ProxyRow>(
     `SELECT * FROM proxies
-      WHERE manager_id = $1
-        AND (created_by_role = 'admin' OR created_by_manager_id <> $1)
+      WHERE manager_id = $1::uuid
+        AND (created_by_role = 'admin' OR created_by_manager_id <> $1::uuid)
       ORDER BY created_at DESC`,
     [managerId],
   )
@@ -1875,7 +1875,7 @@ export async function applyLunchSubstitution(
     // the owner), ordered deterministically so the round-robin cursor is stable.
     const subs = await query<{ id: string }>(
       `SELECT id FROM managers
-        WHERE status = 'active' AND on_lunch = false AND id <> $1
+        WHERE status = 'active' AND on_lunch = false AND id <> $1::uuid
         ORDER BY id ASC`,
       [ownerId],
     )

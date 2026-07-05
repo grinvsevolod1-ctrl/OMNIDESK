@@ -313,7 +313,7 @@ async function resolveLunchManager(ownerId: string): Promise<string> {
     // Owner away — gather available substitutes, deterministically ordered.
     const subs = await query<{ id: string }>(
       `SELECT id FROM managers
-        WHERE status = 'active' AND on_lunch = false AND id <> $1
+        WHERE status = 'active' AND on_lunch = false AND id <> $1::uuid
         ORDER BY id ASC`,
       [ownerId],
     )
