@@ -34,6 +34,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -431,7 +432,7 @@ function CreateAccountCard({
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                После нажатия «Подключить» здесь появится поле для кода из
+                После нажатия «Подключить» откроется окно для ввода кода из
                 Telegram.
               </p>
             )}
@@ -455,65 +456,107 @@ function CreateAccountCard({
         )}
       </div>
 
-      {/* Telegram code / password steps */}
-      {tgStep === 'code' ? (
-        <div className="mt-4 flex items-end gap-2 rounded-lg border border-border bg-muted/30 p-3">
-          <div className="flex flex-1 flex-col gap-1.5">
-            <Label>Код из Telegram</Label>
-            <Input
-              value={tgCode}
-              onChange={(e) => setTgCode(e.target.value)}
-              placeholder="12345"
-              inputMode="numeric"
-            />
-          </div>
-          <Button onClick={submitCode} disabled={pending}>
-            Отправить код
-          </Button>
-        </div>
-      ) : null}
-
-      {tgStep === 'password' ? (
-        <div className="mt-4 flex items-end gap-2 rounded-lg border border-border bg-muted/30 p-3">
-          <div className="flex flex-1 flex-col gap-1.5">
-            <Label>Пароль двухэтапной аутентификации</Label>
-            <Input
-              value={tgPassword}
-              onChange={(e) => setTgPassword(e.target.value)}
-              type="password"
-            />
-          </div>
-          <Button onClick={submitPassword} disabled={pending}>
-            Отправить пароль
-          </Button>
-        </div>
-      ) : null}
-
       <div className="mt-4 flex items-center gap-2">
-        {tgChannelId ? (
-          <Button variant="outline" onClick={resetForm} disabled={pending}>
-            Отменить
-          </Button>
-        ) : (
-          <Button
-            onClick={submitCreate}
-            disabled={pending || (type === 'telegram' && !workerOnline)}
-          >
-            {pending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Plus className="size-4" />
-            )}
-            Подключить
-          </Button>
-        )}
-        {tgChannelId ? (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" />
-            Ожидаем ответ Telegram…
-          </span>
-        ) : null}
+        <Button
+          onClick={submitCreate}
+          disabled={pending || (type === 'telegram' && !workerOnline)}
+        >
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Plus className="size-4" />
+          )}
+          Подключить
+        </Button>
       </div>
+
+      {/*
+        Telegram login modal. It opens automatically as soon as the connect flow
+        starts (tgChannelId is set) so the code / 2FA-password entry is
+        impossible to miss — previously these steps rendered as a small inline
+        box at the bottom of the card that was easy to overlook.
+      */}
+      <Dialog
+        open={Boolean(tgChannelId)}
+        onOpenChange={(o) => {
+          if (!o) resetForm()
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Подключение Telegram</DialogTitle>
+            <DialogDescription>
+              {phone ? `Номер ${phone}` : 'Вход в аккаунт Telegram'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {tgStep === 'code' ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label>Код из Telegram</Label>
+                <Input
+                  value={tgCode}
+                  onChange={(e) => setTgCode(e.target.value)}
+                  placeholder="12345"
+                  inputMode="numeric"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      submitCode()
+                    }
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Введите код, который пришёл в приложение Telegram или по SMS.
+                </p>
+              </div>
+              <Button onClick={submitCode} disabled={pending || !tgCode.trim()}>
+                {pending ? <Loader2 className="size-4 animate-spin" /> : null}
+                Отправить код
+              </Button>
+            </div>
+          ) : tgStep === 'password' ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label>Пароль двухэтапной аутентификации</Label>
+                <Input
+                  value={tgPassword}
+                  onChange={(e) => setTgPassword(e.target.value)}
+                  type="password"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      submitPassword()
+                    }
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  На аккаунте включена двухэтапная аутентификация — введите
+                  облачный пароль Telegram.
+                </p>
+              </div>
+              <Button
+                onClick={submitPassword}
+                disabled={pending || !tgPassword.trim()}
+              >
+                {pending ? <Loader2 className="size-4 animate-spin" /> : null}
+                Отправить пароль
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 py-4 text-sm text-muted-foreground">
+              <Loader2 className="size-5 animate-spin" />
+              Запрашиваем код у Telegram… Это может занять несколько секунд.
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={resetForm} disabled={pending}>
+              Отменить
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }
