@@ -96,11 +96,13 @@ export function AccountsAdmin({
   proxies,
   managers,
   proxyUsage,
+  workerOnline,
 }: {
   channels: AdminChannel[]
   proxies: Proxy[]
   managers: Manager[]
   proxyUsage: Record<string, string[]>
+  workerOnline: boolean
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -108,6 +110,7 @@ export function AccountsAdmin({
         proxies={proxies}
         managers={managers}
         proxyUsage={proxyUsage}
+        workerOnline={workerOnline}
       />
       <AccountsTable channels={channels} proxies={proxies} proxyUsage={proxyUsage} />
     </div>
@@ -120,10 +123,12 @@ function CreateAccountCard({
   proxies,
   managers,
   proxyUsage,
+  workerOnline,
 }: {
   proxies: Proxy[]
   managers: Manager[]
   proxyUsage: Record<string, string[]>
+  workerOnline: boolean
 }) {
   const [type, setType] = useState<CreatableType>('telegram')
   const [managerId, setManagerId] = useState('')
@@ -139,6 +144,11 @@ function CreateAccountCard({
   const [tgCode, setTgCode] = useState('')
   const [tgPassword, setTgPassword] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Wall-clock deadline for the login to leave the 'starting' state. If the
+  // worker is offline or the job is never claimed, the session status stays
+  // 'starting' forever and the code window never appears — so we stop polling
+  // and surface a clear error instead of spinning indefinitely.
+  const pollDeadlineRef = useRef<number>(0)
 
   const eligibleProxies = useMemo(
     () => proxies.filter((p) => proxyEligible(p, type, proxyUsage)),
@@ -166,6 +176,11 @@ function CreateAccountCard({
 
   function pollTelegram(channelId: string) {
     if (pollRef.current) clearInterval(pollRef.current)
+    // Allow up to 90s to reach a code/password/online/error state. Requesting
+    // the code from Telegram (through the account's proxy) can take a while, but
+    // if nothing happens by then the worker is almost certainly not processing
+    // the job — tell the admin instead of leaving them staring at a spinner.
+    pollDeadlineRef.current = Date.now() + 90_000
     pollRef.current = setInterval(async () => {
       const snap = await adminGetChannelStatusAction(channelId)
       if (!snap) return
@@ -183,6 +198,16 @@ function CreateAccountCard({
       ) {
         if (pollRef.current) clearInterval(pollRef.current)
         toast.error(snap.lastError || 'Не удалось подключить Telegram.')
+      } else if (
+        // Still 'starting'/'idle' past the deadline → the worker never picked
+        // up the job. Stop and explain, so the flow doesn't hang forever.
+        Date.now() > pollDeadlineRef.current &&
+        (snap.sessionStatus === 'starting' || snap.sessionStatus === 'idle')
+      ) {
+        if (pollRef.current) clearInterval(pollRef.current)
+        toast.error(
+          'Telegram не ответил. Убедитесь, что процесс воркера запущен на VPS и подключён к базе, затем попробуйте снова.',
+        )
       }
     }, 2000)
   }
@@ -202,6 +227,15 @@ function CreateAccountCard({
       if (type === 'telegram') {
         if (!phone.trim()) {
           toast.error('Введите номер телефона.')
+          return
+        }
+        // Telegram login is driven entirely by the worker (MTProto). If it's
+        // offline the job will queue but never run, so the code window would
+        // never appear. Block up-front with a clear reason instead.
+        if (!workerOnline) {
+          toast.error(
+            'Воркер не в сети. Telegram-вход требует запущенного процесса воркера на VPS — запустите его и повторите.',
+          )
           return
         }
         fd.set('phone', phone)
@@ -390,6 +424,17 @@ function CreateAccountCard({
               placeholder="+14155550132"
               disabled={Boolean(tgChannelId)}
             />
+            {!workerOnline ? (
+              <p className="text-xs text-warning">
+                Воркер не в сети — вход в Telegram сейчас недоступен. Запустите
+                процесс воркера на VPS, чтобы получить код подтверждения.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                После нажатия «Подключить» здесь появится поле для кода из
+                Telegram.
+              </p>
+            )}
           </div>
         ) : (
           <div className="flex flex-col gap-1.5 sm:col-span-2">
@@ -450,7 +495,10 @@ function CreateAccountCard({
             Отменить
           </Button>
         ) : (
-          <Button onClick={submitCreate} disabled={pending}>
+          <Button
+            onClick={submitCreate}
+            disabled={pending || (type === 'telegram' && !workerOnline)}
+          >
             {pending ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (

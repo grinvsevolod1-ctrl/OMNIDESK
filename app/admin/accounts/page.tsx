@@ -53,6 +53,7 @@ export default async function AdminAccountsPage() {
         proxies={proxies}
         managers={managers}
         proxyUsage={proxyUsage}
+        workerOnline={workerOnline}
       />
     </div>
   )
