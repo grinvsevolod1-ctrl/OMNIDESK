@@ -2021,13 +2021,22 @@ export function InboxView({
   )
     return false
   if (!q) return true
-      return (
+      // Match on contact/source metadata first (cheap), then fall back to a
+      // full-text scan of every message we've loaded for this thread so search
+      // covers the whole conversation history, not just the last message.
+      if (
         c.contactName.toLowerCase().includes(q) ||
         c.lastMessage.toLowerCase().includes(q) ||
         sourceLabel(c).toLowerCase().includes(q) ||
         (c.contactUsername?.toLowerCase().includes(q.replace(/^@/, '')) ??
           false)
-      )
+      ) {
+        return true
+      }
+      const msgs = localMessages[c.id]
+      return msgs
+        ? msgs.some((m) => m.body?.toLowerCase().includes(q))
+        : false
     })
     const byRecent = (a: Conversation, b: Conversation) => {
       const timeDelta =
@@ -2076,6 +2085,7 @@ export function InboxView({
     isMuted,
     showMuted,
     activeId,
+    localMessages,
   ])
 
   // When the channel-type filter changes, drop any selected sources that no
@@ -2616,10 +2626,10 @@ export function InboxView({
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Поиск"
-              className="h-9 rounded-full border-transparent bg-muted pl-9 text-sm focus-visible:bg-card"
-              aria-label="Поиск по диалогам"
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Поиск по диалогам и сообщениям"
+                  className="h-9 rounded-full border-transparent bg-muted pl-9 text-sm focus-visible:bg-card"
+                  aria-label="Поиск по диалогам и сообщениям"
             />
             {search ? (
               <button
