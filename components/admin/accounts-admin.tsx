@@ -683,8 +683,14 @@ function AccountRow({
           onClick={() => setConfirmOpen(true)}
           disabled={pending}
           aria-label="Удалить аккаунт"
+          title="Удалить аккаунт"
+          className="border-destructive/30 text-destructive hover:bg-destructive hover:text-destructive-foreground"
         >
-          <Trash2 className="size-4" />
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Trash2 className="size-4" />
+          )}
         </Button>
       </div>
 
