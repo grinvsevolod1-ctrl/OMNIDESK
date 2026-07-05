@@ -172,3 +172,17 @@
     display: none;
   }
 }
+
+/* Уважаем системную настройку «уменьшить движение»: у пользователей с этой
+   опцией (в т.ч. по требованиям доступности) отключаем все анимации,
+   переходы вкладок/страниц и плавную прокрутку, оставляя мгновенный отклик. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
