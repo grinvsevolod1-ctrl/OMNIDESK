@@ -7,6 +7,7 @@ import {
   updateWhatsappMessageStatus,
 } from '@/lib/data'
 import type { MediaType } from '@/lib/types'
+import { whatsappErrorText } from '@/lib/whatsapp-cloud'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 
 export const runtime = 'nodejs'
@@ -70,6 +71,13 @@ interface WaStatus {
   id?: string
   status?: string
   recipient_id?: string
+  /** Present on 'failed' statuses: the reason Meta rejected/couldn't deliver. */
+  errors?: {
+    code?: number
+    title?: string
+    message?: string
+    error_data?: { details?: string }
+  }[]
 }
 interface WaValue {
   metadata?: { phone_number_id?: string }
@@ -223,8 +231,19 @@ export async function POST(request: Request): Promise<Response> {
       for (const s of value.statuses ?? []) {
         const st = mapStatus(s.status)
         if (!st || !s.id) continue
+        // On failure, map Meta's error code to a human-readable Russian reason
+        // (24h window closed, number not on WhatsApp, token expired, …) so the
+        // panel shows WHY next to the "!" marker instead of a bare failed tick.
+        let reason: string | null = null
+        if (st === 'failed') {
+          const e = s.errors?.[0]
+          reason = whatsappErrorText(
+            e?.code,
+            e?.error_data?.details || e?.message || e?.title || 'Сообщение не доставлено WhatsApp.',
+          )
+        }
         try {
-          await updateWhatsappMessageStatus(s.id, st)
+          await updateWhatsappMessageStatus(s.id, st, reason)
           handled++
         } catch (err) {
           console.error('[v0] whatsapp webhook: status update failed:', err)

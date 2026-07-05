@@ -2648,6 +2648,11 @@ export async function recordVkInbound(input: {
   contactHandle: string
   body: string
   providerMessageId?: string | null
+  preview?: string
+  mediaType?: MediaType | null
+  mediaMime?: string | null
+  mediaName?: string | null
+  mediaRef?: Record<string, unknown> | null
 }) {
   return recordWebhookInbound({ channelType: 'vk', ...input })
 }
@@ -3089,6 +3094,7 @@ export async function recordWhatsappInbound(input: {
 export async function updateWhatsappMessageStatus(
   providerMessageId: string,
   status: 'sent' | 'delivered' | 'read' | 'failed',
+  reason?: string | null,
 ): Promise<void> {
   // Rank guards against out-of-order webhooks (read can arrive before delivered).
   const rank: Record<string, number> = {
@@ -3097,9 +3103,17 @@ export async function updateWhatsappMessageStatus(
     read: 3,
     failed: 3,
   }
+  // On 'failed' record the mapped reason (capped for the NOTIFY budget); any
+  // successful forward step clears a stale reason so a delivered/read message
+  // never keeps showing an old error string.
+  const trimmed =
+    status === 'failed' && typeof reason === 'string' && reason.trim()
+      ? reason.trim().slice(0, 300)
+      : null
   await query(
     `UPDATE messages m
-        SET status = $2
+        SET status = $2,
+            error_reason = CASE WHEN $2 = 'failed' THEN $4 ELSE NULL END
        FROM conversations c, channels ch
       WHERE m.conversation_id = c.id
         AND ch.id = c.channel_id
@@ -3114,7 +3128,7 @@ export async function updateWhatsappMessageStatus(
               WHEN 'read' THEN 3 WHEN 'failed' THEN 3 END, 0)
           OR $2 = 'failed'
         )`,
-    [providerMessageId, status, rank[status]],
+    [providerMessageId, status, rank[status], trimmed],
   )
 }
 
@@ -3141,6 +3155,36 @@ export async function getWhatsappMediaDescriptor(
   const app = await getWhatsappAppConfig()
   if (!app) return null
   return { waMediaId: ref.waMediaId, mime: rows[0]?.media_mime ?? null, token: app.accessToken }
+}
+
+/**
+ * Media descriptor for channels that store a direct CDN url in media_ref (VK
+ * photos/docs, and any other webhook channel that keeps a url). Returns the url
+ * plus the account's proxy so the media proxy route can stream the bytes from
+ * the provider's CDN through the account's dedicated IP. Null when the message
+ * has no url ref. Authorization is enforced separately by getMessageOwner.
+ */
+export async function getUrlMediaDescriptor(
+  messageId: string,
+): Promise<{ url: string; mime: string | null; proxy: ProxyDescriptor | null } | null> {
+  const rows = await query<{
+    media_ref: unknown
+    media_mime: string | null
+    channel_id: string
+  }>(
+    `SELECT m.media_ref, m.media_mime, c.channel_id
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.id = $1
+      LIMIT 1`,
+    [messageId],
+  )
+  const row = rows[0]
+  if (!row) return null
+  const ref = row.media_ref as { url?: string } | null
+  if (!ref?.url) return null
+  const proxy = await getProxyForChannel(row.channel_id)
+  return { url: ref.url, mime: row.media_mime ?? null, proxy }
 }
 
 /** Backfill the provider message id on an outbound row (post-delivery). */

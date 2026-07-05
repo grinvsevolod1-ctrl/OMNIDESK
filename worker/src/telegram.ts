@@ -1147,6 +1147,68 @@ function errMessage(e: unknown): string {
   return String(e)
 }
 
+/**
+ * Map a raw Telegram/MTProto send error into a short, human-readable Russian
+ * explanation for the panel (stored on messages.error_reason). Kept exhaustive
+ * for the send failures a manager actually hits so the inbox "!" marker always
+ * says WHY, never just fails silently. Falls back to the raw error text.
+ */
+export function telegramSendFailureReason(e: unknown): string {
+  const raw = errMessage(e)
+  const m = raw.toUpperCase()
+
+  // Flood / rate limiting.
+  if (m.includes('FLOOD_WAIT')) {
+    const secs =
+      (e && typeof e === 'object' && typeof (e as { seconds?: number }).seconds === 'number'
+        ? (e as { seconds: number }).seconds
+        : null) ?? Number(raw.match(/FLOOD_WAIT_(\d+)/)?.[1] ?? 0)
+    return secs
+      ? `Telegram временно ограничил отправку (флуд-контроль). Подождите ${secs} с и повторите.`
+      : 'Telegram временно ограничил отправку (флуд-контроль). Повторите позже.'
+  }
+  if (m.includes('SLOWMODE_WAIT'))
+    return 'В чате включён медленный режим — подождите перед следующим сообщением.'
+  if (m.includes('PEER_FLOOD'))
+    return 'Аккаунт ограничен Telegram за спам (PEER_FLOOD): отправка новым пользователям временно заблокирована.'
+
+  // Recipient-side restrictions.
+  if (m.includes('USER_IS_BLOCKED') || m.includes('YOU_BLOCKED_USER'))
+    return 'Пользователь заблокировал этот аккаунт (или вы заблокировали пользователя).'
+  if (m.includes('USER_PRIVACY_RESTRICTED') || m.includes('PRIVACY'))
+    return 'Настройки приватности пользователя запрещают писать ему первым.'
+  if (m.includes('USER_DEACTIVATED') || m.includes('INPUT_USER_DEACTIVATED'))
+    return 'Аккаунт пользователя удалён или заблокирован Telegram.'
+  if (m.includes('USER_BANNED_IN_CHANNEL'))
+    return 'Аккаунт заблокирован в этом канале/чате.'
+
+  // Chat / peer resolution.
+  if (m.includes('CHAT_WRITE_FORBIDDEN'))
+    return 'Нет прав писать в этот чат.'
+  if (m.includes('CHAT_SEND_') && m.includes('FORBIDDEN'))
+    return 'Отправка этого типа сообщений запрещена в чате.'
+  if (m.includes('PEER_ID_INVALID') || m.includes('PEER_ID_NOT_SUPPORTED'))
+    return 'Не удалось определить получателя (peer недоступен).'
+  if (m.includes('MSG_ID_INVALID') || m.includes('MESSAGE_ID_INVALID'))
+    return 'Сообщение, на которое вы отвечаете, недоступно.'
+
+  // Message content.
+  if (m.includes('MESSAGE_TOO_LONG'))
+    return 'Сообщение слишком длинное для Telegram.'
+  if (m.includes('MESSAGE_EMPTY'))
+    return 'Пустое сообщение не может быть отправлено.'
+
+  // Connectivity.
+  if (m.includes('TIMEOUT') || m.includes('TIMED OUT'))
+    return 'Истекло время ожидания ответа Telegram — проверьте прокси/соединение.'
+  if (m.includes('SESSION') && m.includes('NOT STARTED'))
+    return 'Сессия Telegram не подключена — переподключите аккаунт.'
+  if (m.includes('CONNECT') || m.includes('SOCKET') || m.includes('PROXY'))
+    return 'Ошибка соединения с Telegram (прокси недоступен?).'
+
+  return raw ? `Ошибка отправки: ${raw}` : 'Не удалось отправить сообщение.'
+}
+
 /** Numeric MTProto error code, if the SDK exposed one (e.g. 420, 400, 406). */
 function extractErrorCode(e: unknown): number | null {
   if (e && typeof e === 'object') {

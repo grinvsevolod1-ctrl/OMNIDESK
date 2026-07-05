@@ -15,6 +15,7 @@ import {
   getManagerAuthState,
   getManagerByEmail,
   getManagerOnLunch,
+  getVkDispatchByConversationId,
   getWhatsappCloudDispatchByConversationId,
   markConversationRead,
   markMessageFailed,
@@ -24,6 +25,11 @@ import {
 } from '@/lib/data'
 import { deliverMaxMessage } from '@/lib/max-dispatch'
 import { deliverVkMessage, markVkConversationRead } from '@/lib/vk-dispatch'
+import {
+  sendMessage as sendVkMessage,
+  uploadDocAttachment as uploadVkDoc,
+  uploadPhotoAttachment as uploadVkPhoto,
+} from '@/lib/vk'
 import {
   deliverWhatsappMessage,
   markWhatsappConversationRead,
@@ -142,25 +148,27 @@ export async function sendMessageAction(
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
 
   // Delivery routing by channel:
-  //  • Telegram (+ legacy Baileys WhatsApp): worker job queue.
+  //  • Telegram: worker job queue (MTProto session).
   //  • WhatsApp Cloud API: direct Graph API call (no worker/session).
-  //  • MAX: direct Bot API call.
+  //  • MAX / VK: direct Bot API call.
   //  • Live chat: no delivery — the inserted 'out' row fires a realtime NOTIFY
   //    that the website widget receives over its SSE stream.
   const conv = await getConversation(conversationId, session.sub)
   if (conv && conv.channelType === 'whatsapp') {
-    // Cloud API handles delivery itself; only fall back to the worker for any
-    // remaining legacy Baileys channel.
+    // WhatsApp is Cloud API only (Baileys was removed). If delivery reports the
+    // conversation isn't a configured Cloud channel, the token is missing/broken
+    // — fail the row loudly instead of leaving it stuck "sending".
     const handled = await deliverWhatsappMessage(conversationId, msg.id, text)
     if (!handled) {
-      await enqueueJob({
-        channelId: conv.channelId,
-        managerId: session.sub,
-        action: 'send_message',
-        payload: { target: conv.contactHandle, body: text, messageId: msg.id },
-      }).catch((err) => {
-        console.error('[panel] failed to enqueue send_message job:', err)
-      })
+      await markMessageFailed(
+        msg.id,
+        'WhatsApp не настроен: добавьте токен доступа в админке (аккаунты → WhatsApp).',
+      ).catch(() => {})
+      revalidatePath('/app/inbox')
+      return {
+        ok: false,
+        message: 'WhatsApp не настроен — обратитесь к администратору.',
+      }
     }
   } else if (conv && conv.channelType === 'telegram') {
     await enqueueJob({
@@ -201,19 +209,10 @@ export async function markConversationReadAction(
   if (!conv) return { ok: false, message: 'Диалог не найден.' }
 
   if (conv.channelType === 'whatsapp') {
-    // Cloud API sends the read receipt directly; fall back to the worker only
-    // for legacy Baileys channels.
-    const handled = await markWhatsappConversationRead(conversationId)
-    if (!handled) {
-      await enqueueJob({
-        channelId: conv.channelId,
-        managerId: session.sub,
-        action: 'mark_read',
-        payload: { target: conv.contactHandle },
-      }).catch((err) => {
-        console.error('[panel] failed to enqueue mark_read job:', err)
-      })
-    }
+    // Cloud API sends the read receipt directly. Best-effort: if the channel
+    // isn't a configured Cloud number there's nothing to ack (no Baileys
+    // fallback anymore), so we simply skip — read receipts are non-critical.
+    await markWhatsappConversationRead(conversationId)
   } else if (conv.channelType === 'telegram') {
     await enqueueJob({
       channelId: conv.channelId,
@@ -363,6 +362,113 @@ export async function sendWhatsappMediaAction(
 
   revalidatePath('/app/inbox')
   return { ok: true, message: 'Файл отправлен.' }
+}
+
+/**
+ * Per-kind upload size caps for VK. VK allows large docs; we keep sane limits so
+ * a huge upload can't tie up the account's proxy.
+ */
+const VK_MEDIA_LIMITS = {
+  photo: 25 * 1024 * 1024,
+  doc: 200 * 1024 * 1024,
+}
+
+/**
+ * Send a media file on a VK conversation. Static images (except GIFs) upload as
+ * a VK photo; everything else uploads as a VK document. The bytes are uploaded
+ * through the account's proxy, an outbound row is recorded for instant display
+ * (with the returned CDN url in media_ref), then messages.send delivers it —
+ * backfilling the provider id or flagging the row 'failed' with VK's reason.
+ */
+export async function sendVkMediaAction(
+  conversationId: string,
+  formData: FormData,
+): Promise<SimpleResult> {
+  const session = await requireManager()
+
+  const file = formData.get('file')
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, message: 'Файл не выбран.' }
+  }
+  const caption = String(formData.get('caption') ?? '').trim()
+
+  const conv = await getConversation(conversationId, session.sub)
+  if (!conv) return { ok: false, message: 'Диалог не найден.' }
+  if (conv.channelType !== 'vk') {
+    return { ok: false, message: 'Это действие доступно только для VK.' }
+  }
+
+  const mime = file.type || 'application/octet-stream'
+  // VK photo upload only accepts static raster images; GIFs and everything else
+  // must go through the document uploader.
+  const asPhoto = mime.startsWith('image/') && mime !== 'image/gif'
+  const cap = asPhoto ? VK_MEDIA_LIMITS.photo : VK_MEDIA_LIMITS.doc
+  if (file.size > cap) {
+    const mb = Math.round(cap / (1024 * 1024))
+    return { ok: false, message: `Файл слишком большой (максимум ${mb} МБ).` }
+  }
+
+  const dispatch = await getVkDispatchByConversationId(conversationId)
+  if (!dispatch) {
+    return { ok: false, message: 'VK не настроен для этого диалога.' }
+  }
+
+  // 1) Upload the bytes to VK → attachment descriptor (+ display url).
+  const up = asPhoto
+    ? await uploadVkPhoto(
+        dispatch.channel.token,
+        dispatch.contactHandle,
+        file,
+        file.name || 'photo.jpg',
+        dispatch.proxy,
+      )
+    : await uploadVkDoc(
+        dispatch.channel.token,
+        dispatch.contactHandle,
+        file,
+        file.name || 'file',
+        dispatch.proxy,
+      )
+  if (!up.ok) {
+    console.error('[panel] vk media upload failed:', up.error)
+    return { ok: false, message: up.error || 'Не удалось загрузить файл в VK.' }
+  }
+
+  const mediaType: MediaType = asPhoto ? 'image' : 'document'
+  // 2) Record the outbound row immediately so it shows in the thread.
+  const msg = await addMessage({
+    conversationId,
+    managerId: session.sub,
+    body: caption,
+    preview: caption || MEDIA_KIND_LABEL[mediaType],
+    author: session.name,
+    mediaType,
+    mediaMime: mime,
+    mediaName: asPhoto ? undefined : file.name || undefined,
+    mediaRef: up.data.url ? { url: up.data.url } : undefined,
+  })
+  if (!msg) return { ok: false, message: 'Диалог не найден.' }
+
+  // 3) Send the message with the attachment; backfill provider id or fail.
+  const sent = await sendVkMessage(
+    dispatch.channel.token,
+    dispatch.contactHandle,
+    caption,
+    dispatch.proxy,
+    up.data.attachment,
+  )
+  if (!sent.ok) {
+    console.error('[panel] vk media send failed:', sent.error)
+    await markMessageFailed(msg.id, sent.error).catch(() => {})
+    revalidatePath('/app/inbox')
+    return { ok: false, message: sent.error || 'VK отклонил отправку файла.' }
+  }
+  if (sent.data.messageId) {
+    await setMessageProviderId(msg.id, sent.data.messageId).catch(() => {})
+  }
+
+  revalidatePath('/app/inbox')
+  return { ok: true, message: 'Отправлено.' }
 }
 
 /**

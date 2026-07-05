@@ -1,5 +1,10 @@
 import { getSession } from '@/lib/auth'
-import { getMessageOwner, getWhatsappMediaDescriptor } from '@/lib/data'
+import {
+  getMessageOwner,
+  getUrlMediaDescriptor,
+  getWhatsappMediaDescriptor,
+} from '@/lib/data'
+import { proxiedFetch } from '@/lib/proxy-agent'
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp-cloud'
 import { isWorkerConfigured, streamFromWorker } from '@/lib/worker-client'
 
@@ -51,6 +56,37 @@ export async function GET(
         info.data.mime_type ||
         desc.mime ||
         'application/octet-stream',
+    )
+    const len = upstream.headers.get('content-length')
+    if (len) headers.set('content-length', len)
+    headers.set('cache-control', 'private, max-age=86400')
+    return new Response(upstream.body, { status: 200, headers })
+  }
+
+  // VK (like MAX/live-chat) has no worker: attachments carry a direct CDN url
+  // stored in media_ref. We stream those bytes through the account's proxy so
+  // the manager's browser never hits VK directly (consistent IP, no hotlink/CORS
+  // issues) and the raw url is never exposed to the client.
+  if (owner.channelType === 'vk') {
+    const desc = await getUrlMediaDescriptor(id)
+    if (!desc) return new Response('Media unavailable', { status: 404 })
+    let upstream: Response
+    try {
+      upstream = await proxiedFetch(
+        desc.url,
+        { cache: 'no-store' },
+        desc.proxy,
+      )
+    } catch {
+      return new Response('Media unavailable', { status: 502 })
+    }
+    if (!upstream.ok || !upstream.body) {
+      return new Response('Media unavailable', { status: upstream.status || 502 })
+    }
+    const headers = new Headers()
+    headers.set(
+      'content-type',
+      upstream.headers.get('content-type') || desc.mime || 'application/octet-stream',
     )
     const len = upstream.headers.get('content-length')
     if (len) headers.set('content-length', len)

@@ -105,14 +105,12 @@ export async function getChannel(id: string): Promise<ChannelRecord | null> {
 }
 
 export async function listLiveChannels(): Promise<ChannelRecord[]> {
-  // Cloud API WhatsApp channels (config.provider = 'cloud') are served by the
-  // Next.js webhook, not this worker — exclude them so no Baileys socket is
-  // ever opened for them. Telegram and any legacy Baileys WhatsApp stay.
+  // Only Telegram runs in this worker. WhatsApp (Cloud API), VK and MAX are all
+  // served by the Next.js app, so we never open a session for them here.
   return query<ChannelRecord>(
     `SELECT * FROM channels
-     WHERE type IN ('telegram', 'whatsapp')
-       AND session_status IN ('online', 'offline', 'starting')
-       AND COALESCE(config->>'provider', '') <> 'cloud'`,
+     WHERE type = 'telegram'
+       AND session_status IN ('online', 'offline', 'starting')`,
   )
 }
 
@@ -214,33 +212,6 @@ export async function saveTgSession(
      VALUES ($1, $2, now())
      ON CONFLICT (channel_id)
      DO UPDATE SET tg_session_enc = $2, updated_at = now()`,
-    [channelId, enc],
-  )
-}
-
-/**
- * WhatsApp/Baileys auth state is stored as a BufferJSON-serialized string
- * (handled by the caller) and encrypted as an opaque blob here.
- */
-export async function getWaState(channelId: string): Promise<string | null> {
-  const row = await one<SecretRow>(
-    'SELECT * FROM channel_secrets WHERE channel_id = $1',
-    [channelId],
-  )
-  if (!row?.wa_state_enc) return null
-  return decrypt(row.wa_state_enc)
-}
-
-export async function saveWaState(
-  channelId: string,
-  serialized: string,
-): Promise<void> {
-  const enc = encrypt(serialized)
-  await query(
-    `INSERT INTO channel_secrets (channel_id, wa_state_enc, updated_at)
-     VALUES ($1, $2, now())
-     ON CONFLICT (channel_id)
-     DO UPDATE SET wa_state_enc = $2, updated_at = now()`,
     [channelId, enc],
   )
 }
@@ -712,10 +683,15 @@ export async function setMessageStatusByProviderId(
   channelId: string,
   providerMessageId: string,
   status: MessageStatus,
+  reason?: string | null,
 ): Promise<void> {
+  // On 'failed' we also record the human-readable reason; on any forward step
+  // (sent/delivered/read) we clear a stale reason so a message that ultimately
+  // succeeded doesn't keep showing an old error.
   await query(
     `UPDATE messages m
-        SET status = $3
+        SET status = $3,
+            error_reason = CASE WHEN $3 = 'failed' THEN $4 ELSE NULL END
        FROM conversations c
       WHERE m.conversation_id = c.id
         AND c.channel_id = $1
@@ -729,23 +705,27 @@ export async function setMessageStatusByProviderId(
              < CASE $3 WHEN 'read' THEN 3 WHEN 'delivered' THEN 2
                        WHEN 'sent' THEN 1 ELSE 0 END
         )`,
-    [channelId, providerMessageId, status],
+    [channelId, providerMessageId, status, reason ?? null],
   )
 }
 
 /**
  * Set the delivery status of a single message directly by its row id. Used to
- * flag a send as 'failed' when the provider rejects it (e.g. WhatsApp 463 / not
- * a WhatsApp number), since at that point there's no provider id to match on.
+ * flag a send as 'failed' when the provider rejects it, since at that point
+ * there's often no provider id to match on. When `reason` is given it is stored
+ * on error_reason so the panel shows WHY the send failed next to the "!" marker.
  */
 export async function setMessageStatus(
   messageId: string,
   status: MessageStatus,
+  reason?: string | null,
 ): Promise<void> {
   await query(
-    `UPDATE messages SET status = $2
+    `UPDATE messages
+        SET status = $2,
+            error_reason = CASE WHEN $2 = 'failed' THEN $3 ELSE NULL END
        WHERE id = $1 AND direction = 'out'`,
-    [messageId, status],
+    [messageId, status, reason ?? null],
   )
 }
 

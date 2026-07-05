@@ -7,7 +7,13 @@ import {
 } from '@/lib/data'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import { rateLimit } from '@/lib/rate-limit'
-import { getUser, vkUserName, type VkMessage, type VkUpdate } from '@/lib/vk'
+import {
+  getUser,
+  parseVkAttachments,
+  vkUserName,
+  type VkMessage,
+  type VkUpdate,
+} from '@/lib/vk'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -91,8 +97,14 @@ export async function POST(
       ? (update.object as VkMessage)
       : undefined)
 
-  const body = (message?.text ?? '').trim()
-  if (!message || !body) {
+  if (!message) {
+    return text('ok')
+  }
+  const body = (message.text ?? '').trim()
+  // Parse any attachments (photo/doc/voice/audio/sticker/video/…). A message may
+  // carry only an attachment with no text, which we still ingest.
+  const media = parseVkAttachments(message.attachments)
+  if (!body && !media) {
     return text('ok')
   }
 
@@ -133,6 +145,11 @@ export async function POST(
       contactName,
       contactHandle,
       body,
+      preview: body || media?.preview,
+      mediaType: media?.mediaType ?? null,
+      mediaMime: media?.mediaMime ?? null,
+      mediaName: media?.mediaName ?? null,
+      mediaRef: media?.mediaRef ?? null,
       providerMessageId:
         message.conversation_message_id != null
           ? String(message.conversation_message_id)
@@ -143,8 +160,9 @@ export async function POST(
 
     // Autopilot: same engine as live-chat (no ban risk, reply sent instantly).
     // Self-guards all errors so it can never break ingestion. Skipped for
-    // duplicate webhook deliveries (stored === null).
-    if (stored) {
+    // duplicate webhook deliveries (stored === null) and for attachment-only
+    // messages (no text for the autopilot to act on).
+    if (stored && body) {
       await runLivechatAutopilot({
         managerId,
         channelId: channel.id,

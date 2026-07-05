@@ -9,8 +9,8 @@ import * as repo from './repo.js'
 
 /**
  * Tiny internal HTTP API consumed only by the panel (same host, protected by a
- * shared WORKER_SECRET). It exposes the in-memory QR (which can't live in the
- * DB) and a health check. All stateful commands go through the job queue.
+ * shared WORKER_SECRET). It streams Telegram media/stickers, runs proxy checks
+ * and exposes a health check. All stateful commands go through the job queue.
  */
 export function startHttpServer(): void {
   const server = createServer(async (req, res) => {
@@ -25,18 +25,6 @@ export function startHttpServer(): void {
     const provided = req.headers['x-worker-secret']
     if (typeof provided !== 'string' || !secretMatches(provided, env.workerSecret)) {
       return json(res, 401, { error: 'unauthorized' })
-    }
-
-    if (url.pathname === '/qr' && req.method === 'GET') {
-      const channelId = url.searchParams.get('channelId') ?? ''
-      const qr = registry.getQr(channelId)
-      return json(res, 200, { qr })
-    }
-
-    if (url.pathname === '/pairing-code' && req.method === 'GET') {
-      const channelId = url.searchParams.get('channelId') ?? ''
-      const code = registry.getPairingCode(channelId)
-      return json(res, 200, { code })
     }
 
     // Stream a message's media. The panel proxies the browser request here

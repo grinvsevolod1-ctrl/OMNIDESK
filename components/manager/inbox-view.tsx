@@ -54,6 +54,7 @@ import {
   markConversationReadAction,
   sendMessageAction,
   sendStickerAction,
+  sendVkMediaAction,
   sendWhatsappMediaAction,
 } from '@/app/actions/account'
 import {
@@ -2388,18 +2389,23 @@ export function InboxView({
     })
   }
 
-  // Attach + send a file on a WhatsApp conversation. The bytes are uploaded to
-  // WhatsApp server-side; on success the realtime insert (or refresh) shows the
-  // new message with its media bubble.
+  // Attach + send a file on a WhatsApp or VK conversation. The bytes are
+  // uploaded provider-side (through the account's proxy); on success the realtime
+  // insert (or refresh) shows the new message with its media bubble.
   function sendMediaFile(file: File) {
     if (!activeId) return
+    const channelType = active?.channelType
+    if (channelType !== 'whatsapp' && channelType !== 'vk') return
     const caption = draft.trim()
     const fd = new FormData()
     fd.append('file', file)
     if (caption) fd.append('caption', caption)
     setDraft('')
     startTransition(async () => {
-      const res = await sendWhatsappMediaAction(activeId, fd)
+      const res =
+        channelType === 'vk'
+          ? await sendVkMediaAction(activeId, fd)
+          : await sendWhatsappMediaAction(activeId, fd)
       if (!res.ok) {
         toast.error(res.message)
       } else {
@@ -3368,7 +3374,7 @@ export function InboxView({
                     onSend={sendSticker}
                   />
                 ) : null}
-                {active.channelType === 'whatsapp' ? (
+                {active.channelType === 'whatsapp' || active.channelType === 'vk' ? (
                   <>
                     <input
                       ref={fileInputRef}
@@ -3435,7 +3441,7 @@ export function InboxView({
             </div>
             <p className="text-sm font-medium">Выберите диалог</p>
             <p className="max-w-xs text-xs text-muted-foreground">
-              Откройте чат слева, чтобы прочитать переписку и ответить. Правый
+              О��кройте чат слева, чтобы прочитать переписку и ответить. Правый
               клик по диалогу — быстрые действия.
             </p>
           </div>

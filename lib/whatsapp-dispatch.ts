@@ -18,8 +18,9 @@ import { markRead, sendText } from './whatsapp-cloud'
  * can never throw into the caller.
  *
  * Returns `true` when the conversation was a Cloud API WhatsApp channel (i.e.
- * this handled delivery), and `false` when it isn't — letting callers fall back
- * to the legacy worker transport for any remaining Baileys channels.
+ * this handled delivery), and `false` when it isn't a configured Cloud channel
+ * (token missing/broken). Baileys is gone, so callers must treat `false` as a
+ * hard failure and surface it — never leave the message stuck "sending".
  */
 export async function deliverWhatsappMessage(
   conversationId: string,
