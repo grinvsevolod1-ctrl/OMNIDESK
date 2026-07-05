@@ -4,12 +4,44 @@ import { logger } from './logger.js'
 
 const { Pool, Client } = pg
 
+/**
+ * Resolve TLS settings for the worker's Postgres connections.
+ *
+ * Mirrors the panel's policy (lib/db.ts): when TLS is used we VALIDATE the
+ * server certificate by default so the connection — which carries every
+ * decrypted secret — cannot be MITM'd. A custom CA can be supplied via
+ * DATABASE_CA_CERT, and verification can be explicitly disabled with
+ * DATABASE_SSL_NO_VERIFY=true (never the default). This is shared by BOTH the
+ * pool and the dedicated LISTEN client so realtime notifications keep working
+ * on managed providers that require `sslmode=require`.
+ */
+function resolveSslConfig(
+  connectionString: string,
+): false | { rejectUnauthorized: boolean; ca?: string } {
+  const wantsSsl =
+    connectionString.includes('sslmode=require') ||
+    connectionString.includes('sslmode=verify') ||
+    process.env.DATABASE_SSL === 'true'
+
+  if (!wantsSsl) return false
+
+  if (process.env.DATABASE_SSL_NO_VERIFY === 'true') {
+    logger.warn(
+      'DATABASE_SSL_NO_VERIFY=true — the database TLS certificate is NOT ' +
+        'verified. This exposes the connection to MITM attacks; prefer ' +
+        'setting DATABASE_CA_CERT instead.',
+    )
+    return { rejectUnauthorized: false }
+  }
+
+  const ca = process.env.DATABASE_CA_CERT
+  return { rejectUnauthorized: true, ...(ca ? { ca } : {}) }
+}
+
 export const pool = new Pool({
   connectionString: env.databaseUrl,
   max: 10,
-  ssl: env.databaseUrl.includes('sslmode=require')
-    ? { rejectUnauthorized: false }
-    : undefined,
+  ssl: resolveSslConfig(env.databaseUrl),
 })
 
 pool.on('error', (err) => {
@@ -40,15 +72,37 @@ export async function startListener(
   channel: string,
   onNotify: (payload: string) => void,
 ): Promise<void> {
+  // Guard against stacking reconnects: a dropped connection can fire multiple
+  // 'error' events, and connect() can also throw — without this flag each would
+  // schedule its own retry, leaking Client instances over time.
+  let reconnectScheduled = false
+
+  function scheduleReconnect(): void {
+    if (reconnectScheduled) return
+    reconnectScheduled = true
+    setTimeout(() => {
+      reconnectScheduled = false
+      connect().catch((err) => {
+        logger.error({ err }, `LISTEN ${channel} reconnect failed`)
+        scheduleReconnect()
+      })
+    }, 2000)
+  }
+
   async function connect(): Promise<void> {
-    const client = new Client({ connectionString: env.databaseUrl })
+    const client = new Client({
+      connectionString: env.databaseUrl,
+      // Same validated TLS policy as the pool so LISTEN works on managed
+      // providers (sslmode=require) instead of silently failing to connect.
+      ssl: resolveSslConfig(env.databaseUrl),
+    })
     client.on('notification', (msg) => {
       if (msg.channel === channel && msg.payload) onNotify(msg.payload)
     })
     client.on('error', (err) => {
       logger.error({ err }, `LISTEN ${channel} client error, reconnecting`)
       client.end().catch(() => {})
-      setTimeout(connect, 2000)
+      scheduleReconnect()
     })
     await client.connect()
     await client.query(`LISTEN ${channel}`)

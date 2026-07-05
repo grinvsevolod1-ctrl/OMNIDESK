@@ -26,7 +26,7 @@ const globalForDb = globalThis as unknown as { __pgPool?: Pool }
  * (e.g. a trusted private network where you accept the risk), but it is never
  * the default.
  */
-function resolveSslConfig(
+export function resolveSslConfig(
   connectionString: string,
 ): false | { rejectUnauthorized: boolean; ca?: string } {
   const wantsSsl =

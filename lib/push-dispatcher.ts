@@ -40,13 +40,13 @@ function channelLabel(type?: string): string {
     case 'telegram':
       return 'Telegram'
     case 'livechat':
-      return 'Live chat'
+      return 'Онлайн-чат'
     case 'max':
       return 'MAX'
     case 'vk':
       return 'VK'
     default:
-      return 'Message'
+      return 'Сообщение'
   }
 }
 
@@ -106,10 +106,10 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
   const sender =
     event.contactName?.trim() ||
     event.contactHandle?.trim() ||
-    'New message'
+    'Новое сообщение'
   const channel = channelLabel(event.channelType)
   const title = `${sender} · ${channel}`
-  const body = event.body ? truncate(event.body) : 'New message received'
+  const body = event.body ? truncate(event.body) : 'Новое сообщение'
 
   void sendPushToManager(event.managerId, {
     title,

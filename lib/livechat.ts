@@ -29,10 +29,16 @@ export function originAllowed(
 
 /**
  * Best-effort client IP from the proxy headers. Used as a rate-limit key, never
- * trusted for anything security-critical (it can be spoofed unless the upstream
- * proxy is trusted — which on a VPS reverse-proxy setup it is).
+ * trusted for anything security-critical.
+ *
+ * These headers can be spoofed unless the upstream proxy is trusted — which on
+ * a typical VPS reverse-proxy setup (nginx/Caddy/Cloudflare) it is, so we trust
+ * them by default. Deployments that expose Node directly (no trusted proxy) can
+ * set `TRUST_PROXY=false` to stop honouring forwarded headers, preventing a
+ * client from spoofing its IP to sidestep per-IP throttling.
  */
 export function clientIp(headers: Headers): string {
+  if (process.env.TRUST_PROXY === 'false') return 'unknown'
   return (
     (headers.get('x-forwarded-for')?.split(',')[0] ?? '').trim() ||
     headers.get('x-real-ip')?.trim() ||

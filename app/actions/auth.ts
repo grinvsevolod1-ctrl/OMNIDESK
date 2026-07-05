@@ -23,6 +23,10 @@ const LOGIN_MAX_ATTEMPTS = 8
 const LOGIN_WINDOW_MS = 5 * 60_000 // 5 minutes
 
 async function getClientIp(): Promise<string> {
+  // Forwarded headers are spoofable unless a trusted reverse-proxy sits in
+  // front. Deployments exposing Node directly can set TRUST_PROXY=false so a
+  // client cannot forge its IP to dodge the per-IP brute-force limit below.
+  if (process.env.TRUST_PROXY === 'false') return 'unknown'
   const h = await headers()
   const fwd = h.get('x-forwarded-for')
   if (fwd) return fwd.split(',')[0]!.trim()
