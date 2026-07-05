@@ -870,7 +870,7 @@ export async function proxyTypeInUse(
   const rows = await query<{ id: string }>(
     `SELECT id FROM channels
       WHERE proxy_id = $1 AND type = $2
-        AND ($3::text IS NULL OR id <> $3)
+        AND ($3::uuid IS NULL OR id <> $3::uuid)
       LIMIT 1`,
     [proxyId, type, excludeChannelId ?? null],
   )
@@ -895,9 +895,9 @@ export async function listAvailableProxiesForType(
               SELECT 1 FROM channels c
                WHERE c.proxy_id = p.id AND c.type = $1
             )
-        AND ($2::text IS NULL
-             OR p.manager_id = $2
-             OR p.created_by_manager_id = $2)
+        AND ($2::uuid IS NULL
+             OR p.manager_id = $2::uuid
+             OR p.created_by_manager_id = $2::uuid)
       ORDER BY p.created_at DESC`,
     [type, managerId ?? null],
   )
