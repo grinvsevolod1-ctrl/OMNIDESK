@@ -45,6 +45,7 @@ import {
   Sticker,
   Tag,
   Trash2,
+  UserPlus,
   Users,
   X,
   Zap,
@@ -69,6 +70,7 @@ import {
   setConversationMutedAction,
   setLeadStatusAction,
 } from '@/app/actions/leads'
+import { transferConversationAction } from '@/app/actions/conversations'
 import {
   MessageContextMenu,
   type ForwardTarget,
@@ -89,6 +91,14 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -100,6 +110,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Popover,
   PopoverContent,
@@ -1253,7 +1264,7 @@ const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
       '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
       '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😋', '😎', '🤩',
       '🥳', '😏', '😢', '😭', '😤', '😠', '😡', '🤔', '🤗', '🤭',
-      '😴', '😬', '🙄', '😱', '😳', '🤯', '😅', '😢',
+      '😴', '😬', '🙄', '😱', '����', '🤯', '😅', '😢',
     ],
   },
   {
@@ -1498,6 +1509,7 @@ export function InboxView({
   quickReplies = [],
   autopilot,
   ownedChannelIds = [],
+  transferTargets = [],
 }: {
   conversations: Conversation[]
   messagesByConversation: Record<string, Message[]>
@@ -1511,6 +1523,8 @@ export function InboxView({
    * with a generic channel-type label instead.
    */
   ownedChannelIds?: string[]
+  /** Colleagues this manager can hand a conversation off to. */
+  transferTargets?: { id: string; name: string; onLunch: boolean }[]
 }) {
   const router = useRouter()
   // Hide foreign account names: blank the channel name for any lead whose
@@ -1526,6 +1540,12 @@ export function InboxView({
   const [draft, setDraft] = useState('')
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // Conversation hand-off dialog state. `transferForId` holds the conversation
+  // being handed off (null = dialog closed); the picker/note drive the submit.
+  const [transferForId, setTransferForId] = useState<string | null>(null)
+  const [transferTo, setTransferTo] = useState('')
+  const [transferNote, setTransferNote] = useState('')
+  const [transferPending, setTransferPending] = useState(false)
 
   const [search, setSearch] = useState('')
   // Multi-select filters. An empty Set means "no filter" (show everything),
@@ -2162,6 +2182,40 @@ export function InboxView({
         return
       }
       toast.success(res.message)
+      router.refresh()
+    })
+  }
+
+  // Open the hand-off dialog for a conversation, resetting the picker/note.
+  function openTransfer(conversationId: string) {
+    setTransferForId(conversationId)
+    setTransferTo('')
+    setTransferNote('')
+  }
+
+  // Submit the hand-off. On success the thread leaves this manager's inbox, so
+  // we close it and refresh the server data.
+  function submitTransfer() {
+    if (!transferForId || !transferTo) {
+      toast.error('Выберите менеджера для передачи.')
+      return
+    }
+    const convId = transferForId
+    setTransferPending(true)
+    startStatusTransition(async () => {
+      const res = await transferConversationAction(
+        convId,
+        transferTo,
+        transferNote.trim() || undefined,
+      )
+      setTransferPending(false)
+      if (!res.ok) {
+        toast.error(res.message)
+        return
+      }
+      toast.success(res.message)
+      setTransferForId(null)
+      if (activeId === convId) setActiveId(null)
       router.refresh()
     })
   }
@@ -2896,13 +2950,22 @@ export function InboxView({
                       Заглушить контакт
                     </ContextMenuItem>
                   )}
-                  <ContextMenuItem onClick={() => copyHandle(c.contactHandle)}>
-                    <Copy className="size-4" />
-                    Скопировать контакт
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
-            ))
+                    <ContextMenuItem onClick={() => copyHandle(c.contactHandle)}>
+                      <Copy className="size-4" />
+                      Скопировать контакт
+                    </ContextMenuItem>
+                    {transferTargets.length > 0 ? (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onClick={() => openTransfer(c.id)}>
+                          <UserPlus className="size-4" />
+                          Передать менеджеру
+                        </ContextMenuItem>
+                      </>
+                    ) : null}
+                  </ContextMenuContent>
+                </ContextMenu>
+              ))
           )}
         </div>
       </div>
@@ -3029,6 +3092,15 @@ export function InboxView({
                       <Copy className="size-4" />
                       Скопировать контакт
                     </DropdownMenuItem>
+                    {transferTargets.length > 0 ? (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => openTransfer(active.id)}>
+                          <UserPlus className="size-4" />
+                          Передать менеджеру
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -3478,6 +3550,91 @@ export function InboxView({
           />
         ) : null}
       </aside>
+
+      {/* Hand-off dialog: pick a colleague and optionally leave a note. */}
+      <Dialog
+        open={transferForId !== null}
+        onOpenChange={(open) => {
+          if (!open) setTransferForId(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Передать диалог</DialogTitle>
+            <DialogDescription>
+              Диалог перейдёт выбранному менеджеру и исчезнет из ваших входящих.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-2">
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-foreground">
+                Кому передать
+              </span>
+              <div className="scrollbar-thin flex max-h-56 flex-col gap-1 overflow-y-auto">
+                {transferTargets.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setTransferTo(t.id)}
+                    className={cn(
+                      'flex items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors',
+                      transferTo === t.id
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-border hover:bg-muted',
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Avatar className="size-6">
+                        <AvatarFallback className="text-[10px]">
+                          {t.name.slice(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      {t.name}
+                    </span>
+                    {t.onLunch ? (
+                      <span className="text-xs text-muted-foreground">
+                        на обеде
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-foreground">
+                Заметка для коллеги (необязательно)
+              </span>
+              <Textarea
+                value={transferNote}
+                onChange={(e) => setTransferNote(e.target.value)}
+                placeholder="Например: клиент ждёт расчёт по доставке"
+                maxLength={500}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setTransferForId(null)}
+              disabled={transferPending}
+            >
+              Отмена
+            </Button>
+            <Button
+              onClick={submitTransfer}
+              disabled={transferPending || !transferTo}
+            >
+              {transferPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <UserPlus className="size-4" />
+              )}
+              Передать
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

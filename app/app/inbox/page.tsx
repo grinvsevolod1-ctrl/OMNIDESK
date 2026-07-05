@@ -9,16 +9,21 @@ import {
   listConversations,
   listMessages,
   listQuickReplies,
+  listTransferTargets,
 } from '@/lib/data'
 import type { Message } from '@/lib/types'
 
 export default async function InboxPage() {
   const session = await requireManager()
-  const [conversations, channels, quickReplies] = await Promise.all([
-    listConversations(session.sub),
-    listChannels(session.sub),
-    listQuickReplies(session.sub),
-  ])
+  const [conversations, channels, quickReplies, transferTargets] =
+    await Promise.all([
+      listConversations(session.sub),
+      listChannels(session.sub),
+      listQuickReplies(session.sub),
+      // Colleagues this manager can hand a conversation off to. Best-effort:
+      // never let a transfer-target lookup take down the inbox.
+      listTransferTargets(session.sub).catch(() => []),
+    ])
 
   // Personal accounts whose session is degraded/paused — surfaced as a banner in
   // the inbox so the operator knows live sync may be affected for those sources,
@@ -81,6 +86,7 @@ export default async function InboxPage() {
             quickReplies={quickReplies}
             autopilot={autopilot}
             ownedChannelIds={channels.map((c) => c.id)}
+            transferTargets={transferTargets}
           />
         </div>
       )}

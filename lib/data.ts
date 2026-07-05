@@ -1704,6 +1704,91 @@ export async function isConversationMuted(
   return rows.length > 0 ? Boolean(rows[0].muted) : false
 }
 
+/* ------------------------- Conversation transfer ------------------------- */
+
+export interface TransferTarget {
+  id: string
+  name: string
+  /** True when the colleague is on lunch (still selectable, shown greyed). */
+  onLunch: boolean
+}
+
+/**
+ * Active managers a conversation can be handed off to, excluding the caller and
+ * any blocked accounts. On-lunch managers are still returned (a manual transfer
+ * is an explicit choice) but flagged so the UI can de-emphasise them.
+ */
+export async function listTransferTargets(
+  excludeManagerId: string,
+): Promise<TransferTarget[]> {
+  const rows = await query<{
+    id: string
+    name: string
+    on_lunch: boolean | null
+  }>(
+    `SELECT id, name, on_lunch
+       FROM managers
+      WHERE status = 'active' AND id <> $1
+      ORDER BY on_lunch ASC, name ASC`,
+    [excludeManagerId],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    onLunch: r.on_lunch ?? false,
+  }))
+}
+
+/**
+ * Hand a conversation off to another manager. Ownership-scoped: only the
+ * current owner (fromManagerId) can transfer, which also prevents transferring
+ * a thread you can't see. Clears the "reply dismissed" marker so the new owner
+ * sees it as awaiting a reply, and records an audit row (best-effort: the
+ * transfer still succeeds if migration 041 hasn't been applied yet).
+ */
+export async function transferConversation(input: {
+  conversationId: string
+  fromManagerId: string
+  toManagerId: string
+  note?: string
+}): Promise<boolean> {
+  // Guard: the target must be an existing active manager (and not the caller).
+  const target = await query<{ id: string }>(
+    `SELECT id FROM managers WHERE id = $1 AND status = 'active'`,
+    [input.toManagerId],
+  )
+  if (target.length === 0 || input.toManagerId === input.fromManagerId) {
+    return false
+  }
+
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET manager_id = $3, reply_dismissed_at = NULL
+      WHERE id = $1 AND manager_id = $2
+      RETURNING id`,
+    [input.conversationId, input.fromManagerId, input.toManagerId],
+  )
+  if (rows.length === 0) return false
+
+  try {
+    await query(
+      `INSERT INTO conversation_transfers
+         (conversation_id, from_manager_id, to_manager_id, note)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        input.conversationId,
+        input.fromManagerId,
+        input.toManagerId,
+        (input.note ?? '').slice(0, 500),
+      ],
+    )
+  } catch (err) {
+    // Audit table missing (pre-041) — don't fail the actual hand-off.
+    console.error('[v0] transfer audit skipped:', err)
+  }
+  return true
+}
+
 /* ----------------------------- Live chat ---------------------------- */
 
 export interface LivechatChannel {
