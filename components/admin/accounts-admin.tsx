@@ -390,8 +390,18 @@ function CreateAccountCard({
             value={proxyId || 'none'}
             onValueChange={(v) => setProxyId(v === 'none' ? '' : (v ?? ''))}
           >
-            <SelectTrigger>
-              <SelectValue placeholder="Без прокси — прямое подключение" />
+            <SelectTrigger className="min-w-0">
+              <SelectValue placeholder="Без прокси — прямое подключение">
+                {(value: string | null) =>
+                  !value || value === 'none'
+                    ? 'Без прокси — прямое подключение'
+                    : (eligibleProxies.find((p) => p.id === value)
+                        ? proxyLabelText(
+                            eligibleProxies.find((p) => p.id === value)!,
+                          )
+                        : 'Прокси выбран')
+                }
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="none">
@@ -642,6 +652,14 @@ function AccountRow({
     [proxies, proxyUsage, channel.proxyId, channel.type],
   )
 
+  // base-ui's <Select.Value> renders the raw value string unless we format it,
+  // which is why the trigger showed a bare proxy UUID. Map id → readable label.
+  const proxyLabelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const p of proxies) m.set(p.id, proxyLabelText(p))
+    return m
+  }, [proxies])
+
   function reassign(proxyId: string) {
     // 'none' sentinel → detach the proxy (direct connection).
     const next = proxyId === 'none' ? null : proxyId
@@ -695,7 +713,7 @@ function AccountRow({
         <StatusBadge status={channel.status} />
       </div>
 
-      <div className="flex items-center gap-2 sm:w-72">
+      <div className="flex min-w-0 items-center gap-2 sm:w-72">
         {channel.proxyId ? null : (
           <ShieldAlert className="size-4 shrink-0 text-warning" />
         )}
@@ -704,8 +722,14 @@ function AccountRow({
           onValueChange={(v) => v && reassign(v)}
           disabled={pending}
         >
-          <SelectTrigger className="h-9 flex-1">
-            <SelectValue placeholder="Без прокси — напрямую" />
+          <SelectTrigger className="h-9 min-w-0 flex-1">
+            <SelectValue placeholder="Без прокси — напрямую">
+              {(value: string | null) =>
+                !value || value === 'none'
+                  ? 'Без прокси — напрямую'
+                  : (proxyLabelById.get(value) ?? 'Прокси назначен')
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">Без прокси — напрямую</SelectItem>
@@ -724,6 +748,7 @@ function AccountRow({
           disabled={pending}
           aria-label="Проверить связь / переподключить"
           title="Проверить связь"
+          className="shrink-0"
         >
           <RefreshCw className={cn('size-4', checking && 'animate-spin')} />
         </Button>
@@ -735,7 +760,7 @@ function AccountRow({
           disabled={pending}
           aria-label="Удалить аккаунт"
           title="Удалить аккаунт"
-          className="border-destructive/30 text-destructive hover:bg-destructive hover:text-destructive-foreground"
+          className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive hover:text-destructive-foreground"
         >
           {pending ? (
             <Loader2 className="size-4 animate-spin" />
