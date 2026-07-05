@@ -47,6 +47,7 @@ import {
   Trash2,
   UserPlus,
   Users,
+  Video,
   X,
   Zap,
 } from 'lucide-react'
@@ -70,7 +71,10 @@ import {
   setConversationMutedAction,
   setLeadStatusAction,
 } from '@/app/actions/leads'
-import { transferConversationAction } from '@/app/actions/conversations'
+import {
+  createMeetingAction,
+  transferConversationAction,
+} from '@/app/actions/conversations'
 import {
   MessageContextMenu,
   type ForwardTarget,
@@ -1261,7 +1265,7 @@ const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
   {
     label: 'Смайлы',
     emojis: [
-      '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
+      '😀', '���', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
       '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😋', '😎', '🤩',
       '🥳', '😏', '😢', '😭', '😤', '😠', '😡', '🤔', '🤗', '🤭',
       '😴', '😬', '🙄', '😱', '����', '🤯', '😅', '😢',
@@ -1510,6 +1514,7 @@ export function InboxView({
   autopilot,
   ownedChannelIds = [],
   transferTargets = [],
+  telemostEnabled = false,
 }: {
   conversations: Conversation[]
   messagesByConversation: Record<string, Message[]>
@@ -1525,6 +1530,8 @@ export function InboxView({
   ownedChannelIds?: string[]
   /** Colleagues this manager can hand a conversation off to. */
   transferTargets?: { id: string; name: string; onLunch: boolean }[]
+  /** Whether the Yandex Telemost video-meeting button is available. */
+  telemostEnabled?: boolean
 }) {
   const router = useRouter()
   // Hide foreign account names: blank the channel name for any lead whose
@@ -1546,6 +1553,8 @@ export function InboxView({
   const [transferTo, setTransferTo] = useState('')
   const [transferNote, setTransferNote] = useState('')
   const [transferPending, setTransferPending] = useState(false)
+  // Telemost video-meeting creation in progress (disables the composer button).
+  const [meetingPending, setMeetingPending] = useState(false)
 
   const [search, setSearch] = useState('')
   // Multi-select filters. An empty Set means "no filter" (show everything),
@@ -2216,6 +2225,31 @@ export function InboxView({
       toast.success(res.message)
       setTransferForId(null)
       if (activeId === convId) setActiveId(null)
+      router.refresh()
+    })
+  }
+
+  // Create a Yandex Telemost meeting and send the join link into the active
+  // conversation via its own channel (handled server-side).
+  function startVideoMeeting() {
+    if (!activeId || meetingPending) return
+    const convId = activeId
+    setMeetingPending(true)
+    startStatusTransition(async () => {
+      const res = await createMeetingAction(convId)
+      setMeetingPending(false)
+      if (!res.ok) {
+        // If the meeting was created but delivery failed, offer the link so it
+        // isn't lost.
+        if (res.joinUrl) {
+          navigator.clipboard?.writeText(res.joinUrl).catch(() => {})
+          toast.error(`${res.message} Ссылка скопирована в буфер обмена.`)
+        } else {
+          toast.error(res.message)
+        }
+        return
+      }
+      toast.success(res.message)
       router.refresh()
     })
   }
@@ -3472,6 +3506,24 @@ export function InboxView({
                       <Paperclip className="size-4" />
                     </Button>
                   </>
+                ) : null}
+                {telemostEnabled ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+                    disabled={pending || meetingPending}
+                    onClick={startVideoMeeting}
+                    aria-label="Создать видеовстречу"
+                    title="Создать видеовстречу в Яндекс Телемост и отправить ссылку клиенту"
+                  >
+                    {meetingPending ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Video className="size-4" />
+                    )}
+                  </Button>
                 ) : null}
                 <textarea
                   ref={composerRef}

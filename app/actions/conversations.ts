@@ -7,6 +7,8 @@ import {
   transferConversation,
   type TransferTarget,
 } from '@/lib/data'
+import { createTelemostMeeting, isTelemostConfigured } from '@/lib/telemost'
+import { sendMessageAction } from '@/app/actions/account'
 
 export interface SimpleResult {
   ok: boolean
@@ -56,4 +58,62 @@ export async function transferConversationAction(
   revalidatePath('/app/inbox')
   revalidatePath('/app')
   return { ok: true, message: 'Диалог передан менеджеру.' }
+}
+
+/* ----------------------------- Video meeting ----------------------------- */
+
+export interface MeetingResult {
+  ok: boolean
+  message: string
+  joinUrl?: string
+}
+
+/**
+ * Manager: create a Yandex Telemost video meeting and send the join link to the
+ * client through the current conversation's channel. Reuses sendMessageAction so
+ * the link is delivered exactly like any other outbound message (Telegram queue,
+ * WhatsApp Cloud API, VK/MAX bot, or live-chat SSE) and appears in the thread.
+ */
+export async function createMeetingAction(
+  conversationId: string,
+  note?: string,
+): Promise<MeetingResult> {
+  await requireManager()
+  if (!conversationId) {
+    return { ok: false, message: 'Диалог не выбран.' }
+  }
+
+  const meeting = await createTelemostMeeting()
+  if (!meeting.ok) {
+    return { ok: false, message: meeting.message }
+  }
+
+  // Compose a friendly Russian invite. An optional note (e.g. proposed time)
+  // is prepended so the client gets context alongside the link.
+  const prefix = note?.trim() ? `${note.trim()}\n\n` : ''
+  const body = `${prefix}Приглашаю вас на видеовстречу в Яндекс Телемост:\n${meeting.meeting.joinUrl}`
+
+  const sent = await sendMessageAction(conversationId, body)
+  if (!sent.ok) {
+    // The meeting exists but we couldn't deliver the link — surface the link so
+    // the manager can copy/paste it manually rather than losing it.
+    return {
+      ok: false,
+      message: `Встреча создана, но ссылку не удалось отправить: ${sent.message}`,
+      joinUrl: meeting.meeting.joinUrl,
+    }
+  }
+
+  revalidatePath('/app/inbox')
+  return {
+    ok: true,
+    message: 'Ссылка на видеовстречу отправлена клиенту.',
+    joinUrl: meeting.meeting.joinUrl,
+  }
+}
+
+/** Whether the Telemost button should be shown/enabled in the composer. */
+export async function isTelemostAvailableAction(): Promise<boolean> {
+  await requireManager()
+  return isTelemostConfigured()
 }

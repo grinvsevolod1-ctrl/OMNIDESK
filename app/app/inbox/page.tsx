@@ -11,6 +11,7 @@ import {
   listQuickReplies,
   listTransferTargets,
 } from '@/lib/data'
+import { isTelemostConfigured } from '@/lib/telemost'
 import type { Message } from '@/lib/types'
 
 export default async function InboxPage() {
@@ -24,6 +25,10 @@ export default async function InboxPage() {
       // never let a transfer-target lookup take down the inbox.
       listTransferTargets(session.sub).catch(() => []),
     ])
+
+  // Whether the Yandex Telemost video-meeting button should appear in the
+  // composer (only when a token is configured).
+  const telemostEnabled = isTelemostConfigured()
 
   // Personal accounts whose session is degraded/paused — surfaced as a banner in
   // the inbox so the operator knows live sync may be affected for those sources,
@@ -87,6 +92,7 @@ export default async function InboxPage() {
             autopilot={autopilot}
             ownedChannelIds={channels.map((c) => c.id)}
             transferTargets={transferTargets}
+            telemostEnabled={telemostEnabled}
           />
         </div>
       )}
