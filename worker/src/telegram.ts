@@ -775,6 +775,22 @@ export class TelegramSession {
   }
 
   /**
+   * Show the "typing…" indicator to the contact. Telegram auto-expires the
+   * indicator after ~6s, so the panel re-sends it while the operator keeps
+   * typing. Best-effort — never throws into the job runner.
+   */
+  async setTyping(target: string): Promise<void> {
+    if (!this.client) throw new Error('Session not started')
+    const entity = await this.resolveTarget(target)
+    await this.client.invoke(
+      new Api.messages.SetTyping({
+        peer: entity,
+        action: new Api.SendMessageTypingAction(),
+      }),
+    )
+  }
+
+  /**
    * Toggle an emoji reaction on a message. Passing an empty emoji clears the
    * reaction. Telegram-only.
    */
@@ -1283,7 +1299,7 @@ export function telegramSendFailureReason(e: unknown): string {
 
   // Chat / peer resolution.
   if (m.includes('CHAT_WRITE_FORBIDDEN'))
-    return 'Нет прав писать в этот чат.'
+    return 'Нет пра�� писать в этот чат.'
   if (m.includes('CHAT_SEND_') && m.includes('FORBIDDEN'))
     return 'Отправка этого типа сообщений запрещена в чате.'
   if (m.includes('PEER_ID_INVALID') || m.includes('PEER_ID_NOT_SUPPORTED'))

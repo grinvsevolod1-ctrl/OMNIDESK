@@ -149,6 +149,8 @@ export type JobAction =
   | 'resume'
   // Send read receipts for a chat so the contact sees we read their messages.
   | 'mark_read'
+  // Show the native "typing…" action to the contact (Telegram only).
+  | 'set_typing'
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'error'
 

@@ -141,6 +141,22 @@ class Registry {
           }
         }
       }
+      case 'set_typing': {
+        const target = String(payload.target ?? '')
+        if (!target) throw new Error('set_typing requires target')
+        // Typing indicators are purely cosmetic and Telegram expires them
+        // quickly, so a failure here must never surface as a failed job.
+        try {
+          await session.setTyping(target)
+          return { typing: true }
+        } catch (err) {
+          logger.warn(
+            { err, channelId: channel.id },
+            'set_typing failed (non-fatal)',
+          )
+          return { typing: false }
+        }
+      }
       case 'react_message': {
         const target = String(payload.target ?? '')
         const providerMessageId = Number(payload.providerMessageId ?? 0)
