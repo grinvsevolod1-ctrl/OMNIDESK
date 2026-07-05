@@ -23,7 +23,7 @@ import {
   updateManagerPassword,
 } from '@/lib/data'
 import { deliverMaxMessage } from '@/lib/max-dispatch'
-import { deliverVkMessage } from '@/lib/vk-dispatch'
+import { deliverVkMessage, markVkConversationRead } from '@/lib/vk-dispatch'
 import {
   deliverWhatsappMessage,
   markWhatsappConversationRead,
@@ -223,6 +223,9 @@ export async function markConversationReadAction(
     }).catch((err) => {
       console.error('[panel] failed to enqueue mark_read job:', err)
     })
+  } else if (conv.channelType === 'vk') {
+    // VK sends the read receipt directly through the account's proxy.
+    await markVkConversationRead(conversationId)
   }
 
   revalidatePath('/app/inbox')
@@ -311,6 +314,7 @@ export async function sendWhatsappMediaAction(
     file,
     mime,
     file.name || 'file',
+    dispatch.proxy,
   )
   if (!up.ok) {
     console.error('[panel] whatsapp media upload failed:', up.error)
@@ -340,10 +344,11 @@ export async function sendWhatsappMediaAction(
     up.data.id,
     caption || undefined,
     file.name || undefined,
+    dispatch.proxy,
   )
   if (!sent.ok) {
     console.error('[panel] whatsapp media send failed:', sent.error)
-    await markMessageFailed(msg.id).catch(() => {})
+    await markMessageFailed(msg.id, sent.error).catch(() => {})
     revalidatePath('/app/inbox')
     return {
       ok: false,

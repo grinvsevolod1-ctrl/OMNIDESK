@@ -30,10 +30,11 @@ export async function deliverMaxMessage(
       dispatch.channel.token,
       dispatch.contactHandle,
       body,
+      dispatch.proxy,
     )
     if (!res.ok) {
       console.error('[v0] deliverMaxMessage: MAX send failed:', res.error)
-      await markMessageFailed(messageId).catch(() => {})
+      await markMessageFailed(messageId, res.error).catch(() => {})
       return
     }
     if (res.data.mid) {
@@ -41,6 +42,9 @@ export async function deliverMaxMessage(
     }
   } catch (err) {
     console.error('[v0] deliverMaxMessage: unexpected error:', err)
-    await markMessageFailed(messageId).catch(() => {})
+    await markMessageFailed(
+      messageId,
+      err instanceof Error ? err.message : 'Ошибка отправки в MAX.',
+    ).catch(() => {})
   }
 }

@@ -11,6 +11,7 @@ import {
   setMessageReaction,
 } from '@/lib/data'
 import { publishRealtime } from '@/lib/realtime'
+import { setVkTyping } from '@/lib/vk-dispatch'
 
 export interface SimpleResult {
   ok: boolean
@@ -31,7 +32,17 @@ export async function setAgentTypingAction(
 ): Promise<void> {
   const session = await requireManager()
   const conv = await getConversation(conversationId, session.sub)
-  if (!conv || conv.channelType !== 'livechat') return
+  if (!conv) return
+
+  // VK exposes a real "typing…" indicator via messages.setActivity — surface it
+  // to the user through the account's proxy. Only meaningful when turning on.
+  if (conv.channelType === 'vk') {
+    if (typing) await setVkTyping(conversationId)
+    return
+  }
+
+  // Live-chat typing is an ephemeral realtime event relayed to the widget.
+  if (conv.channelType !== 'livechat') return
   await publishRealtime({
     type: 'typing',
     actor: 'agent',

@@ -66,6 +66,8 @@ export interface RealtimeEvent {
    * disambiguated by `type`.
    */
   status?: string
+  /** Failure reason for a message event whose status is 'failed'. */
+  errorReason?: string | null
   sessionStatus?: string
   lastMessage?: string
   unread?: number

@@ -390,6 +390,12 @@ export interface Message {
   deletedOrigin?: 'self' | 'remote'
   /** Delivery/read status for outbound messages (undefined for inbound). */
   status?: MessageStatus
+  /**
+   * Human-readable reason a send failed (only set when status === 'failed'),
+   * e.g. "Пользователь запретил сообщения от сообщества" (VK) or "Окно 24 часов
+   * закрыто" (WhatsApp). Shown in the inbox next to the failed marker.
+   */
+  errorReason?: string
 }
 
 /** Compact preview of a quoted (replied-to) message. */

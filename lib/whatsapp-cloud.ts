@@ -10,6 +10,9 @@
  * Docs: https://developers.facebook.com/docs/whatsapp/cloud-api
  */
 
+import 'server-only'
+import { proxiedFetch, type ProxyDescriptor } from './proxy-agent'
+
 const GRAPH_VERSION = 'v22.0'
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`
 
@@ -17,22 +20,62 @@ export type CloudResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; error: string }
 
+/**
+ * Turn a raw Meta Graph error (code/message) into a short, human-readable
+ * Russian reason for the panel — most importantly the 24-hour customer-service
+ * window being closed, which is the single most common send failure.
+ *
+ * Reference: https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes
+ */
+export function whatsappErrorText(
+  code: number | undefined,
+  fallback: string,
+): string {
+  switch (code) {
+    case 131047:
+      return 'Окно 24 часов закрыто: свободный текст можно отправить только в течение 24 ч после сообщения клиента. Используйте шаблон (template).'
+    case 131051:
+      return 'Такой тип сообщения не поддерживается для этого получателя.'
+    case 131026:
+      return 'Сообщение недоставляемо: номер не в WhatsApp или не может его получить.'
+    case 470:
+    case 131048:
+      return 'Отправка вне сессии заблокирована (лимит/окно переписки). Нужен одобренный шаблон.'
+    case 131052:
+      return 'Не удалось загрузить/скачать медиа.'
+    case 100:
+      return 'Некорректный запрос к WhatsApp (проверьте номер получателя).'
+    case 190:
+      return 'Токен доступа WhatsApp истёк или отозван. Обновите его в настройках.'
+    case 80007:
+    case 130429:
+      return 'Превышен лимит запросов WhatsApp — повторите позже.'
+    default:
+      return fallback || 'WhatsApp отклонил отправку сообщения.'
+  }
+}
+
 async function graph<T>(
   path: string,
   token: string,
   init?: RequestInit,
+  proxy?: ProxyDescriptor | null,
 ): Promise<CloudResult<T>> {
   let res: Response
   try {
-    res = await fetch(`${GRAPH_BASE}/${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        ...(init?.headers ?? {}),
+    res = await proxiedFetch(
+      `${GRAPH_BASE}/${path}`,
+      {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...(init?.headers ?? {}),
+        },
+        cache: 'no-store',
       },
-      cache: 'no-store',
-    })
+      proxy,
+    )
   } catch (err) {
     return {
       ok: false,
@@ -50,11 +93,15 @@ async function graph<T>(
   }
 
   if (!res.ok) {
-    const apiErr = (json as { error?: { message?: string } } | null)?.error
+    const apiErr = (json as { error?: { message?: string; code?: number } } | null)
+      ?.error
     return {
       ok: false,
       status: res.status,
-      error: apiErr?.message || text || `HTTP ${res.status}`,
+      error: whatsappErrorText(
+        apiErr?.code,
+        apiErr?.message || text || `HTTP ${res.status}`,
+      ),
     }
   }
   return { ok: true, data: (json ?? {}) as T }
@@ -118,6 +165,7 @@ export function sendText(
   token: string,
   to: string,
   body: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<CloudResult<SendResult>> {
   return graph<SendResult>(
     `${encodeURIComponent(phoneNumberId)}/messages`,
@@ -132,6 +180,7 @@ export function sendText(
         text: { preview_url: false, body },
       }),
     },
+    proxy,
   )
 }
 
@@ -143,15 +192,21 @@ export function markRead(
   phoneNumberId: string,
   token: string,
   messageId: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<CloudResult<unknown>> {
-  return graph(`${encodeURIComponent(phoneNumberId)}/messages`, token, {
-    method: 'POST',
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      status: 'read',
-      message_id: messageId,
-    }),
-  })
+  return graph(
+    `${encodeURIComponent(phoneNumberId)}/messages`,
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: messageId,
+      }),
+    },
+    proxy,
+  )
 }
 
 /* --------------------------------- Media --------------------------------- */
@@ -174,8 +229,9 @@ export interface MediaUrlInfo {
 export function getMediaUrl(
   mediaId: string,
   token: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<CloudResult<MediaUrlInfo>> {
-  return graph<MediaUrlInfo>(encodeURIComponent(mediaId), token)
+  return graph<MediaUrlInfo>(encodeURIComponent(mediaId), token, undefined, proxy)
 }
 
 /**
@@ -186,12 +242,17 @@ export function getMediaUrl(
 export async function downloadMedia(
   url: string,
   token: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<Response | null> {
   try {
-    return await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
-    })
+    return await proxiedFetch(
+      url,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      },
+      proxy,
+    )
   } catch (err) {
     console.error('[v0] downloadMedia: fetch failed:', err)
     return null
@@ -209,6 +270,7 @@ export async function uploadMedia(
   bytes: Blob,
   mime: string,
   filename = 'file',
+  proxy?: ProxyDescriptor | null,
 ): Promise<CloudResult<{ id: string }>> {
   const form = new FormData()
   form.append('messaging_product', 'whatsapp')
@@ -217,7 +279,7 @@ export async function uploadMedia(
 
   let res: Response
   try {
-    res = await fetch(
+    res = await proxiedFetch(
       `${GRAPH_BASE}/${encodeURIComponent(phoneNumberId)}/media`,
       {
         method: 'POST',
@@ -225,6 +287,7 @@ export async function uploadMedia(
         body: form,
         cache: 'no-store',
       },
+      proxy,
     )
   } catch (err) {
     return {
@@ -264,6 +327,7 @@ export function sendMedia(
   mediaId: string,
   caption?: string,
   filename?: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<CloudResult<SendResult>> {
   const media: Record<string, unknown> = { id: mediaId }
   if (caption && (kind === 'image' || kind === 'video' || kind === 'document')) {
@@ -283,5 +347,6 @@ export function sendMedia(
         [kind]: media,
       }),
     },
+    proxy,
   )
 }

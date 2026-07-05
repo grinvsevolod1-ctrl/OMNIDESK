@@ -36,10 +36,11 @@ export async function deliverWhatsappMessage(
       dispatch.token,
       dispatch.contactHandle,
       body,
+      dispatch.proxy,
     )
     if (!res.ok) {
       console.error('[v0] deliverWhatsappMessage: send failed:', res.error)
-      await markMessageFailed(messageId).catch(() => {})
+      await markMessageFailed(messageId, res.error).catch(() => {})
       return true
     }
     const mid = res.data.messages?.[0]?.id
@@ -49,7 +50,10 @@ export async function deliverWhatsappMessage(
     return true
   } catch (err) {
     console.error('[v0] deliverWhatsappMessage: unexpected error:', err)
-    await markMessageFailed(messageId).catch(() => {})
+    await markMessageFailed(
+      messageId,
+      err instanceof Error ? err.message : 'Ошибка отправки в WhatsApp.',
+    ).catch(() => {})
     return true
   }
 }
@@ -71,7 +75,12 @@ export async function markWhatsappConversationRead(
     // Still a Cloud conversation even if there's no inbound id to ack yet.
     if (!providerId) return true
 
-    await markRead(dispatch.phoneNumberId, dispatch.token, providerId)
+    await markRead(
+      dispatch.phoneNumberId,
+      dispatch.token,
+      providerId,
+      dispatch.proxy,
+    )
     return true
   } catch (err) {
     console.error('[v0] markWhatsappConversationRead: unexpected error:', err)

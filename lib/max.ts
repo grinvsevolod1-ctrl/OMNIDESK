@@ -1,4 +1,5 @@
 import 'server-only'
+import { proxiedFetch, type ProxyDescriptor } from './proxy-agent'
 
 /**
  * MAX Bot API client (https://dev.max.ru/docs-api).
@@ -90,17 +91,45 @@ function tokenUrl(path: string, token: string, params?: Record<string, string>) 
   return url.toString()
 }
 
+/**
+ * Turn a raw MAX API failure into a short, human-readable Russian reason for the
+ * panel. MAX returns `{ code, message }`; we map the common send failures and
+ * fall back to the API's own message.
+ */
+export function maxErrorText(
+  status: number | undefined,
+  code: string | undefined,
+  fallback: string,
+): string {
+  if (status === 401 || code === 'verify.token')
+    return 'Токен бота MAX недействителен. Переподключите аккаунт.'
+  if (status === 403 || code === 'access.denied')
+    return 'Нет доступа: пользователь не начинал диалог с ботом или заблокировал его.'
+  if (status === 404 || code === 'not.found')
+    return 'Получатель не найден в MAX.'
+  if (status === 429 || code === 'too.many.requests')
+    return 'MAX ограничил частоту запросов — повторите позже.'
+  if (status === 400 && /text/i.test(fallback))
+    return 'MAX отклонил текст сообщения (проверьте длину/формат).'
+  return fallback || 'MAX отклонил отправку сообщения.'
+}
+
 async function request<T>(
   url: string,
   init: RequestInit,
+  proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<T>> {
   try {
-    const res = await fetch(url, {
-      ...init,
-      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
-      // Always go to the network; never cache bot API calls.
-      cache: 'no-store',
-    })
+    const res = await proxiedFetch(
+      url,
+      {
+        ...init,
+        headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+        // Always go to the network; never cache bot API calls.
+        cache: 'no-store',
+      },
+      proxy,
+    )
     const text = await res.text()
     let parsed: unknown = null
     if (text) {
@@ -111,10 +140,16 @@ async function request<T>(
       }
     }
     if (!res.ok) {
-      const message =
-        (parsed as { message?: string; code?: string } | null)?.message ||
-        `MAX API error ${res.status}`
-      return { ok: false, error: message, status: res.status }
+      const api = parsed as { message?: string; code?: string } | null
+      return {
+        ok: false,
+        error: maxErrorText(
+          res.status,
+          api?.code,
+          api?.message || `MAX API error ${res.status}`,
+        ),
+        status: res.status,
+      }
     }
     return { ok: true, data: (parsed ?? {}) as T }
   } catch (err) {
@@ -129,8 +164,11 @@ async function request<T>(
  * Validate a bot token by fetching the bot's own identity. Used at connect time
  * to confirm the token is real before we persist the channel.
  */
-export async function getMe(token: string): Promise<MaxResult<MaxBotInfo>> {
-  return request<MaxBotInfo>(tokenUrl('/me', token), { method: 'GET' })
+export async function getMe(
+  token: string,
+  proxy?: ProxyDescriptor | null,
+): Promise<MaxResult<MaxBotInfo>> {
+  return request<MaxBotInfo>(tokenUrl('/me', token), { method: 'GET' }, proxy)
 }
 
 /**
@@ -143,21 +181,29 @@ export async function subscribeWebhook(
   url: string,
   secret: string,
   updateTypes: string[] = ['message_created', 'bot_started'],
+  proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ success?: boolean }>> {
-  return request(tokenUrl('/subscriptions', token), {
-    method: 'POST',
-    body: JSON.stringify({ url, secret, update_types: updateTypes }),
-  })
+  return request(
+    tokenUrl('/subscriptions', token),
+    {
+      method: 'POST',
+      body: JSON.stringify({ url, secret, update_types: updateTypes }),
+    },
+    proxy,
+  )
 }
 
 /** Remove a previously-registered webhook subscription for this bot. */
 export async function unsubscribeWebhook(
   token: string,
   url: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ success?: boolean }>> {
-  return request(tokenUrl('/subscriptions', token, { url }), {
-    method: 'DELETE',
-  })
+  return request(
+    tokenUrl('/subscriptions', token, { url }),
+    { method: 'DELETE' },
+    proxy,
+  )
 }
 
 /**
@@ -169,6 +215,7 @@ export async function sendMessage(
   token: string,
   userId: string | number,
   text: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ mid: string | null }>> {
   const res = await request<MaxSendResult>(
     tokenUrl('/messages', token, { user_id: String(userId) }),
@@ -176,6 +223,7 @@ export async function sendMessage(
       method: 'POST',
       body: JSON.stringify({ text }),
     },
+    proxy,
   )
   if (!res.ok) return res
   return { ok: true, data: { mid: res.data.message?.body?.mid ?? null } }

@@ -1,6 +1,7 @@
 import { randomUUID, randomBytes } from 'crypto'
 import { query } from './db'
 import { decrypt, encrypt, maskSecret } from './crypto'
+import type { ProxyDescriptor } from './proxy-agent'
 import { notifyLeadConversionOnFirstReply } from './leads-confirm'
 import { whatsappLinkFromPhone } from './offhours'
 import {
@@ -804,6 +805,181 @@ export async function managerCanUseProxy(
   return rows.length > 0
 }
 
+/**
+ * Resolve a proxy's connection descriptor WITH decrypted credentials, for
+ * server-side routing of provider HTTP traffic (see lib/proxy-agent.ts). This
+ * returns plaintext proxy credentials — NEVER expose it to the client.
+ */
+export async function getProxyDescriptorById(
+  id: string,
+): Promise<ProxyDescriptor | null> {
+  const rows = await query<ProxyRow>(
+    'SELECT * FROM proxies WHERE id = $1 LIMIT 1',
+    [id],
+  )
+  const r = rows[0]
+  if (!r) return null
+  let username: string | null = null
+  let password: string | null = null
+  try {
+    if (r.username_enc) username = decrypt(r.username_enc)
+    if (r.password_enc) password = decrypt(r.password_enc)
+  } catch (err) {
+    console.error(
+      '[v0] getProxyDescriptorById: failed to decrypt credentials:',
+      err,
+    )
+  }
+  return {
+    id: r.id,
+    kind: r.kind,
+    host: r.host,
+    port: Number(r.port),
+    username,
+    password,
+  }
+}
+
+/**
+ * Resolve the proxy descriptor a channel routes through (null when it has none).
+ * Used by the VK/MAX/WhatsApp dispatchers so every provider call exits via the
+ * account's dedicated proxy IP.
+ */
+export async function getProxyForChannel(
+  channelId: string,
+): Promise<ProxyDescriptor | null> {
+  const rows = await query<{ proxy_id: string | null }>(
+    'SELECT proxy_id FROM channels WHERE id = $1 LIMIT 1',
+    [channelId],
+  )
+  const pid = rows[0]?.proxy_id
+  if (!pid) return null
+  return getProxyDescriptorById(pid)
+}
+
+/**
+ * Proxy allocation rule: a proxy serves AT MOST ONE account of each type. True
+ * when another channel already uses this proxy for the same type (optionally
+ * excluding a channel being edited).
+ */
+export async function proxyTypeInUse(
+  proxyId: string,
+  type: ChannelType,
+  excludeChannelId?: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM channels
+      WHERE proxy_id = $1 AND type = $2
+        AND ($3::text IS NULL OR id <> $3)
+      LIMIT 1`,
+    [proxyId, type, excludeChannelId ?? null],
+  )
+  return rows.length > 0
+}
+
+/**
+ * Proxies available to assign to a NEW account of `type`: every proxy NOT
+ * already bound to another account of the same type (different types may share a
+ * proxy). Optionally restricted to a manager's assigned/owned proxies.
+ */
+export async function listAvailableProxiesForType(
+  type: ChannelType,
+  managerId?: string,
+): Promise<Proxy[]> {
+  const rows = await query<ProxyRow>(
+    `SELECT p.*, m.name AS assigned_manager_name, o.name AS owner_manager_name
+       FROM proxies p
+       LEFT JOIN managers m ON m.id = p.manager_id
+       LEFT JOIN managers o ON o.id = p.created_by_manager_id
+      WHERE NOT EXISTS (
+              SELECT 1 FROM channels c
+               WHERE c.proxy_id = p.id AND c.type = $1
+            )
+        AND ($2::text IS NULL
+             OR p.manager_id = $2
+             OR p.created_by_manager_id = $2)
+      ORDER BY p.created_at DESC`,
+    [type, managerId ?? null],
+  )
+  return rows.map(toProxy)
+}
+
+/* ----------------------- Admin channel management ------------------- */
+
+export interface AdminChannel extends Channel {
+  /** Owner manager display name (null when unassigned/deleted). */
+  managerName: string | null
+  /** Assigned proxy label, or null when the account has no proxy (legacy). */
+  proxyLabel: string | null
+}
+
+/**
+ * Admin: every messaging account (excludes live-chat, which is managed on its
+ * own page) with owner + proxy joined, for the /admin/accounts table.
+ */
+export async function listAdminChannels(): Promise<AdminChannel[]> {
+  const rows = await query<
+    ChannelRow & { manager_name: string | null; proxy_label: string | null }
+  >(
+    `SELECT c.*, m.name AS manager_name, p.label AS proxy_label
+       FROM channels c
+       LEFT JOIN managers m ON m.id = c.manager_id
+       LEFT JOIN proxies p ON p.id = c.proxy_id
+      WHERE c.type IN ('telegram', 'whatsapp', 'vk', 'max')
+      ORDER BY c.created_at DESC`,
+  )
+  return rows.map((r) => ({
+    ...toChannel(r),
+    managerName: r.manager_name ?? null,
+    proxyLabel: r.proxy_label ?? null,
+  }))
+}
+
+/** Admin/webhook: fetch any channel by id (no manager scope). */
+export async function getChannelById(id: string): Promise<Channel | null> {
+  const rows = await query<ChannelRow>(
+    'SELECT * FROM channels WHERE id = $1 LIMIT 1',
+    [id],
+  )
+  return rows[0] ? toChannel(rows[0]) : null
+}
+
+/** Admin: reassign the proxy bound to a channel. */
+export async function updateChannelProxy(
+  id: string,
+  proxyId: string,
+): Promise<void> {
+  await query('UPDATE channels SET proxy_id = $2 WHERE id = $1', [id, proxyId])
+}
+
+/** Admin: patch a channel's live session status by id (no manager scope). */
+export async function updateChannelSessionById(
+  id: string,
+  patch: { sessionStatus?: SessionStatus; lastError?: string | null },
+): Promise<void> {
+  const touchError = Object.prototype.hasOwnProperty.call(patch, 'lastError')
+  await query(
+    `UPDATE channels
+        SET session_status = COALESCE($2, session_status),
+            last_error = CASE WHEN $3 THEN $4 ELSE last_error END
+      WHERE id = $1`,
+    [id, patch.sessionStatus ?? null, touchError, patch.lastError ?? null],
+  )
+}
+
+/** Admin: shallow-merge a channel's JSONB config by id (no manager scope). */
+export async function mergeChannelConfigById(
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await query(
+    `UPDATE channels
+        SET config = COALESCE(config, '{}'::jsonb) || $2::jsonb
+      WHERE id = $1`,
+    [id, JSON.stringify(patch)],
+  )
+}
+
 /* ------------------------- Proxy analytics ------------------------- */
 
 /** System-wide proxy analytics for the admin proxies page. */
@@ -1146,6 +1322,7 @@ interface MessageRow {
   deleted_at: string | Date | null
   deleted_origin: 'self' | 'remote' | null
   status: MessageStatus | null
+  error_reason: string | null
   reply_to_id: string | null
   reply_to_author: string | null
   reply_to_body: string | null
@@ -1170,6 +1347,7 @@ function toMessage(r: {
   deleted_at?: string | Date | null
   deleted_origin?: 'self' | 'remote' | null
   status?: MessageStatus | null
+  error_reason?: string | null
   reply_to_id?: string | null
   reply_to_author?: string | null
   reply_to_body?: string | null
@@ -1199,6 +1377,7 @@ function toMessage(r: {
     ...(r.deleted_at ? { deletedAt: new Date(r.deleted_at).toISOString() } : {}),
     ...(r.deleted_origin ? { deletedOrigin: r.deleted_origin } : {}),
     ...(r.status ? { status: r.status } : {}),
+    ...(r.error_reason ? { errorReason: r.error_reason } : {}),
     ...(r.reply_to_id
       ? {
           replyTo: {
@@ -1220,7 +1399,7 @@ function toMessage(r: {
  * alias; `rt` is the joined reply-target alias.
  */
 const MESSAGE_SELECT = `m.id, m.conversation_id, m.direction, m.body, m.author, m.created_at,
-        m.media_type, m.media_mime, m.media_name, m.reactions, m.deleted_at, m.deleted_origin, m.status,
+        m.media_type, m.media_mime, m.media_name, m.reactions, m.deleted_at, m.deleted_origin, m.status, m.error_reason,
         rt.id AS reply_to_id, rt.author AS reply_to_author,
         rt.body AS reply_to_body, rt.media_type AS reply_to_media_type`
 const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_message_id`
@@ -2354,7 +2533,11 @@ export async function recordMaxInbound(input: {
  */
 export async function getMaxDispatchByConversationId(
   conversationId: string,
-): Promise<{ channel: MaxChannel; contactHandle: string } | null> {
+): Promise<{
+  channel: MaxChannel
+  contactHandle: string
+  proxy: ProxyDescriptor | null
+} | null> {
   const rows = await query<{ channel_id: string; contact_handle: string }>(
     `SELECT c.channel_id, c.contact_handle
        FROM conversations c
@@ -2367,7 +2550,8 @@ export async function getMaxDispatchByConversationId(
   if (!r) return null
   const channel = await getMaxChannelById(r.channel_id)
   if (!channel) return null
-  return { channel, contactHandle: r.contact_handle }
+  const proxy = await getProxyForChannel(r.channel_id)
+  return { channel, contactHandle: r.contact_handle, proxy }
 }
 
 /* ------------------------------- VK -------------------------------- */
@@ -2477,7 +2661,11 @@ export async function recordVkInbound(input: {
  */
 export async function getVkDispatchByConversationId(
   conversationId: string,
-): Promise<{ channel: VkChannel; contactHandle: string } | null> {
+): Promise<{
+  channel: VkChannel
+  contactHandle: string
+  proxy: ProxyDescriptor | null
+} | null> {
   const rows = await query<{ channel_id: string; contact_handle: string }>(
     `SELECT c.channel_id, c.contact_handle
        FROM conversations c
@@ -2490,7 +2678,8 @@ export async function getVkDispatchByConversationId(
   if (!r) return null
   const channel = await getVkChannelById(r.channel_id)
   if (!channel) return null
-  return { channel, contactHandle: r.contact_handle }
+  const proxy = await getProxyForChannel(r.channel_id)
+  return { channel, contactHandle: r.contact_handle, proxy }
 }
 
 /* ------------------------- WhatsApp Cloud API ------------------------- */
@@ -2827,12 +3016,14 @@ export async function getWhatsappCloudDispatchByConversationId(
   phoneNumberId: string
   token: string
   contactHandle: string
+  proxy: ProxyDescriptor | null
 } | null> {
   const rows = await query<{
+    channel_id: string
     phone_number_id: string | null
     contact_handle: string
   }>(
-    `SELECT ch.config->>'phoneNumberId' AS phone_number_id, c.contact_handle
+    `SELECT ch.id AS channel_id, ch.config->>'phoneNumberId' AS phone_number_id, c.contact_handle
        FROM conversations c
        JOIN channels ch ON ch.id = c.channel_id
       WHERE c.id = $1 AND ch.type = 'whatsapp'
@@ -2843,10 +3034,12 @@ export async function getWhatsappCloudDispatchByConversationId(
   if (!r?.phone_number_id) return null
   const app = await getWhatsappAppConfig()
   if (!app) return null
+  const proxy = await getProxyForChannel(r.channel_id)
   return {
     phoneNumberId: r.phone_number_id,
     token: app.accessToken,
     contactHandle: r.contact_handle,
+    proxy,
   }
 }
 
@@ -2962,9 +3155,24 @@ export async function setMessageProviderId(
   )
 }
 
-/** Flag an outbound row as failed (delivery to the provider was rejected). */
-export async function markMessageFailed(messageId: string): Promise<void> {
-  await query(`UPDATE messages SET status = 'failed' WHERE id = $1`, [messageId])
+/**
+ * Flag an outbound row as failed (delivery to the provider was rejected) and
+ * store a short, human-readable reason so the panel can show WHY it failed
+ * (e.g. VK "user disallowed messages", WhatsApp "24h window closed"). The reason
+ * is capped so it can never blow the realtime NOTIFY payload budget.
+ */
+export async function markMessageFailed(
+  messageId: string,
+  reason?: string | null,
+): Promise<void> {
+  const trimmed =
+    typeof reason === 'string' && reason.trim()
+      ? reason.trim().slice(0, 300)
+      : null
+  await query(
+    `UPDATE messages SET status = 'failed', error_reason = $2 WHERE id = $1`,
+    [messageId, trimmed],
+  )
 }
 
 /* ----------------------- Off-hours messengers ----------------------- */

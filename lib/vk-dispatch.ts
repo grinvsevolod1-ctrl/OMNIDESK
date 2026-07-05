@@ -4,7 +4,7 @@ import {
   markMessageFailed,
   setMessageProviderId,
 } from './data'
-import { sendMessage } from './vk'
+import { markAsRead, sendMessage, setActivity } from './vk'
 
 /**
  * Deliver an already-persisted outbound message to VK.
@@ -30,10 +30,11 @@ export async function deliverVkMessage(
       dispatch.channel.token,
       dispatch.contactHandle,
       body,
+      dispatch.proxy,
     )
     if (!res.ok) {
       console.error('[v0] deliverVkMessage: VK send failed:', res.error)
-      await markMessageFailed(messageId).catch(() => {})
+      await markMessageFailed(messageId, res.error).catch(() => {})
       return
     }
     if (res.data.messageId) {
@@ -41,6 +42,53 @@ export async function deliverVkMessage(
     }
   } catch (err) {
     console.error('[v0] deliverVkMessage: unexpected error:', err)
-    await markMessageFailed(messageId).catch(() => {})
+    await markMessageFailed(
+      messageId,
+      err instanceof Error ? err.message : 'Ошибка отправки в VK.',
+    ).catch(() => {})
+  }
+}
+
+/**
+ * Show the "typing…" indicator to the VK user for this conversation. Routed
+ * through the account's proxy. Best-effort; no-ops for non-VK conversations.
+ * Returns true when it handled a VK conversation (so callers can branch).
+ */
+export async function setVkTyping(conversationId: string): Promise<boolean> {
+  try {
+    const dispatch = await getVkDispatchByConversationId(conversationId)
+    if (!dispatch) return false
+    await setActivity(
+      dispatch.channel.token,
+      dispatch.contactHandle,
+      dispatch.proxy,
+    )
+    return true
+  } catch (err) {
+    console.error('[v0] setVkTyping: unexpected error:', err)
+    return true
+  }
+}
+
+/**
+ * Send a VK read receipt for the conversation (marks the dialog read so the
+ * user sees their messages were read). Best-effort; no-ops for non-VK
+ * conversations. Returns true when it handled a VK conversation.
+ */
+export async function markVkConversationRead(
+  conversationId: string,
+): Promise<boolean> {
+  try {
+    const dispatch = await getVkDispatchByConversationId(conversationId)
+    if (!dispatch) return false
+    await markAsRead(
+      dispatch.channel.token,
+      dispatch.contactHandle,
+      dispatch.proxy,
+    )
+    return true
+  } catch (err) {
+    console.error('[v0] markVkConversationRead: unexpected error:', err)
+    return true
   }
 }
