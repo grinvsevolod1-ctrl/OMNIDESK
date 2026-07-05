@@ -171,17 +171,31 @@ export async function sendMessageAction(
       }
     }
   } else if (conv && conv.channelType === 'telegram') {
-    await enqueueJob({
-      channelId: conv.channelId,
-      managerId: session.sub,
-      action: 'send_message',
-      // Pass the optimistic row id so the worker can backfill the provider
-      // message id and attach delivery/read receipts — and flag the row
-      // 'failed' if the send is rejected.
-      payload: { target: conv.contactHandle, body: text, messageId: msg.id },
-    }).catch((err) => {
+    try {
+      await enqueueJob({
+        channelId: conv.channelId,
+        managerId: session.sub,
+        action: 'send_message',
+        // Pass the optimistic row id so the worker can backfill the provider
+        // message id and attach delivery/read receipts — and flag the row
+        // 'failed' if the send is rejected.
+        payload: { target: conv.contactHandle, body: text, messageId: msg.id },
+      })
+    } catch (err) {
+      // If we can't even queue the job, the worker will never see this message.
+      // Don't tell the operator it was "sent" — flag the row failed and report
+      // the failure, mirroring the WhatsApp branch above.
       console.error('[panel] failed to enqueue send_message job:', err)
-    })
+      await markMessageFailed(
+        msg.id,
+        'Не удалось поставить сообщение в очередь. Попробуйте ещё раз.',
+      ).catch(() => {})
+      revalidatePath('/app/inbox')
+      return {
+        ok: false,
+        message: 'Не удалось отправить — сообщение не поставлено в очередь.',
+      }
+    }
   } else if (conv && conv.channelType === 'max') {
     // Push straight to MAX and backfill the provider id (or flag failed).
     await deliverMaxMessage(conversationId, msg.id, text)
