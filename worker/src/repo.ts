@@ -1,0 +1,1040 @@
+import { query, one } from './db.js'
+import { decrypt, encrypt } from './crypto.js'
+
+export type SessionStatus =
+  | 'idle'
+  | 'starting'
+  | 'qr_pending'
+  | 'code_pending'
+  | 'password_pending'
+  | 'online'
+  | 'offline'
+  | 'error'
+  | 'logged_out'
+  // The account is being throttled / temporarily restricted by the provider, or
+  // we deliberately backed off after repeated failed reconnects to avoid
+  // hammering WhatsApp/Telegram (which itself risks a ban). Distinct from
+  // 'error' so the panel can show a "cooling down" state and auto-resume.
+  | 'rate_limited'
+
+export interface ChannelRecord {
+  id: string
+  manager_id: string
+  type: 'telegram' | 'whatsapp' | 'livechat'
+  name: string
+  detail: string
+  status: string
+  session_status: SessionStatus
+  phone: string | null
+  proxy_id: string | null
+  /**
+   * Soft pause: when true the session stays connected/alive but inbound
+   * messages are NOT written to the inbox. Independent of session_status.
+   */
+  ingest_paused: boolean
+  /** Channel config JSON. For WhatsApp, provider:'cloud' marks Cloud API. */
+  config: Record<string, unknown> | null
+}
+
+export interface JobRecord {
+  id: string
+  channel_id: string
+  manager_id: string
+  action: string
+  payload: Record<string, unknown>
+  status: string
+}
+
+export interface ProxyConfig {
+  kind: 'socks5' | 'http' | 'mtproto'
+  host: string
+  port: number
+  username?: string
+  password?: string
+  secret?: string
+}
+
+/* ------------------------------- Jobs ------------------------------- */
+
+/** Atomically claim a single queued job (skip locked for concurrency safety). */
+export async function claimJob(jobId: string): Promise<JobRecord | null> {
+  const row = await one<JobRecord>(
+    `UPDATE channel_jobs
+       SET status = 'running', updated_at = now()
+     WHERE id = $1 AND status = 'queued'
+     RETURNING id, channel_id, manager_id, action, payload, status`,
+    [jobId],
+  )
+  return row
+}
+
+/** Claim any leftover queued jobs on startup (in case NOTIFY was missed). */
+export async function claimNextQueued(): Promise<JobRecord | null> {
+  return one<JobRecord>(
+    `UPDATE channel_jobs
+       SET status = 'running', updated_at = now()
+     WHERE id = (
+       SELECT id FROM channel_jobs
+       WHERE status = 'queued'
+       ORDER BY created_at
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1
+     )
+     RETURNING id, channel_id, manager_id, action, payload, status`,
+  )
+}
+
+export async function finishJob(
+  jobId: string,
+  ok: boolean,
+  result: Record<string, unknown> | null,
+  error: string | null,
+): Promise<void> {
+  await query(
+    `UPDATE channel_jobs
+       SET status = $2, result = $3, last_error = $4, updated_at = now()
+     WHERE id = $1`,
+    [jobId, ok ? 'done' : 'error', result ? JSON.stringify(result) : null, error],
+  )
+}
+
+/* ----------------------------- Channels ----------------------------- */
+
+export async function getChannel(id: string): Promise<ChannelRecord | null> {
+  return one<ChannelRecord>('SELECT * FROM channels WHERE id = $1', [id])
+}
+
+export async function listLiveChannels(): Promise<ChannelRecord[]> {
+  // Cloud API WhatsApp channels (config.provider = 'cloud') are served by the
+  // Next.js webhook, not this worker — exclude them so no Baileys socket is
+  // ever opened for them. Telegram and any legacy Baileys WhatsApp stay.
+  return query<ChannelRecord>(
+    `SELECT * FROM channels
+     WHERE type IN ('telegram', 'whatsapp')
+       AND session_status IN ('online', 'offline', 'starting')
+       AND COALESCE(config->>'provider', '') <> 'cloud'`,
+  )
+}
+
+export async function setSession(
+  channelId: string,
+  sessionStatus: SessionStatus,
+  opts: { lastError?: string | null; markConnected?: boolean } = {},
+): Promise<void> {
+  const status =
+    sessionStatus === 'online'
+      ? 'connected'
+      : sessionStatus === 'error' || sessionStatus === 'rate_limited'
+        ? 'error'
+        : sessionStatus === 'logged_out' || sessionStatus === 'offline'
+          ? 'disconnected'
+          : 'pending'
+  await query(
+    `UPDATE channels
+       SET session_status = $2,
+           status = $3,
+           last_error = $4,
+           last_checked_at = now(),
+           connected_at = CASE WHEN $5 THEN now() ELSE connected_at END
+     WHERE id = $1`,
+    [
+      channelId,
+      sessionStatus,
+      status,
+      opts.lastError ?? null,
+      opts.markConnected ?? sessionStatus === 'online',
+    ],
+  )
+}
+
+/**
+ * Toggle the soft-pause flag for a channel. The live session is left untouched
+ * (still connected); only inbound persistence is gated on this flag.
+ */
+export async function setIngestPaused(
+  channelId: string,
+  paused: boolean,
+): Promise<void> {
+  await query(
+    'UPDATE channels SET ingest_paused = $2, last_checked_at = now() WHERE id = $1',
+    [channelId, paused],
+  )
+}
+
+export async function setChannelDetail(
+  channelId: string,
+  detail: string,
+): Promise<void> {
+  await query('UPDATE channels SET detail = $2 WHERE id = $1', [
+    channelId,
+    detail,
+  ])
+}
+
+/**
+ * Shallow-merge keys into the channel's JSONB config. Used to record where
+ * Telegram actually delivered the login code (`codeDelivery`: 'app' | 'sms')
+ * so the UI can tell the manager whether to look in the Telegram app or in SMS.
+ */
+export async function mergeChannelConfig(
+  channelId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await query(
+    `UPDATE channels SET config = COALESCE(config, '{}'::jsonb) || $2::jsonb WHERE id = $1`,
+    [channelId, JSON.stringify(patch)],
+  )
+}
+
+/* ------------------------------ Secrets ----------------------------- */
+
+interface SecretRow {
+  channel_id: string
+  tg_session_enc: string | null
+  wa_state_enc: string | null
+  token_enc: string | null
+}
+
+export async function getTgSession(channelId: string): Promise<string> {
+  const row = await one<SecretRow>(
+    'SELECT * FROM channel_secrets WHERE channel_id = $1',
+    [channelId],
+  )
+  if (!row?.tg_session_enc) return ''
+  return decrypt(row.tg_session_enc)
+}
+
+export async function saveTgSession(
+  channelId: string,
+  session: string,
+): Promise<void> {
+  const enc = encrypt(session)
+  await query(
+    `INSERT INTO channel_secrets (channel_id, tg_session_enc, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (channel_id)
+     DO UPDATE SET tg_session_enc = $2, updated_at = now()`,
+    [channelId, enc],
+  )
+}
+
+/**
+ * WhatsApp/Baileys auth state is stored as a BufferJSON-serialized string
+ * (handled by the caller) and encrypted as an opaque blob here.
+ */
+export async function getWaState(channelId: string): Promise<string | null> {
+  const row = await one<SecretRow>(
+    'SELECT * FROM channel_secrets WHERE channel_id = $1',
+    [channelId],
+  )
+  if (!row?.wa_state_enc) return null
+  return decrypt(row.wa_state_enc)
+}
+
+export async function saveWaState(
+  channelId: string,
+  serialized: string,
+): Promise<void> {
+  const enc = encrypt(serialized)
+  await query(
+    `INSERT INTO channel_secrets (channel_id, wa_state_enc, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (channel_id)
+     DO UPDATE SET wa_state_enc = $2, updated_at = now()`,
+    [channelId, enc],
+  )
+}
+
+export async function clearSecrets(channelId: string): Promise<void> {
+  await query('DELETE FROM channel_secrets WHERE channel_id = $1', [channelId])
+}
+
+/* ------------------------------ Proxies ----------------------------- */
+
+interface ProxyRow {
+  id: string
+  kind: 'socks5' | 'http' | 'mtproto'
+  host: string
+  port: number
+  username_enc: string | null
+  password_enc: string | null
+  secret_enc: string | null
+}
+
+function rowToProxyConfig(row: ProxyRow): ProxyConfig {
+  return {
+    kind: row.kind,
+    host: row.host,
+    port: Number(row.port),
+    username: row.username_enc ? decrypt(row.username_enc) : undefined,
+    password: row.password_enc ? decrypt(row.password_enc) : undefined,
+    secret: row.secret_enc ? decrypt(row.secret_enc) : undefined,
+  }
+}
+
+export async function getProxyForChannel(
+  channelId: string,
+): Promise<ProxyConfig | null> {
+  const row = await one<ProxyRow>(
+    `SELECT p.* FROM proxies p
+     JOIN channels c ON c.proxy_id = p.id
+     WHERE c.id = $1`,
+    [channelId],
+  )
+  if (!row) return null
+  return rowToProxyConfig(row)
+}
+
+/** Load a proxy config directly by its id (used by the admin health check). */
+export async function getProxyById(id: string): Promise<ProxyConfig | null> {
+  const row = await one<ProxyRow>('SELECT * FROM proxies WHERE id = $1', [id])
+  if (!row) return null
+  return rowToProxyConfig(row)
+}
+
+export async function markProxy(
+  proxyId: string,
+  status: 'ok' | 'error',
+  error: string | null,
+): Promise<void> {
+  await query('UPDATE proxies SET status = $2, last_error = $3 WHERE id = $1', [
+    proxyId,
+    status,
+    error,
+  ])
+}
+
+/* --------------------- Inbound messages persistence ------------------ */
+
+/** Outcome of an ingestInbound call, used by Autopilot to decide whether to fire. */
+export interface IngestResult {
+  /** Conversation the message belongs to (created or existing). */
+  conversationId: string
+  /** True only when a NEW message row was actually written (false on a dedup). */
+  wrote: boolean
+  /**
+   * True when this is the FIRST inbound message of a brand-new conversation —
+   * i.e. the conversation was just created by this inbound. Drives the
+   * "first_message" autopilot trigger.
+   */
+  isFirstInbound: boolean
+}
+
+/**
+ * Decide who should HANDLE a new conversation, accounting for lunch breaks.
+ * If the channel owner is active and available, they keep it. Otherwise route
+ * to an available substitute (active, not on lunch) via the shared atomic
+ * round-robin counter, mirroring the app-side applyLunchSubstitution so both
+ * ingest paths behave identically. Falls back to the owner when nobody is free,
+ * so we never drop a message or violate the conversations FK.
+ */
+async function resolveLunchManager(ownerId: string): Promise<string> {
+  try {
+    // Owner available? (exists, active, not on lunch)
+    const owner = await one<{ id: string }>(
+      `SELECT id FROM managers
+        WHERE id = $1 AND status = 'active' AND on_lunch = false
+        LIMIT 1`,
+      [ownerId],
+    )
+    if (owner) return ownerId
+
+    // Owner away — gather available substitutes, deterministically ordered.
+    const subs = await query<{ id: string }>(
+      `SELECT id FROM managers
+        WHERE status = 'active' AND on_lunch = false AND id <> $1
+        ORDER BY id ASC`,
+      [ownerId],
+    )
+    if (subs.length === 0) return ownerId
+    if (subs.length === 1) return subs[0].id
+
+    // Atomic, shared round-robin cursor (same counter the app side uses).
+    const rows = await query<{ n: string | number }>(
+      `INSERT INTO offhours_counters (name, n)
+         VALUES ('lunch_substitute', 1)
+       ON CONFLICT (name)
+         DO UPDATE SET n = offhours_counters.n + 1
+       RETURNING n`,
+    )
+    const n = Number(rows[0]?.n ?? 1)
+    return subs[(n - 1) % subs.length].id
+  } catch (err) {
+    // If migration 034 (on_lunch) isn't applied yet, never break ingestion —
+    // just keep the channel owner as the handler.
+    console.error('[worker] resolveLunchManager failed (migration 034?):', err)
+    return ownerId
+  }
+}
+
+/**
+ * Persist an inbound message, creating/updating its conversation. The realtime
+ * NOTIFY triggers fire automatically so the panel pushes it to the browser.
+ */
+export async function ingestInbound(input: {
+  channelId: string
+  managerId: string
+  channelType: 'telegram' | 'whatsapp' | 'livechat'
+  contactName: string
+  contactHandle: string
+  /**
+   * Public @username of the contact (without the leading '@'), when they have
+   * one. Stored separately from the addressing handle so the panel can show it
+   * next to the display name. Omit/null when unknown.
+   */
+  contactUsername?: string | null
+  body: string
+  /**
+   * Message direction. Defaults to 'in' (a message FROM the contact). Pass
+   * 'out' for messages the operator sent from their own linked device (e.g.
+   * WhatsApp `fromMe`) so the panel mirrors both sides of the conversation.
+   * Outbound messages never bump the unread counter.
+   */
+  direction?: 'in' | 'out'
+  /**
+   * Display name for the message author. Defaults to contactName for inbound
+   * and 'You' for outbound, so operator-sent messages aren't labelled with the
+   * contact's name.
+   */
+  author?: string
+  /**
+   * Stable provider-side message id (e.g. WhatsApp m.key.id). When present the
+   * insert is de-duplicated, so the same message arriving live AND via history
+   * replay (or after a relink) is stored only once.
+   */
+  providerMessageId?: string | null
+  /**
+   * Real message timestamp. Defaults to now(). History-imported messages MUST
+   * pass their original time so the thread keeps chronological order.
+   */
+  createdAt?: Date
+  /**
+   * Whether this message should bump the unread badge. Defaults to true for
+   * inbound. History import passes false so backfilling old chats doesn't light
+   * up every conversation as unread.
+   */
+  countUnread?: boolean
+  /**
+   * Optional media descriptor. When the message carries media we record its
+   * kind (sticker/voice/video_note/…), MIME, file name and a small JSON `ref`
+   * that lets the worker re-download the bytes on demand. No binary is stored.
+   */
+  mediaType?: string | null
+  mediaMime?: string | null
+  mediaName?: string | null
+  mediaRef?: unknown
+  /** True when this outbound was generated by Autopilot (for rate caps/badging). */
+  isAutopilot?: boolean
+}): Promise<IngestResult> {
+  const direction = input.direction ?? 'in'
+  // Normalise the username: strip a leading '@' and blank → null, so storage is
+  // consistent regardless of how the caller passes it.
+  const contactUsername = input.contactUsername?.replace(/^@/, '').trim() || null
+  const createdAt = input.createdAt ?? new Date()
+  const countUnread = input.countUnread ?? direction === 'in'
+  const author = input.author ?? (direction === 'out' ? 'You' : input.contactName)
+  const providerId = input.providerMessageId ?? null
+  const mediaType = input.mediaType ?? null
+  const mediaMime = input.mediaMime ?? null
+  const mediaName = input.mediaName ?? null
+  const mediaRef =
+    input.mediaRef === undefined || input.mediaRef === null
+      ? null
+      : JSON.stringify(input.mediaRef)
+
+  // find existing open conversation for this contact on this channel
+  const existing = await one<{ id: string }>(
+    `SELECT id FROM conversations
+     WHERE channel_id = $1 AND contact_handle = $2
+     ORDER BY last_message_at DESC LIMIT 1`,
+    [input.channelId, input.contactHandle],
+  )
+
+  let conversationId: string
+  let conversationExisted: boolean
+  if (existing) {
+    conversationId = existing.id
+    conversationExisted = true
+  } else {
+    // Route a NEW conversation away from a manager who is on lunch to an
+    // available substitute (round-robin). Existing conversations are reused
+    // above and keep their assigned manager, so this only affects new ones.
+    const handlerId = await resolveLunchManager(input.managerId)
+    const created = await one<{ id: string }>(
+      `INSERT INTO conversations
+         (channel_id, manager_id, channel_type, contact_name, contact_handle, contact_username, last_message, last_message_at, unread)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id`,
+      [
+        input.channelId,
+        handlerId,
+        input.channelType,
+        input.contactName,
+        input.contactHandle,
+        contactUsername,
+        input.body,
+        createdAt,
+        countUnread ? 1 : 0,
+      ],
+    )
+    conversationId = created!.id
+    conversationExisted = false
+  }
+
+  // Insert the message, de-duplicating on the stable provider id when present.
+  // RETURNING tells us whether a row was actually written: on a duplicate the
+  // ON CONFLICT path returns nothing, so we must NOT touch the conversation
+  // preview/unread again (otherwise replays would inflate the counters).
+  const inserted = await one<{ id: string }>(
+    `INSERT INTO messages
+       (conversation_id, direction, body, author, created_at, provider_message_id,
+        media_type, media_mime, media_name, media_ref, is_autopilot)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (conversation_id, provider_message_id)
+       WHERE provider_message_id IS NOT NULL
+       DO NOTHING
+     RETURNING id`,
+    [
+      conversationId,
+      direction,
+      input.body,
+      author,
+      createdAt,
+      providerId,
+      mediaType,
+      mediaMime,
+      mediaName,
+      mediaRef,
+      input.isAutopilot ?? false,
+    ],
+  )
+
+  // Duplicate of an already-stored message on an existing conversation: stop.
+  if (!inserted && conversationExisted)
+    return { conversationId, wrote: false, isFirstInbound: false }
+
+  // Refresh the conversation only for an existing thread (a freshly created one
+  // was already seeded above). The preview only moves forward in time, so an
+  // out-of-order history message never clobbers a newer live preview.
+  if (conversationExisted) {
+    await query(
+      `UPDATE conversations
+         SET contact_name = CASE WHEN $4 THEN $5 ELSE contact_name END,
+             contact_username = COALESCE($7, contact_username),
+             last_message = CASE WHEN $2 >= last_message_at THEN $3 ELSE last_message END,
+             last_message_at = GREATEST(last_message_at, $2),
+             unread = unread + CASE WHEN $6 THEN 1 ELSE 0 END
+       WHERE id = $1`,
+      [
+        conversationId,
+        createdAt,
+        input.body,
+        // Only refresh the title from inbound messages whose name isn't just the
+        // raw handle (avoids overwriting a real name with a phone number).
+        direction === 'in' && input.contactName !== input.contactHandle,
+        input.contactName,
+        countUnread,
+        // Keep the last known username; only overwrite when we actually have one.
+        contactUsername,
+      ],
+    )
+  }
+
+  // A first inbound is one that just created the conversation with an inbound
+  // message (not an operator's own fromMe echo, not a history backfill).
+  return {
+    conversationId,
+    wrote: !!inserted,
+    isFirstInbound: !conversationExisted && direction === 'in',
+  }
+}
+
+/**
+ * Upsert a conversation from a synced chat/dialog (Telegram history import).
+ *
+ * Unlike ingestInbound this is idempotent across reconnects: it keys on
+ * (channel_id, contact_handle), refreshes the preview + unread count, and only
+ * seeds a single "last message" row when the conversation is first created. It
+ * never keeps appending the same history message on every restart.
+ */
+export async function upsertDialog(input: {
+  channelId: string
+  managerId: string
+  channelType: 'telegram' | 'whatsapp'
+  contactName: string
+  contactHandle: string
+  /** Public @username (without leading '@'), when known. */
+  contactUsername?: string | null
+  lastMessage: string
+  lastMessageAt: Date
+  unread: number
+  lastFromMe: boolean
+}): Promise<void> {
+  const contactUsername = input.contactUsername?.replace(/^@/, '').trim() || null
+  const existing = await one<{ id: string }>(
+    `SELECT id FROM conversations
+       WHERE channel_id = $1 AND contact_handle = $2
+       LIMIT 1`,
+    [input.channelId, input.contactHandle],
+  )
+
+  if (existing) {
+    await query(
+      `UPDATE conversations
+         SET contact_name = $2,
+             contact_username = COALESCE($6, contact_username),
+             last_message = $3,
+             last_message_at = $4,
+             unread = $5
+       WHERE id = $1`,
+      [
+        existing.id,
+        input.contactName,
+        input.lastMessage,
+        input.lastMessageAt,
+        input.unread,
+        contactUsername,
+      ],
+    )
+    return
+  }
+
+  const created = await one<{ id: string }>(
+    `INSERT INTO conversations
+       (channel_id, manager_id, channel_type, contact_name, contact_handle, contact_username, last_message, last_message_at, unread)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id`,
+    [
+      input.channelId,
+      input.managerId,
+      input.channelType,
+      input.contactName,
+      input.contactHandle,
+      contactUsername,
+      input.lastMessage,
+      input.lastMessageAt,
+      input.unread,
+    ],
+  )
+
+  // Seed the thread with the last known message so opening the conversation
+  // isn't blank. Direction reflects who sent that last message.
+  await query(
+    `INSERT INTO messages (conversation_id, direction, body, author, created_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      created!.id,
+      input.lastFromMe ? 'out' : 'in',
+      input.lastMessage,
+      input.lastFromMe ? 'You' : input.contactName,
+      input.lastMessageAt,
+    ],
+  )
+}
+
+/**
+ * Backfill the provider/Telegram message id onto an existing message row (the
+ * panel's optimistically-inserted outbound message). Lets the panel later
+ * delete / forward / react to a message we sent.
+ */
+export async function setMessageProviderId(
+  messageId: string,
+  providerMessageId: string,
+): Promise<void> {
+  await query(
+    `UPDATE messages SET provider_message_id = $2
+       WHERE id = $1 AND provider_message_id IS NULL`,
+    [messageId, providerMessageId],
+  )
+}
+
+/* ----------------------- Telegram peer cache ------------------------- */
+
+export type TelegramPeerKind = 'user' | 'channel' | 'chat'
+
+export interface TelegramPeerRecord {
+  kind: TelegramPeerKind
+  peerId: string
+  accessHash: string | null
+}
+
+/**
+ * Persist a Telegram peer's access_hash so we can reconstruct an input peer
+ * after a restart without relying on GramJS's volatile entity cache. Upserts on
+ * (channel_id, handle); a null access_hash (basic groups) is allowed.
+ */
+export async function saveTelegramPeer(
+  channelId: string,
+  handle: string,
+  peer: TelegramPeerRecord,
+): Promise<void> {
+  await query(
+    `INSERT INTO telegram_peers (channel_id, handle, kind, peer_id, access_hash, updated_at)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (channel_id, handle) DO UPDATE
+       SET kind = EXCLUDED.kind,
+           peer_id = EXCLUDED.peer_id,
+           access_hash = COALESCE(EXCLUDED.access_hash, telegram_peers.access_hash),
+           updated_at = now()`,
+    [channelId, handle, peer.kind, peer.peerId, peer.accessHash],
+  )
+}
+
+/** Look up a persisted Telegram peer by its stored handle. */
+export async function getTelegramPeer(
+  channelId: string,
+  handle: string,
+): Promise<TelegramPeerRecord | null> {
+  const row = await one<{
+    kind: TelegramPeerKind
+    peer_id: string
+    access_hash: string | null
+  }>(
+    `SELECT kind, peer_id, access_hash FROM telegram_peers
+      WHERE channel_id = $1 AND handle = $2`,
+    [channelId, handle],
+  )
+  if (!row) return null
+  return { kind: row.kind, peerId: row.peer_id, accessHash: row.access_hash }
+}
+
+/** Outbound delivery lifecycle, ordered. Status only ever moves forward. */
+export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
+
+/**
+ * Advance the delivery status of a single OUTBOUND message identified by its
+ * provider id within a channel. The status only moves forward (sent ->
+ * delivered -> read); 'failed' may always be set. A no-op when the message is
+ * unknown or already at/ahead of the target status, so duplicate provider
+ * receipts are harmless.
+ */
+export async function setMessageStatusByProviderId(
+  channelId: string,
+  providerMessageId: string,
+  status: MessageStatus,
+): Promise<void> {
+  await query(
+    `UPDATE messages m
+        SET status = $3
+       FROM conversations c
+      WHERE m.conversation_id = c.id
+        AND c.channel_id = $1
+        AND m.provider_message_id = $2
+        AND m.direction = 'out'
+        AND (
+          $3 = 'failed'
+          OR COALESCE(
+               CASE m.status WHEN 'read' THEN 3 WHEN 'delivered' THEN 2
+                             WHEN 'sent' THEN 1 ELSE 0 END, 0)
+             < CASE $3 WHEN 'read' THEN 3 WHEN 'delivered' THEN 2
+                       WHEN 'sent' THEN 1 ELSE 0 END
+        )`,
+    [channelId, providerMessageId, status],
+  )
+}
+
+/**
+ * Set the delivery status of a single message directly by its row id. Used to
+ * flag a send as 'failed' when the provider rejects it (e.g. WhatsApp 463 / not
+ * a WhatsApp number), since at that point there's no provider id to match on.
+ */
+export async function setMessageStatus(
+  messageId: string,
+  status: MessageStatus,
+): Promise<void> {
+  await query(
+    `UPDATE messages SET status = $2
+       WHERE id = $1 AND direction = 'out'`,
+    [messageId, status],
+  )
+}
+
+/**
+ * Mark every outbound message in a conversation as 'read' up to (and including)
+ * a provider message id. Used for Telegram's "read up to max_id" outbox
+ * receipts, where a single update acknowledges a whole run of our messages.
+ * Only numeric provider ids (Telegram message ids) participate in the compare.
+ */
+export async function markOutboundReadUpTo(
+  channelId: string,
+  contactHandle: string,
+  maxProviderId: string,
+): Promise<void> {
+  if (!/^\d+$/.test(maxProviderId)) return
+  await query(
+    `UPDATE messages m
+        SET status = 'read'
+       FROM conversations c
+      WHERE m.conversation_id = c.id
+        AND c.channel_id = $1
+        AND c.contact_handle = $2
+        AND m.direction = 'out'
+        AND m.provider_message_id ~ '^[0-9]+$'
+        AND m.provider_message_id::bigint <= $3::bigint
+        AND (m.status IS NULL OR m.status <> 'read')`,
+    [channelId, contactHandle, maxProviderId],
+  )
+}
+
+/**
+ * Mark a message as deleted by the CONTACT (the other side revoked it). We keep
+ * the original body/media intact and only stamp `deleted_at` + a 'remote'
+ * origin, so the panel shows the original content with a "deleted by contact"
+ * marker instead of losing it. Matched by provider message id within the
+ * channel. Idempotent (only stamps a not-yet-deleted row), so duplicate
+ * delete notifications are harmless. Returns the affected message ids.
+ */
+export async function markInboundDeletedByProviderId(
+  channelId: string,
+  providerMessageId: string,
+): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    `UPDATE messages m
+        SET deleted_at = now(), deleted_origin = 'remote'
+       FROM conversations c
+      WHERE m.conversation_id = c.id
+        AND c.channel_id = $1
+        AND m.provider_message_id = $2
+        AND m.deleted_at IS NULL
+      RETURNING m.id`,
+    [channelId, providerMessageId],
+  )
+  return rows.map((r) => r.id)
+}
+
+/**
+ * Recent inbound provider message ids for a conversation, newest first. Used to
+ * build WhatsApp read-receipt keys when the operator opens a chat so the
+ * contact sees our blue ticks. Bounded so we never replay an entire thread.
+ */
+export async function getRecentInboundProviderIds(
+  channelId: string,
+  contactHandle: string,
+  limit = 30,
+): Promise<string[]> {
+  const rows = await query<{ provider_message_id: string }>(
+    `SELECT m.provider_message_id
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.channel_id = $1
+        AND c.contact_handle = $2
+        AND m.direction = 'in'
+        AND m.provider_message_id IS NOT NULL
+      ORDER BY m.created_at DESC
+      LIMIT $3`,
+    [channelId, contactHandle, limit],
+  )
+  return rows.map((r) => r.provider_message_id)
+}
+
+/** Fetch the outbound target (contact_handle) for a conversation. */
+export async function getOutboundTarget(
+  conversationId: string,
+): Promise<{ contactHandle: string; channelId: string } | null> {
+  const row = await one<{ contact_handle: string; channel_id: string }>(
+    'SELECT contact_handle, channel_id FROM conversations WHERE id = $1',
+    [conversationId],
+  )
+  if (!row) return null
+  return { contactHandle: row.contact_handle, channelId: row.channel_id }
+}
+
+/**
+ * Resolve everything needed to re-download a message's media: which channel /
+ * session owns it, the media kind/mime/name and the provider `ref` JSON. Used
+ * by the worker's GET /media endpoint.
+ */
+export async function getMessageMedia(messageId: string): Promise<{
+  channelId: string
+  channelType: 'telegram' | 'whatsapp' | 'livechat'
+  mediaType: string | null
+  mediaMime: string | null
+  mediaName: string | null
+  mediaRef: unknown
+} | null> {
+  const row = await one<{
+    channel_id: string
+    type: 'telegram' | 'whatsapp' | 'livechat'
+    media_type: string | null
+    media_mime: string | null
+    media_name: string | null
+    media_ref: unknown
+  }>(
+    `SELECT c.channel_id, ch.type,
+            m.media_type, m.media_mime, m.media_name, m.media_ref
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN channels ch ON ch.id = c.channel_id
+      WHERE m.id = $1`,
+    [messageId],
+  )
+  if (!row) return null
+  return {
+    channelId: row.channel_id,
+    channelType: row.type,
+    mediaType: row.media_type,
+    mediaMime: row.media_mime,
+    mediaName: row.media_name,
+    // pg returns jsonb already parsed; pass through as-is.
+    mediaRef: row.media_ref,
+  }
+}
+
+/* ------------------------------ Autopilot ----------------------------- */
+
+/** Raw autopilot rule row (worker view; matcher normalizes the config). */
+export interface AutopilotRuleRow {
+  id: string
+  manager_id: string
+  name: string
+  enabled: boolean
+  sort_order: number
+  event: string
+  config: unknown
+}
+
+/** Is the manager's autopilot master switch on? Defaults to OFF when no row. */
+export async function autopilotEnabled(managerId: string): Promise<boolean> {
+  const row = await one<{ enabled: boolean }>(
+    `SELECT enabled FROM autopilot_settings WHERE manager_id = $1`,
+    [managerId],
+  )
+  return !!row?.enabled
+}
+
+/** Active rules for a manager, priority order (sort_order asc, then created). */
+export async function listEnabledAutopilotRules(
+  managerId: string,
+): Promise<AutopilotRuleRow[]> {
+  return query<AutopilotRuleRow>(
+    `SELECT id, manager_id, name, enabled, sort_order, event, config
+       FROM autopilot_rules
+      WHERE manager_id = $1 AND enabled = true
+      ORDER BY sort_order ASC, created_at ASC`,
+    [managerId],
+  )
+}
+
+/**
+ * Atomically claim the first fire of a rule on a conversation. Returns true if
+ * THIS call recorded it (rule had not fired before), false if already fired.
+ * Mirrors the panel-side tryRecordFire so dedupe is consistent across runtimes.
+ */
+export async function tryRecordAutopilotFire(
+  ruleId: string,
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `INSERT INTO autopilot_fires (rule_id, conversation_id)
+     VALUES ($1, $2)
+     ON CONFLICT (rule_id, conversation_id) DO NOTHING
+     RETURNING id`,
+    [ruleId, conversationId],
+  )
+  return rows.length > 0
+}
+
+/** Remove a fire record (used to roll back a claim when the send fails). */
+export async function clearAutopilotFire(
+  ruleId: string,
+  conversationId: string,
+): Promise<void> {
+  await query(
+    `DELETE FROM autopilot_fires WHERE rule_id = $1 AND conversation_id = $2`,
+    [ruleId, conversationId],
+  )
+}
+
+/**
+ * Count autopilot sends on a channel within a trailing window (minutes). Used
+ * to enforce per-channel anti-ban rate caps for messengers.
+ */
+export async function countAutopilotSends(
+  channelId: string,
+  withinMinutes: number,
+): Promise<number> {
+  const row = await one<{ n: string }>(
+    `SELECT COUNT(*)::int AS n
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.channel_id = $1
+        AND m.direction = 'out'
+        AND m.is_autopilot = true
+        AND m.created_at > now() - ($2 || ' minutes')::interval`,
+    [channelId, String(withinMinutes)],
+  )
+  return Number(row?.n ?? 0)
+}
+
+/**
+ * Conversations with an inbound that hasn't been answered for >= N minutes and
+ * where the manager's autopilot is on. Drives the 'no_response' scheduler.
+ * Only returns the data the matcher/sender needs; dedupe is checked per rule.
+ */
+export async function findNoResponseConversations(maxMinutes: number): Promise<
+  Array<{
+    conversationId: string
+    channelId: string
+    managerId: string
+    channelType: 'telegram' | 'whatsapp' | 'livechat'
+    contactHandle: string
+    lastInboundText: string
+    minutesSilent: number
+  }>
+> {
+  const rows = await query<{
+    conversation_id: string
+    channel_id: string
+    manager_id: string
+    channel_type: 'telegram' | 'whatsapp' | 'livechat'
+    contact_handle: string
+    last_inbound_text: string
+    minutes_silent: number
+  }>(
+    `WITH last_in AS (
+       SELECT DISTINCT ON (m.conversation_id)
+              m.conversation_id, m.body, m.created_at
+         FROM messages m
+        WHERE m.direction = 'in'
+        ORDER BY m.conversation_id, m.created_at DESC
+     ),
+     last_out AS (
+       SELECT m.conversation_id, MAX(m.created_at) AS created_at
+         FROM messages m
+        WHERE m.direction = 'out'
+        GROUP BY m.conversation_id
+     )
+     SELECT c.id AS conversation_id, c.channel_id, c.manager_id,
+            c.channel_type, c.contact_handle,
+            li.body AS last_inbound_text,
+            EXTRACT(EPOCH FROM (now() - li.created_at)) / 60 AS minutes_silent
+       FROM conversations c
+       JOIN last_in li ON li.conversation_id = c.id
+       JOIN autopilot_settings s ON s.manager_id = c.manager_id AND s.enabled = true
+       LEFT JOIN last_out lo ON lo.conversation_id = c.id
+      WHERE (lo.created_at IS NULL OR lo.created_at < li.created_at)
+        AND li.created_at < now() - '1 minute'::interval
+        AND li.created_at > now() - ($1 || ' minutes')::interval`,
+    [String(maxMinutes)],
+  )
+  return rows.map((r) => ({
+    conversationId: r.conversation_id,
+    channelId: r.channel_id,
+    managerId: r.manager_id,
+    channelType: r.channel_type,
+    contactHandle: r.contact_handle,
+    lastInboundText: r.last_inbound_text,
+    minutesSilent: Number(r.minutes_silent),
+  }))
+}
+
+/** Working-hours JSON for a channel (any type), for the matcher's WH condition. */
+export async function getChannelWorkingHours(
+  channelId: string,
+): Promise<unknown | null> {
+  const row = await one<{ config: { widget?: { workingHours?: unknown } } | null }>(
+    `SELECT config FROM channels WHERE id = $1`,
+    [channelId],
+  )
+  return row?.config?.widget?.workingHours ?? null
+}

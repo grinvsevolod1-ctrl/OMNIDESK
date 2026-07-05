@@ -1,0 +1,30 @@
+{
+  "name": "omnidesk-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Omnidesk integration worker: live Telegram (MTProto) and WhatsApp (Web) sessions.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "6.7.23",
+    "dotenv": "^16.4.7",
+    "https-proxy-agent": "^9.0.0",
+    "pg": "^8.13.1",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "socks-proxy-agent": "^8.0.4",
+    "telegram": "^2.26.22",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5.7.2"
+  }
+}

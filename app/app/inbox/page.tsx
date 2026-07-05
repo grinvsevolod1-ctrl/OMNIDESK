@@ -1,0 +1,89 @@
+import { Inbox } from 'lucide-react'
+import { getAutopilotStatusAction } from '@/app/actions/autopilot'
+import { AccountHealthBanner } from '@/components/manager/account-health-banner'
+import { InboxView } from '@/components/manager/inbox-view'
+import { EmptyState } from '@/components/page-parts'
+import { requireManager } from '@/lib/auth'
+import {
+  listChannels,
+  listConversations,
+  listMessages,
+  listQuickReplies,
+} from '@/lib/data'
+import type { Message } from '@/lib/types'
+
+export default async function InboxPage() {
+  const session = await requireManager()
+  const [conversations, channels, quickReplies] = await Promise.all([
+    listConversations(session.sub),
+    listChannels(session.sub),
+    listQuickReplies(session.sub),
+  ])
+
+  // Personal accounts whose session is degraded/paused — surfaced as a banner in
+  // the inbox so the operator knows live sync may be affected for those sources,
+  // without having to open the Connections page.
+  const degradedAccounts = channels
+    .filter(
+      (c) =>
+        (c.type === 'telegram' || c.type === 'whatsapp') &&
+        (c.sessionStatus === 'rate_limited' ||
+          c.sessionStatus === 'error' ||
+          c.sessionStatus === 'logged_out' ||
+          c.sessionStatus === 'offline'),
+    )
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      type: c.type,
+      sessionStatus: c.sessionStatus,
+      lastError: c.lastError,
+    }))
+
+  const messagesByConversation: Record<string, Message[]> = {}
+  await Promise.all(
+    conversations.map(async (c) => {
+      messagesByConversation[c.id] = await listMessages(c.id, session.sub)
+    }),
+  )
+
+  // Autopilot status for the inbox toolbar toggle. Wrapped in try/catch with
+  // safe defaults: if migration 030 (autopilot tables) hasn't been applied yet,
+  // a missing-table error must NOT take down the entire inbox.
+  let autopilot = { enabled: false, enabledCount: 0 }
+  try {
+    autopilot = await getAutopilotStatusAction()
+  } catch (err) {
+    console.error('[v0] inbox: autopilot status unavailable:', err)
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      {degradedAccounts.length > 0 ? (
+        <div className="shrink-0 px-3 pt-3 md:px-4">
+          <AccountHealthBanner accounts={degradedAccounts} />
+        </div>
+      ) : null}
+      {conversations.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center p-6">
+          <EmptyState
+            icon={Inbox}
+            title="Входящие пусты"
+            description="Как только в подключённые каналы придут сообщения, диалоги появятся здесь."
+          />
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1">
+          <InboxView
+            conversations={conversations}
+            messagesByConversation={messagesByConversation}
+            currentUser={session.name}
+            quickReplies={quickReplies}
+            autopilot={autopilot}
+            ownedChannelIds={channels.map((c) => c.id)}
+          />
+        </div>
+      )}
+    </div>
+  )
+}

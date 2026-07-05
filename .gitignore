@@ -1,0 +1,26 @@
+# Dependencies
+node_modules
+
+# Build output
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env*.local
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+
+# Local tooling artifacts
+.snowflake/
+.v0-trash/
+.vercel/
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts

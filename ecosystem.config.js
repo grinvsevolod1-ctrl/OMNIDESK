@@ -1,0 +1,59 @@
+// pm2 process config for self-hosting Omnidesk on a VPS.
+//
+//   pnpm install && pnpm build          # build the Next.js panel
+//   cd worker && pnpm install && cd ..   # install worker deps (runs via tsx)
+//   pm2 start ecosystem.config.js
+//   pm2 save && pm2 startup             # persist across reboots
+//
+// Both processes read the same .env (DATABASE_URL + ENCRYPTION_KEY must match).
+module.exports = {
+  apps: [
+    {
+      name: 'omnidesk-panel',
+      script: 'node_modules/next/dist/bin/next',
+      args: 'start -p 3000',
+      cwd: __dirname,
+      instances: 1,
+      autorestart: true,
+      max_memory_restart: '512M',
+      env: {
+        NODE_ENV: 'production',
+      },
+    },
+    {
+      name: 'omnidesk-worker',
+      script: 'node_modules/.bin/tsx',
+      args: 'src/index.ts',
+      cwd: __dirname + '/worker',
+      instances: 1,
+      autorestart: true,
+      max_memory_restart: '512M',
+      // The worker keeps long-lived MTProto / WhatsApp sockets — never cluster it.
+      //
+      // PM2's default kill_timeout is 1600ms — far too short. On restart the
+      // worker's SIGTERM handler runs registry.shutdownAll(), which gracefully
+      // closes every WhatsApp/Telegram socket (up to SOCKET_CLOSE_GRACE_MS each)
+      // and flushes session state to Postgres. If PM2 SIGKILLs mid-teardown the
+      // old sockets stay half-open, and the freshly started process reconnects
+      // the same WhatsApp device into a multi-device conflict → forced 401
+      // logout. Give shutdown enough headroom to finish cleanly.
+      kill_timeout: 12000,
+      // Process-level restart hardening: stop a transient failure (or a 401
+      // storm during deploy) from becoming a tight restart-loop that keeps
+      // reconnecting WhatsApp devices and getting them flagged.
+      //   - min_uptime: a start only "counts" as stable after 30s; shorter runs
+      //     are treated as crashes and feed the backoff/limit below.
+      //   - restart_delay + exp_backoff_restart_delay: wait between restarts and
+      //     grow the delay on repeated crashes instead of restarting instantly.
+      //   - max_restarts: after this many unstable restarts PM2 gives up instead
+      //     of looping forever (surface the failure rather than churn sockets).
+      min_uptime: 30000,
+      restart_delay: 5000,
+      exp_backoff_restart_delay: 500,
+      max_restarts: 10,
+      env: {
+        NODE_ENV: 'production',
+      },
+    },
+  ],
+}
