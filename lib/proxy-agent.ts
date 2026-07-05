@@ -88,7 +88,7 @@ function buildSocksDispatcher(p: ProxyDescriptor): Dispatcher {
           if (protocol === 'https:') {
             // Upgrade the tunneled TCP socket to TLS via undici's connector.
             tlsConnector(
-              { ...(opts as Record<string, unknown>), httpSocket: socket } as never,
+              { ...(opts as unknown as Record<string, unknown>), httpSocket: socket } as never,
               callback,
             )
           } else {

@@ -1434,6 +1434,8 @@ interface RealtimeStreamEvent {
   deletedAt?: string | null
   deletedOrigin?: 'self' | 'remote' | null
   status?: string
+  /** Failure reason for a message 'update' whose status is 'failed'. */
+  errorReason?: string | null
   // Typing pings (visitor → manager).
   actor?: 'visitor' | 'agent'
   typing?: boolean
@@ -1692,6 +1694,8 @@ export function InboxView({
           ? data.reactions.filter((r) => r && typeof r.emoji === 'string')
           : []
         const nextStatus = data.status as Message['status'] | undefined
+        const nextErrorReason =
+          typeof data.errorReason === 'string' ? data.errorReason : undefined
         setLocalMessages((prev) => {
           const list = prev[convId]
           if (!list) return prev
@@ -1711,6 +1715,9 @@ export function InboxView({
                       ...m,
                       reactions: reactions.length ? reactions : undefined,
                       ...(nextStatus ? { status: nextStatus } : {}),
+                      ...(nextStatus === 'failed'
+                        ? { errorReason: nextErrorReason }
+                        : {}),
                     }
                 : m,
             ),
@@ -3201,6 +3208,15 @@ export function InboxView({
                               ) : (
                                 bubble
                               )}
+                              {isOut && m.status === 'failed' ? (
+                                <p className="flex items-start gap-1 text-[11px] leading-snug text-destructive [overflow-wrap:anywhere]">
+                                  <AlertCircle className="mt-0.5 size-3 shrink-0" />
+                                  <span>
+                                    Не отправлено
+                                    {m.errorReason ? `: ${m.errorReason}` : '.'}
+                                  </span>
+                                </p>
+                              ) : null}
                               {reactions.length ? (
                                 <div
                                   className={cn(

@@ -10,7 +10,6 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { ChannelCard } from '@/components/manager/channel-card'
-import { ConnectWizard } from '@/components/manager/connect-wizard'
 import { Button } from '@/components/ui/button'
 import { EmptyState, PageHeader } from '@/components/page-parts'
 import { requireManager } from '@/lib/auth'
@@ -41,8 +40,7 @@ export default async function ConnectionsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Подключения"
-        description="Подключайте личные аккаунты Telegram и WhatsApp, онлайн-чаты сайтов и направляйте их через прокси."
-        action={<ConnectWizard proxies={proxies} />}
+        description="Ваши аккаунты и их состояние. Новые аккаунты подключает администратор — при обрыве связи сессия переподключится автоматически."
       />
 
       {!isWorkerConfigured ? (
@@ -92,8 +90,7 @@ export default async function ConnectionsPage() {
         <EmptyState
           icon={Plug}
           title="Пока нет подключений"
-          description="Начните с подключения первого аккаунта. Telegram — по коду из СМС, WhatsApp — сканированием QR."
-          action={<ConnectWizard proxies={proxies} />}
+          description="Аккаунты подключает администратор и назначает их вам. Как только это произойдёт, они появятся здесь."
         />
       ) : (
         <div className="flex flex-col gap-7">

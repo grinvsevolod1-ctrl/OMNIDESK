@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'crypto'
 import {
+  getProxyForChannel,
   getVkChannelById,
   recordVkInbound,
   resolveVkAgentId,
@@ -109,9 +110,12 @@ export async function POST(
   }
 
   // Resolve a human name for the contact (best-effort; falls back to "VK #id").
+  // The profile lookup goes out through the account's proxy so ALL VK API
+  // traffic for this community exits from the same dedicated IP.
   let contactName = `VK #${contactHandle}`
   try {
-    const user = await getUser(channel.token, contactHandle)
+    const proxy = await getProxyForChannel(channel.id)
+    const user = await getUser(channel.token, contactHandle, proxy)
     if (user.ok) contactName = vkUserName(user.data, contactHandle)
   } catch {
     // keep the fallback name

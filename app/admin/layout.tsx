@@ -5,6 +5,7 @@ import { requireAdmin } from '@/lib/auth'
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
   { href: '/admin/managers', label: 'Менеджеры', icon: 'managers' },
+  { href: '/admin/accounts', label: 'Аккаунты', icon: 'connections' },
   { href: '/admin/channels', label: 'Все каналы', icon: 'channels' },
   { href: '/admin/whatsapp', label: 'WhatsApp', icon: 'whatsapp' },
   { href: '/admin/proxies', label: 'Прокси', icon: 'proxies' },

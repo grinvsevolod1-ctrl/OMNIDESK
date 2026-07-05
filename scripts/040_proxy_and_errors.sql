@@ -67,6 +67,7 @@ BEGIN
         'body', NEW.body,
         'reactions', NEW.reactions,
         'deletedAt', NEW.deleted_at,
+        'deletedOrigin', NEW.deleted_origin,
         'status', NEW.status,
         'errorReason', NEW.error_reason
       );
@@ -133,6 +134,7 @@ CREATE TRIGGER trg_realtime_messages_upd
   WHEN (
     OLD.reactions IS DISTINCT FROM NEW.reactions
     OR OLD.deleted_at IS DISTINCT FROM NEW.deleted_at
+    OR OLD.deleted_origin IS DISTINCT FROM NEW.deleted_origin
     OR OLD.body IS DISTINCT FROM NEW.body
     OR OLD.status IS DISTINCT FROM NEW.status
     OR OLD.error_reason IS DISTINCT FROM NEW.error_reason
