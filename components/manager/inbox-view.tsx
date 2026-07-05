@@ -587,7 +587,7 @@ function SyncBadge({ state }: { state: 'connecting' | 'live' | 'offline' }) {
   const cfg = {
     live: {
       label: 'Онлайн',
-      title: 'Синхронизация активна — новые сообщения приходят сразу',
+      title: 'Синхронизация ак��ивна — новые сообщения приходят сразу',
       dot: 'bg-emerald-500',
       text: 'text-emerald-600 dark:text-emerald-400',
       pulse: true,
@@ -1113,6 +1113,10 @@ function MessageMedia({ message }: { message: Message }) {
 
   if (type === 'sticker') {
     return (
+      // Chat media comes from arbitrary external CDNs (Telegram/VK/etc.) with
+      // unknown dimensions; next/image can't optimize these, so a plain img is
+      // the correct choice here.
+      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={url || '/placeholder.svg'}
         alt={message.body || 'Стикер'}
@@ -1132,6 +1136,8 @@ function MessageMedia({ message }: { message: Message }) {
           className="group relative block cursor-zoom-in overflow-hidden rounded-lg"
           aria-label="Открыть изображение"
         >
+          {/* External chat media of unknown size — see note above; plain img. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={url || '/placeholder.svg'}
             alt={message.body || 'Изображение'}
@@ -1335,6 +1341,7 @@ function StickerPicker({
 
   useEffect(() => {
     if (!open || stickers !== null || loading) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     fetch(`/api/stickers?channelId=${encodeURIComponent(channelId)}`)
       .then((r) => (r.ok ? r.json() : { stickers: [] }))
@@ -1909,10 +1916,13 @@ export function InboxView({
     [conversations, isMuted],
   )
 
-  // Keep the reminder interval's snapshot fresh on every render.
-  reminderRef.current.conversations = conversations
-  reminderRef.current.awaiting = awaitingReply
-  reminderRef.current.activeId = activeId
+  // Keep the reminder interval's snapshot fresh. Writing to the ref in an effect
+  // (instead of during render) keeps this a proper post-render side-effect.
+  useEffect(() => {
+    reminderRef.current.conversations = conversations
+    reminderRef.current.awaiting = awaitingReply
+    reminderRef.current.activeId = activeId
+  }, [conversations, awaitingReply, activeId])
 
   // Periodic nudge: if a contact's last message has gone unanswered for a while
   // and the manager isn't currently looking at that thread, pop a reminder toast.
@@ -2035,6 +2045,7 @@ export function InboxView({
   // longer belong to a visible type, so stale selections can't hide everything.
   useEffect(() => {
     if (typeFilter.size === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSourceFilter((prev) => {
       if (prev.size === 0) return prev
       const valid = new Set(
@@ -2059,6 +2070,7 @@ export function InboxView({
       window.matchMedia('(min-width: 768px)').matches
     const stillVisible =
       activeId !== null && filtered.some((c) => c.id === activeId)
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (activeId !== null && !stillVisible) {
       setActiveId(isDesktop && filtered.length > 0 ? filtered[0].id : null)
       return
@@ -2066,6 +2078,7 @@ export function InboxView({
     if (activeId === null && isDesktop && filtered.length > 0) {
       setActiveId(filtered[0].id)
     }
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [activeId, filtered])
 
   const [pending, startTransition] = useTransition()
@@ -2146,6 +2159,7 @@ export function InboxView({
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLocalMessages(messagesByConversation)
   }, [messagesByConversation])
 
@@ -2397,6 +2411,7 @@ export function InboxView({
 
   // Clear any pending reply when switching conversations.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReplyTarget(null)
   }, [activeId])
 

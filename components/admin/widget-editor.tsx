@@ -154,6 +154,7 @@ export function WidgetEditor({
   // Reset to the saved config whenever the dialog is (re)opened.
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setConfig(cloneConfig(initialConfig))
       setPreviewOff(false)
       readyRef.current = false

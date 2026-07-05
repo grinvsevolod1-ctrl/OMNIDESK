@@ -97,9 +97,6 @@ export function ConnectWizard({
   // code step can point the manager to the right place.
   const [codeDelivery, setCodeDelivery] = useState<'app' | 'sms' | null>(null)
   const [password, setPassword] = useState('')
-  const [pairingCode, setPairingCode] = useState<string | null>(null)
-  // Live QR data-URL when the worker falls back to QR (no phone / fallback).
-  const [qr, setQr] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Wall-clock start of the current polling run; backs the client-side timeout
@@ -128,8 +125,6 @@ export function ConnectWizard({
     setCode('')
     setCodeDelivery(null)
     setPassword('')
-    setPairingCode(null)
-    setQr(null)
     setError(null)
   }
 

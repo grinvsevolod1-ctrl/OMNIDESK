@@ -168,6 +168,7 @@ export function DashboardShell({
   // hydration mismatch, then persist any change the user makes.
   useEffect(() => {
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCollapsed(localStorage.getItem(COLLAPSE_KEY) === '1')
     } catch {
       /* ignore */

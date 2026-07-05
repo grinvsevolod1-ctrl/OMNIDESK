@@ -146,6 +146,7 @@ export function SourceGroupsOverview({
   // timezone. We deliberately don't render analytics on the server because it
   // would compute "today" in UTC and be off by a day for the admin.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (initialGroupId) load(initialGroupId, 'today')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
