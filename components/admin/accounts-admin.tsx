@@ -171,7 +171,7 @@ function CreateAccountCard({
 
   function validateCommon(): string | null {
     if (!managerId) return 'Выберите менеджера-владельца.'
-    if (!proxyId) return 'Выберите прокси — он обязателен для каждого аккаунта.'
+    // Proxy is optional — an empty proxyId means a direct connection.
     return null
   }
 
@@ -322,7 +322,8 @@ function CreateAccountCard({
         <div>
           <h2 className="text-sm font-semibold">Подключить аккаунт</h2>
           <p className="text-xs text-muted-foreground">
-            Создание аккаунтов доступно только администратору. Прокси обязателен.
+            Создание аккаунтов доступно только администратору. Прокси
+            необязателен — без него подключение идёт напрямую.
           </p>
         </div>
       </div>
@@ -384,26 +385,30 @@ function CreateAccountCard({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <Label>Прокси (обязательно)</Label>
-          <Select value={proxyId} onValueChange={(v) => setProxyId(v ?? '')}>
+          <Label>Прокси (необязательно)</Label>
+          <Select
+            value={proxyId || 'none'}
+            onValueChange={(v) => setProxyId(v === 'none' ? '' : (v ?? ''))}
+          >
             <SelectTrigger>
-              <SelectValue placeholder="Выберите прокси" />
+              <SelectValue placeholder="Без прокси — прямое подключение" />
             </SelectTrigger>
             <SelectContent>
-              {eligibleProxies.length === 0 ? (
-                <div className="px-2 py-3 text-xs text-muted-foreground">
-                  Нет свободных прокси для этого типа. Добавьте прокси на странице
-                  «Прокси».
-                </div>
-              ) : (
-                eligibleProxies.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {proxyLabelText(p)}
-                  </SelectItem>
-                ))
-              )}
+              <SelectItem value="none">
+                Без прокси — прямое подключение
+              </SelectItem>
+              {eligibleProxies.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {proxyLabelText(p)}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
+          <p className="text-xs text-muted-foreground">
+            Прокси не обязателен. Если аккаунт не подключается через прокси
+            (например, прокси не пропускает Telegram), выберите «Без прокси» —
+            подключение пойдёт напрямую.
+          </p>
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -638,8 +643,10 @@ function AccountRow({
   )
 
   function reassign(proxyId: string) {
+    // 'none' sentinel → detach the proxy (direct connection).
+    const next = proxyId === 'none' ? null : proxyId
     startTransition(async () => {
-      const res = await adminReassignProxyAction(channel.id, proxyId)
+      const res = await adminReassignProxyAction(channel.id, next)
       if (res.ok) toast.success(res.message)
       else toast.error(res.message)
     })
@@ -693,14 +700,15 @@ function AccountRow({
           <ShieldAlert className="size-4 shrink-0 text-warning" />
         )}
         <Select
-          value={channel.proxyId ?? ''}
+          value={channel.proxyId ?? 'none'}
           onValueChange={(v) => v && reassign(v)}
           disabled={pending}
         >
           <SelectTrigger className="h-9 flex-1">
-            <SelectValue placeholder="Назначить прокси" />
+            <SelectValue placeholder="Без прокси — напрямую" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="none">Без прокси — напрямую</SelectItem>
             {eligible.map((p) => (
               <SelectItem key={p.id} value={p.id}>
                 {proxyLabelText(p)}

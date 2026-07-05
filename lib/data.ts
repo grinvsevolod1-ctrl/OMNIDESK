@@ -947,9 +947,13 @@ export async function getChannelById(id: string): Promise<Channel | null> {
 /** Admin: reassign the proxy bound to a channel. */
 export async function updateChannelProxy(
   id: string,
-  proxyId: string,
+  proxyId: string | null,
 ): Promise<void> {
-  await query('UPDATE channels SET proxy_id = $2 WHERE id = $1', [id, proxyId])
+  // proxyId may be null → detach the proxy so the account connects directly.
+  await query('UPDATE channels SET proxy_id = $2::uuid WHERE id = $1::uuid', [
+    id,
+    proxyId,
+  ])
 }
 
 /** Admin: patch a channel's live session status by id (no manager scope). */

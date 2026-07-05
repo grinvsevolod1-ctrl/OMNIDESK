@@ -51,17 +51,21 @@ export interface ChannelStatusSnapshot {
 
 /**
  * Enforce the proxy allocation rules for a NEW/edited account:
- *  1. A proxy is REQUIRED for every account (all four types).
- *  2. A proxy serves at most ONE account per type (different types may share).
+ *  1. A proxy is OPTIONAL — when omitted the account connects directly. This
+ *     matters because some proxies can't tunnel Telegram MTProto/WebSocket, so
+ *     a direct connection must always be possible as a fallback.
+ *  2. When a proxy IS chosen it serves at most ONE account per type (different
+ *     types may share).
  *  3. MTProto proxies are Telegram-only (they can't tunnel VK/MAX/WhatsApp HTTP).
- * Returns an error string, or null when the proxy is valid to use.
+ * Returns an error string, or null when the selection is valid to use.
  */
 async function validateProxyForType(
   proxyId: string | null,
   type: ChannelType,
   excludeChannelId?: string,
 ): Promise<string | null> {
-  if (!proxyId) return 'Выберите прокси — он обязателен для каждого аккаунта.'
+  // No proxy → direct connection. Always allowed.
+  if (!proxyId) return null
   const proxy = await getProxyById(proxyId)
   if (!proxy) return 'Указанный прокси не найден.'
   if (proxy.kind === 'mtproto' && type !== 'telegram') {
@@ -532,16 +536,27 @@ export async function adminHealthCheckAction(
 /** Admin: reassign the proxy of an existing account (uniqueness enforced). */
 export async function adminReassignProxyAction(
   channelId: string,
-  proxyId: string,
+  proxyId: string | null,
 ): Promise<AdminAccountResult> {
   await requireAdmin()
   const channel = await getChannelById(channelId)
   if (!channel) return { ok: false, message: 'Аккаунт не найден.' }
-  const proxyError = await validateProxyForType(proxyId, channel.type, channelId)
+  // Empty selection → detach the proxy (direct connection).
+  const nextProxyId = proxyId && proxyId.trim() ? proxyId.trim() : null
+  const proxyError = await validateProxyForType(
+    nextProxyId,
+    channel.type,
+    channelId,
+  )
   if (proxyError) return { ok: false, message: proxyError }
-  await updateChannelProxy(channelId, proxyId)
+  await updateChannelProxy(channelId, nextProxyId)
   revalidatePath('/admin/accounts')
-  return { ok: true, message: 'Прокси переназначен.' }
+  return {
+    ok: true,
+    message: nextProxyId
+      ? 'Прокси переназначен.'
+      : 'Прокси отключён — аккаунт подключается напрямую.',
+  }
 }
 
 /** Admin: delete any account, tearing down its live session / webhook first. */
