@@ -218,6 +218,34 @@ export async function getGroup(
   return { ok: true, data: group }
 }
 
+/**
+ * Verify the community token actually carries the scopes we need before we try
+ * to wire up the Callback API. Returns the list of missing scopes (empty when
+ * the token is fully privileged) so the admin gets an exact, actionable error
+ * instead of a cryptic failure three API calls later.
+ *
+ * `groups.getTokenPermissions` returns a bitmask + a `settings` array of
+ * `{ name, setting }` for community tokens. We require `messages` (send/receive)
+ * and `manage` (register the callback server).
+ */
+export async function checkTokenScopes(
+  token: string,
+  proxy?: ProxyDescriptor | null,
+): Promise<VkResult<{ missing: string[] }>> {
+  const res = await call<{
+    mask?: number
+    permissions?: { name?: string }[]
+    settings?: { name?: string; setting?: number }[]
+  }>('groups.getTokenPermissions', token, {}, proxy)
+  if (!res.ok) return res
+  const granted = new Set<string>()
+  for (const p of res.data.permissions ?? []) if (p.name) granted.add(p.name)
+  for (const p of res.data.settings ?? []) if (p.name) granted.add(p.name)
+  const required = ['messages', 'manage']
+  const missing = required.filter((s) => !granted.has(s))
+  return { ok: true, data: { missing } }
+}
+
 /** Fetch the Callback API confirmation string VK expects us to echo back. */
 export async function getConfirmationCode(
   token: string,

@@ -58,14 +58,10 @@ export function ChannelCard({ channel }: { channel: Channel }) {
   const attemptsRef = useRef(0)
   const Icon = ICONS[channel.type]
 
-  const isCloudWhatsapp =
-    channel.type === 'whatsapp' && channel.config?.provider === 'cloud'
-  // Only Telegram + legacy Baileys WhatsApp are socket-backed "personal"
-  // accounts that can drop and need reconnecting. VK/MAX/Cloud WhatsApp are
-  // webhook-based and always "online".
-  const isPersonal =
-    channel.type === 'telegram' ||
-    (channel.type === 'whatsapp' && !isCloudWhatsapp)
+  // Only Telegram is a socket-backed "personal" account that can drop and needs
+  // reconnecting via the worker. WhatsApp (Cloud API), VK and MAX are all
+  // webhook-based and always "online" as long as their token/webhook are valid.
+  const isPersonal = channel.type === 'telegram'
   const paused = channel.ingestPaused
 
   // A session that logged out or is deliberately rate-limited must NOT be

@@ -8,19 +8,24 @@ import {
   deleteChannelById,
   enqueueJob,
   getChannelById,
+  getMaxChannelById,
   getProxyById,
   getProxyDescriptorById,
   getProxyForChannel,
   getVkChannelById,
+  getWhatsappAppConfig,
   mergeChannelConfigById,
   proxyTypeInUse,
   updateChannelProxy,
   updateChannelSessionById,
+  updateChannelStatus,
 } from '@/lib/data'
 import { decrypt, encrypt } from '@/lib/crypto'
 import { getMe, subscribeWebhook, unsubscribeWebhook } from '@/lib/max'
+import { getPhoneNumber as getWhatsappPhoneNumber } from '@/lib/whatsapp-cloud'
 import {
   addCallbackServer as addVkCallbackServer,
+  checkTokenScopes as checkVkTokenScopes,
   deleteCallbackServer as deleteVkCallbackServer,
   getConfirmationCode as getVkConfirmationCode,
   getGroup as getVkGroup,
@@ -289,6 +294,27 @@ export async function adminConnectVkAction(
   }
   const groupId = group.data.id
 
+  // Verify the token actually has the required scopes before wiring up the
+  // callback server — otherwise the admin gets a confusing failure mid-setup.
+  const scopes = await checkVkTokenScopes(token, proxy)
+  if (!scopes.ok) {
+    return {
+      ok: false,
+      message: `Не удалось проверить права токена VK: ${scopes.error}.`,
+    }
+  }
+  if (scopes.data.missing.length > 0) {
+    const labels: Record<string, string> = {
+      messages: '«Сообщения»',
+      manage: '«Управление сообществом»',
+    }
+    const names = scopes.data.missing.map((s) => labels[s] ?? s).join(', ')
+    return {
+      ok: false,
+      message: `У токена не хватает прав: ${names}. Создайте ключ доступа сообщества с этими scope и вставьте заново.`,
+    }
+  }
+
   const confirmation = await getVkConfirmationCode(token, groupId, proxy)
   if (!confirmation.ok) {
     return {
@@ -380,6 +406,125 @@ export async function adminConnectVkAction(
     channelId: channel.id,
     sessionStatus: 'online',
   }
+}
+
+/* ------------------------------ Health check ----------------------------- */
+
+/**
+ * Admin: actively re-verify a webhook-based account (VK / MAX / WhatsApp Cloud)
+ * by calling the provider through the account's proxy. Unlike Telegram (which
+ * runs a live socket the worker can restart), these channels are "always online"
+ * as long as their token + webhook are valid — so a health check IS their
+ * reconnect: it proves the token still works and updates session_status +
+ * last_error so any breakage (revoked token, missing scope, wrong phone id) is
+ * immediately visible in the panel instead of silently failing on next send.
+ *
+ * Telegram is delegated to the worker restart path (adminRestartTelegram below).
+ */
+export async function adminHealthCheckAction(
+  channelId: string,
+): Promise<AdminAccountResult> {
+  await requireAdmin()
+  const channel = await getChannelById(channelId)
+  if (!channel) return { ok: false, message: 'Аккаунт не найден.' }
+
+  // Telegram: reconnect via the worker (reuses the stored session, no code).
+  if (channel.type === 'telegram') {
+    if (!channel.managerId) {
+      return { ok: false, message: 'У аккаунта нет владельца.' }
+    }
+    await updateChannelSessionById(channelId, { sessionStatus: 'starting' })
+    await enqueueJob({
+      channelId,
+      managerId: channel.managerId,
+      action: 'restart',
+    })
+    revalidatePath('/admin/accounts')
+    return { ok: true, message: 'Переподключаем Telegram…', channelId }
+  }
+
+  const proxy = await getProxyForChannel(channelId)
+
+  // Helper: persist the check outcome (status + error) and revalidate.
+  async function persist(ok: boolean, error: string | null) {
+    await updateChannelSessionById(channelId, {
+      sessionStatus: ok ? 'online' : 'error',
+      lastError: error,
+    })
+    if (channel!.managerId) {
+      await updateChannelStatus(
+        channelId,
+        channel!.managerId,
+        ok ? 'connected' : 'error',
+      )
+    }
+    revalidatePath('/admin/accounts')
+  }
+
+  if (channel.type === 'vk') {
+    const vk = await getVkChannelById(channelId)
+    if (!vk) return { ok: false, message: 'VK-аккаунт не найден.' }
+    const group = await getVkGroup(vk.token, proxy)
+    if (!group.ok) {
+      await persist(false, `VK: ${group.error}`)
+      return { ok: false, message: `VK недоступен: ${group.error}`, channelId }
+    }
+    const scopes = await checkVkTokenScopes(vk.token, proxy)
+    if (scopes.ok && scopes.data.missing.length > 0) {
+      const msg = `VK: у токена не хватает прав (${scopes.data.missing.join(', ')}).`
+      await persist(false, msg)
+      return { ok: false, message: msg, channelId }
+    }
+    await persist(true, null)
+    return { ok: true, message: 'VK на связи — токен действителен.', channelId }
+  }
+
+  if (channel.type === 'max') {
+    const max = await getMaxChannelById(channelId)
+    if (!max) return { ok: false, message: 'MAX-аккаунт не найден.' }
+    const me = await getMe(max.token, proxy)
+    if (!me.ok) {
+      const msg =
+        me.status === 401
+          ? 'MAX: токен недействителен — переподключите аккаунт.'
+          : `MAX недоступен: ${me.error}`
+      await persist(false, msg)
+      return { ok: false, message: msg, channelId }
+    }
+    await persist(true, null)
+    return { ok: true, message: 'MAX на связи — токен действителен.', channelId }
+  }
+
+  if (channel.type === 'whatsapp') {
+    const app = await getWhatsappAppConfig()
+    if (!app) {
+      await persist(false, 'WhatsApp: не задан токен приложения в админке.')
+      return {
+        ok: false,
+        message: 'WhatsApp не настроен: добавьте токен на странице WhatsApp.',
+        channelId,
+      }
+    }
+    const phoneNumberId = (channel.config as { phoneNumberId?: string } | null)
+      ?.phoneNumberId
+    if (!phoneNumberId) {
+      await persist(false, 'WhatsApp: у номера не задан phone number id.')
+      return { ok: false, message: 'У номера не задан phone number id.', channelId }
+    }
+    const info = await getWhatsappPhoneNumber(phoneNumberId, app.accessToken)
+    if (!info.ok) {
+      await persist(false, `WhatsApp: ${info.error}`)
+      return { ok: false, message: `WhatsApp недоступен: ${info.error}`, channelId }
+    }
+    await persist(true, null)
+    return {
+      ok: true,
+      message: 'WhatsApp на связи — номер и токен действительны.',
+      channelId,
+    }
+  }
+
+  return { ok: false, message: 'Проверка недоступна для этого типа аккаунта.' }
 }
 
 /* ------------------------------ Management ------------------------------- */

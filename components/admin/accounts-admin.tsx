@@ -7,12 +7,14 @@ import {
   MessageSquare,
   Phone,
   Plus,
+  RefreshCw,
   Send,
   Server,
   ShieldAlert,
   Trash2,
   Users,
 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   adminConnectMaxAction,
@@ -20,6 +22,7 @@ import {
   adminConnectVkAction,
   adminDeleteChannelAction,
   adminGetChannelStatusAction,
+  adminHealthCheckAction,
   adminReassignProxyAction,
   adminSubmitTelegramCodeAction,
   adminSubmitTelegramPasswordAction,
@@ -44,6 +47,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { CHANNEL_META, type Manager, type Proxy } from '@/lib/types'
+import { cn } from '@/lib/utils'
 import type { AdminChannel } from '@/lib/data'
 
 type CreatableType = 'telegram' | 'vk' | 'max'
@@ -512,9 +516,22 @@ function AccountRow({
   proxies: Proxy[]
   proxyUsage: Record<string, string[]>
 }) {
+  const router = useRouter()
   const [pending, startTransition] = useTransition()
+  const [checking, setChecking] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const Icon = TYPE_ICON[channel.type as keyof typeof TYPE_ICON] ?? Server
+
+  function healthCheck() {
+    setChecking(true)
+    startTransition(async () => {
+      const res = await adminHealthCheckAction(channel.id)
+      if (res.ok) toast.success(res.message)
+      else toast.error(res.message)
+      setChecking(false)
+      router.refresh()
+    })
+  }
 
   // Proxies eligible to (re)assign to THIS account: right kind + not used by
   // another account of the same type (the account's current proxy is allowed).
@@ -588,6 +605,17 @@ function AccountRow({
             ))}
           </SelectContent>
         </Select>
+
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={healthCheck}
+          disabled={pending}
+          aria-label="Проверить связь / переподключить"
+          title="Проверить связь"
+        >
+          <RefreshCw className={cn('size-4', checking && 'animate-spin')} />
+        </Button>
 
         <Button
           variant="outline"
