@@ -13,6 +13,7 @@ const nav: NavItem[] = [
   { href: '/app/inbox', label: 'Входящие', icon: 'inbox' },
   { href: '/app/quick-replies', label: 'Автоответы', icon: 'quickReplies' },
   { href: '/app/autopilot', label: 'Автопилот', icon: 'autopilot' },
+  { href: '/app/meetings', label: 'Видеовстречи', icon: 'telemost' },
   { href: '/app/proxies', label: 'Прокси', icon: 'proxies' },
   { href: '/app/settings', label: 'Настройки', icon: 'settings' },
 ]

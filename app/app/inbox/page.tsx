@@ -27,8 +27,8 @@ export default async function InboxPage() {
     ])
 
   // Whether the Yandex Telemost video-meeting button should appear in the
-  // composer (only when a token is configured).
-  const telemostEnabled = isTelemostConfigured()
+  // composer (only when the admin has configured and enabled it).
+  const telemostEnabled = await isTelemostConfigured()
 
   // Personal accounts whose session is degraded/paused — surfaced as a banner in
   // the inbox so the operator knows live sync may be affected for those sources,

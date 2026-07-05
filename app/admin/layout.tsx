@@ -8,6 +8,7 @@ const nav: NavItem[] = [
   { href: '/admin/accounts', label: 'Аккаунты', icon: 'connections' },
   { href: '/admin/channels', label: 'Все каналы', icon: 'channels' },
   { href: '/admin/whatsapp', label: 'WhatsApp', icon: 'whatsapp' },
+  { href: '/admin/telemost', label: 'Телемост', icon: 'telemost' },
   { href: '/admin/proxies', label: 'Прокси', icon: 'proxies' },
   { href: '/admin/livechat', label: 'Онлайн-чат', icon: 'livechat' },
   { href: '/admin/settings', label: 'Система', icon: 'settings' },

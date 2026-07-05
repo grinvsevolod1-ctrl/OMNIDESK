@@ -26,6 +26,7 @@ import {
   Server,
   Settings,
   Users,
+  Video,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -53,6 +54,7 @@ export type NavIcon =
   | 'analytics'
   | 'quickReplies'
   | 'autopilot'
+  | 'telemost'
   | 'docs'
   | 'settings'
 
@@ -68,6 +70,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   analytics: BarChart3,
   quickReplies: MessageSquareText,
   autopilot: Bot,
+  telemost: Video,
   docs: BookOpen,
   settings: Settings,
 }

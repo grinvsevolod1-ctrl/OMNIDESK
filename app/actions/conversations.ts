@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { requireManager } from '@/lib/auth'
 import {
   listTransferTargets,
+  recordTelemostMeeting,
   transferConversation,
   type TransferTarget,
 } from '@/lib/data'
@@ -78,7 +79,7 @@ export async function createMeetingAction(
   conversationId: string,
   note?: string,
 ): Promise<MeetingResult> {
-  await requireManager()
+  const session = await requireManager()
   if (!conversationId) {
     return { ok: false, message: 'Диалог не выбран.' }
   }
@@ -94,6 +95,13 @@ export async function createMeetingAction(
   const body = `${prefix}Приглашаю вас на видеовстречу в Яндекс Телемост:\n${meeting.meeting.joinUrl}`
 
   const sent = await sendMessageAction(conversationId, body)
+  await recordTelemostMeeting({
+    managerId: session.sub,
+    conversationId,
+    conferenceId: meeting.meeting.id,
+    joinUrl: meeting.meeting.joinUrl,
+    delivered: sent.ok,
+  })
   if (!sent.ok) {
     // The meeting exists but we couldn't deliver the link — surface the link so
     // the manager can copy/paste it manually rather than losing it.
@@ -105,9 +113,39 @@ export async function createMeetingAction(
   }
 
   revalidatePath('/app/inbox')
+  revalidatePath('/app/meetings')
   return {
     ok: true,
     message: 'Ссылка на видеовстречу отправлена клиенту.',
+    joinUrl: meeting.meeting.joinUrl,
+  }
+}
+
+/**
+ * Manager: create a standalone Telemost meeting from the Видеовстречи tab (not
+ * tied to a conversation). Returns the join link for the manager to share
+ * manually; nothing is sent to any client.
+ */
+export async function createStandaloneMeetingAction(): Promise<MeetingResult> {
+  const session = await requireManager()
+
+  const meeting = await createTelemostMeeting()
+  if (!meeting.ok) {
+    return { ok: false, message: meeting.message }
+  }
+
+  await recordTelemostMeeting({
+    managerId: session.sub,
+    conversationId: null,
+    conferenceId: meeting.meeting.id,
+    joinUrl: meeting.meeting.joinUrl,
+    delivered: false,
+  })
+
+  revalidatePath('/app/meetings')
+  return {
+    ok: true,
+    message: 'Видеовстреча создана.',
     joinUrl: meeting.meeting.joinUrl,
   }
 }
