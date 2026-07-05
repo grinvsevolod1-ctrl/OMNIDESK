@@ -189,6 +189,9 @@ function LeadBoardDialog({
 
   useEffect(() => {
     if (!open || !selection) return
+    // Fetch the list when the board opens; loadList manages its own loading
+    // state. This is external-data synchronization, not a render-derived value.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadList()
   }, [open, selection, loadList])
 

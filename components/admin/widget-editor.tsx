@@ -825,9 +825,11 @@ function HoursTab({ config, patch }: TabProps) {
                     onClick={() =>
                       patch((draft) => {
                         const set = new Set(draft.workingHours.days)
-                        set.has(d.value)
-                          ? set.delete(d.value)
-                          : set.add(d.value)
+                        if (set.has(d.value)) {
+                          set.delete(d.value)
+                        } else {
+                          set.add(d.value)
+                        }
                         draft.workingHours.days = Array.from(set).sort(
                           (a, b) => a - b,
                         )

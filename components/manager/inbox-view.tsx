@@ -1538,28 +1538,44 @@ export function InboxView({
   const toggleType = useCallback((value: ChannelType) => {
     setTypeFilter((prev) => {
       const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
+      if (next.has(value)) {
+        next.delete(value)
+      } else {
+        next.add(value)
+      }
       return next
     })
   }, [])
   const toggleSource = useCallback((value: string) => {
     setSourceFilter((prev) => {
       const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
+      if (next.has(value)) {
+        next.delete(value)
+      } else {
+        next.add(value)
+      }
       return next
     })
   }, [])
   const toggleStatus = useCallback((value: LeadStatus) => {
     setStatusFilter((prev) => {
       const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
+      if (next.has(value)) {
+        next.delete(value)
+      } else {
+        next.add(value)
+      }
       return next
     })
   }, [])
   const toggleReason = useCallback((value: NotLiquidReason) => {
     setReasonFilter((prev) => {
       const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
+      if (next.has(value)) {
+        next.delete(value)
+      } else {
+        next.add(value)
+      }
       return next
     })
   }, [])

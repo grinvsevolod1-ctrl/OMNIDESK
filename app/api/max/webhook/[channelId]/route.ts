@@ -5,6 +5,7 @@ import {
   resolveMaxAgentId,
 } from '@/lib/data'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { rateLimit } from '@/lib/rate-limit'
 import { maxUserName, type MaxUpdate } from '@/lib/max'
 
 export const runtime = 'nodejs'
@@ -34,6 +35,13 @@ export async function POST(
   { params }: { params: Promise<{ channelId: string }> },
 ): Promise<Response> {
   const { channelId } = await params
+
+  // Anti-flood guard BEFORE any DB work. The webhook is protected by a
+  // per-channel secret, but if it ever leaks this caps how hard one channel
+  // endpoint can hammer the database. Generous enough for real MAX traffic.
+  // We ack 200 so MAX doesn't retry-storm us while we're shedding load.
+  const floodGuard = rateLimit(`max:webhook:${channelId}`, 120, 60_000)
+  if (!floodGuard.allowed) return json({ ok: true, throttled: true })
 
   const channel = await getMaxChannelById(channelId)
   if (!channel) {

@@ -192,6 +192,15 @@ export async function POST(request: Request): Promise<Response> {
     if (!verifySignature(raw, sig, appSecret)) {
       return json({ ok: false, error: 'bad_signature' }, 401)
     }
+  } else {
+    // No app secret configured: we cannot verify the payload really came from
+    // Meta, so anyone who learns this URL could inject inbound messages. This is
+    // an explicit opt-out — surface it loudly so an operator can lock it down by
+    // adding the app secret under /admin/whatsapp.
+    console.warn(
+      '[v0] whatsapp webhook: accepting UNSIGNED payload — no app secret configured. ' +
+        'Set the WhatsApp app secret in /admin/whatsapp to enable signature verification.',
+    )
   }
 
   let body: WaWebhookBody

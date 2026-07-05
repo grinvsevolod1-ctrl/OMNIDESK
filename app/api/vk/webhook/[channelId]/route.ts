@@ -5,6 +5,7 @@ import {
   resolveVkAgentId,
 } from '@/lib/data'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { rateLimit } from '@/lib/rate-limit'
 import { getUser, vkUserName, type VkMessage, type VkUpdate } from '@/lib/vk'
 
 export const runtime = 'nodejs'
@@ -45,6 +46,13 @@ export async function POST(
   { params }: { params: Promise<{ channelId: string }> },
 ): Promise<Response> {
   const { channelId } = await params
+
+  // Anti-flood guard BEFORE any DB work. The webhook is protected by a
+  // per-channel secret, but if it ever leaks this caps how hard one channel
+  // endpoint can hammer the database. Generous enough for real VK traffic.
+  // We reply "ok" so VK doesn't retry-storm us while we're shedding load.
+  const floodGuard = rateLimit(`vk:webhook:${channelId}`, 120, 60_000)
+  if (!floodGuard.allowed) return text('ok')
 
   const channel = await getVkChannelById(channelId)
   if (!channel) {

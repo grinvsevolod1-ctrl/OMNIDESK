@@ -147,6 +147,9 @@ export function LivechatAdmin({
   const [origin, setOrigin] = useState('')
 
   useEffect(() => {
+    // Read the real origin on the client so generated snippet/webhook URLs match
+    // the browser address. Safe one-shot state set on mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOrigin(window.location.origin)
   }, [])
 
@@ -177,7 +180,11 @@ export function LivechatAdmin({
     setBusyId(id)
     startTransition(async () => {
       const res = await deleteLivechatAction(id)
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
       setBusyId(null)
     })
   }
@@ -384,6 +391,7 @@ function EditQueue({
 
   // Reset selection to the saved queue whenever the dialog opens.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (open) setPool(channel.pool)
   }, [open, channel.pool])
 
@@ -419,7 +427,7 @@ function EditQueue({
         <div className="my-3 flex flex-col gap-2">
           <QueuePicker managers={managers} selected={pool} onChange={setPool} />
           <span className="text-xs text-muted-foreground">
-            выбрано: {pool.length}
+            выб��ано: {pool.length}
           </span>
         </div>
         <div className="flex justify-end gap-2">

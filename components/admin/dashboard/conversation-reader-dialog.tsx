@@ -78,6 +78,7 @@ export function ConversationReaderDialog({
   useEffect(() => {
     if (!open || !managerId) return
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setListLoading(true)
     setConversations([])
     setSelectedId(null)
