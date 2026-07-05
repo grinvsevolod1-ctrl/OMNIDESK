@@ -551,42 +551,55 @@ export async function adminDeleteChannelAction(
   await requireAdmin()
   const channel = await getChannelById(channelId)
   if (!channel) return { ok: false, message: 'Аккаунт не найден.' }
-  const proxy = await getProxyForChannel(channelId)
 
-  if (channel.managerId && channel.type === 'telegram') {
-    await enqueueJob({
-      channelId,
-      managerId: channel.managerId,
-      action: 'stop',
-    }).catch(() => {})
-  }
-  if (channel.type === 'max') {
-    const cfg = channel.config as { token?: unknown }
-    if (typeof cfg.token === 'string') {
-      try {
+  // Best-effort remote teardown (stop live session, unsubscribe webhooks). NONE
+  // of this must block the actual delete: if a proxy lookup, decrypt, or remote
+  // API call fails, we still want the account gone from the panel. Any failure
+  // here is logged and swallowed so we always reach deleteChannelById below.
+  try {
+    const proxy = await getProxyForChannel(channelId)
+
+    if (channel.managerId && channel.type === 'telegram') {
+      await enqueueJob({
+        channelId,
+        managerId: channel.managerId,
+        action: 'stop',
+      }).catch(() => {})
+    }
+    if (channel.type === 'max') {
+      const cfg = channel.config as { token?: unknown }
+      if (typeof cfg.token === 'string') {
         const base = await resolveAppBaseUrl()
         await unsubscribeWebhook(
           decrypt(cfg.token),
           `${base}/api/max/webhook/${channelId}`,
           proxy,
         )
-      } catch (err) {
-        console.error('[admin] failed to unsubscribe MAX webhook:', err)
       }
     }
-  }
-  if (channel.type === 'vk') {
-    const vk = await getVkChannelById(channelId)
-    if (vk && vk.serverId != null) {
-      try {
+    if (channel.type === 'vk') {
+      const vk = await getVkChannelById(channelId)
+      if (vk && vk.serverId != null) {
         await deleteVkCallbackServer(vk.token, vk.groupId, vk.serverId, proxy)
-      } catch (err) {
-        console.error('[admin] failed to delete VK callback server:', err)
       }
+    }
+  } catch (err) {
+    console.error('[admin] channel teardown failed, deleting anyway:', err)
+  }
+
+  // The actual delete. If THIS fails the account really can't be removed, so
+  // surface a clear error instead of letting the exception escape to the client
+  // (which would leave the confirm dialog stuck with no feedback).
+  try {
+    await deleteChannelById(channelId)
+  } catch (err) {
+    console.error('[admin] failed to delete channel:', err)
+    return {
+      ok: false,
+      message: 'Не удалось удалить аккаунт. Попробуйте ещё раз.',
     }
   }
 
-  await deleteChannelById(channelId)
   revalidatePath('/admin/accounts')
   return { ok: true, message: 'Аккаунт удалён.' }
 }

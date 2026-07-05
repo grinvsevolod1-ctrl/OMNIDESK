@@ -604,10 +604,22 @@ function AccountRow({
 
   function remove() {
     startTransition(async () => {
-      const res = await adminDeleteChannelAction(channel.id)
-      if (res.ok) toast.success(res.message)
-      else toast.error(res.message)
-      setConfirmOpen(false)
+      try {
+        const res = await adminDeleteChannelAction(channel.id)
+        if (res.ok) {
+          toast.success(res.message)
+          router.refresh()
+        } else {
+          toast.error(res.message)
+        }
+      } catch (err) {
+        // A thrown server action (e.g. network/DB error) would otherwise leave
+        // the dialog stuck with no feedback — surface it explicitly instead.
+        console.error('[v0] delete channel failed:', err)
+        toast.error('Не удалось удалить аккаунт. Попробуйте ещё раз.')
+      } finally {
+        setConfirmOpen(false)
+      }
     })
   }
 
