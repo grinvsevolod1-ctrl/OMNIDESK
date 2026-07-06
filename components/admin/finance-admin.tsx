@@ -1,13 +1,19 @@
 'use client'
 
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   Archive,
   AtSign,
+  AlertTriangle,
   BarChart3,
+  ClipboardCopy,
+  Download,
+  LayoutDashboard,
+  Table2,
+  Upload,
   Check,
   ChevronDown,
   ChevronRight,
@@ -55,6 +61,7 @@ import {
   createResourceAction,
   createSectionAction,
   createVaultItemAction,
+  importVaultItemsAction,
   deleteAdAccountAction,
   deleteAdStatAction,
   deleteAdTopupAction,
@@ -84,6 +91,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -96,6 +109,17 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import { AdsTrendChart } from './finance-charts'
+import {
+  downloadText,
+  findReusedSecrets,
+  parseVaultFile,
+  scorePassword,
+  toCSV,
+  toJSON,
+  type ParsedVaultRow,
+  type PasswordStrength,
+} from '@/lib/vault-utils'
 import { EmptyState, StatCard } from '@/components/page-parts'
 import { cn } from '@/lib/utils'
 import {
@@ -412,6 +436,7 @@ export function FinanceAdmin({
   encryptionReady: boolean
 }) {
   const [pending, startTransition] = useTransition()
+  const [view, setView] = useState<'dashboard' | 'resource'>('dashboard')
   const [resourceId, setResourceId] = useState<string | null>(null)
   const [subTab, setSubTab] = useState<SubTab>('overview')
 
@@ -499,8 +524,22 @@ export function FinanceAdmin({
 
   const resourceBar = (
     <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => setView('dashboard')}
+        className={cn(
+          'inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors',
+          view === 'dashboard'
+            ? 'border-primary bg-primary text-primary-foreground'
+            : 'border-border bg-card text-foreground hover:bg-muted',
+        )}
+      >
+        <LayoutDashboard className="size-4" />
+        Сводка
+      </button>
+      <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
       {resources.map((r) => {
-        const active = activeResource?.id === r.id
+        const active = view === 'resource' && activeResource?.id === r.id
         const leads = leadCountByResource.get(r.id) ?? 0
         return (
           <button
@@ -509,6 +548,7 @@ export function FinanceAdmin({
             onClick={() => {
               setResourceId(r.id)
               setSubTab('overview')
+              setView('resource')
             }}
             className={cn(
               'group inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors',
@@ -564,6 +604,35 @@ export function FinanceAdmin({
               <Plus className="size-4" /> Добавить ресурс
             </Button>
           }
+        />
+        <ResourceDialog
+          state={resourceDialog}
+          pending={pending}
+          onClose={() => setResourceDialog(null)}
+          onSubmit={(fd) =>
+            run(() => createResourceAction(fd), () => setResourceDialog(null))
+          }
+          onUpdate={() => {}}
+          onDelete={() => {}}
+        />
+      </div>
+    )
+  }
+
+  if (view === 'dashboard') {
+    return (
+      <div className="flex flex-col gap-5">
+        {resourceBar}
+        <GlobalDashboard
+          resources={resources}
+          adAccounts={adAccounts}
+          entries={entries}
+          vaultItems={vaultItems}
+          onOpenResource={(id, tab) => {
+            setResourceId(id)
+            setSubTab(tab ?? 'overview')
+            setView('resource')
+          }}
         />
         <ResourceDialog
           state={resourceDialog}
@@ -722,6 +791,10 @@ export function FinanceAdmin({
             items={resourceVaultItems}
             encryptionReady={encryptionReady}
             pending={pending}
+            resourceName={activeResource.name}
+            onImport={(rows) =>
+              run(() => importVaultItemsAction(activeResource.id, rows))
+            }
             onAdd={() =>
               setVaultDialog({ mode: 'create', resourceId: activeResource.id })
             }
@@ -833,6 +906,426 @@ export function FinanceAdmin({
         onClose={() => setConfirm(null)}
       />
     </div>
+  )
+}
+
+/* ================================================================== */
+/* Global dashboard (all resources)                                    */
+/* ================================================================== */
+
+interface ResourceRow {
+  resource: FinanceResource
+  leads: number
+  clicks: number
+  spend: number
+  balance: number
+  currency: FinanceCurrency
+  activeAccounts: number
+  totalAccounts: number
+  lowBalance: number
+  expenseTotal: number
+  unpaid: number
+  vaultCount: number
+}
+
+function GlobalDashboard({
+  resources,
+  adAccounts,
+  entries,
+  vaultItems,
+  onOpenResource,
+}: {
+  resources: FinanceResource[]
+  adAccounts: FinanceAdAccount[]
+  entries: FinanceEntry[]
+  vaultItems: VaultItem[]
+  onOpenResource: (id: string, tab?: SubTab) => void
+}) {
+  const {
+    rows,
+    totalLeads,
+    totalClicks,
+    balanceByCurrency,
+    unpaidTotal,
+    lowBalanceList,
+    overdueList,
+    weakVault,
+    reusedVault,
+  } = useMemo(() => {
+    const rows: ResourceRow[] = []
+    let totalLeads = 0
+    let totalClicks = 0
+    let unpaidTotal = 0
+    const balanceByCurrency = new Map<FinanceCurrency, number>()
+    const lowBalanceList: { account: FinanceAdAccount; resource: string }[] = []
+    const today = todayISO()
+
+    for (const resource of resources) {
+      const accounts = adAccounts.filter((a) => a.resourceId === resource.id)
+      const rEntries = entries.filter((e) => e.resourceId === resource.id)
+      const vaultCount = vaultItems.filter(
+        (v) => v.resourceId === resource.id,
+      ).length
+
+      let leads = 0
+      let clicks = 0
+      let spend = 0
+      let balance = 0
+      let activeAccounts = 0
+      let low = 0
+      for (const a of accounts) {
+        const m = accountMetrics(a)
+        leads += m.leads
+        clicks += m.clicks
+        spend += m.spend
+        balance += m.balance
+        if (a.status === 'active') activeAccounts += 1
+        balanceByCurrency.set(
+          a.currency,
+          (balanceByCurrency.get(a.currency) ?? 0) + m.balance,
+        )
+        if (a.status !== 'archived' && m.balance <= 0 && m.topups > 0) {
+          low += 1
+          lowBalanceList.push({ account: a, resource: resource.name })
+        }
+      }
+
+      const expenseTotal = rEntries
+        .filter((e) => e.status !== 'cancelled')
+        .reduce((s, e) => s + e.amount, 0)
+      const unpaid = rEntries.filter(
+        (e) => e.status === 'planned' || e.status === 'in_progress',
+      ).length
+      unpaidTotal += unpaid
+      totalLeads += leads
+      totalClicks += clicks
+
+      rows.push({
+        resource,
+        leads,
+        clicks,
+        spend,
+        balance,
+        currency: resource.currency,
+        activeAccounts,
+        totalAccounts: accounts.length,
+        lowBalance: low,
+        expenseTotal,
+        unpaid,
+        vaultCount,
+      })
+    }
+
+    // Overdue expenses across all resources.
+    const overdueList = entries
+      .filter(
+        (e) =>
+          (e.status === 'planned' || e.status === 'in_progress') &&
+          e.dueDate != null &&
+          e.dueDate < today,
+      )
+      .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))
+
+    // Vault health.
+    const reused = findReusedSecrets(vaultItems)
+    let weakVault = 0
+    let reusedVault = 0
+    for (const v of vaultItems) {
+      if (!v.secret) continue
+      if (scorePassword(v.secret).score <= 1) weakVault += 1
+      if (reused.has(v.secret)) reusedVault += 1
+    }
+
+    rows.sort((a, b) => b.leads - a.leads)
+    return {
+      rows,
+      totalLeads,
+      totalClicks,
+      balanceByCurrency,
+      unpaidTotal,
+      lowBalanceList,
+      overdueList,
+      weakVault,
+      reusedVault,
+    }
+  }, [resources, adAccounts, entries, vaultItems])
+
+  const balanceChips = [...balanceByCurrency.entries()].sort(
+    (a, b) => b[1] - a[1],
+  )
+  const ctr = totalClicks > 0 ? (totalLeads / totalClicks) * 100 : 0
+  const hasAlerts =
+    lowBalanceList.length > 0 ||
+    overdueList.length > 0 ||
+    weakVault > 0 ||
+    reusedVault > 0
+
+  return (
+    <div className="flex flex-col gap-5">
+      {/* Hero KPIs */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="Ресурсы"
+          value={formatInt(resources.length)}
+          icon={Layers}
+          hint={`${adAccounts.length} кабинетов · ${vaultItems.length} записей`}
+        />
+        <StatCard
+          label="Лиды (всего)"
+          value={formatInt(totalLeads)}
+          icon={Users}
+          hint={`CR в лид ${formatPct(ctr)}`}
+        />
+        <StatCard
+          label="Не оплачено"
+          value={formatInt(unpaidTotal)}
+          icon={CreditCard}
+          hint="Запланировано / в работе"
+        />
+        <StatCard
+          label="Записей в хранилище"
+          value={formatInt(vaultItems.length)}
+          icon={Vault}
+          hint={
+            weakVault > 0 ? `${weakVault} слабых паролей` : 'Секреты под защитой'
+          }
+        />
+      </div>
+
+      {/* Total ad balance by currency */}
+      {balanceChips.length > 0 ? (
+        <Card className="p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Wallet className="size-4 text-muted-foreground" />
+            <h3 className="text-sm font-semibold">Суммарный баланс рекламы</h3>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {balanceChips.map(([cur, bal]) => (
+              <div
+                key={cur}
+                className={cn(
+                  'rounded-lg border px-3 py-2',
+                  bal <= 0
+                    ? 'border-destructive/40 bg-destructive/5'
+                    : 'border-border bg-muted/40',
+                )}
+              >
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  {cur}
+                </p>
+                <p
+                  className={cn(
+                    'text-lg font-semibold tabular-nums',
+                    bal <= 0 && 'text-destructive',
+                  )}
+                >
+                  {formatMoney(bal, cur)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      {/* Alerts */}
+      {hasAlerts ? (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {lowBalanceList.length > 0 ? (
+            <AlertCard
+              tone="destructive"
+              icon={TrendingDown}
+              title={`Заканчивается баланс: ${lowBalanceList.length}`}
+              items={lowBalanceList.map(
+                (x) => `${x.account.name} · ${x.resource}`,
+              )}
+            />
+          ) : null}
+          {overdueList.length > 0 ? (
+            <AlertCard
+              tone="warning"
+              icon={AlertTriangle}
+              title={`Просрочены платежи: ${overdueList.length}`}
+              items={overdueList.map(
+                (e) => `${e.title} · до ${formatDate(e.dueDate as string)}`,
+              )}
+            />
+          ) : null}
+          {weakVault > 0 ? (
+            <AlertCard
+              tone="warning"
+              icon={ShieldAlert}
+              title={`Слабые пароли: ${weakVault}`}
+              items={['Откройте хранилище и обновите короткие или простые пароли.']}
+            />
+          ) : null}
+          {reusedVault > 0 ? (
+            <AlertCard
+              tone="warning"
+              icon={KeyRound}
+              title={`Повторяющиеся пароли: ${reusedVault}`}
+              items={['Один и тот же пароль используется в нескольких записях.']}
+            />
+          ) : null}
+        </div>
+      ) : (
+        <Card className="flex items-center gap-3 border-success/30 bg-success/5 p-4">
+          <ShieldCheck className="size-5 shrink-0 text-success" />
+          <p className="text-sm text-success">
+            Всё в порядке: балансы положительные, просроченных платежей нет,
+            пароли надёжные.
+          </p>
+        </Card>
+      )}
+
+      {/* Trend chart across all resources */}
+      {adAccounts.length > 0 ? (
+        <Card className="p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <BarChart3 className="size-4 text-muted-foreground" />
+            <h3 className="text-sm font-semibold">
+              Динамика лидов и кликов (все ресурсы)
+            </h3>
+          </div>
+          <AdsTrendChart accounts={adAccounts} />
+        </Card>
+      ) : null}
+
+      {/* Per-resource table */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-semibold">Ресурсы</h3>
+        {rows.length === 0 ? (
+          <Card className="p-6 text-center text-sm text-muted-foreground">
+            Пока нет ресурсов.
+          </Card>
+        ) : (
+          <Card className="overflow-hidden p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-4 py-2.5 font-medium">Ресурс</th>
+                    <th className="px-4 py-2.5 text-right font-medium">Баланс</th>
+                    <th className="px-4 py-2.5 text-right font-medium">Лиды</th>
+                    <th className="px-4 py-2.5 text-right font-medium">CPL</th>
+                    <th className="px-4 py-2.5 text-right font-medium">Кабинеты</th>
+                    <th className="px-4 py-2.5 text-right font-medium">Не опл.</th>
+                    <th className="px-4 py-2.5 text-right font-medium">Хранилище</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => {
+                    const cpl =
+                      row.leads > 0 ? row.spend / row.leads : null
+                    return (
+                      <tr
+                        key={row.resource.id}
+                        onClick={() => onOpenResource(row.resource.id)}
+                        className="cursor-pointer border-b border-border/60 transition-colors last:border-0 hover:bg-muted/50"
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-medium">
+                              {row.resource.name}
+                            </span>
+                            {row.lowBalance > 0 ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-1.5 py-0.5 text-[11px] font-medium text-destructive">
+                                <TrendingDown className="size-3" />
+                                {row.lowBalance}
+                              </span>
+                            ) : null}
+                            {row.resource.archived ? (
+                              <Archive className="size-3.5 text-muted-foreground" />
+                            ) : null}
+                          </div>
+                        </td>
+                        <td
+                          className={cn(
+                            'px-4 py-3 text-right font-semibold tabular-nums',
+                            row.balance <= 0 &&
+                              row.totalAccounts > 0 &&
+                              'text-destructive',
+                          )}
+                        >
+                          {row.totalAccounts > 0
+                            ? formatMoney(row.balance, row.currency)
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          {formatInt(row.leads)}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                          {cpl == null ? '—' : formatMoney(cpl, row.currency)}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                          {row.activeAccounts}/{row.totalAccounts}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          {row.unpaid > 0 ? (
+                            <span className="font-medium text-warning">
+                              {row.unpaid}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">0</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onOpenResource(row.resource.id, 'vault')
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                          >
+                            <Vault className="size-3.5" />
+                            {row.vaultCount}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AlertCard({
+  tone,
+  icon: Icon,
+  title,
+  items,
+}: {
+  tone: 'destructive' | 'warning'
+  icon: typeof KeyRound
+  title: string
+  items: string[]
+}) {
+  const toneCls =
+    tone === 'destructive'
+      ? 'border-destructive/40 bg-destructive/5 text-destructive'
+      : 'border-warning/40 bg-warning/5 text-warning'
+  return (
+    <Card className={cn('flex items-start gap-3 p-4', toneCls)}>
+      <Icon className="mt-0.5 size-5 shrink-0" />
+      <div className="min-w-0 space-y-1">
+        <p className="font-medium">{title}</p>
+        <ul className="space-y-0.5 text-sm text-muted-foreground">
+          {items.slice(0, 4).map((it, i) => (
+            <li key={i} className="truncate">
+              {it}
+            </li>
+          ))}
+          {items.length > 4 ? (
+            <li className="text-xs">и ещё {items.length - 4}…</li>
+          ) : null}
+        </ul>
+      </div>
+    </Card>
   )
 }
 
@@ -1065,16 +1558,81 @@ function AdsPanel({
   onDeleteTopup: (id: string) => void
   onDeleteStat: (id: string) => void
 }) {
+  const [layout, setLayout] = useState<'cards' | 'table'>('cards')
+
+  const lowBalance = accounts.filter(
+    (a) =>
+      a.status !== 'archived' &&
+      accountMetrics(a).balance <= 0 &&
+      accountMetrics(a).topups > 0,
+  )
+  const hasStats = accounts.some((a) => a.stats.length > 0)
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
           {accounts.length} кабинет(ов)
         </p>
-        <Button className="gap-1.5" onClick={onAdd}>
-          <Plus className="size-4" /> Кабинет
-        </Button>
+        <div className="flex items-center gap-2">
+          {accounts.length > 0 ? (
+            <div className="inline-flex rounded-lg border border-border p-0.5">
+              <button
+                type="button"
+                onClick={() => setLayout('cards')}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
+                  layout === 'cards'
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Layers className="size-4" /> Карточки
+              </button>
+              <button
+                type="button"
+                onClick={() => setLayout('table')}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
+                  layout === 'table'
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Table2 className="size-4" /> Таблица
+              </button>
+            </div>
+          ) : null}
+          <Button className="gap-1.5" onClick={onAdd}>
+            <Plus className="size-4" /> Кабинет
+          </Button>
+        </div>
       </div>
+
+      {lowBalance.length > 0 ? (
+        <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-3.5">
+          <TrendingDown className="mt-0.5 size-5 shrink-0 text-destructive" />
+          <div className="text-sm">
+            <p className="font-medium text-destructive">
+              Заканчивается баланс: {lowBalance.length}
+            </p>
+            <p className="text-muted-foreground">
+              {lowBalance.map((a) => a.name).join(', ')} — пополните, чтобы
+              реклама не остановилась.
+            </p>
+          </div>
+        </Card>
+      ) : null}
+
+      {hasStats ? (
+        <Card className="p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <BarChart3 className="size-4 text-muted-foreground" />
+            <h3 className="text-sm font-semibold">Динамика лидов и кликов</h3>
+          </div>
+          <AdsTrendChart accounts={accounts} />
+        </Card>
+      ) : null}
 
       {accounts.length === 0 ? (
         <EmptyState
@@ -1087,6 +1645,8 @@ function AdsPanel({
             </Button>
           }
         />
+      ) : layout === 'table' ? (
+        <AdsSummaryTable accounts={accounts} onEdit={onEdit} onTopup={onTopup} />
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
           {accounts.map((a) => (
@@ -1105,6 +1665,104 @@ function AdsPanel({
         </div>
       )}
     </div>
+  )
+}
+
+function AdsSummaryTable({
+  accounts,
+  onEdit,
+  onTopup,
+}: {
+  accounts: FinanceAdAccount[]
+  onEdit: (a: FinanceAdAccount) => void
+  onTopup: (a: FinanceAdAccount) => void
+}) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[860px] text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <th className="px-4 py-2.5 font-medium">Кабинет</th>
+              <th className="px-4 py-2.5 text-right font-medium">Баланс</th>
+              <th className="px-4 py-2.5 text-right font-medium">Расход</th>
+              <th className="px-4 py-2.5 text-right font-medium">Лиды</th>
+              <th className="px-4 py-2.5 text-right font-medium">CPL</th>
+              <th className="px-4 py-2.5 text-right font-medium">CTR</th>
+              <th className="px-4 py-2.5 text-right font-medium">CR</th>
+              <th className="px-4 py-2.5 text-right font-medium" />
+            </tr>
+          </thead>
+          <tbody>
+            {accounts.map((a) => {
+              const m = accountMetrics(a)
+              return (
+                <tr
+                  key={a.id}
+                  className="border-b border-border/60 transition-colors last:border-0 hover:bg-muted/50"
+                >
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          'size-2 shrink-0 rounded-full',
+                          AD_STATUS_META[a.status].dot,
+                        )}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => onEdit(a)}
+                        className="truncate font-medium hover:underline"
+                      >
+                        {a.name}
+                      </button>
+                      <span className="text-xs text-muted-foreground">
+                        {PLATFORM_META[a.platform]}
+                      </span>
+                    </div>
+                  </td>
+                  <td
+                    className={cn(
+                      'px-4 py-3 text-right font-semibold tabular-nums',
+                      m.balance <= 0 && 'text-destructive',
+                    )}
+                  >
+                    {formatMoney(m.balance, a.currency)}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                    {formatMoney(m.spend, a.currency)}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums">
+                    {formatInt(m.leads)}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums">
+                    {m.cpl === Number.POSITIVE_INFINITY
+                      ? '—'
+                      : formatMoney(m.cpl, a.currency)}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                    {formatPct(m.ctr)}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                    {formatPct(m.cr)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => onTopup(a)}
+                    >
+                      <Plus className="size-3.5" /> Пополнить
+                    </Button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   )
 }
 
@@ -2648,27 +3306,58 @@ function VaultPanel({
   items,
   encryptionReady,
   pending,
+  resourceName,
   onAdd,
   onEdit,
   onToggleFavorite,
   onDelete,
+  onImport,
 }: {
   items: VaultItem[]
   encryptionReady: boolean
   pending: boolean
+  resourceName: string
   onAdd: () => void
   onEdit: (item: VaultItem) => void
   onToggleFavorite: (item: VaultItem) => void
   onDelete: (item: VaultItem) => void
+  onImport: (rows: ParsedVaultRow[]) => void
 }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<'all' | VaultCategory>('all')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const reusedSecrets = useMemo(() => findReusedSecrets(items), [items])
 
   const countByCategory = useMemo(() => {
     const map = new Map<VaultCategory, number>()
     for (const it of items) map.set(it.category, (map.get(it.category) ?? 0) + 1)
     return map
   }, [items])
+
+  function slug(name: string): string {
+    return (
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9а-я]+/gi, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40) || 'vault'
+    )
+  }
+
+  async function handleFile(file: File) {
+    try {
+      const text = await file.text()
+      const rows = parseVaultFile(file.name, text)
+      if (rows.length === 0) {
+        toast.error('В файле не найдено записей.')
+        return
+      }
+      onImport(rows)
+    } catch {
+      toast.error('Не удалось прочитать файл. Ожидается CSV или JSON.')
+    }
+  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -2730,9 +3419,71 @@ function VaultPanel({
             aria-label="Поиск по хранилищу"
           />
         </div>
-        <Button className="gap-1.5" onClick={onAdd}>
-          <Plus className="size-4" /> Добавить запись
-        </Button>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.json,text/csv,application/json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void handleFile(file)
+              e.target.value = ''
+            }}
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon"
+                  disabled={items.length === 0}
+                  aria-label="Экспорт хранилища"
+                  title="Экспорт"
+                >
+                  <Download className="size-4" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() =>
+                  downloadText(
+                    `${slug(resourceName)}-vault.json`,
+                    toJSON(items),
+                    'application/json',
+                  )
+                }
+              >
+                Экспорт в JSON
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  downloadText(
+                    `${slug(resourceName)}-vault.csv`,
+                    toCSV(items),
+                    'text/csv',
+                  )
+                }
+              >
+                Экспорт в CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={pending}
+            aria-label="Импорт в хранилище"
+            title="Импорт из CSV / JSON"
+          >
+            <Upload className="size-4" />
+          </Button>
+          <Button className="gap-1.5" onClick={onAdd}>
+            <Plus className="size-4" /> Добавить запись
+          </Button>
+        </div>
       </div>
 
       {/* Category filter chips */}
@@ -2784,6 +3535,7 @@ function VaultPanel({
               key={item.id}
               item={item}
               pending={pending}
+              reused={!!item.secret && reusedSecrets.has(item.secret)}
               onEdit={() => onEdit(item)}
               onToggleFavorite={() => onToggleFavorite(item)}
               onDelete={() => onDelete(item)}
@@ -2848,6 +3600,14 @@ function VaultRow({
   href?: string
 }) {
   const [show, setShow] = useState(false)
+
+  // Auto-hide a revealed secret after 20s so it never lingers on screen.
+  useEffect(() => {
+    if (!show || !secret) return
+    const t = setTimeout(() => setShow(false), 20000)
+    return () => clearTimeout(t)
+  }, [show, secret])
+
   if (!value) return null
   const masked = secret && !show
   const display = masked ? '•'.repeat(Math.min(14, Math.max(8, value.length))) : value
@@ -2907,12 +3667,14 @@ function VaultRow({
 function VaultCard({
   item,
   pending,
+  reused,
   onEdit,
   onToggleFavorite,
   onDelete,
 }: {
   item: VaultItem
   pending: boolean
+  reused?: boolean
   onEdit: () => void
   onToggleFavorite: () => void
   onDelete: () => void
@@ -2924,6 +3686,8 @@ function VaultCard({
       ? item.url
       : `https://${item.url}`
     : undefined
+  const strength = item.secret ? scorePassword(item.secret) : null
+  const weak = strength != null && strength.score <= 1
   return (
     <Card className="flex flex-col gap-3 p-4">
       <div className="flex items-start gap-3">
@@ -2936,7 +3700,19 @@ function VaultCard({
           <Icon className="size-4.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <h4 className="truncate font-medium leading-tight">{item.title}</h4>
+          <div className="flex items-center gap-1.5">
+            <h4 className="truncate font-medium leading-tight">{item.title}</h4>
+            {weak ? (
+              <span title="Слабый пароль">
+                <ShieldAlert className="size-3.5 shrink-0 text-warning" />
+              </span>
+            ) : null}
+            {reused ? (
+              <span title="Пароль повторяется в другой записи">
+                <AlertTriangle className="size-3.5 shrink-0 text-warning" />
+              </span>
+            ) : null}
+          </div>
           <p className="text-xs text-muted-foreground">{meta.label}</p>
         </div>
         <button
@@ -2972,6 +3748,8 @@ function VaultCard({
         ))}
       </div>
 
+      {strength != null ? <StrengthMeter strength={strength} compact /> : null}
+
       {item.tags.length > 0 ? (
         <div className="flex flex-wrap gap-1">
           {item.tags.map((t) => (
@@ -2988,25 +3766,76 @@ function VaultCard({
         </p>
       ) : null}
 
-      <div className="mt-auto flex items-center justify-end gap-1 border-t border-border/60 pt-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-1.5"
-          onClick={onEdit}
-        >
+      <div className="mt-auto flex items-center gap-1 border-t border-border/60 pt-2">
+        {item.login && item.secret ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5"
+            onClick={() =>
+              copyToClipboard(
+                `${item.login}\t${item.secret}`,
+                'Логин и пароль',
+              )
+            }
+            title="Скопировать логин и пароль (через таб)"
+          >
+            <ClipboardCopy className="size-3.5" /> Логин+пароль
+          </Button>
+        ) : null}
+        <div className="flex-1" />
+        <Button variant="ghost" size="sm" className="gap-1.5" onClick={onEdit}>
           <Pencil className="size-3.5" /> Изменить
         </Button>
         <Button
           variant="ghost"
-          size="sm"
-          className="gap-1.5 text-destructive hover:text-destructive"
+          size="icon"
+          className="size-8 text-destructive hover:text-destructive"
           onClick={onDelete}
+          aria-label="Удалить"
         >
-          <Trash2 className="size-3.5" /> Удалить
+          <Trash2 className="size-3.5" />
         </Button>
       </div>
     </Card>
+  )
+}
+
+function StrengthMeter({
+  strength,
+  compact = false,
+}: {
+  strength: PasswordStrength
+  compact?: boolean
+}) {
+  const barTone =
+    strength.tone === 'success'
+      ? 'bg-success'
+      : strength.tone === 'warning'
+        ? 'bg-warning'
+        : strength.tone === 'destructive'
+          ? 'bg-destructive'
+          : 'bg-muted-foreground/40'
+  const textTone =
+    strength.tone === 'success'
+      ? 'text-success'
+      : strength.tone === 'warning'
+        ? 'text-warning'
+        : strength.tone === 'destructive'
+          ? 'text-destructive'
+          : 'text-muted-foreground'
+  return (
+    <div className={cn('flex items-center gap-2', compact ? 'text-xs' : 'text-sm')}>
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn('h-full rounded-full transition-all', barTone)}
+          style={{ width: `${strength.percent}%` }}
+        />
+      </div>
+      <span className={cn('shrink-0 font-medium', textTone)}>
+        {strength.label}
+      </span>
+    </div>
   )
 }
 
@@ -3204,6 +4033,7 @@ function VaultDialog({
                   <Copy className="size-4" />
                 </Button>
               </div>
+              {secret ? <StrengthMeter strength={scorePassword(secret)} /> : null}
               {!encryptionReady ? (
                 <p className="text-xs text-warning">
                   Секрет не сохранится, пока не задан ENCRYPTION_KEY.

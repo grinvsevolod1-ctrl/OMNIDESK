@@ -599,3 +599,74 @@ export async function deleteVaultItemAction(
   revalidatePath('/admin/finance')
   return { ok: true, message: 'Запись удалена из хранилища.' }
 }
+
+interface VaultImportRow {
+  category?: string
+  title?: string
+  login?: string
+  secret?: string
+  url?: string
+  note?: string
+  tags?: string[]
+  favorite?: boolean
+  fields?: VaultField[]
+}
+
+export async function importVaultItemsAction(
+  resourceId: string,
+  rows: VaultImportRow[],
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!resourceId) return { ok: false, message: 'Ресурс не найден.' }
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return { ok: false, message: 'Нет записей для импорта.' }
+  }
+  if (rows.length > 500) {
+    return { ok: false, message: 'За один раз можно импортировать до 500 записей.' }
+  }
+
+  let imported = 0
+  try {
+    for (const raw of rows) {
+      const title = String(raw.title ?? '').trim().slice(0, MAX_TITLE)
+      if (!title) continue
+      const fields: VaultField[] = Array.isArray(raw.fields)
+        ? raw.fields
+            .filter((f) => f && typeof f === 'object')
+            .map((f) => ({
+              label: String(f.label ?? '').trim().slice(0, MAX_NAME),
+              value: String(f.value ?? '').slice(0, MAX_NOTES),
+              secret: Boolean(f.secret),
+            }))
+            .filter((f) => f.label || f.value)
+            .slice(0, 40)
+        : []
+      await createFinanceVaultItem(resourceId, {
+        category: parseVaultCategory(String(raw.category ?? '')),
+        title,
+        login: String(raw.login ?? '').trim().slice(0, MAX_REF),
+        secret: String(raw.secret ?? '').slice(0, MAX_NOTES),
+        url: String(raw.url ?? '').trim().slice(0, MAX_NOTES),
+        fields,
+        note: String(raw.note ?? '').trim().slice(0, MAX_NOTES),
+        tags: Array.isArray(raw.tags)
+          ? raw.tags.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, 20)
+          : [],
+        favorite: raw.favorite === true,
+      })
+      imported += 1
+    }
+  } catch {
+    return {
+      ok: false,
+      message:
+        'Импорт прерван. Проверьте, что задан ENCRYPTION_KEY для шифрования секретов.',
+    }
+  }
+
+  revalidatePath('/admin/finance')
+  return {
+    ok: imported > 0,
+    message: imported > 0 ? `Импортировано записей: ${imported}.` : 'Подходящих записей не найдено.',
+  }
+}
