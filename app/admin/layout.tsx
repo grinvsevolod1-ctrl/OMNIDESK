@@ -11,6 +11,7 @@ const nav: NavItem[] = [
   { href: '/admin/telemost', label: 'Телемост', icon: 'telemost' },
   { href: '/admin/proxies', label: 'Прокси', icon: 'proxies' },
   { href: '/admin/livechat', label: 'Онлайн-чат', icon: 'livechat' },
+  { href: '/admin/finance', label: 'Учёт', icon: 'finance' },
   { href: '/admin/settings', label: 'Система', icon: 'settings' },
 ]
 

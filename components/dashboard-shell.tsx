@@ -27,6 +27,7 @@ import {
   Settings,
   Users,
   Video,
+  Wallet,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -55,6 +56,7 @@ export type NavIcon =
   | 'quickReplies'
   | 'autopilot'
   | 'telemost'
+  | 'finance'
   | 'docs'
   | 'settings'
 
@@ -71,6 +73,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   quickReplies: MessageSquareText,
   autopilot: Bot,
   telemost: Video,
+  finance: Wallet,
   docs: BookOpen,
   settings: Settings,
 }
