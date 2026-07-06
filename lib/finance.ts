@@ -189,25 +189,25 @@ function mapEntry(row: EntryRow, tasks: FinanceTask[]): FinanceEntry {
 export async function getFinanceData(): Promise<FinanceData> {
   const [resourceRows, sectionRows, entryRows, taskRows] = await Promise.all([
     query<ResourceRow>(
-      `SELECT id, name, description, currency, archived, created_at
-         FROM finance_resources
-        ORDER BY archived ASC, created_at ASC`,
+      `SELECT r.id, r.name, r.description, r.currency, r.archived, r.created_at
+         FROM finance_resources r
+        ORDER BY r.archived ASC, r.created_at ASC`,
     ),
     query<SectionRow>(
-      `SELECT id, resource_id, name, sort_order, created_at
-         FROM finance_sections
-        ORDER BY sort_order ASC, created_at ASC`,
+      `SELECT s.id, s.resource_id, s.name, s.sort_order, s.created_at
+         FROM finance_sections s
+        ORDER BY s.sort_order ASC, s.created_at ASC`,
     ),
     query<EntryRow>(
-      `SELECT id, section_id, resource_id, title, type, amount, status,
-              notes, entry_date, created_at, updated_at
-         FROM finance_entries
-        ORDER BY entry_date DESC, created_at DESC`,
+      `SELECT e.id, e.section_id, e.resource_id, e.title, e.type, e.amount,
+              e.status, e.notes, e.entry_date, e.created_at, e.updated_at
+         FROM finance_entries e
+        ORDER BY e.entry_date DESC, e.created_at DESC`,
     ),
     query<TaskRow>(
-      `SELECT id, entry_id, label, done, sort_order
-         FROM finance_entry_tasks
-        ORDER BY sort_order ASC, created_at ASC`,
+      `SELECT t.id, t.entry_id, t.label, t.done, t.sort_order
+         FROM finance_entry_tasks t
+        ORDER BY t.sort_order ASC, t.created_at ASC`,
     ),
   ])
 
