@@ -57,6 +57,63 @@ export const AD_STATUSES: AdStatus[] = [
   'archived',
 ]
 
+/* ------------------------------------------------------------------ */
+/* Vault (Хранилище)                                                   */
+/* ------------------------------------------------------------------ */
+
+export type VaultCategory =
+  | 'credential'
+  | 'server'
+  | 'account'
+  | 'social'
+  | 'payment'
+  | 'email'
+  | 'domain'
+  | 'api_key'
+  | 'database'
+  | 'other'
+
+export const VAULT_CATEGORIES: VaultCategory[] = [
+  'credential',
+  'server',
+  'account',
+  'social',
+  'payment',
+  'email',
+  'domain',
+  'api_key',
+  'database',
+  'other',
+]
+
+/** Произвольное доп. поле записи хранилища. */
+export interface VaultField {
+  label: string
+  value: string
+  /** Скрывать значение под точками с кнопкой «показать». */
+  secret: boolean
+}
+
+export interface VaultItem {
+  id: string
+  resourceId: string
+  category: VaultCategory
+  title: string
+  /** Открытая часть: логин / e-mail / ник / номер счёта. */
+  login: string
+  /** Расшифрованный основной секрет (пароль/токен). '' если нет. */
+  secret: string
+  url: string
+  /** Расшифрованные доп. поля. */
+  fields: VaultField[]
+  note: string
+  tags: string[]
+  favorite: boolean
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
 export interface FinanceTask {
   id: string
   entryId: string
@@ -140,4 +197,7 @@ export interface FinanceData {
   sections: FinanceSection[]
   entries: FinanceEntry[]
   adAccounts: FinanceAdAccount[]
+  vaultItems: VaultItem[]
+  /** true, если ENCRYPTION_KEY задан и секреты хранилища шифруются. */
+  encryptionReady: boolean
 }

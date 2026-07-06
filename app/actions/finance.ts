@@ -10,6 +10,7 @@ import {
   createFinanceEntry,
   createFinanceResource,
   createFinanceSection,
+  createFinanceVaultItem,
   deleteFinanceAdAccount,
   deleteFinanceAdStat,
   deleteFinanceAdTopup,
@@ -17,20 +18,26 @@ import {
   deleteFinanceResource,
   deleteFinanceSection,
   deleteFinanceTask,
+  deleteFinanceVaultItem,
   moveFinanceEntry,
   renameFinanceSection,
   setFinanceTaskDone,
+  setFinanceVaultFavorite,
   updateFinanceAdAccount,
   updateFinanceEntry,
   updateFinanceResource,
+  updateFinanceVaultItem,
   AD_PLATFORMS,
   AD_STATUSES,
   FINANCE_CURRENCIES,
   FINANCE_ENTRY_STATUSES,
+  VAULT_CATEGORIES,
   type AdPlatform,
   type AdStatus,
   type FinanceCurrency,
   type FinanceEntryStatus,
+  type VaultCategory,
+  type VaultField,
 } from '@/lib/finance'
 
 export interface FinanceResult {
@@ -70,6 +77,46 @@ function parseAdStatus(raw: string): AdStatus {
   return AD_STATUSES.includes(raw as AdStatus)
     ? (raw as AdStatus)
     : 'active'
+}
+
+function parseVaultCategory(raw: string): VaultCategory {
+  return VAULT_CATEGORIES.includes(raw as VaultCategory)
+    ? (raw as VaultCategory)
+    : 'credential'
+}
+
+/** Comma/newline separated tags -> unique, trimmed, capped list. */
+function parseTags(raw: string): string[] {
+  const seen = new Set<string>()
+  for (const part of raw.split(/[,\n]/)) {
+    const tag = part.trim().slice(0, 40)
+    if (tag) seen.add(tag)
+    if (seen.size >= 20) break
+  }
+  return [...seen]
+}
+
+/** Parse the custom-fields JSON blob from the dialog, defensively. */
+function parseVaultFields(raw: string): VaultField[] {
+  if (!raw) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const fields: VaultField[] = []
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue
+    const f = item as Record<string, unknown>
+    const label = String(f.label ?? '').trim().slice(0, MAX_NAME)
+    const value = String(f.value ?? '').slice(0, MAX_NOTES)
+    if (!label && !value) continue
+    fields.push({ label, value, secret: Boolean(f.secret) })
+    if (fields.length >= 40) break
+  }
+  return fields
 }
 
 function parseAmount(raw: string): number {
@@ -470,4 +517,85 @@ export async function deleteAdStatAction(id: string): Promise<FinanceResult> {
   await deleteFinanceAdStat(id)
   revalidatePath('/admin/finance')
   return { ok: true, message: 'Статистика удалена.' }
+}
+
+/* -------------------------------------------------------------- */
+/* Vault (Хранилище)                                              */
+/* -------------------------------------------------------------- */
+
+function readVaultForm(formData: FormData) {
+  return {
+    category: parseVaultCategory(String(formData.get('category') ?? '')),
+    title: String(formData.get('title') ?? '').trim().slice(0, MAX_TITLE),
+    login: String(formData.get('login') ?? '').trim().slice(0, MAX_REF),
+    secret: String(formData.get('secret') ?? '').slice(0, MAX_NOTES),
+    url: String(formData.get('url') ?? '').trim().slice(0, MAX_NOTES),
+    fields: parseVaultFields(String(formData.get('fields') ?? '')),
+    note: String(formData.get('note') ?? '').trim().slice(0, MAX_NOTES),
+    tags: parseTags(String(formData.get('tags') ?? '')),
+    favorite: String(formData.get('favorite') ?? '') === 'true',
+  }
+}
+
+export async function createVaultItemAction(
+  resourceId: string,
+  formData: FormData,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!resourceId) return { ok: false, message: 'Ресурс не найден.' }
+  const input = readVaultForm(formData)
+  if (!input.title) return { ok: false, message: 'Укажите название записи.' }
+  try {
+    await createFinanceVaultItem(resourceId, input)
+  } catch {
+    return {
+      ok: false,
+      message:
+        'Не удалось зашифровать секрет. Задайте ENCRYPTION_KEY (openssl rand -hex 32).',
+    }
+  }
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Запись добавлена в хранилище.' }
+}
+
+export async function updateVaultItemAction(
+  id: string,
+  formData: FormData,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Запись не найдена.' }
+  const input = readVaultForm(formData)
+  if (!input.title) return { ok: false, message: 'Укажите название записи.' }
+  try {
+    await updateFinanceVaultItem(id, input)
+  } catch {
+    return {
+      ok: false,
+      message:
+        'Не удалось зашифровать секрет. Задайте ENCRYPTION_KEY (openssl rand -hex 32).',
+    }
+  }
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Запись обновлена.' }
+}
+
+export async function toggleVaultFavoriteAction(
+  id: string,
+  favorite: boolean,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Запись не найдена.' }
+  await setFinanceVaultFavorite(id, favorite)
+  revalidatePath('/admin/finance')
+  return { ok: true, message: favorite ? 'Закреплено.' : 'Откреплено.' }
+}
+
+export async function deleteVaultItemAction(
+  id: string,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Запись не найдена.' }
+  await deleteFinanceVaultItem(id)
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Запись удалена из хранилища.' }
 }

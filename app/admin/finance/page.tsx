@@ -14,13 +14,15 @@ export default async function AdminFinancePage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Учёт"
-        description="Расходы и реклама по ресурсам. Добавьте ресурс (например, site.com), заведите рекламные кабинеты с балансом и статистикой (лиды, клики, CPL), а также ведите расходы по вкладкам с чек-листом задач."
+        description="Единое хранилище проекта: расходы и реклама по ресурсам плюс защищённое хранилище всех данных — учётные записи, сервера, аккаунты, ники, счета и оплаты. Пароли и секреты шифруются (AES-256-GCM)."
       />
       <FinanceAdmin
         resources={data.resources}
         sections={data.sections}
         entries={data.entries}
         adAccounts={data.adAccounts}
+        vaultItems={data.vaultItems}
+        encryptionReady={data.encryptionReady}
       />
     </div>
   )

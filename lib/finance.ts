@@ -1,9 +1,11 @@
 import { query } from './db'
+import { decrypt, encrypt, isEncryptionConfigured } from './crypto'
 import {
   AD_PLATFORMS,
   AD_STATUSES,
   FINANCE_CURRENCIES,
   FINANCE_ENTRY_STATUSES,
+  VAULT_CATEGORIES,
   type AdPlatform,
   type AdStatus,
   type FinanceAdAccount,
@@ -16,6 +18,9 @@ import {
   type FinanceResource,
   type FinanceSection,
   type FinanceTask,
+  type VaultCategory,
+  type VaultField,
+  type VaultItem,
 } from './finance-types'
 
 /**
@@ -39,6 +44,7 @@ export {
   AD_STATUSES,
   FINANCE_CURRENCIES,
   FINANCE_ENTRY_STATUSES,
+  VAULT_CATEGORIES,
 }
 export type {
   AdPlatform,
@@ -53,6 +59,9 @@ export type {
   FinanceResource,
   FinanceSection,
   FinanceTask,
+  VaultCategory,
+  VaultField,
+  VaultItem,
 }
 
 /* ------------------------------------------------------------------ */
@@ -134,6 +143,23 @@ interface AdStatRow {
   created_at: string | Date
 }
 
+interface VaultItemRow {
+  id: string
+  resource_id: string
+  category: string
+  title: string
+  login: string
+  secret_enc: string | null
+  url: string
+  extra_enc: string | null
+  note: string
+  tags: string[] | null
+  favorite: boolean
+  sort_order: number
+  created_at: string | Date
+  updated_at: string | Date
+}
+
 /* ------------------------------------------------------------------ */
 /* Normalizers + mappers                                               */
 /* ------------------------------------------------------------------ */
@@ -169,6 +195,59 @@ function normAdStatus(value: string): AdStatus {
   return AD_STATUSES.includes(value as AdStatus)
     ? (value as AdStatus)
     : 'active'
+}
+
+function normVaultCategory(value: string): VaultCategory {
+  return VAULT_CATEGORIES.includes(value as VaultCategory)
+    ? (value as VaultCategory)
+    : 'other'
+}
+
+/** Decrypt a stored envelope, tolerating a rotated/missing key (returns ''). */
+function safeDecrypt(envelope: string | null): string {
+  if (!envelope) return ''
+  try {
+    return decrypt(envelope)
+  } catch {
+    // Key rotated or ciphertext tampered — never crash the whole page.
+    return ''
+  }
+}
+
+function normVaultFields(raw: string): VaultField[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((f) => f && typeof f === 'object')
+      .map((f) => ({
+        label: String((f as VaultField).label ?? ''),
+        value: String((f as VaultField).value ?? ''),
+        secret: Boolean((f as VaultField).secret),
+      }))
+  } catch {
+    return []
+  }
+}
+
+function mapVaultItem(row: VaultItemRow): VaultItem {
+  return {
+    id: row.id,
+    resourceId: row.resource_id,
+    category: normVaultCategory(row.category),
+    title: row.title,
+    login: row.login ?? '',
+    secret: safeDecrypt(row.secret_enc),
+    url: row.url ?? '',
+    fields: normVaultFields(safeDecrypt(row.extra_enc)),
+    note: row.note ?? '',
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    favorite: row.favorite,
+    sortOrder: row.sort_order,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  }
 }
 
 function mapResource(row: ResourceRow): FinanceResource {
@@ -281,6 +360,7 @@ export async function getFinanceData(): Promise<FinanceData> {
     accountRows,
     topupRows,
     statRows,
+    vaultRows,
   ] = await Promise.all([
     query<ResourceRow>(
       `SELECT r.id, r.name, r.description, r.currency, r.archived, r.created_at
@@ -319,6 +399,13 @@ export async function getFinanceData(): Promise<FinanceData> {
               st.impressions, st.clicks, st.leads, st.spend, st.note, st.created_at
          FROM finance_ad_stats st
         ORDER BY st.period_start DESC, st.created_at DESC`,
+    ),
+    query<VaultItemRow>(
+      `SELECT v.id, v.resource_id, v.category, v.title, v.login, v.secret_enc,
+              v.url, v.extra_enc, v.note, v.tags, v.favorite, v.sort_order,
+              v.created_at, v.updated_at
+         FROM finance_vault_items v
+        ORDER BY v.favorite DESC, v.sort_order ASC, v.created_at DESC`,
     ),
   ])
 
@@ -359,6 +446,8 @@ export async function getFinanceData(): Promise<FinanceData> {
         statsByAccount.get(row.id) ?? [],
       ),
     ),
+    vaultItems: vaultRows.map(mapVaultItem),
+    encryptionReady: isEncryptionConfigured(),
   }
 }
 
@@ -670,4 +759,109 @@ export async function addFinanceAdStat(input: {
 
 export async function deleteFinanceAdStat(id: string): Promise<void> {
   await query(`DELETE FROM finance_ad_stats WHERE id = $1`, [id])
+}
+
+/* ------------------------------------------------------------------ */
+/* Vault (Хранилище)                                                   */
+/* ------------------------------------------------------------------ */
+
+interface VaultInput {
+  category: VaultCategory
+  title: string
+  login: string
+  /** Plaintext secret; encrypted here before it touches the DB. '' -> NULL. */
+  secret: string
+  url: string
+  /** Custom fields; serialized + encrypted as one blob. [] -> NULL. */
+  fields: VaultField[]
+  note: string
+  tags: string[]
+  favorite: boolean
+}
+
+/** Encrypt the main secret; empty -> NULL so we never store an empty envelope. */
+function encSecret(secret: string): string | null {
+  return secret ? encrypt(secret) : null
+}
+
+/** Encrypt the custom fields blob; empty -> NULL. */
+function encFields(fields: VaultField[]): string | null {
+  if (!fields.length) return null
+  const clean = fields
+    .map((f) => ({
+      label: String(f.label ?? '').trim(),
+      value: String(f.value ?? ''),
+      secret: Boolean(f.secret),
+    }))
+    .filter((f) => f.label || f.value)
+  return clean.length ? encrypt(JSON.stringify(clean)) : null
+}
+
+export async function createFinanceVaultItem(
+  resourceId: string,
+  input: VaultInput,
+): Promise<void> {
+  await query(
+    `INSERT INTO finance_vault_items
+       (resource_id, category, title, login, secret_enc, url, extra_enc,
+        note, tags, favorite, sort_order)
+     VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+       COALESCE(
+         (SELECT MAX(sort_order) + 1 FROM finance_vault_items WHERE resource_id = $1),
+         0
+       )
+     )`,
+    [
+      resourceId,
+      input.category,
+      input.title,
+      input.login,
+      encSecret(input.secret),
+      input.url,
+      encFields(input.fields),
+      input.note,
+      input.tags,
+      input.favorite,
+    ],
+  )
+}
+
+export async function updateFinanceVaultItem(
+  id: string,
+  input: VaultInput,
+): Promise<void> {
+  await query(
+    `UPDATE finance_vault_items
+        SET category = $2, title = $3, login = $4, secret_enc = $5, url = $6,
+            extra_enc = $7, note = $8, tags = $9, favorite = $10,
+            updated_at = now()
+      WHERE id = $1`,
+    [
+      id,
+      input.category,
+      input.title,
+      input.login,
+      encSecret(input.secret),
+      input.url,
+      encFields(input.fields),
+      input.note,
+      input.tags,
+      input.favorite,
+    ],
+  )
+}
+
+export async function setFinanceVaultFavorite(
+  id: string,
+  favorite: boolean,
+): Promise<void> {
+  await query(
+    `UPDATE finance_vault_items SET favorite = $2, updated_at = now() WHERE id = $1`,
+    [id, favorite],
+  )
+}
+
+export async function deleteFinanceVaultItem(id: string): Promise<void> {
+  await query(`DELETE FROM finance_vault_items WHERE id = $1`, [id])
 }
