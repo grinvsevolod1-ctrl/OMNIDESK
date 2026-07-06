@@ -1,78 +1,62 @@
 import { query } from './db'
+import {
+  AD_PLATFORMS,
+  AD_STATUSES,
+  FINANCE_CURRENCIES,
+  FINANCE_ENTRY_STATUSES,
+  type AdPlatform,
+  type AdStatus,
+  type FinanceAdAccount,
+  type FinanceAdStat,
+  type FinanceAdTopup,
+  type FinanceCurrency,
+  type FinanceData,
+  type FinanceEntry,
+  type FinanceEntryStatus,
+  type FinanceResource,
+  type FinanceSection,
+  type FinanceTask,
+} from './finance-types'
 
 /**
  * Data-access layer for the «Учёт» (finance) admin tab.
  *
- * Three-level model: Resource → Section (tab) → Entry → checklist Tasks.
- * All SQL lives here; server actions and pages import from this module.
+ * У бизнеса нет доходов — только расходы и реклама. Ключевые метрики: ЛИДЫ,
+ * расход на рекламу, баланс кабинетов, CPL.
+ *
+ * Модель:
+ *   Ресурс (site.com)
+ *     ├── Рекламные кабинеты  →  Пополнения (+баланс) + Статистика (−баланс, метрики)
+ *     └── Разделы расходов (вкладки) → Записи расходов → чек-лист задач
+ *
+ * SQL живёт здесь; типы и enum-массивы — в ./finance-types (без импорта БД,
+ * чтобы их можно было использовать в клиентских компонентах). Реэкспортируем
+ * их для обратной совместимости серверных импортов из '@/lib/finance'.
  */
 
-export type FinanceCurrency = 'USDT' | 'RUB'
-export type FinanceEntryType = 'income' | 'expense'
-export type FinanceEntryStatus =
-  | 'planned'
-  | 'in_progress'
-  | 'done'
-  | 'cancelled'
-
-export const FINANCE_CURRENCIES: FinanceCurrency[] = ['USDT', 'RUB']
-export const FINANCE_ENTRY_TYPES: FinanceEntryType[] = ['income', 'expense']
-export const FINANCE_ENTRY_STATUSES: FinanceEntryStatus[] = [
-  'planned',
-  'in_progress',
-  'done',
-  'cancelled',
-]
-
-export interface FinanceTask {
-  id: string
-  entryId: string
-  label: string
-  done: boolean
-  sortOrder: number
+export {
+  AD_PLATFORMS,
+  AD_STATUSES,
+  FINANCE_CURRENCIES,
+  FINANCE_ENTRY_STATUSES,
 }
-
-export interface FinanceEntry {
-  id: string
-  sectionId: string
-  resourceId: string
-  title: string
-  type: FinanceEntryType
-  amount: number
-  status: FinanceEntryStatus
-  notes: string
-  entryDate: string
-  createdAt: string
-  updatedAt: string
-  tasks: FinanceTask[]
-}
-
-export interface FinanceSection {
-  id: string
-  resourceId: string
-  name: string
-  sortOrder: number
-  createdAt: string
-}
-
-export interface FinanceResource {
-  id: string
-  name: string
-  description: string
-  currency: FinanceCurrency
-  archived: boolean
-  createdAt: string
-}
-
-/** Whole tree, flattened. The client assembles + computes aggregates live. */
-export interface FinanceData {
-  resources: FinanceResource[]
-  sections: FinanceSection[]
-  entries: FinanceEntry[]
+export type {
+  AdPlatform,
+  AdStatus,
+  FinanceAdAccount,
+  FinanceAdStat,
+  FinanceAdTopup,
+  FinanceCurrency,
+  FinanceData,
+  FinanceEntry,
+  FinanceEntryStatus,
+  FinanceResource,
+  FinanceSection,
+  FinanceTask,
 }
 
 /* ------------------------------------------------------------------ */
-/* Row shapes + mappers                                                */
+/* Row shapes                                                          */
 /* ------------------------------------------------------------------ */
 
 interface ResourceRow {
@@ -97,11 +81,12 @@ interface EntryRow {
   section_id: string
   resource_id: string
   title: string
-  type: string
+  vendor: string | null
   amount: string | number
   status: string
   notes: string
   entry_date: string | Date
+  due_date: string | Date | null
   created_at: string | Date
   updated_at: string | Date
 }
@@ -114,22 +99,76 @@ interface TaskRow {
   sort_order: number
 }
 
+interface AdAccountRow {
+  id: string
+  resource_id: string
+  name: string
+  platform: string
+  status: string
+  account_ref: string
+  currency: string
+  note: string
+  created_at: string | Date
+  updated_at: string | Date
+}
+
+interface AdTopupRow {
+  id: string
+  account_id: string
+  amount: string | number
+  topup_date: string | Date
+  note: string
+  created_at: string | Date
+}
+
+interface AdStatRow {
+  id: string
+  account_id: string
+  period_start: string | Date
+  period_end: string | Date
+  impressions: string | number
+  clicks: string | number
+  leads: string | number
+  spend: string | number
+  note: string
+  created_at: string | Date
+}
+
+/* ------------------------------------------------------------------ */
+/* Normalizers + mappers                                               */
+/* ------------------------------------------------------------------ */
+
 function iso(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : String(value)
 }
 
-function normCurrency(value: string): FinanceCurrency {
-  return value === 'RUB' ? 'RUB' : 'USDT'
+function dateOnly(value: string | Date | null): string | null {
+  if (value == null) return null
+  return iso(value).slice(0, 10)
 }
 
-function normType(value: string): FinanceEntryType {
-  return value === 'income' ? 'income' : 'expense'
+function normCurrency(value: string): FinanceCurrency {
+  return FINANCE_CURRENCIES.includes(value as FinanceCurrency)
+    ? (value as FinanceCurrency)
+    : 'USDT'
 }
 
 function normStatus(value: string): FinanceEntryStatus {
   return FINANCE_ENTRY_STATUSES.includes(value as FinanceEntryStatus)
     ? (value as FinanceEntryStatus)
     : 'planned'
+}
+
+function normPlatform(value: string): AdPlatform {
+  return AD_PLATFORMS.includes(value as AdPlatform)
+    ? (value as AdPlatform)
+    : 'other'
+}
+
+function normAdStatus(value: string): AdStatus {
+  return AD_STATUSES.includes(value as AdStatus)
+    ? (value as AdStatus)
+    : 'active'
 }
 
 function mapResource(row: ResourceRow): FinanceResource {
@@ -169,15 +208,62 @@ function mapEntry(row: EntryRow, tasks: FinanceTask[]): FinanceEntry {
     sectionId: row.section_id,
     resourceId: row.resource_id,
     title: row.title,
-    type: normType(row.type),
+    vendor: row.vendor ?? '',
     amount: Number(row.amount) || 0,
     status: normStatus(row.status),
     notes: row.notes ?? '',
-    // entry_date is a DATE — keep the YYYY-MM-DD part only.
     entryDate: iso(row.entry_date).slice(0, 10),
+    dueDate: dateOnly(row.due_date),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     tasks,
+  }
+}
+
+function mapTopup(row: AdTopupRow): FinanceAdTopup {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    amount: Number(row.amount) || 0,
+    topupDate: iso(row.topup_date).slice(0, 10),
+    note: row.note ?? '',
+    createdAt: iso(row.created_at),
+  }
+}
+
+function mapStat(row: AdStatRow): FinanceAdStat {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    periodStart: iso(row.period_start).slice(0, 10),
+    periodEnd: iso(row.period_end).slice(0, 10),
+    impressions: Number(row.impressions) || 0,
+    clicks: Number(row.clicks) || 0,
+    leads: Number(row.leads) || 0,
+    spend: Number(row.spend) || 0,
+    note: row.note ?? '',
+    createdAt: iso(row.created_at),
+  }
+}
+
+function mapAdAccount(
+  row: AdAccountRow,
+  topups: FinanceAdTopup[],
+  stats: FinanceAdStat[],
+): FinanceAdAccount {
+  return {
+    id: row.id,
+    resourceId: row.resource_id,
+    name: row.name,
+    platform: normPlatform(row.platform),
+    status: normAdStatus(row.status),
+    accountRef: row.account_ref ?? '',
+    currency: normCurrency(row.currency),
+    note: row.note ?? '',
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+    topups,
+    stats,
   }
 }
 
@@ -187,7 +273,15 @@ function mapEntry(row: EntryRow, tasks: FinanceTask[]): FinanceEntry {
 
 /** Load the entire finance tree in a few flat queries. */
 export async function getFinanceData(): Promise<FinanceData> {
-  const [resourceRows, sectionRows, entryRows, taskRows] = await Promise.all([
+  const [
+    resourceRows,
+    sectionRows,
+    entryRows,
+    taskRows,
+    accountRows,
+    topupRows,
+    statRows,
+  ] = await Promise.all([
     query<ResourceRow>(
       `SELECT r.id, r.name, r.description, r.currency, r.archived, r.created_at
          FROM finance_resources r
@@ -199,8 +293,8 @@ export async function getFinanceData(): Promise<FinanceData> {
         ORDER BY s.sort_order ASC, s.created_at ASC`,
     ),
     query<EntryRow>(
-      `SELECT e.id, e.section_id, e.resource_id, e.title, e.type, e.amount,
-              e.status, e.notes, e.entry_date, e.created_at, e.updated_at
+      `SELECT e.id, e.section_id, e.resource_id, e.title, e.vendor, e.amount,
+              e.status, e.notes, e.entry_date, e.due_date, e.created_at, e.updated_at
          FROM finance_entries e
         ORDER BY e.entry_date DESC, e.created_at DESC`,
     ),
@@ -208,6 +302,23 @@ export async function getFinanceData(): Promise<FinanceData> {
       `SELECT t.id, t.entry_id, t.label, t.done, t.sort_order
          FROM finance_entry_tasks t
         ORDER BY t.sort_order ASC, t.created_at ASC`,
+    ),
+    query<AdAccountRow>(
+      `SELECT a.id, a.resource_id, a.name, a.platform, a.status, a.account_ref,
+              a.currency, a.note, a.created_at, a.updated_at
+         FROM finance_ad_accounts a
+        ORDER BY a.created_at ASC`,
+    ),
+    query<AdTopupRow>(
+      `SELECT p.id, p.account_id, p.amount, p.topup_date, p.note, p.created_at
+         FROM finance_ad_topups p
+        ORDER BY p.topup_date DESC, p.created_at DESC`,
+    ),
+    query<AdStatRow>(
+      `SELECT st.id, st.account_id, st.period_start, st.period_end,
+              st.impressions, st.clicks, st.leads, st.spend, st.note, st.created_at
+         FROM finance_ad_stats st
+        ORDER BY st.period_start DESC, st.created_at DESC`,
     ),
   ])
 
@@ -219,10 +330,35 @@ export async function getFinanceData(): Promise<FinanceData> {
     else tasksByEntry.set(task.entryId, [task])
   }
 
+  const topupsByAccount = new Map<string, FinanceAdTopup[]>()
+  for (const row of topupRows) {
+    const topup = mapTopup(row)
+    const list = topupsByAccount.get(topup.accountId)
+    if (list) list.push(topup)
+    else topupsByAccount.set(topup.accountId, [topup])
+  }
+
+  const statsByAccount = new Map<string, FinanceAdStat[]>()
+  for (const row of statRows) {
+    const stat = mapStat(row)
+    const list = statsByAccount.get(stat.accountId)
+    if (list) list.push(stat)
+    else statsByAccount.set(stat.accountId, [stat])
+  }
+
   return {
     resources: resourceRows.map(mapResource),
     sections: sectionRows.map(mapSection),
-    entries: entryRows.map((row) => mapEntry(row, tasksByEntry.get(row.id) ?? [])),
+    entries: entryRows.map((row) =>
+      mapEntry(row, tasksByEntry.get(row.id) ?? []),
+    ),
+    adAccounts: accountRows.map((row) =>
+      mapAdAccount(
+        row,
+        topupsByAccount.get(row.id) ?? [],
+        statsByAccount.get(row.id) ?? [],
+      ),
+    ),
   }
 }
 
@@ -273,7 +409,6 @@ export async function createFinanceSection(input: {
   resourceId: string
   name: string
 }): Promise<FinanceSection> {
-  // Append to the end of the resource's tab list.
   const rows = await query<SectionRow>(
     `INSERT INTO finance_sections (resource_id, name, sort_order)
      VALUES (
@@ -301,33 +436,36 @@ export async function deleteFinanceSection(id: string): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
-/* Entries                                                             */
+/* Expense entries                                                     */
 /* ------------------------------------------------------------------ */
 
 export async function createFinanceEntry(input: {
   sectionId: string
   title: string
-  type: FinanceEntryType
+  vendor: string
   amount: number
   status: FinanceEntryStatus
   notes: string
   entryDate: string
+  dueDate: string | null
 }): Promise<void> {
   // resource_id is derived from the section so it always stays consistent.
   await query(
     `INSERT INTO finance_entries
-       (section_id, resource_id, title, type, amount, status, notes, entry_date)
-     SELECT s.id, s.resource_id, $2, $3, $4, $5, $6, $7
+       (section_id, resource_id, title, vendor, type, amount, status, notes,
+        entry_date, due_date)
+     SELECT s.id, s.resource_id, $2, $3, 'expense', $4, $5, $6, $7, $8
        FROM finance_sections s
       WHERE s.id = $1`,
     [
       input.sectionId,
       input.title,
-      input.type,
+      input.vendor,
       input.amount,
       input.status,
       input.notes,
       input.entryDate,
+      input.dueDate,
     ],
   )
 }
@@ -336,26 +474,28 @@ export async function updateFinanceEntry(
   id: string,
   input: {
     title: string
-    type: FinanceEntryType
+    vendor: string
     amount: number
     status: FinanceEntryStatus
     notes: string
     entryDate: string
+    dueDate: string | null
   },
 ): Promise<void> {
   await query(
     `UPDATE finance_entries
-        SET title = $2, type = $3, amount = $4, status = $5,
-            notes = $6, entry_date = $7, updated_at = now()
+        SET title = $2, vendor = $3, amount = $4, status = $5,
+            notes = $6, entry_date = $7, due_date = $8, updated_at = now()
       WHERE id = $1`,
     [
       id,
       input.title,
-      input.type,
+      input.vendor,
       input.amount,
       input.status,
       input.notes,
       input.entryDate,
+      input.dueDate,
     ],
   )
 }
@@ -413,4 +553,121 @@ export async function setFinanceTaskDone(
 
 export async function deleteFinanceTask(id: string): Promise<void> {
   await query(`DELETE FROM finance_entry_tasks WHERE id = $1`, [id])
+}
+
+/* ------------------------------------------------------------------ */
+/* Ad accounts                                                         */
+/* ------------------------------------------------------------------ */
+
+export async function createFinanceAdAccount(input: {
+  resourceId: string
+  name: string
+  platform: AdPlatform
+  status: AdStatus
+  accountRef: string
+  currency: FinanceCurrency
+  note: string
+}): Promise<void> {
+  await query(
+    `INSERT INTO finance_ad_accounts
+       (resource_id, name, platform, status, account_ref, currency, note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      input.resourceId,
+      input.name,
+      input.platform,
+      input.status,
+      input.accountRef,
+      input.currency,
+      input.note,
+    ],
+  )
+}
+
+export async function updateFinanceAdAccount(
+  id: string,
+  input: {
+    name: string
+    platform: AdPlatform
+    status: AdStatus
+    accountRef: string
+    currency: FinanceCurrency
+    note: string
+  },
+): Promise<void> {
+  await query(
+    `UPDATE finance_ad_accounts
+        SET name = $2, platform = $3, status = $4, account_ref = $5,
+            currency = $6, note = $7, updated_at = now()
+      WHERE id = $1`,
+    [
+      id,
+      input.name,
+      input.platform,
+      input.status,
+      input.accountRef,
+      input.currency,
+      input.note,
+    ],
+  )
+}
+
+export async function deleteFinanceAdAccount(id: string): Promise<void> {
+  await query(`DELETE FROM finance_ad_accounts WHERE id = $1`, [id])
+}
+
+/* ------------------------------------------------------------------ */
+/* Ad top-ups                                                          */
+/* ------------------------------------------------------------------ */
+
+export async function addFinanceAdTopup(input: {
+  accountId: string
+  amount: number
+  topupDate: string
+  note: string
+}): Promise<void> {
+  await query(
+    `INSERT INTO finance_ad_topups (account_id, amount, topup_date, note)
+     VALUES ($1, $2, $3, $4)`,
+    [input.accountId, input.amount, input.topupDate, input.note],
+  )
+}
+
+export async function deleteFinanceAdTopup(id: string): Promise<void> {
+  await query(`DELETE FROM finance_ad_topups WHERE id = $1`, [id])
+}
+
+/* ------------------------------------------------------------------ */
+/* Ad stats                                                            */
+/* ------------------------------------------------------------------ */
+
+export async function addFinanceAdStat(input: {
+  accountId: string
+  periodStart: string
+  periodEnd: string
+  impressions: number
+  clicks: number
+  leads: number
+  spend: number
+  note: string
+}): Promise<void> {
+  await query(
+    `INSERT INTO finance_ad_stats
+       (account_id, period_start, period_end, impressions, clicks, leads, spend, note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      input.accountId,
+      input.periodStart,
+      input.periodEnd,
+      input.impressions,
+      input.clicks,
+      input.leads,
+      input.spend,
+      input.note,
+    ],
+  )
+}
+
+export async function deleteFinanceAdStat(id: string): Promise<void> {
+  await query(`DELETE FROM finance_ad_stats WHERE id = $1`, [id])
 }

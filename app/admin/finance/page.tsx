@@ -14,12 +14,13 @@ export default async function AdminFinancePage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Учёт"
-        description="Доходы и расходы по ресурсам. Добавляйте ресурс (например, site.com), внутри — вкладки (Материалы, Реклама…), а в них записи со статусами, суммами и чек-листом выполненных задач."
+        description="Расходы и реклама по ресурсам. Добавьте ресурс (например, site.com), заведите рекламные кабинеты с балансом и статистикой (лиды, клики, CPL), а также ведите расходы по вкладкам с чек-листом задач."
       />
       <FinanceAdmin
         resources={data.resources}
         sections={data.sections}
         entries={data.entries}
+        adAccounts={data.adAccounts}
       />
     </div>
   )

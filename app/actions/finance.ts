@@ -3,10 +3,16 @@
 import { revalidatePath } from 'next/cache'
 import { requireAdmin } from '@/lib/auth'
 import {
+  addFinanceAdStat,
+  addFinanceAdTopup,
   addFinanceTask,
+  createFinanceAdAccount,
   createFinanceEntry,
   createFinanceResource,
   createFinanceSection,
+  deleteFinanceAdAccount,
+  deleteFinanceAdStat,
+  deleteFinanceAdTopup,
   deleteFinanceEntry,
   deleteFinanceResource,
   deleteFinanceSection,
@@ -14,14 +20,17 @@ import {
   moveFinanceEntry,
   renameFinanceSection,
   setFinanceTaskDone,
+  updateFinanceAdAccount,
   updateFinanceEntry,
   updateFinanceResource,
+  AD_PLATFORMS,
+  AD_STATUSES,
   FINANCE_CURRENCIES,
   FINANCE_ENTRY_STATUSES,
-  FINANCE_ENTRY_TYPES,
+  type AdPlatform,
+  type AdStatus,
   type FinanceCurrency,
   type FinanceEntryStatus,
-  type FinanceEntryType,
 } from '@/lib/finance'
 
 export interface FinanceResult {
@@ -33,17 +42,16 @@ const MAX_NAME = 120
 const MAX_TITLE = 200
 const MAX_NOTES = 4000
 const MAX_LABEL = 300
+const MAX_REF = 200
+
+/* -------------------------------------------------------------- */
+/* Parsers                                                         */
+/* -------------------------------------------------------------- */
 
 function parseCurrency(raw: string): FinanceCurrency {
   return FINANCE_CURRENCIES.includes(raw as FinanceCurrency)
     ? (raw as FinanceCurrency)
     : 'USDT'
-}
-
-function parseType(raw: string): FinanceEntryType {
-  return FINANCE_ENTRY_TYPES.includes(raw as FinanceEntryType)
-    ? (raw as FinanceEntryType)
-    : 'expense'
 }
 
 function parseStatus(raw: string): FinanceEntryStatus {
@@ -52,20 +60,41 @@ function parseStatus(raw: string): FinanceEntryStatus {
     : 'planned'
 }
 
+function parsePlatform(raw: string): AdPlatform {
+  return AD_PLATFORMS.includes(raw as AdPlatform)
+    ? (raw as AdPlatform)
+    : 'other'
+}
+
+function parseAdStatus(raw: string): AdStatus {
+  return AD_STATUSES.includes(raw as AdStatus)
+    ? (raw as AdStatus)
+    : 'active'
+}
+
 function parseAmount(raw: string): number {
   // Accept comma decimals ("1 200,50") and stray spaces.
   const normalized = raw.replace(/\s+/g, '').replace(',', '.')
   const value = Number(normalized)
   if (!Number.isFinite(value) || value < 0) return Number.NaN
-  // Round to 2 decimals to match numeric(14,2).
   return Math.round(value * 100) / 100
 }
 
+function parseCount(raw: string): number {
+  const normalized = raw.replace(/\s+/g, '')
+  const value = Number(normalized)
+  if (!Number.isFinite(value) || value < 0) return Number.NaN
+  return Math.floor(value)
+}
+
 function parseDate(raw: string): string {
-  // Expect YYYY-MM-DD from <input type="date">; fall back to today.
   return /^\d{4}-\d{2}-\d{2}$/.test(raw)
     ? raw
     : new Date().toISOString().slice(0, 10)
+}
+
+function parseOptionalDate(raw: string): string | null {
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null
 }
 
 /* -------------------------------------------------------------- */
@@ -116,11 +145,11 @@ export async function deleteResourceAction(
   if (!id) return { ok: false, message: 'Ресурс не найден.' }
   await deleteFinanceResource(id)
   revalidatePath('/admin/finance')
-  return { ok: true, message: 'Ресурс удалён вместе со всеми записями.' }
+  return { ok: true, message: 'Ресурс удалён вместе со всеми данными.' }
 }
 
 /* -------------------------------------------------------------- */
-/* Sections (tabs)                                                 */
+/* Sections (expense tabs)                                         */
 /* -------------------------------------------------------------- */
 
 export async function createSectionAction(
@@ -158,7 +187,7 @@ export async function deleteSectionAction(id: string): Promise<FinanceResult> {
 }
 
 /* -------------------------------------------------------------- */
-/* Entries                                                         */
+/* Expense entries                                                 */
 /* -------------------------------------------------------------- */
 
 export async function createEntryAction(
@@ -169,13 +198,14 @@ export async function createEntryAction(
   if (!sectionId) return { ok: false, message: 'Вкладка не найдена.' }
 
   const title = String(formData.get('title') ?? '').trim().slice(0, MAX_TITLE)
-  const type = parseType(String(formData.get('type') ?? 'expense'))
+  const vendor = String(formData.get('vendor') ?? '').trim().slice(0, MAX_NAME)
   const status = parseStatus(String(formData.get('status') ?? 'planned'))
   const notes = String(formData.get('notes') ?? '').trim().slice(0, MAX_NOTES)
   const entryDate = parseDate(String(formData.get('entryDate') ?? ''))
+  const dueDate = parseOptionalDate(String(formData.get('dueDate') ?? ''))
   const amount = parseAmount(String(formData.get('amount') ?? '0'))
 
-  if (!title) return { ok: false, message: 'Укажите название записи.' }
+  if (!title) return { ok: false, message: 'Укажите название расхода.' }
   if (Number.isNaN(amount)) {
     return { ok: false, message: 'Введите корректную сумму (не меньше 0).' }
   }
@@ -183,14 +213,15 @@ export async function createEntryAction(
   await createFinanceEntry({
     sectionId,
     title,
-    type,
+    vendor,
     amount,
     status,
     notes,
     entryDate,
+    dueDate,
   })
   revalidatePath('/admin/finance')
-  return { ok: true, message: 'Запись добавлена.' }
+  return { ok: true, message: 'Расход добавлен.' }
 }
 
 export async function updateEntryAction(
@@ -201,27 +232,29 @@ export async function updateEntryAction(
   if (!id) return { ok: false, message: 'Запись не найдена.' }
 
   const title = String(formData.get('title') ?? '').trim().slice(0, MAX_TITLE)
-  const type = parseType(String(formData.get('type') ?? 'expense'))
+  const vendor = String(formData.get('vendor') ?? '').trim().slice(0, MAX_NAME)
   const status = parseStatus(String(formData.get('status') ?? 'planned'))
   const notes = String(formData.get('notes') ?? '').trim().slice(0, MAX_NOTES)
   const entryDate = parseDate(String(formData.get('entryDate') ?? ''))
+  const dueDate = parseOptionalDate(String(formData.get('dueDate') ?? ''))
   const amount = parseAmount(String(formData.get('amount') ?? '0'))
 
-  if (!title) return { ok: false, message: 'Укажите название записи.' }
+  if (!title) return { ok: false, message: 'Укажите название расхода.' }
   if (Number.isNaN(amount)) {
     return { ok: false, message: 'Введите корректную сумму (не меньше 0).' }
   }
 
   await updateFinanceEntry(id, {
     title,
-    type,
+    vendor,
     amount,
     status,
     notes,
     entryDate,
+    dueDate,
   })
   revalidatePath('/admin/finance')
-  return { ok: true, message: 'Запись обновлена.' }
+  return { ok: true, message: 'Расход обновлён.' }
 }
 
 export async function moveEntryAction(
@@ -242,7 +275,7 @@ export async function deleteEntryAction(id: string): Promise<FinanceResult> {
   if (!id) return { ok: false, message: 'Запись не найдена.' }
   await deleteFinanceEntry(id)
   revalidatePath('/admin/finance')
-  return { ok: true, message: 'Запись удалена.' }
+  return { ok: true, message: 'Расход удалён.' }
 }
 
 /* -------------------------------------------------------------- */
@@ -279,4 +312,162 @@ export async function deleteTaskAction(id: string): Promise<FinanceResult> {
   await deleteFinanceTask(id)
   revalidatePath('/admin/finance')
   return { ok: true, message: 'Пункт удалён.' }
+}
+
+/* -------------------------------------------------------------- */
+/* Ad accounts                                                     */
+/* -------------------------------------------------------------- */
+
+export async function createAdAccountAction(
+  resourceId: string,
+  formData: FormData,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!resourceId) return { ok: false, message: 'Ресурс не найден.' }
+
+  const name = String(formData.get('name') ?? '').trim().slice(0, MAX_NAME)
+  const platform = parsePlatform(String(formData.get('platform') ?? 'other'))
+  const status = parseAdStatus(String(formData.get('status') ?? 'active'))
+  const accountRef = String(formData.get('accountRef') ?? '')
+    .trim()
+    .slice(0, MAX_REF)
+  const currency = parseCurrency(String(formData.get('currency') ?? 'RUB'))
+  const note = String(formData.get('note') ?? '').trim().slice(0, MAX_NOTES)
+
+  if (!name) return { ok: false, message: 'Укажите название кабинета.' }
+
+  await createFinanceAdAccount({
+    resourceId,
+    name,
+    platform,
+    status,
+    accountRef,
+    currency,
+    note,
+  })
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Кабинет добавлен.' }
+}
+
+export async function updateAdAccountAction(
+  id: string,
+  formData: FormData,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Кабинет не найден.' }
+
+  const name = String(formData.get('name') ?? '').trim().slice(0, MAX_NAME)
+  const platform = parsePlatform(String(formData.get('platform') ?? 'other'))
+  const status = parseAdStatus(String(formData.get('status') ?? 'active'))
+  const accountRef = String(formData.get('accountRef') ?? '')
+    .trim()
+    .slice(0, MAX_REF)
+  const currency = parseCurrency(String(formData.get('currency') ?? 'RUB'))
+  const note = String(formData.get('note') ?? '').trim().slice(0, MAX_NOTES)
+
+  if (!name) return { ok: false, message: 'Укажите название кабинета.' }
+
+  await updateFinanceAdAccount(id, {
+    name,
+    platform,
+    status,
+    accountRef,
+    currency,
+    note,
+  })
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Кабинет обновлён.' }
+}
+
+export async function deleteAdAccountAction(
+  id: string,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Кабинет не найден.' }
+  await deleteFinanceAdAccount(id)
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Кабинет удалён вместе с историей.' }
+}
+
+/* -------------------------------------------------------------- */
+/* Ad top-ups                                                      */
+/* -------------------------------------------------------------- */
+
+export async function addAdTopupAction(
+  accountId: string,
+  formData: FormData,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!accountId) return { ok: false, message: 'Кабинет не найден.' }
+
+  const amount = parseAmount(String(formData.get('amount') ?? '0'))
+  const topupDate = parseDate(String(formData.get('topupDate') ?? ''))
+  const note = String(formData.get('note') ?? '').trim().slice(0, MAX_NOTES)
+
+  if (Number.isNaN(amount) || amount <= 0) {
+    return { ok: false, message: 'Введите сумму пополнения больше 0.' }
+  }
+
+  await addFinanceAdTopup({ accountId, amount, topupDate, note })
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Баланс пополнен.' }
+}
+
+export async function deleteAdTopupAction(id: string): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Пополнение не найдено.' }
+  await deleteFinanceAdTopup(id)
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Пополнение удалено.' }
+}
+
+/* -------------------------------------------------------------- */
+/* Ad stats                                                        */
+/* -------------------------------------------------------------- */
+
+export async function addAdStatAction(
+  accountId: string,
+  formData: FormData,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!accountId) return { ok: false, message: 'Кабинет не найден.' }
+
+  const periodStart = parseDate(String(formData.get('periodStart') ?? ''))
+  const periodEnd = parseDate(String(formData.get('periodEnd') ?? ''))
+  const impressions = parseCount(String(formData.get('impressions') ?? '0'))
+  const clicks = parseCount(String(formData.get('clicks') ?? '0'))
+  const leads = parseCount(String(formData.get('leads') ?? '0'))
+  const spend = parseAmount(String(formData.get('spend') ?? '0'))
+  const note = String(formData.get('note') ?? '').trim().slice(0, MAX_NOTES)
+
+  if (Number.isNaN(impressions) || Number.isNaN(clicks) || Number.isNaN(leads)) {
+    return { ok: false, message: 'Показы, клики и лиды должны быть целыми ≥ 0.' }
+  }
+  if (Number.isNaN(spend)) {
+    return { ok: false, message: 'Введите корректный расход (не меньше 0).' }
+  }
+  if (periodEnd < periodStart) {
+    return { ok: false, message: 'Конец периода раньше начала.' }
+  }
+
+  await addFinanceAdStat({
+    accountId,
+    periodStart,
+    periodEnd,
+    impressions,
+    clicks,
+    leads,
+    spend,
+    note,
+  })
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Статистика внесена.' }
+}
+
+export async function deleteAdStatAction(id: string): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Запись статистики не найдена.' }
+  await deleteFinanceAdStat(id)
+  revalidatePath('/admin/finance')
+  return { ok: true, message: 'Статистика удалена.' }
 }
