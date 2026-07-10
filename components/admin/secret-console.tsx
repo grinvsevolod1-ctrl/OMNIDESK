@@ -11,6 +11,7 @@ import {
 import { toast } from 'sonner'
 import {
   ArrowLeft,
+  Ban,
   CheckCheck,
   Globe,
   Loader2,
@@ -25,6 +26,7 @@ import {
   Radio,
   Search,
   Send,
+  ShieldCheck,
   Trash2,
   UserRound,
   Users,
@@ -36,6 +38,7 @@ import {
   secretFetchThreadAction,
   secretListConversationsAction,
   secretSendAsClientAction,
+  secretSetContactBlockedAction,
   secretSetConversationStatusAction,
   secretSetUnreadAction,
   secretUpdateConversationAction,
@@ -440,6 +443,9 @@ export function SecretConsole({
                           )}
                         </div>
                         <div className="mt-1 flex items-center gap-1.5">
+                          {c.contactBlocked && (
+                            <Ban className="size-3 shrink-0 text-destructive" aria-label="Менеджер заблокирован клиентом" />
+                          )}
                           <span
                             className={cn(
                               'rounded px-1.5 py-0.5 text-[10px] font-medium',
@@ -489,6 +495,14 @@ export function SecretConsole({
               }
               onToggleRead={() =>
                 act(() => secretSetUnreadAction(conversation.id, conversation.unread > 0))
+              }
+              onToggleBlock={() =>
+                act(() =>
+                  secretSetContactBlockedAction(
+                    conversation.id,
+                    !conversation.contactBlocked,
+                  ),
+                )
               }
               onEdit={() => setEditOpen(true)}
               onDelete={() =>
@@ -576,6 +590,7 @@ function ThreadHeader({
   onBack,
   onStatus,
   onToggleRead,
+  onToggleBlock,
   onEdit,
   onDelete,
 }: {
@@ -585,10 +600,12 @@ function ThreadHeader({
   onBack: () => void
   onStatus: (status: string) => void
   onToggleRead: () => void
+  onToggleBlock: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
   const Icon = TYPE_ICON[conversation.channelType] ?? MessageSquare
+  const blocked = Boolean(conversation.contactBlocked)
   return (
     <div className="flex flex-col gap-2 border-b border-border p-3">
       <div className="flex items-center gap-3">
@@ -611,6 +628,12 @@ function ThreadHeader({
               <Icon className="size-3" />
               {TYPE_LABEL[conversation.channelType] ?? conversation.channelType}
             </Badge>
+            {blocked && (
+              <Badge variant="destructive" className="gap-1">
+                <Ban className="size-3" />
+                Заблокирован
+              </Badge>
+            )}
           </div>
           <p className="truncate text-xs text-muted-foreground">
             {conversation.contactHandle} · Менеджер: {managerName}
@@ -645,6 +668,23 @@ function ThreadHeader({
           ) : (
             <>
               <Mail className="size-3.5" /> Непрочитано
+            </>
+          )}
+        </Button>
+        <Button
+          variant={blocked ? 'default' : 'outline'}
+          size="sm"
+          className="press-scale h-8 gap-1.5"
+          disabled={pending}
+          onClick={onToggleBlock}
+        >
+          {blocked ? (
+            <>
+              <ShieldCheck className="size-3.5" /> Разблокировать
+            </>
+          ) : (
+            <>
+              <Ban className="size-3.5" /> Заблокировать
             </>
           )}
         </Button>
@@ -951,7 +991,7 @@ function EditConversationDialog({
         <DialogHeader>
           <DialogTitle>Изменить диалог</DialogTitle>
           <DialogDescription>
-            Отредактируйте данные клиента или переназначьте диалог другому менеджеру.
+            Отредактируйте данные кл��ента или переназначьте диалог другому менеджеру.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">

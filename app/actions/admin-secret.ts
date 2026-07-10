@@ -612,6 +612,28 @@ export async function secretSetUnreadAction(
   return { ok: true, message: read ? 'Отмечено прочитанным' : 'Отмечено непрочитанным' }
 }
 
+/**
+ * Toggle the contact-side block flag: simulates the CLIENT blocking (or
+ * unblocking) our manager in the messenger. Purely a state marker surfaced in
+ * the god console — it doesn't stop ingestion.
+ */
+export async function secretSetContactBlockedAction(
+  id: string,
+  blocked: boolean,
+): Promise<ActionResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Не указан диалог' }
+  await query(
+    `UPDATE conversations SET contact_blocked = $2 WHERE id = $1`,
+    [id, blocked],
+  )
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: blocked ? 'Менеджер заблокирован клиентом' : 'Менеджер разблокирован',
+  }
+}
+
 /** Hard-delete a single message and recompute the conversation preview. */
 export async function secretDeleteMessageAction(input: {
   messageId: string

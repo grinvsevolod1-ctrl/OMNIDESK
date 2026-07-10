@@ -347,6 +347,12 @@ export interface Conversation {
   visitorNo?: number
   /** Visitor context (live-chat only). */
   meta?: ConversationMeta
+  /**
+   * True when the CLIENT (contact) has blocked our manager in the messenger.
+   * Informational flag surfaced in the secret god console — it does not stop
+   * ingestion, it just reflects that outbound replies won't reach the contact.
+   */
+  contactBlocked?: boolean
 }
 
 /** Kinds of media a message can carry (mirrors the DB check constraint). */

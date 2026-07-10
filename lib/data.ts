@@ -1157,6 +1157,7 @@ interface ConversationRow {
   muted?: boolean | null
   meta?: ConversationMeta | null
   visitor_no?: number | null
+  contact_blocked?: boolean | null
   created_at?: string | Date | null
 }
 
@@ -1192,6 +1193,7 @@ function toConversation(r: ConversationRow): Conversation {
       ? new Date(r.reply_dismissed_at).toISOString()
       : undefined,
     muted: Boolean(r.muted),
+    contactBlocked: Boolean(r.contact_blocked),
     visitorNo:
       r.visitor_no === null || r.visitor_no === undefined
         ? undefined
