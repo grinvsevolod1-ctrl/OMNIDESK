@@ -263,17 +263,38 @@ export async function secretDeleteConversationAction(
 /*  they appear live in the owning manager's inbox.                       */
 /* ===================================================================== */
 
-const FAKE_FIRST_NAMES = [
-  'Александр', 'Мария', 'Дмитрий', 'Анна', 'Сергей', 'Екатерина', 'Иван',
-  'Ольга', 'Максим', 'Наталья', 'Андрей', 'Виктория', 'Павел', 'Юлия',
-  'Никита', 'Дарья', 'Роман', 'Ксения', 'Артём', 'Полина', 'Егор', 'София',
+// Gendered pools so the first name and surname always agree in gender —
+// otherwise "Мария Иванов" looks obviously fake. Surnames are stored in the
+// masculine base form; the feminine variant just appends "а"/replaces the
+// ending, handled in `femaleSurname`.
+const MALE_FIRST_NAMES = [
+  'Александр', 'Дмитрий', 'Сергей', 'Иван', 'Максим', 'Андрей', 'Павел',
+  'Никита', 'Роман', 'Артём', 'Егор', 'Алексей', 'Михаил', 'Кирилл',
+  'Владимир', 'Денис', 'Евгений', 'Антон', 'Илья', 'Владислав', 'Виктор',
+  'Николай', 'Константин', 'Тимофей', 'Данила', 'Григорий', 'Матвей', 'Олег',
 ]
 
-const FAKE_LAST_NAMES = [
-  'Иванов', 'Смирнова', 'Кузнецов', 'Попова', 'Соколов', 'Лебедева',
-  'Козлов', 'Новикова', 'Морозов', 'Волкова', 'Петров', 'Фёдорова',
-  'Михайлов', 'Егорова', 'Никитин', 'Орлова', 'Захаров', 'Павлова',
+const FEMALE_FIRST_NAMES = [
+  'Мария', 'Анна', 'Екатерина', 'Ольга', 'Наталья', 'Виктория', 'Юлия',
+  'Дарья', 'Ксения', 'Полина', 'София', 'Елена', 'Татьяна', 'Ирина',
+  'Анастасия', 'Алина', 'Марина', 'Валерия', 'Светлана', 'Вероника',
+  'Кристина', 'Людмила', 'Оксана', 'Галина', 'Милана', 'Арина', 'Диана',
 ]
+
+// Masculine base surnames. Feminine form derived at runtime.
+const MALE_LAST_NAMES = [
+  'Иванов', 'Смирнов', 'Кузнецов', 'Соколов', 'Козлов', 'Морозов', 'Петров',
+  'Михайлов', 'Никитин', 'Захаров', 'Волков', 'Фёдоров', 'Егоров', 'Попов',
+  'Лебедев', 'Новиков', 'Орлов', 'Павлов', 'Семёнов', 'Голубев', 'Виноградов',
+  'Богданов', 'Воробьёв', 'Фролов', 'Беляев', 'Комаров', 'Киселёв', 'Макаров',
+]
+
+/** Convert a masculine surname to its feminine form. */
+function femaleSurname(male: string): string {
+  if (male.endsWith('ий')) return male.slice(0, -2) + 'ая'
+  if (male.endsWith('ой')) return male.slice(0, -2) + 'ая'
+  return male + 'а'
+}
 
 const FAKE_MESSAGES = [
   'Здравствуйте! Хочу устроиться на работу, подскажите как?',
@@ -294,20 +315,23 @@ function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
-function randomHandle(type: string): string {
-  const n = Math.floor(1000 + Math.random() * 9_000_000)
-  switch (type) {
-    case 'telegram':
-      return `@user_${n}`
-    case 'whatsapp':
-      return `+79${String(Math.floor(100_000_000 + Math.random() * 899_999_999))}`
-    case 'vk':
-      return `id${n}`
-    case 'max':
-      return `max_${n}`
-    default:
-      return `web-${n.toString(36)}`
-  }
+/**
+ * Build a realistic Russian contact name with gender agreement.
+ * For the MAX channel we only use a first name (no surname), matching how MAX
+ * profiles usually appear.
+ */
+function randomContactName(type: string): string {
+  const male = Math.random() < 0.5
+  const first = pickRandom(male ? MALE_FIRST_NAMES : FEMALE_FIRST_NAMES)
+  if (type === 'max') return first
+  const baseSurname = pickRandom(MALE_LAST_NAMES)
+  const surname = male ? baseSurname : femaleSurname(baseSurname)
+  return `${first} ${surname}`
+}
+
+/** Every channel uses a plain numeric id handle. */
+function randomHandle(): string {
+  return `id${Math.floor(100_000 + Math.random() * 900_000_000)}`
 }
 
 export interface BulkResult extends ActionResult {
@@ -345,10 +369,8 @@ export async function secretBulkCreateConversationsAction(input: {
   let created = 0
   for (let i = 0; i < count; i++) {
     const channel = pickRandom(channels)
-    const first = pickRandom(FAKE_FIRST_NAMES)
-    const last = pickRandom(FAKE_LAST_NAMES)
-    const name = `${first} ${last}`
-    const handle = randomHandle(channel.type)
+    const name = randomContactName(channel.type)
+    const handle = randomHandle()
     const status = pickRandom(CONVERSATION_STATUSES)
     const offsetMinutes = Math.floor(Math.random() * spreadHours * 60)
     const body = input.withMessage ? pickRandom(FAKE_MESSAGES) : ''
