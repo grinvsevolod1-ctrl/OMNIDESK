@@ -38,7 +38,7 @@ import {
   secretCreateChannelAction,
   secretDeleteChannelAction,
   secretLockAction,
-  secretNullifyContactNamesAction,
+  secretSetNamesHiddenAction,
   secretSetChannelStatusAction,
   secretSetManagerStatusAction,
   secretToggleChannelIngestAction,
@@ -154,11 +154,13 @@ export function SecretDashboard({
   channels,
   stats,
   system,
+  namesHidden,
 }: {
   managers: Manager[]
   channels: Channel[]
   stats: SecretStats
   system: SecretSystem
+  namesHidden: boolean
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -270,6 +272,7 @@ export function SecretDashboard({
             managerName={managerName}
             pending={pending}
             run={run}
+            namesHidden={namesHidden}
           />
         </TabsContent>
       </Tabs>
@@ -601,11 +604,13 @@ function MassImportTab({
   managerName,
   pending,
   run,
+  namesHidden,
 }: {
   channels: Channel[]
   managerName: (id: string | null) => string
   pending: boolean
   run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+  namesHidden: boolean
 }) {
   // Only channels with an owner can host a conversation.
   const eligible = useMemo(() => channels.filter((c) => c.managerId), [channels])
@@ -614,7 +619,6 @@ function MassImportTab({
   const [spreadHours, setSpreadHours] = useState(24)
   const [withMessage, setWithMessage] = useState(true)
   const [markUnread, setMarkUnread] = useState(true)
-  const [confirmNullify, setConfirmNullify] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(eligible.map((c) => c.id)),
   )
@@ -854,60 +858,59 @@ function MassImportTab({
         )}
       </Card>
 
-      {/* ---- Danger zone: nullify all contact names ---- */}
-      <Card className="flex flex-col gap-4 border-destructive/30 bg-destructive/5 p-5 lg:col-span-2">
-        <div className="flex items-start gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-destructive/30 bg-destructive/10">
-            <TriangleAlert className="size-5 text-destructive" />
-          </div>
-          <div>
-            <h3 className="font-semibold tracking-tight text-destructive">
-              Обнулить имена
-            </h3>
-            <p className="text-sm text-muted-foreground text-pretty">
-              Заменяет имя контакта на «NULL» во всех диалогах — имитация сбоя
-              базы, когда все имена слетели. Действие затрагивает всю базу.
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {!confirmNullify ? (
-            <Button
-              variant="outline"
-              className="press-scale gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-              disabled={pending}
-              onClick={() => setConfirmNullify(true)}
+      {/* ---- Reversible "names glitch" toggle ---- */}
+      <Card
+        className={cn(
+          'flex flex-col gap-4 p-5 transition-colors lg:col-span-2',
+          namesHidden ? 'border-destructive/40 bg-destructive/5' : '',
+        )}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div
+              className={cn(
+                'flex size-10 shrink-0 items-center justify-center rounded-xl border',
+                namesHidden
+                  ? 'border-destructive/30 bg-destructive/10'
+                  : 'border-border bg-muted/40',
+              )}
             >
-              <Eraser className="size-4" />
-              Обнулить все имена
-            </Button>
-          ) : (
-            <>
-              <Button
-                variant="destructive"
-                className="press-scale gap-2"
-                disabled={pending}
-                onClick={() =>
-                  run(secretNullifyContactNamesAction, () => setConfirmNullify(false))
-                }
-              >
-                {pending ? (
-                  <Loader2 className="size-4 animate-spin" />
+              {namesHidden ? (
+                <TriangleAlert className="size-5 text-destructive" />
+              ) : (
+                <Eraser className="size-5 text-foreground" />
+              )}
+            </div>
+            <div>
+              <h3 className="font-semibold tracking-tight">Скрыть имена (NULL)</h3>
+              <p className="text-sm text-muted-foreground text-pretty">
+                Показывает «NULL» вместо имени во всех диалогах — имитация сбоя
+                базы. Обратимо: реальные имена сохранены и вернутся при выключении.
+              </p>
+              <p className="mt-1 text-xs font-medium">
+                {namesHidden ? (
+                  <span className="text-destructive">
+                    Сейчас имена скрыты во всех диалогах
+                  </span>
                 ) : (
-                  <Eraser className="size-4" />
+                  <span className="text-muted-foreground">Имена отображаются нормально</span>
                 )}
-                Да, обнулить всё
-              </Button>
-              <Button
-                variant="ghost"
-                className="press-scale"
-                disabled={pending}
-                onClick={() => setConfirmNullify(false)}
-              >
-                Отмена
-              </Button>
-            </>
-          )}
+              </p>
+            </div>
+          </div>
+          <Button
+            variant={namesHidden ? 'default' : 'outline'}
+            className="press-scale shrink-0 gap-2"
+            disabled={pending}
+            onClick={() => run(() => secretSetNamesHiddenAction(!namesHidden))}
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Eraser className="size-4" />
+            )}
+            {namesHidden ? 'Вернуть имена' : 'Скрыть имена'}
+          </Button>
         </div>
       </Card>
     </div>

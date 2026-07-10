@@ -48,10 +48,11 @@ export default async function SecretPage() {
         FROM conversations
         GROUP BY status
       `),
-      query<{ total: number; unread: number }>(`
+      query<{ total: number; unread: number; names_hidden: boolean }>(`
         SELECT
           count(*)::int AS total,
-          coalesce(sum(unread), 0)::int AS unread
+          coalesce(sum(unread), 0)::int AS unread,
+          coalesce(bool_or(contact_name_hidden), false) AS names_hidden
         FROM conversations
       `),
       checkDbConnection(),
@@ -103,6 +104,7 @@ export default async function SecretPage() {
       managers={managers}
       channels={channels}
       stats={stats}
+      namesHidden={convAgg[0]?.names_hidden ?? false}
       system={{
         workerConfigured,
         workerOnline,

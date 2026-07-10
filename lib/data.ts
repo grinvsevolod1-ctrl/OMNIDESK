@@ -1158,6 +1158,7 @@ interface ConversationRow {
   meta?: ConversationMeta | null
   visitor_no?: number | null
   contact_blocked?: boolean | null
+  contact_name_hidden?: boolean | null
   created_at?: string | Date | null
 }
 
@@ -1176,7 +1177,8 @@ function toConversation(r: ConversationRow): Conversation {
     channelId: r.channel_id,
     managerId: r.manager_id,
     channelType: r.channel_type,
-    contactName: r.contact_name,
+    // Reversible "names glitch": show "NULL" while hidden, real name is intact in DB.
+    contactName: r.contact_name_hidden ? 'NULL' : r.contact_name,
     contactHandle: r.contact_handle,
     contactUsername: r.contact_username ?? undefined,
     lastMessage: r.last_message,
