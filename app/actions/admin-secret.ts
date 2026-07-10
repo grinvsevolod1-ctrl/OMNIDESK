@@ -332,7 +332,7 @@ export async function secretBulkCreateConversationsAction(input: {
     `SELECT id, type, manager_id
        FROM channels
       WHERE manager_id IS NOT NULL
-        AND ($1::text[] IS NULL OR id = ANY($1::text[]))`,
+        AND ($1::text[] IS NULL OR id::text = ANY($1::text[]))`,
     [idFilter],
   )
   if (channels.length === 0)
