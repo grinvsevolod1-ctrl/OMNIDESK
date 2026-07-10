@@ -51,7 +51,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -609,7 +608,7 @@ function ChannelsTab({
               className="pl-8"
             />
           </div>
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v ?? 'all')}>
             <SelectTrigger className="w-full sm:w-40">
               <SelectValue />
             </SelectTrigger>
@@ -772,7 +771,7 @@ function CreateChannelDialog({
               <Label>Тип</Label>
               <Select
                 value={form.type}
-                onValueChange={(v) => setForm({ ...form, type: v })}
+                onValueChange={(v) => setForm({ ...form, type: v ?? '' })}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -790,7 +789,7 @@ function CreateChannelDialog({
               <Label>Владелец</Label>
               <Select
                 value={form.managerId}
-                onValueChange={(v) => setForm({ ...form, managerId: v })}
+                onValueChange={(v) => setForm({ ...form, managerId: v ?? '' })}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Менеджер" />
@@ -914,9 +913,9 @@ function ConversationsTab({
               <div className="flex flex-wrap items-center gap-1.5">
                 <Select
                   value={conv.status}
-                  onValueChange={(v) =>
-                    run(() => secretSetConversationStatusAction(conv.id, v))
-                  }
+                  onValueChange={(v) => {
+                    if (v) run(() => secretSetConversationStatusAction(conv.id, v))
+                  }}
                 >
                   <SelectTrigger className="h-8 w-36">
                     <SelectValue />
@@ -995,7 +994,7 @@ function CreateConversationDialog({
             <Label>Канал</Label>
             <Select
               value={form.channelId}
-              onValueChange={(v) => setForm({ ...form, channelId: v })}
+              onValueChange={(v) => setForm({ ...form, channelId: v ?? '' })}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Выберите канал" />
@@ -1088,7 +1087,7 @@ function ConsoleTab({
           <Label>Диалог</Label>
           <Select
             value={form.conversationId}
-            onValueChange={(v) => setForm({ ...form, conversationId: v })}
+            onValueChange={(v) => setForm({ ...form, conversationId: v ?? '' })}
           >
             <SelectTrigger>
               <SelectValue placeholder="Выберите диалог" />
@@ -1106,7 +1105,7 @@ function ConsoleTab({
           <Label>Направление</Label>
           <Select
             value={form.direction}
-            onValueChange={(v) => setForm({ ...form, direction: v })}
+            onValueChange={(v) => setForm({ ...form, direction: v ?? 'out' })}
           >
             <SelectTrigger>
               <SelectValue />
