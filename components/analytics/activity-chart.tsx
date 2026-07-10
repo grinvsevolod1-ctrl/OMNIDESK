@@ -368,7 +368,7 @@ function PeopleByDayChart({
 
       {grandTotal === 0 ? (
         <div className="mt-6 flex h-40 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
-          За выбранный перио�� обращений не было.
+          За выбранный период обращений не было.
         </div>
       ) : (
         <div ref={wrapRef} className="relative mt-5 w-full select-none">

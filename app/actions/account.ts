@@ -496,7 +496,7 @@ export async function sendStickerAction(
 ): Promise<SimpleResult> {
   const session = await requireManager()
   if (!sticker || !sticker.id || !sticker.accessHash || !sticker.fileReference) {
-    return { ok: false, message: 'Не��орректный стикер.' }
+    return { ok: false, message: 'Некорректный стикер.' }
   }
 
   const conv = await getConversation(conversationId, session.sub)
@@ -533,5 +533,5 @@ export async function sendStickerAction(
   })
 
   revalidatePath('/app/inbox')
-  return { ok: true, message: 'Стикер отпр��влен.' }
+  return { ok: true, message: 'Стикер отправлен.' }
 }

@@ -951,7 +951,7 @@ function EditConversationDialog({
         <DialogHeader>
           <DialogTitle>Изменить диалог</DialogTitle>
           <DialogDescription>
-            Отре��актируйте данные клиента или переназначьте диалог другому менеджеру.
+            Отредактируйте данные клиента или переназначьте диалог другому менеджеру.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">

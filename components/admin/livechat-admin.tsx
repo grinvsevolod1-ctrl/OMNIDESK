@@ -427,7 +427,7 @@ function EditQueue({
         <div className="my-3 flex flex-col gap-2">
           <QueuePicker managers={managers} selected={pool} onChange={setPool} />
           <span className="text-xs text-muted-foreground">
-            выб��ано: {pool.length}
+            выбрано: {pool.length}
           </span>
         </div>
         <div className="flex justify-end gap-2">

@@ -603,7 +603,7 @@ function SyncBadge({ state }: { state: 'connecting' | 'live' | 'offline' }) {
   const cfg = {
     live: {
       label: 'Онлайн',
-      title: 'Синхронизация ак��ивна — новые сообщения приходят сразу',
+      title: 'Синхронизация активна — новые сообщения приходят сразу',
       dot: 'bg-emerald-500',
       text: 'text-emerald-600 dark:text-emerald-400',
       pulse: true,
@@ -618,7 +618,7 @@ function SyncBadge({ state }: { state: 'connecting' | 'live' | 'offline' }) {
     offline: {
       label: 'Переподключение',
       title:
-        'Соединение прервано. ��ереподключаемся — пропущенные сообщения подгрузятся автоматически.',
+        'Соединение прервано. Переподключаемся — пропущенные сообщения подгрузятся автоматически.',
       dot: 'bg-destructive',
       text: 'text-destructive',
       pulse: false,
@@ -1265,10 +1265,10 @@ const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
   {
     label: 'Смайлы',
     emojis: [
-      '😀', '���', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
+      '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
       '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😋', '😎', '🤩',
       '🥳', '😏', '😢', '😭', '😤', '😠', '😡', '🤔', '🤗', '🤭',
-      '😴', '😬', '🙄', '😱', '����', '🤯', '😅', '😢',
+      '😴', '😬', '🙄', '😱', '😳', '🤯', '😅', '😢',
     ],
   },
   {
@@ -1281,8 +1281,8 @@ const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
   {
     label: 'Сердца',
     emojis: [
-      '❤️', '🧡', '���', '💚', '💙', '💜', '🖤', '🤍', '💔', '❣️',
-      '���', '💞', '💓', '💗', '💖', '💘', '💝', '✨', '🔥', '⭐',
+      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💔', '❣️',
+      '💕', '💞', '💓', '💗', '💖', '💘', '💝', '✨', '🔥', '⭐',
     ],
   },
   {
@@ -1991,7 +1991,7 @@ export function InboxView({
       const waitedMin = Math.max(1, Math.round((now - pick.since) / 60_000))
       const picked = pick
       toast.warning(`Чувак, ты не ответил: ${picked.name}`, {
-        description: `Сообщение ждёт ответа уже ${waitedMin} мин. Может, подни��ешь жопу?`,
+        description: `Сообщение ждёт ответа уже ${waitedMin} мин. Может, поднимешь жопу?`,
         duration: 10_000,
         action: {
           label: 'Открыть',
@@ -3575,7 +3575,7 @@ export function InboxView({
             </div>
             <p className="text-sm font-medium">Выберите диалог</p>
             <p className="max-w-xs text-xs text-muted-foreground">
-              О��кройте чат слева, чтобы прочитать переписку и ответить. Правый
+              Откройте чат слева, чтобы прочитать переписку и ответить. Правый
               клик по диалогу — быстрые действия.
             </p>
           </div>

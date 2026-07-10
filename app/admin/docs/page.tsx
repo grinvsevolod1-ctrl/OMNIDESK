@@ -309,7 +309,7 @@ export default function AdminDocsPage() {
         id="api"
         icon={Code2}
         title="JavaScript API и события"
-        description="Открывайте виджет программно и подключайтесь �� аналитике."
+        description="Открывайте виджет программно и подключайтесь к аналитике."
       >
         <p>
           Глобальный объект —{' '}

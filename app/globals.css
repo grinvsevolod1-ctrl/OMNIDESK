@@ -138,6 +138,13 @@
   html {
     @apply font-sans;
   }
+  :root {
+    /* Apple-подобные кривые ускорения. `apple-out` — фирменное «резко стартует,
+       мягко тормозит» (как открытие шторок в iOS): движение ощущается мгновенным,
+       но завершается плавно, без рывка. `apple` — для симметричных переходов. */
+    --ease-apple: cubic-bezier(0.32, 0.72, 0, 1);
+    --ease-apple-out: cubic-bezier(0.16, 1, 0.3, 1);
+  }
 }
 
 @layer utilities {
@@ -170,6 +177,61 @@
   }
   .no-scrollbar::-webkit-scrollbar {
     display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Apple-style motion
+   Base UI перемонтирует панель активной вкладки при переключении, поэтому
+   анимацию входа достаточно повесить на её появление. Цель — «моментально, но
+   красиво»: контент возникает сразу (короткая длительность), но с мягким
+   торможением и микро-подъёмом/зумом, как переходы в iOS/macOS.
+--------------------------------------------------------------------------- */
+@keyframes apple-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@layer components {
+  /* Панель вкладок: применяется автоматически ко всем TabsContent. */
+  [data-slot='tabs-content'] {
+    animation: apple-panel-in 0.34s var(--ease-apple-out) both;
+    will-change: transform, opacity;
+  }
+
+  /* Единый «эппловский» тайминг для оверлеев/попапов Base UI (диалоги,
+     поповеры, дропдауны, тултипы, шиты). Переопределяем длительность и кривую
+     у tw-animate-css, сохраняя его keyframes (fade/zoom/slide). */
+  [data-slot='dialog-content'],
+  [data-slot='dialog-overlay'],
+  [data-slot='popover-content'],
+  [data-slot='dropdown-menu-content'],
+  [data-slot='dropdown-menu-sub-content'],
+  [data-slot='context-menu-content'],
+  [data-slot='context-menu-sub-content'],
+  [data-slot='select-content'],
+  [data-slot='tooltip-content'] {
+    animation-duration: 0.28s;
+    animation-timing-function: var(--ease-apple-out);
+  }
+}
+
+/* Микро-нажатие для активных вкладок/кнопок: лёгкая «пружина» отклика. */
+@layer utilities {
+  .press-scale {
+    transition:
+      transform 0.12s var(--ease-apple-out),
+      background-color 0.18s var(--ease-apple-out),
+      color 0.18s var(--ease-apple-out);
+  }
+  .press-scale:active {
+    transform: scale(0.97);
   }
 }
 

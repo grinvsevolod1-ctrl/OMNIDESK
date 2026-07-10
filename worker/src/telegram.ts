@@ -1299,7 +1299,7 @@ export function telegramSendFailureReason(e: unknown): string {
 
   // Chat / peer resolution.
   if (m.includes('CHAT_WRITE_FORBIDDEN'))
-    return 'Нет пра�� писать в этот чат.'
+    return 'Нет прав писать в этот чат.'
   if (m.includes('CHAT_SEND_') && m.includes('FORBIDDEN'))
     return 'Отправка этого типа сообщений запрещена в чате.'
   if (m.includes('PEER_ID_INVALID') || m.includes('PEER_ID_NOT_SUPPORTED'))
