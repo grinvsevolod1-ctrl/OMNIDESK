@@ -360,7 +360,7 @@ export async function secretBulkCreateConversationsAction(input: {
          (id, channel_id, channel_type, manager_id, contact_name, contact_handle,
           last_message, last_message_at, status, unread)
        VALUES ($1, $2, $3, $4, $5, $6, $7,
-               now() - ($8 * interval '1 minute'), $9, $10)`,
+               now() - make_interval(mins => $8::int), $9, $10)`,
       [
         convId,
         channel.id,
@@ -378,7 +378,7 @@ export async function secretBulkCreateConversationsAction(input: {
     if (input.withMessage) {
       await query(
         `INSERT INTO messages (id, conversation_id, direction, body, author, created_at)
-         VALUES ($1, $2, 'in', $3, $4, now() - ($5 * interval '1 minute'))`,
+         VALUES ($1, $2, 'in', $3, $4, now() - make_interval(mins => $5::int))`,
         [randomUUID(), convId, body, name, offsetMinutes],
       )
     }
