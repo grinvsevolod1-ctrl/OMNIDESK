@@ -1,8 +1,10 @@
 import { requireAdmin } from '@/lib/auth'
+import { isGodPasscodeConfigured, isGodUnlocked } from '@/lib/god-gate'
 import { checkDbConnection, query } from '@/lib/db'
 import { listAllChannels, listManagers } from '@/lib/data'
 import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
 import { SecretDashboard } from '@/components/admin/secret-dashboard'
+import { SecretGate } from '@/components/admin/secret-gate'
 import type { SecretStats } from '@/components/admin/secret-dashboard'
 
 export const dynamic = 'force-dynamic'
@@ -16,6 +18,10 @@ const DAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
  */
 export default async function SecretPage() {
   await requireAdmin()
+
+  // Second factor: even a logged-in admin must pass the secret passcode gate
+  // (when SECRET_PANEL_PASSWORD is configured) before any data is fetched.
+  if (!(await isGodUnlocked())) return <SecretGate />
 
   const [managers, channels, msgCounts, msg7dRows, statusRows, convAgg, db] =
     await Promise.all([
@@ -103,6 +109,7 @@ export default async function SecretPage() {
         dbOk: db.ok,
         dbMessage: db.message,
         generatedAt: new Date().toISOString(),
+        gateEnabled: isGodPasscodeConfigured(),
       }}
     />
   )

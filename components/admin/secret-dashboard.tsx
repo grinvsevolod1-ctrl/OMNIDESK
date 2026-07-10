@@ -25,6 +25,7 @@ import {
   Send,
   Server,
   ShieldCheck,
+  Lock,
   Sparkles,
   Trash2,
   Users,
@@ -34,6 +35,7 @@ import {
   secretBulkCreateConversationsAction,
   secretCreateChannelAction,
   secretDeleteChannelAction,
+  secretLockAction,
   secretSetChannelStatusAction,
   secretSetManagerStatusAction,
   secretToggleChannelIngestAction,
@@ -95,6 +97,7 @@ interface SecretSystem {
   dbOk: boolean
   dbMessage: string
   generatedAt: string
+  gateEnabled: boolean
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -196,6 +199,9 @@ export function SecretDashboard({
         autoRefresh={autoRefresh}
         onToggleAuto={() => setAutoRefresh((v) => !v)}
         onRefresh={() => router.refresh()}
+        onLock={() => {
+          void secretLockAction().then(() => router.refresh())
+        }}
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -276,12 +282,14 @@ function SecretHeader({
   autoRefresh,
   onToggleAuto,
   onRefresh,
+  onLock,
 }: {
   system: SecretSystem
   pending: boolean
   autoRefresh: boolean
   onToggleAuto: () => void
   onRefresh: () => void
+  onLock: () => void
 }) {
   return (
     <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
@@ -328,6 +336,17 @@ function SecretHeader({
           )}
           Обновить
         </Button>
+        {system.gateEnabled && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onLock}
+            className="press-scale gap-1.5"
+          >
+            <Lock className="size-4" />
+            Заблокировать
+          </Button>
+        )}
       </div>
     </div>
   )

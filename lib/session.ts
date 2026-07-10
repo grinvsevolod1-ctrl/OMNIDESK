@@ -10,6 +10,10 @@ import type { Role, SessionUser } from './types'
 export const SESSION_COOKIE = 'omnidesk_session'
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
 
+export function getAuthSecret(): Uint8Array {
+  return getSecret()
+}
+
 function getSecret(): Uint8Array {
   const secret = process.env.AUTH_SECRET
 
