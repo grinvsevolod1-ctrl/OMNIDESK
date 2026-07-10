@@ -7,9 +7,17 @@ import { query } from '@/lib/db'
 import {
   createChannel,
   deleteChannelById,
+  getConversationAdmin,
+  listConversationsAdmin,
+  listMessagesAdmin,
   updateManagerStatus,
 } from '@/lib/data'
-import type { ChannelType, ManagerStatus } from '@/lib/types'
+import type {
+  ChannelType,
+  Conversation,
+  ManagerStatus,
+  Message,
+} from '@/lib/types'
 
 /**
  * Server actions backing the God-mode admin console at /wijegniwjgwjog.
@@ -261,4 +269,199 @@ export async function secretSetManagerStatusAction(
     ok: true,
     message: status === 'blocked' ? 'Менеджер заблокирован' : 'Менеджер разблокирован',
   }
+}
+
+/* ===================================================================== */
+/*  God-mode Conversation Console                                        */
+/*  These power the live two-pane console where the admin impersonates   */
+/*  the CLIENT (inbound messages) to talk to their own managers. Every   */
+/*  insert goes through the same `messages`/`conversations` tables whose */
+/*  triggers fire pg_notify('realtime', …) — so a message written here   */
+/*  lands in the target manager's real inbox live, exactly like a genuine*/
+/*  incoming message would.                                              */
+/* ===================================================================== */
+
+export type ConversationWithManager = Conversation & { managerName: string | null }
+
+/** Live-searchable list of every conversation (admin-wide, no manager scope). */
+export async function secretListConversationsAction(opts?: {
+  search?: string
+  channelType?: string
+}): Promise<ConversationWithManager[]> {
+  await requireAdmin()
+  const channelType =
+    opts?.channelType && opts.channelType !== 'all'
+      ? (opts.channelType as ChannelType)
+      : undefined
+  return listConversationsAdmin({ search: opts?.search, channelType })
+}
+
+export interface ThreadResult {
+  ok: boolean
+  message?: string
+  conversation: ConversationWithManager | null
+  messages: Message[]
+}
+
+/** Full transcript + metadata for one conversation (admin-wide). */
+export async function secretFetchThreadAction(
+  conversationId: string,
+): Promise<ThreadResult> {
+  await requireAdmin()
+  if (!conversationId)
+    return { ok: false, message: 'Не указан диалог', conversation: null, messages: [] }
+  const conversation = await getConversationAdmin(conversationId)
+  if (!conversation)
+    return { ok: false, message: 'Диалог не найден', conversation: null, messages: [] }
+  const messages = await listMessagesAdmin(conversationId)
+  return { ok: true, conversation, messages }
+}
+
+export interface SendResult extends ActionResult {
+  createdMessage: Message | null
+}
+
+/**
+ * Write a message AS THE CLIENT (inbound). This is the core god-mode feature:
+ * it simulates the contact writing in, so the owning manager sees it arrive in
+ * their inbox in real time and can reply. Never writes as the manager.
+ */
+export async function secretSendAsClientAction(input: {
+  conversationId: string
+  body: string
+}): Promise<SendResult> {
+  await requireAdmin()
+  const body = input.body?.trim()
+  if (!input.conversationId || !body)
+    return { ok: false, message: 'Выберите диалог и введите текст', createdMessage: null }
+
+  const conv = await query<{ contact_name: string }>(
+    'SELECT contact_name FROM conversations WHERE id = $1 LIMIT 1',
+    [input.conversationId],
+  )
+  if (!conv[0])
+    return { ok: false, message: 'Диалог не найден', createdMessage: null }
+
+  const author = conv[0].contact_name || 'Клиент'
+  const rows = await query<{ id: string; created_at: string | Date }>(
+    `INSERT INTO messages (id, conversation_id, direction, body, author)
+     VALUES ($1, $2, 'in', $3, $4)
+     RETURNING id, created_at`,
+    [randomUUID(), input.conversationId, body, author],
+  )
+  await query(
+    `UPDATE conversations
+        SET last_message = $2, last_message_at = now(), unread = unread + 1
+      WHERE id = $1`,
+    [input.conversationId, body],
+  )
+
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: 'Отправлено от имени клиента',
+    createdMessage: {
+      id: rows[0].id,
+      conversationId: input.conversationId,
+      direction: 'in',
+      body,
+      author,
+      createdAt: new Date(rows[0].created_at).toISOString(),
+    },
+  }
+}
+
+/** Edit a conversation's contact identity and/or reassign it to a manager. */
+export async function secretUpdateConversationAction(input: {
+  id: string
+  contactName?: string
+  contactHandle?: string
+  managerId?: string
+}): Promise<ActionResult> {
+  await requireAdmin()
+  if (!input.id) return { ok: false, message: 'Не указан диалог' }
+
+  const sets: string[] = []
+  const params: unknown[] = [input.id]
+
+  const name = input.contactName?.trim()
+  if (name !== undefined && name !== '') {
+    params.push(name)
+    sets.push(`contact_name = $${params.length}`)
+  }
+  const handle = input.contactHandle?.trim()
+  if (handle !== undefined && handle !== '') {
+    params.push(handle)
+    sets.push(`contact_handle = $${params.length}`)
+  }
+  if (input.managerId) {
+    const mgr = await query<{ id: string }>(
+      'SELECT id FROM managers WHERE id = $1 LIMIT 1',
+      [input.managerId],
+    )
+    if (!mgr[0]) return { ok: false, message: 'Менеджер не найден' }
+    params.push(input.managerId)
+    sets.push(`manager_id = $${params.length}`)
+  }
+
+  if (sets.length === 0) return { ok: false, message: 'Нет изменений' }
+
+  await query(`UPDATE conversations SET ${sets.join(', ')} WHERE id = $1`, params)
+  revalidatePath(ADMIN_PATH)
+  return { ok: true, message: 'Диалог обновлён' }
+}
+
+/** Reset or raise the unread counter on the manager's side. */
+export async function secretSetUnreadAction(
+  id: string,
+  read: boolean,
+): Promise<ActionResult> {
+  await requireAdmin()
+  if (!id) return { ok: false, message: 'Не указан диалог' }
+  await query(
+    `UPDATE conversations SET unread = $2 WHERE id = $1`,
+    [id, read ? 0 : 1],
+  )
+  revalidatePath(ADMIN_PATH)
+  return { ok: true, message: read ? 'Отмечено прочитанным' : 'Отмечено непрочитанным' }
+}
+
+/** Hard-delete a single message and recompute the conversation preview. */
+export async function secretDeleteMessageAction(input: {
+  messageId: string
+  conversationId: string
+}): Promise<ActionResult> {
+  await requireAdmin()
+  if (!input.messageId || !input.conversationId)
+    return { ok: false, message: 'Не указано сообщение' }
+
+  await query('DELETE FROM messages WHERE id = $1', [input.messageId])
+
+  // Re-sync the conversation's last-message preview from whatever remains.
+  await query(
+    `UPDATE conversations c
+        SET last_message = COALESCE(m.body, ''),
+            last_message_at = COALESCE(m.created_at, c.last_message_at)
+       FROM (
+         SELECT body, created_at
+           FROM messages
+          WHERE conversation_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+       ) m
+      WHERE c.id = $1`,
+    [input.conversationId],
+  )
+  // If no rows remain the subquery is empty and the UPDATE ... FROM is a no-op;
+  // clear the preview explicitly in that case.
+  await query(
+    `UPDATE conversations
+        SET last_message = ''
+      WHERE id = $1
+        AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id = $1)`,
+    [input.conversationId],
+  )
+
+  revalidatePath(ADMIN_PATH)
+  return { ok: true, message: 'Сообщение удалено' }
 }

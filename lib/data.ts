@@ -3911,6 +3911,57 @@ export async function listMessagesAdmin(
   return rows.map(toMessage)
 }
 
+/**
+ * Admin-only: list EVERY conversation across all managers/channels, enriched
+ * with the owning manager's and source channel's display names. Powers the
+ * God-mode console conversation rail. No manager scoping — authorization is
+ * enforced by the caller (requireAdmin). Optional case-insensitive search over
+ * contact name/handle and last message, plus optional channel-type filter.
+ */
+export async function listConversationsAdmin(opts?: {
+  search?: string
+  channelType?: ChannelType
+  limit?: number
+}): Promise<Array<Conversation & { managerName: string | null }>> {
+  const params: unknown[] = []
+  const where: string[] = []
+
+  const search = opts?.search?.trim()
+  if (search) {
+    params.push(`%${search}%`)
+    const p = `$${params.length}`
+    where.push(
+      `(c.contact_name ILIKE ${p} OR c.contact_handle ILIKE ${p} OR c.last_message ILIKE ${p})`,
+    )
+  }
+  if (opts?.channelType) {
+    params.push(opts.channelType)
+    where.push(`c.channel_type = $${params.length}`)
+  }
+
+  const limit = Math.min(Math.max(opts?.limit ?? 300, 1), 1000)
+  params.push(limit)
+  const limitParam = `$${params.length}`
+
+  const rows = await query<
+    ConversationRow & { channel_name: string | null; manager_name: string | null }
+  >(
+    `SELECT c.*, ch.name AS channel_name, m.name AS manager_name
+       FROM conversations c
+       LEFT JOIN channels ch ON ch.id = c.channel_id
+       LEFT JOIN managers m ON m.id = c.manager_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY c.last_message_at DESC
+      LIMIT ${limitParam}`,
+    params,
+  )
+  return rows.map((r) => ({
+    ...toConversation(r),
+    channelName: r.channel_name ?? undefined,
+    managerName: r.manager_name ?? null,
+  }))
+}
+
 /* --------------------------- Source groups ----------------------------- */
 // A "source group" bundles the channels (Telegram / WhatsApp accounts + the
 // live-chat widget) that belong to ONE website. It is configured once and used

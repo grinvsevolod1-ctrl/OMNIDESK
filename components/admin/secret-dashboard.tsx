@@ -30,12 +30,8 @@ import {
 } from 'lucide-react'
 import {
   secretCreateChannelAction,
-  secretCreateConversationAction,
   secretDeleteChannelAction,
-  secretDeleteConversationAction,
-  secretSendMessageAction,
   secretSetChannelStatusAction,
-  secretSetConversationStatusAction,
   secretSetManagerStatusAction,
   secretToggleChannelIngestAction,
   type ActionResult,
@@ -62,7 +58,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Table,
   TableBody,
@@ -74,6 +69,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { Channel, Manager } from '@/lib/types'
 import { MessagesTrendChart, ChannelsTypeChart } from '@/components/admin/secret-charts'
+import { SecretConsole } from '@/components/admin/secret-console'
 
 export interface SecretConversation {
   id: string
@@ -171,13 +167,11 @@ function convStatusLabel(status: string): string {
 export function SecretDashboard({
   managers,
   channels,
-  conversations,
   stats,
   system,
 }: {
   managers: Manager[]
   channels: Channel[]
-  conversations: SecretConversation[]
   stats: SecretStats
   system: SecretSystem
 }) {
@@ -252,13 +246,12 @@ export function SecretDashboard({
         />
       </div>
 
-      <Tabs defaultValue="overview" className="w-full">
+      <Tabs defaultValue="console" className="w-full">
         <TabsList className="flex w-full flex-wrap justify-start gap-1">
+          <TabsTrigger value="console">Диалоги</TabsTrigger>
           <TabsTrigger value="overview">Обзор</TabsTrigger>
           <TabsTrigger value="managers">Менеджеры</TabsTrigger>
           <TabsTrigger value="channels">Каналы</TabsTrigger>
-          <TabsTrigger value="conversations">Диалоги</TabsTrigger>
-          <TabsTrigger value="console">Консоль</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4">
@@ -276,16 +269,8 @@ export function SecretDashboard({
             run={run}
           />
         </TabsContent>
-        <TabsContent value="conversations" className="mt-4">
-          <ConversationsTab
-            conversations={conversations}
-            channels={channels}
-            pending={pending}
-            run={run}
-          />
-        </TabsContent>
         <TabsContent value="console" className="mt-4">
-          <ConsoleTab conversations={conversations} pending={pending} run={run} />
+          <SecretConsole channels={channels} managers={managers} />
         </TabsContent>
       </Tabs>
     </div>
@@ -841,305 +826,6 @@ function CreateChannelDialog({
       </DialogContent>
       </Dialog>
     </>
-  )
-}
-
-/* ---------------------------- Conversations --------------------------- */
-
-function ConversationsTab({
-  conversations,
-  channels,
-  pending,
-  run,
-}: {
-  conversations: SecretConversation[]
-  channels: Channel[]
-  pending: boolean
-  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
-}) {
-  const [q, setQ] = useState('')
-  const filtered = conversations.filter(
-    (c) =>
-      c.contactName.toLowerCase().includes(q.toLowerCase()) ||
-      c.contactHandle.toLowerCase().includes(q.toLowerCase()) ||
-      c.lastMessage.toLowerCase().includes(q.toLowerCase()),
-  )
-
-  return (
-    <Card className="overflow-hidden">
-      <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-xs">
-          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Поиск по контакту или тексту"
-            className="pl-8"
-          />
-        </div>
-        <CreateConversationDialog channels={channels} pending={pending} run={run} />
-      </div>
-
-      {filtered.length ? (
-        <div className="divide-y divide-border">
-          {filtered.map((conv) => (
-            <div
-              key={conv.id}
-              className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{conv.contactName}</span>
-                  <span className="text-sm text-muted-foreground">{conv.contactHandle}</span>
-                  <Badge variant="secondary">{TYPE_LABEL[conv.channelType] ?? conv.channelType}</Badge>
-                  <span
-                    className={cn(
-                      'rounded-md px-2 py-0.5 text-xs font-medium',
-                      CONV_STATUS_STYLE[conv.status] ?? 'bg-muted text-muted-foreground',
-                    )}
-                  >
-                    {convStatusLabel(conv.status)}
-                  </span>
-                  {conv.unread > 0 ? (
-                    <Badge className="bg-primary text-primary-foreground">
-                      {conv.unread} новых
-                    </Badge>
-                  ) : null}
-                </div>
-                <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                  {conv.lastMessage || '—'} · {fmtDateTime(conv.lastMessageAt)}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Select
-                  value={conv.status}
-                  onValueChange={(v) => {
-                    if (v) run(() => secretSetConversationStatusAction(conv.id, v))
-                  }}
-                >
-                  <SelectTrigger className="h-8 w-36">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(CONV_STATUS_LABEL).map(([v, l]) => (
-                      <SelectItem key={v} value={v}>
-                        {l}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => copyText(conv.id)}
-                  className="gap-1.5"
-                >
-                  <Copy className="size-3.5" /> ID
-                </Button>
-                <ConfirmDeleteButton
-                  label="диалог"
-                  name={conv.contactName}
-                  pending={pending}
-                  onConfirm={() => run(() => secretDeleteConversationAction(conv.id))}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="p-6">
-          <EmptyState
-            icon={MessagesSquare}
-            title="Диалоги не найдены"
-            description="Создайте новый диалог или измените запрос."
-          />
-        </div>
-      )}
-    </Card>
-  )
-}
-
-function CreateConversationDialog({
-  channels,
-  pending,
-  run,
-}: {
-  channels: Channel[]
-  pending: boolean
-  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({
-    channelId: '',
-    contactName: '',
-    contactHandle: '',
-    message: '',
-  })
-
-  return (
-    <>
-      <Button size="sm" className="gap-1.5" onClick={() => setOpen(true)}>
-        <Plus className="size-4" /> Новый диалог
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Создать диалог</DialogTitle>
-          <DialogDescription>
-            Диалог привязывается к каналу и его владельцу.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <div className="grid gap-1.5">
-            <Label>Канал</Label>
-            <Select
-              value={form.channelId}
-              onValueChange={(v) => setForm({ ...form, channelId: v ?? '' })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Выберите канал" />
-              </SelectTrigger>
-              <SelectContent>
-                {channels.map((ch) => (
-                  <SelectItem key={ch.id} value={ch.id}>
-                    {ch.name} · {TYPE_LABEL[ch.type] ?? ch.type}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1.5">
-              <Label>Имя контакта</Label>
-              <Input
-                value={form.contactName}
-                onChange={(e) => setForm({ ...form, contactName: e.target.value })}
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label>Хэндл</Label>
-              <Input
-                value={form.contactHandle}
-                onChange={(e) => setForm({ ...form, contactHandle: e.target.value })}
-                placeholder="@user / +7…"
-              />
-            </div>
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Первое сообщение</Label>
-            <Textarea
-              value={form.message}
-              onChange={(e) => setForm({ ...form, message: e.target.value })}
-              placeholder="Необязательно"
-              className="resize-none"
-            />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button
-            disabled={pending}
-            onClick={() =>
-              run(
-                () => secretCreateConversationAction(form),
-                () => {
-                  setOpen(false)
-                  setForm({ channelId: '', contactName: '', contactHandle: '', message: '' })
-                },
-              )
-            }
-            className="gap-1.5"
-          >
-            {pending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            Создать
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-      </Dialog>
-    </>
-  )
-}
-
-/* ------------------------------- Console ------------------------------ */
-
-function ConsoleTab({
-  conversations,
-  pending,
-  run,
-}: {
-  conversations: SecretConversation[]
-  pending: boolean
-  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
-}) {
-  const [form, setForm] = useState({
-    conversationId: '',
-    body: '',
-    direction: 'out',
-  })
-
-  return (
-    <Card className="mx-auto max-w-2xl p-5">
-      <div className="mb-4 flex items-center gap-2">
-        <MessageSquare className="size-4 text-muted-foreground" />
-        <h3 className="font-medium">Вставка сообщения в диалог</h3>
-      </div>
-      <div className="grid gap-3">
-        <div className="grid gap-1.5">
-          <Label>Диалог</Label>
-          <Select
-            value={form.conversationId}
-            onValueChange={(v) => setForm({ ...form, conversationId: v ?? '' })}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Выберите диалог" />
-            </SelectTrigger>
-            <SelectContent>
-              {conversations.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.contactName} · {c.contactHandle}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="grid gap-1.5">
-          <Label>Направление</Label>
-          <Select
-            value={form.direction}
-            onValueChange={(v) => setForm({ ...form, direction: v ?? 'out' })}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="out">Исходящее (от менеджера)</SelectItem>
-              <SelectItem value="in">Входящее (от клиента)</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="grid gap-1.5">
-          <Label>Текст</Label>
-          <Textarea
-            value={form.body}
-            onChange={(e) => setForm({ ...form, body: e.target.value })}
-            placeholder="Текст сообщения"
-            className="min-h-24 resize-none"
-          />
-        </div>
-        <Button
-          disabled={pending}
-          onClick={() =>
-            run(
-              () => secretSendMessageAction(form),
-              () => setForm({ ...form, body: '' }),
-            )
-          }
-          className="gap-1.5"
-        >
-          {pending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-          Добавить сообщение
-        </Button>
-      </div>
-    </Card>
   )
 }
 
