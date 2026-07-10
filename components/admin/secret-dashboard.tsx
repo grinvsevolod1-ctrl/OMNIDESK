@@ -71,19 +71,6 @@ import type { Channel, Manager } from '@/lib/types'
 import { MessagesTrendChart, ChannelsTypeChart } from '@/components/admin/secret-charts'
 import { SecretConsole } from '@/components/admin/secret-console'
 
-export interface SecretConversation {
-  id: string
-  contactName: string
-  contactHandle: string
-  lastMessage: string
-  unread: number
-  status: string
-  channelId: string
-  channelType: string
-  managerId: string | null
-  lastMessageAt: string
-}
-
 export interface SecretStats {
   managersTotal: number
   managersActive: number
@@ -147,17 +134,6 @@ function copyText(text: string, label = 'ID') {
     .writeText(text)
     .then(() => toast.success(`${label} скопирован`))
     .catch(() => toast.error('Не удалось скопировать'))
-}
-
-function fmtDateTime(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 function convStatusLabel(status: string): string {

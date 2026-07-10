@@ -157,6 +157,12 @@ export function SecretConsole({
 
   const listRefetch = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Mirror the selected id into a ref during render so the long-lived SSE
+  // handler (subscribed once) always reads the latest value without needing
+  // to re-subscribe. Assigning in render is safe and lint-clean.
+  const selectedIdRef = useRef<string | null>(null)
+  selectedIdRef.current = selectedId
+
   /* ----- list loading (server-side search + filter) ----- */
   const loadList = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -200,6 +206,8 @@ export function SecretConsole({
     }
   }, [])
 
+  // Load (or clear) the open thread whenever the selection changes. This is a
+  // legitimate "sync with an external system on selection change" effect.
   useEffect(() => {
     if (selectedId) void loadThread(selectedId)
     else {
@@ -269,12 +277,6 @@ export function SecretConsole({
     // Subscribe once for the component's lifetime; handlers read live refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // Keep a ref of the selected id so the long-lived SSE handler sees the latest.
-  const selectedIdRef = useRef<string | null>(null)
-  useEffect(() => {
-    selectedIdRef.current = selectedId
-  }, [selectedId])
 
   /* ----- auto-scroll thread ----- */
   const endRef = useRef<HTMLDivElement | null>(null)
@@ -547,10 +549,11 @@ export function SecretConsole({
       />
 
       {conversation && (
-        <EditConversationDialog
-          open={editOpen}
-          onOpenChange={setEditOpen}
-          conversation={conversation}
+          <EditConversationDialog
+            key={conversation.id}
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            conversation={conversation}
           managers={managers}
           pending={pending}
           onSaved={() => {
@@ -925,17 +928,6 @@ function EditConversationDialog({
   })
   const [, startTransition] = useTransition()
 
-  // Re-seed the form whenever a different conversation is opened for editing.
-  useEffect(() => {
-    if (open) {
-      setForm({
-        contactName: conversation.contactName,
-        contactHandle: conversation.contactHandle,
-        managerId: conversation.managerId,
-      })
-    }
-  }, [open, conversation])
-
   function submit() {
     startTransition(async () => {
       const res = await secretUpdateConversationAction({
@@ -959,7 +951,7 @@ function EditConversationDialog({
         <DialogHeader>
           <DialogTitle>Изменить диалог</DialogTitle>
           <DialogDescription>
-            Отредактируйте данные клиента или переназначьте диалог другому менеджеру.
+            Отре��актируйте данные клиента или переназначьте диалог другому менеджеру.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">

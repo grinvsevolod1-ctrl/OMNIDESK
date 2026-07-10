@@ -3,7 +3,7 @@ import { checkDbConnection, query } from '@/lib/db'
 import { listAllChannels, listManagers } from '@/lib/data'
 import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
 import { SecretDashboard } from '@/components/admin/secret-dashboard'
-import type { SecretConversation, SecretStats } from '@/components/admin/secret-dashboard'
+import type { SecretStats } from '@/components/admin/secret-dashboard'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,26 +17,10 @@ const DAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
 export default async function SecretPage() {
   await requireAdmin()
 
-  const [managers, channels, convRows, msgCounts, msg7dRows, statusRows, convAgg, db] =
+  const [managers, channels, msgCounts, msg7dRows, statusRows, convAgg, db] =
     await Promise.all([
       listManagers(),
       listAllChannels(),
-      query<SecretConversation>(`
-        SELECT
-          c.id,
-          c.contact_name    AS "contactName",
-          c.contact_handle  AS "contactHandle",
-          c.last_message    AS "lastMessage",
-          c.unread,
-          c.status,
-          c.channel_id      AS "channelId",
-          c.channel_type    AS "channelType",
-          c.manager_id      AS "managerId",
-          to_char(c.last_message_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS "lastMessageAt"
-        FROM conversations c
-        ORDER BY c.last_message_at DESC
-        LIMIT 200
-      `),
       query<{ total: number; last24: number }>(`
         SELECT
           count(*)::int AS total,
@@ -112,7 +96,6 @@ export default async function SecretPage() {
     <SecretDashboard
       managers={managers}
       channels={channels}
-      conversations={convRows}
       stats={stats}
       system={{
         workerConfigured,
