@@ -4,25 +4,30 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from 'react'
 import {
+  AtSign,
   BarChart3,
   Bot,
   BookOpen,
+  ChevronDown,
   ChevronLeft,
   Inbox,
   LayoutDashboard,
   LogOut,
   Menu,
   MessageCircle,
+  MessageSquare,
   MessageSquareText,
   PanelLeft,
   Phone,
   Plug,
   Radio,
+  Send,
   Server,
   Settings,
   Users,
@@ -48,6 +53,9 @@ export type NavIcon =
   | 'managers'
   | 'channels'
   | 'whatsapp'
+  | 'telegram'
+  | 'vk'
+  | 'max'
   | 'connections'
   | 'inbox'
   | 'proxies'
@@ -65,6 +73,9 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   managers: Users,
   channels: Radio,
   whatsapp: Phone,
+  telegram: Send,
+  vk: AtSign,
+  max: MessageSquare,
   connections: Plug,
   inbox: Inbox,
   proxies: Server,
@@ -82,6 +93,8 @@ export interface NavItem {
   href: string
   label: string
   icon: NavIcon
+  /** When present, this item becomes a collapsible group of sub-links. */
+  children?: NavItem[]
 }
 
 interface DashboardShellProps {
@@ -105,6 +118,30 @@ function initials(name: string): string {
     .toUpperCase()
 }
 
+function collectHrefs(nav: NavItem[]): string[] {
+  const out: string[] = []
+  for (const item of nav) {
+    out.push(item.href)
+    if (item.children) for (const c of item.children) out.push(c.href)
+  }
+  return out
+}
+
+/**
+ * Resolve the single active nav href using longest-prefix matching. This keeps
+ * exactly one item highlighted even when hrefs nest (e.g. "/admin/accounts" vs
+ * "/admin/accounts/telegram").
+ */
+function computeActiveHref(pathname: string, nav: NavItem[]): string | null {
+  let best: string | null = null
+  for (const href of collectHrefs(nav)) {
+    if (pathname === href || pathname.startsWith(href + '/')) {
+      if (!best || href.length > best.length) best = href
+    }
+  }
+  return best
+}
+
 function NavLinks({
   nav,
   pathname,
@@ -121,6 +158,27 @@ function NavLinks({
   // Position/size of the sliding "liquid" highlight behind the active item.
   // Null until measured on the client so SSR doesn't render a misplaced pill.
   const [pill, setPill] = useState<{ top: number; height: number } | null>(null)
+  // Which groups are expanded. A group auto-opens when it owns the active route.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+
+  const activeHref = useMemo(
+    () => computeActiveHref(pathname, nav),
+    [pathname, nav],
+  )
+  const groupOwnsActive = (item: NavItem) =>
+    !!item.children && item.children.some((c) => c.href === activeHref)
+
+  // Auto-open the group that contains the active route whenever it changes.
+  useEffect(() => {
+    setOpenGroups((prev) => {
+      const next = { ...prev }
+      for (const item of nav) {
+        if (item.children && item.children.some((c) => c.href === activeHref))
+          next[item.href] = true
+      }
+      return next
+    })
+  }, [activeHref, nav])
 
   useEffect(() => {
     function measure() {
@@ -134,9 +192,104 @@ function NavLinks({
     measure()
     window.addEventListener('resize', measure)
     return () => window.removeEventListener('resize', measure)
-    // Re-measure when the route changes or the sidebar collapses (item metrics
-    // change), so the highlight glides to the newly active item.
-  }, [pathname, collapsed, nav])
+    // Re-measure when the route changes, the sidebar collapses, or a group is
+    // expanded/collapsed (item metrics change), so the highlight tracks.
+  }, [pathname, collapsed, nav, openGroups])
+
+  function renderLink(
+    item: NavItem,
+    opts?: { nested?: boolean; hidden?: boolean },
+  ) {
+    const active = item.href === activeHref
+    const Icon = ICONS[item.icon]
+    const link = (
+      <Link
+        key={item.href}
+        href={item.href}
+        ref={active && !opts?.hidden ? activeRef : undefined}
+        onClick={onNavigate}
+        aria-label={item.label}
+        className={cn(
+          'group relative z-10 flex items-center gap-2.5 rounded-lg text-sm font-medium transition-colors duration-200',
+          collapsed ? 'justify-center px-0 py-2.5' : 'px-3 py-2',
+          opts?.nested && !collapsed && 'py-1.5 text-[13px]',
+          active
+            ? 'text-sidebar-accent-foreground'
+            : 'text-muted-foreground hover:text-foreground',
+        )}
+      >
+        <Icon
+          className={cn(
+            'size-4 shrink-0 transition-transform duration-200',
+            active && 'scale-110',
+          )}
+        />
+        {!collapsed ? item.label : null}
+      </Link>
+    )
+    if (collapsed) {
+      return (
+        <Tooltip key={item.href}>
+          <TooltipTrigger render={link} aria-label={item.label} />
+          <TooltipContent side="right">{item.label}</TooltipContent>
+        </Tooltip>
+      )
+    }
+    return link
+  }
+
+  function renderGroup(item: NavItem) {
+    const Icon = ICONS[item.icon]
+    const sectionActive = groupOwnsActive(item)
+    // Collapsed rail: no room for a disclosure, so flatten to tooltipped icons.
+    if (collapsed) {
+      return (
+        <div key={item.href} className="flex flex-col gap-1">
+          {item.children!.map((child) => renderLink(child))}
+        </div>
+      )
+    }
+    const open = openGroups[item.href] ?? sectionActive
+    return (
+      <div key={item.href} className="flex flex-col gap-1">
+        <button
+          type="button"
+          onClick={() => setOpenGroups((p) => ({ ...p, [item.href]: !open }))}
+          aria-expanded={open}
+          className={cn(
+            'group relative z-10 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200',
+            sectionActive
+              ? 'text-foreground'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <Icon className="size-4 shrink-0" />
+          {item.label}
+          <ChevronDown
+            className={cn(
+              'ml-auto size-4 shrink-0 text-muted-foreground transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+              open && 'rotate-180',
+            )}
+          />
+        </button>
+        {/* Grid-rows trick animates height from 0 → auto smoothly. */}
+        <div
+          className={cn(
+            'grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+            open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+          )}
+        >
+          <div className="overflow-hidden">
+            <div className="ml-4 flex flex-col gap-1 border-l border-sidebar-border pl-2">
+              {item.children!.map((child) =>
+                renderLink(child, { nested: true, hidden: !open }),
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <nav ref={navRef} className="relative flex flex-col gap-1">
@@ -152,44 +305,9 @@ function NavLinks({
           }}
         />
       ) : null}
-      {nav.map((item) => {
-        const active =
-          pathname === item.href || pathname.startsWith(item.href + '/')
-        const Icon = ICONS[item.icon]
-        const link = (
-          <Link
-            key={item.href}
-            href={item.href}
-            ref={active ? activeRef : undefined}
-            onClick={onNavigate}
-            aria-label={item.label}
-            className={cn(
-              'group relative z-10 flex items-center gap-2.5 rounded-lg text-sm font-medium transition-colors duration-200',
-              collapsed ? 'justify-center px-0 py-2.5' : 'px-3 py-2',
-              active
-                ? 'text-sidebar-accent-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Icon
-              className={cn(
-                'size-4 shrink-0 transition-transform duration-200',
-                active && 'scale-110',
-              )}
-            />
-            {!collapsed ? item.label : null}
-          </Link>
-        )
-        if (collapsed) {
-          return (
-            <Tooltip key={item.href}>
-              <TooltipTrigger render={link} aria-label={item.label} />
-              <TooltipContent side="right">{item.label}</TooltipContent>
-            </Tooltip>
-          )
-        }
-        return link
-      })}
+      {nav.map((item) =>
+        item.children ? renderGroup(item) : renderLink(item),
+      )}
     </nav>
   )
 }

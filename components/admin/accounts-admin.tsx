@@ -98,13 +98,19 @@ export function AccountsAdmin({
   managers,
   proxyUsage,
   workerOnline,
+  only,
 }: {
   channels: AdminChannel[]
   proxies: Proxy[]
   managers: Manager[]
   proxyUsage: Record<string, string[]>
   workerOnline: boolean
+  /** Restrict the create form and table to a single source type. */
+  only?: CreatableType
 }) {
+  const visibleChannels = only
+    ? channels.filter((c) => c.type === only)
+    : channels
   return (
     <div className="flex flex-col gap-6">
       <CreateAccountCard
@@ -112,8 +118,13 @@ export function AccountsAdmin({
         managers={managers}
         proxyUsage={proxyUsage}
         workerOnline={workerOnline}
+        only={only}
       />
-      <AccountsTable channels={channels} proxies={proxies} proxyUsage={proxyUsage} />
+      <AccountsTable
+        channels={visibleChannels}
+        proxies={proxies}
+        proxyUsage={proxyUsage}
+      />
     </div>
   )
 }
@@ -125,13 +136,15 @@ function CreateAccountCard({
   managers,
   proxyUsage,
   workerOnline,
+  only,
 }: {
   proxies: Proxy[]
   managers: Manager[]
   proxyUsage: Record<string, string[]>
   workerOnline: boolean
+  only?: CreatableType
 }) {
-  const [type, setType] = useState<CreatableType>('telegram')
+  const [type, setType] = useState<CreatableType>(only ?? 'telegram')
   const [managerId, setManagerId] = useState('')
   const [proxyId, setProxyId] = useState('')
   const [name, setName] = useState('')
@@ -328,40 +341,44 @@ function CreateAccountCard({
         </div>
       </div>
 
-      {/* Type selector */}
-      <div className="mb-4 grid grid-cols-3 gap-2">
-        {TYPES.map((t) => {
-          const Icon = TYPE_ICON[t.value]
-          const active = type === t.value
-          return (
-            <button
-              key={t.value}
-              type="button"
-              onClick={() => {
-                setType(t.value)
-                setProxyId('')
-              }}
-              disabled={pending || Boolean(tgChannelId)}
-              className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
-                active
-                  ? 'border-foreground bg-secondary text-secondary-foreground'
-                  : 'border-border text-muted-foreground hover:bg-muted/50'
-              }`}
-            >
-              <Icon className="size-4" />
-              {t.label}
-            </button>
-          )
-        })}
-      </div>
+      {/* Type selector — hidden when the card is scoped to one source. */}
+      {!only ? (
+        <div className="mb-4 grid grid-cols-3 gap-2">
+          {TYPES.map((t) => {
+            const Icon = TYPE_ICON[t.value]
+            const active = type === t.value
+            return (
+              <button
+                key={t.value}
+                type="button"
+                onClick={() => {
+                  setType(t.value)
+                  setProxyId('')
+                }}
+                disabled={pending || Boolean(tgChannelId)}
+                className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
+                  active
+                    ? 'border-foreground bg-secondary text-secondary-foreground'
+                    : 'border-border text-muted-foreground hover:bg-muted/50'
+                }`}
+              >
+                <Icon className="size-4" />
+                {t.label}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
 
-      <p className="mb-4 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-        WhatsApp подключается на странице{' '}
-        <Link href="/admin/whatsapp" className="font-medium text-foreground underline">
-          WhatsApp
-        </Link>
-        , после чего назначьте номеру прокси в таблице ниже.
-      </p>
+      {!only ? (
+        <p className="mb-4 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          WhatsApp подключается на странице{' '}
+          <Link href="/admin/whatsapp" className="font-medium text-foreground underline">
+            WhatsApp
+          </Link>
+          , после чего назначьте номеру прокси в таблице ниже.
+        </p>
+      ) : null}
 
       {/* Common fields */}
       <div className="grid gap-4 sm:grid-cols-2">
