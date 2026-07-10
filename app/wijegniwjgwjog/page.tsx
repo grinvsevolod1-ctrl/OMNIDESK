@@ -17,7 +17,7 @@ const DAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
 export default async function SecretPage() {
   await requireAdmin()
 
-  const [managers, channels, convRows, msgCounts, msg7dRows, statusRows, db] =
+  const [managers, channels, convRows, msgCounts, msg7dRows, statusRows, convAgg, db] =
     await Promise.all([
       listManagers(),
       listAllChannels(),
@@ -58,6 +58,12 @@ export default async function SecretPage() {
         FROM conversations
         GROUP BY status
       `),
+      query<{ total: number; unread: number }>(`
+        SELECT
+          count(*)::int AS total,
+          coalesce(sum(unread), 0)::int AS unread
+        FROM conversations
+      `),
       checkDbConnection(),
     ])
 
@@ -93,8 +99,8 @@ export default async function SecretPage() {
     managersOnLunch: managers.filter((m) => m.onLunch).length,
     channelsTotal: channels.length,
     channelsConnected: channels.filter((c) => c.status === 'connected').length,
-    conversationsTotal: convRows.length,
-    unreadTotal: convRows.reduce((sum, c) => sum + (c.unread || 0), 0),
+    conversationsTotal: convAgg[0]?.total ?? 0,
+    unreadTotal: convAgg[0]?.unread ?? 0,
     messagesTotal: msgCounts[0]?.total ?? 0,
     messages24h: msgCounts[0]?.last24 ?? 0,
     channelsByType,
