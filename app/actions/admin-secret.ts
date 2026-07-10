@@ -415,6 +415,26 @@ export async function secretBulkCreateConversationsAction(input: {
   }
 }
 
+/**
+ * Wipe every conversation's contact name, replacing it with the literal text
+ * "NULL" — simulates a database glitch where all names got nulled out. The
+ * column is NOT NULL, so we store the string "NULL" rather than a real NULL,
+ * which keeps the schema/types/rendering intact while looking like a real bug.
+ */
+export async function secretNullifyContactNamesAction(): Promise<BulkResult> {
+  await requireAdmin()
+  const rows = await query<{ count: string }>(
+    `UPDATE conversations SET contact_name = 'NULL' RETURNING id`,
+  )
+  const affected = rows.length
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    created: affected,
+    message: `Имена обнулены в ${affected} диалогах`,
+  }
+}
+
 export async function secretSetConversationStatusAction(
   id: string,
   status: string,
@@ -652,7 +672,7 @@ export async function secretSetContactBlockedAction(
   revalidatePath(ADMIN_PATH)
   return {
     ok: true,
-    message: blocked ? 'Менеджер заблокирован клиентом' : 'Менеджер разблокирован',
+    message: blocked ? 'Менеджер заблокирован клиентом' : 'Менед��ер разблокирован',
   }
 }
 

@@ -25,9 +25,11 @@ import {
   Send,
   Server,
   ShieldCheck,
+  Eraser,
   Lock,
   Sparkles,
   Trash2,
+  TriangleAlert,
   Users,
   Zap,
 } from 'lucide-react'
@@ -36,6 +38,7 @@ import {
   secretCreateChannelAction,
   secretDeleteChannelAction,
   secretLockAction,
+  secretNullifyContactNamesAction,
   secretSetChannelStatusAction,
   secretSetManagerStatusAction,
   secretToggleChannelIngestAction,
@@ -611,6 +614,7 @@ function MassImportTab({
   const [spreadHours, setSpreadHours] = useState(24)
   const [withMessage, setWithMessage] = useState(true)
   const [markUnread, setMarkUnread] = useState(true)
+  const [confirmNullify, setConfirmNullify] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(eligible.map((c) => c.id)),
   )
@@ -848,6 +852,63 @@ function MassImportTab({
             Выберите хотя бы один канал
           </p>
         )}
+      </Card>
+
+      {/* ---- Danger zone: nullify all contact names ---- */}
+      <Card className="flex flex-col gap-4 border-destructive/30 bg-destructive/5 p-5 lg:col-span-2">
+        <div className="flex items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-destructive/30 bg-destructive/10">
+            <TriangleAlert className="size-5 text-destructive" />
+          </div>
+          <div>
+            <h3 className="font-semibold tracking-tight text-destructive">
+              Обнулить имена
+            </h3>
+            <p className="text-sm text-muted-foreground text-pretty">
+              Заменяет имя контакта на «NULL» во всех диалогах — имитация сбоя
+              базы, когда все имена слетели. Действие затрагивает всю базу.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {!confirmNullify ? (
+            <Button
+              variant="outline"
+              className="press-scale gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              disabled={pending}
+              onClick={() => setConfirmNullify(true)}
+            >
+              <Eraser className="size-4" />
+              Обнулить все имена
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="destructive"
+                className="press-scale gap-2"
+                disabled={pending}
+                onClick={() =>
+                  run(secretNullifyContactNamesAction, () => setConfirmNullify(false))
+                }
+              >
+                {pending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Eraser className="size-4" />
+                )}
+                Да, обнулить всё
+              </Button>
+              <Button
+                variant="ghost"
+                className="press-scale"
+                disabled={pending}
+                onClick={() => setConfirmNullify(false)}
+              >
+                Отмена
+              </Button>
+            </>
+          )}
+        </div>
       </Card>
     </div>
   )
