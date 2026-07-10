@@ -25,10 +25,13 @@ import {
   Send,
   Server,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Users,
+  Zap,
 } from 'lucide-react'
 import {
+  secretBulkCreateConversationsAction,
   secretCreateChannelAction,
   secretDeleteChannelAction,
   secretSetChannelStatusAction,
@@ -225,6 +228,10 @@ export function SecretDashboard({
       <Tabs defaultValue="console" className="w-full">
         <TabsList className="flex w-full flex-wrap justify-start gap-1">
           <TabsTrigger value="console">Диалоги</TabsTrigger>
+          <TabsTrigger value="bulk" className="gap-1.5">
+            <Zap className="size-3.5" />
+            Наплыв
+          </TabsTrigger>
           <TabsTrigger value="overview">Обзор</TabsTrigger>
           <TabsTrigger value="managers">Менеджеры</TabsTrigger>
           <TabsTrigger value="channels">Каналы</TabsTrigger>
@@ -247,6 +254,14 @@ export function SecretDashboard({
         </TabsContent>
         <TabsContent value="console" className="mt-4">
           <SecretConsole channels={channels} managers={managers} />
+        </TabsContent>
+        <TabsContent value="bulk" className="mt-4">
+          <MassImportTab
+            channels={channels}
+            managerName={managerName}
+            pending={pending}
+            run={run}
+          />
         </TabsContent>
       </Tabs>
     </div>
@@ -527,6 +542,318 @@ function ManagersTab({
         </div>
       )}
     </Card>
+  )
+}
+
+/* --------------------------- Mass import ------------------------------ */
+
+const TIME_WINDOWS: { value: string; label: string; hours: number }[] = [
+  { value: '1', label: 'Последний час', hours: 1 },
+  { value: '24', label: 'Последние 24 часа', hours: 24 },
+  { value: '168', label: 'Последние 7 дней', hours: 168 },
+  { value: '720', label: 'Последние 30 дней', hours: 720 },
+]
+
+const COUNT_PRESETS = [10, 25, 50, 100]
+
+function MassImportTab({
+  channels,
+  managerName,
+  pending,
+  run,
+}: {
+  channels: Channel[]
+  managerName: (id: string | null) => string
+  pending: boolean
+  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+}) {
+  // Only channels with an owner can host a conversation.
+  const eligible = useMemo(() => channels.filter((c) => c.managerId), [channels])
+
+  const [count, setCount] = useState(10)
+  const [windowValue, setWindowValue] = useState('24')
+  const [withMessage, setWithMessage] = useState(true)
+  const [markUnread, setMarkUnread] = useState(true)
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(eligible.map((c) => c.id)),
+  )
+
+  const spreadHours =
+    TIME_WINDOWS.find((w) => w.value === windowValue)?.hours ?? 24
+  const selectedIds = eligible.filter((c) => selected.has(c.id)).map((c) => c.id)
+  const canGenerate = count > 0 && selectedIds.length > 0 && !pending
+
+  function toggleChannel(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function generate() {
+    run(() =>
+      secretBulkCreateConversationsAction({
+        count,
+        channelIds: selectedIds,
+        spreadHours,
+        withMessage,
+        markUnread,
+      }),
+    )
+  }
+
+  if (eligible.length === 0) {
+    return (
+      <EmptyState
+        icon={Zap}
+        title="Нет каналов с владельцем"
+        description="Сначала создайте канал и назначьте ему менеджера — тогда можно массово наливать диалоги."
+      />
+    )
+  }
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+      {/* ---- Config ---- */}
+      <Card className="flex flex-col gap-6 p-5">
+        <div className="flex items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/40">
+            <Sparkles className="size-5 text-foreground" />
+          </div>
+          <div>
+            <h3 className="font-semibold tracking-tight">Массовое создание диалогов</h3>
+            <p className="text-sm text-muted-foreground text-pretty">
+              Сгенерируйте пачку диалогов с разных каналов и с разным временем —
+              как внезапный наплыв обращений.
+            </p>
+          </div>
+        </div>
+
+        {/* Count */}
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="bulk-count">Сколько диалогов</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            {COUNT_PRESETS.map((p) => (
+              <Button
+                key={p}
+                type="button"
+                size="sm"
+                variant={count === p ? 'default' : 'outline'}
+                className="press-scale"
+                onClick={() => setCount(p)}
+              >
+                {p}
+              </Button>
+            ))}
+            <Input
+              id="bulk-count"
+              type="number"
+              min={1}
+              max={100}
+              value={count}
+              onChange={(e) =>
+                setCount(Math.min(Math.max(Number(e.target.value) || 0, 1), 100))
+              }
+              className="w-24"
+            />
+            <span className="text-xs text-muted-foreground">макс. 100 за раз</span>
+          </div>
+        </div>
+
+        {/* Time window */}
+        <div className="flex flex-col gap-2">
+          <Label>Разброс по времени</Label>
+          <Select value={windowValue} onValueChange={(v) => setWindowValue(v ?? '24')}>
+            <SelectTrigger className="w-full sm:w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TIME_WINDOWS.map((w) => (
+                <SelectItem key={w.value} value={w.value}>
+                  {w.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            Время последнего сообщения распределится случайно в этом окне.
+          </p>
+        </div>
+
+        {/* Options */}
+        <div className="flex flex-col gap-2">
+          <Label>Параметры</Label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <ToggleTile
+              active={withMessage}
+              onClick={() => setWithMessage((v) => !v)}
+              title="С первым сообщением"
+              description="Добавить входящее сообщение от клиента"
+            />
+            <ToggleTile
+              active={markUnread}
+              onClick={() => setMarkUnread((v) => !v)}
+              disabled={!withMessage}
+              title="Отметить непрочитанным"
+              description="Поднять счётчик непрочитанных у менеджера"
+            />
+          </div>
+        </div>
+
+        {/* Channels */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <Label>Каналы-источники</Label>
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                type="button"
+                className="text-foreground/70 underline-offset-2 hover:underline"
+                onClick={() => setSelected(new Set(eligible.map((c) => c.id)))}
+              >
+                Все
+              </button>
+              <span className="text-muted-foreground">·</span>
+              <button
+                type="button"
+                className="text-foreground/70 underline-offset-2 hover:underline"
+                onClick={() => setSelected(new Set())}
+              >
+                Сброс
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {eligible.map((c) => {
+              const Icon = TYPE_ICON[c.type] ?? Globe
+              const on = selected.has(c.id)
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => toggleChannel(c.id)}
+                  className={cn(
+                    'press-scale inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                    on
+                      ? 'border-foreground/20 bg-foreground text-background'
+                      : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                  {c.name}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </Card>
+
+      {/* ---- Summary / action ---- */}
+      <Card className="flex flex-col gap-5 p-5">
+        <h3 className="font-semibold tracking-tight">Итог</h3>
+        <div className="flex flex-col gap-3 text-sm">
+          <SummaryRow label="Диалогов" value={String(count)} />
+          <SummaryRow
+            label="Каналов выбрано"
+            value={`${selectedIds.length} из ${eligible.length}`}
+          />
+          <SummaryRow
+            label="Окно времени"
+            value={TIME_WINDOWS.find((w) => w.value === windowValue)?.label ?? '—'}
+          />
+          <SummaryRow label="Сообщение" value={withMessage ? 'да' : 'нет'} />
+          <SummaryRow
+            label="Непрочитанные"
+            value={withMessage && markUnread ? 'да' : 'нет'}
+          />
+        </div>
+
+        {selectedIds.length > 0 && (
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            Владельцы:{' '}
+            {Array.from(
+              new Set(
+                eligible
+                  .filter((c) => selected.has(c.id))
+                  .map((c) => managerName(c.managerId)),
+              ),
+            ).join(', ')}
+          </div>
+        )}
+
+        <Button
+          size="lg"
+          className="press-scale mt-auto gap-2"
+          disabled={!canGenerate}
+          onClick={generate}
+        >
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Zap className="size-4" />
+          )}
+          Создать {count}{' '}
+          {count % 10 === 1 && count % 100 !== 11 ? 'диалог' : 'диалогов'}
+        </Button>
+        {selectedIds.length === 0 && (
+          <p className="text-center text-xs text-destructive">
+            Выберите хотя бы один канал
+          </p>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+function ToggleTile({
+  active,
+  onClick,
+  title,
+  description,
+  disabled,
+}: {
+  active: boolean
+  onClick: () => void
+  title: string
+  description: string
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        'press-scale flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors',
+        active
+          ? 'border-foreground/20 bg-muted/50'
+          : 'border-border bg-transparent hover:bg-muted/30',
+        disabled && 'pointer-events-none opacity-40',
+      )}
+    >
+      <div
+        className={cn(
+          'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors',
+          active ? 'border-foreground bg-foreground text-background' : 'border-border',
+        )}
+      >
+        {active && <CheckCircle2 className="size-3.5" />}
+      </div>
+      <div>
+        <div className="text-sm font-medium text-foreground">{title}</div>
+        <div className="text-xs text-muted-foreground text-pretty">{description}</div>
+      </div>
+    </button>
+  )
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium text-foreground">{value}</span>
+    </div>
   )
 }
 

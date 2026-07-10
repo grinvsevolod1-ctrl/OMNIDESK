@@ -207,6 +207,145 @@ export async function secretDeleteConversationAction(
   return { ok: true, message: 'Диалог удалён' }
 }
 
+/* ===================================================================== */
+/*  Bulk conversation generator ("Наплыв")                               */
+/*  Spins up N realistic-looking conversations across the chosen channels*/
+/*  with randomised contacts, statuses and timestamps spread over a time */
+/*  window — simulating a sudden flood/glitch of incoming chats. Each     */
+/*  conversation goes through the same tables/triggers as a real one, so  */
+/*  they appear live in the owning manager's inbox.                       */
+/* ===================================================================== */
+
+const FAKE_FIRST_NAMES = [
+  'Александр', 'Мария', 'Дмитрий', 'Анна', 'Сергей', 'Екатерина', 'Иван',
+  'Ольга', 'Максим', 'Наталья', 'Андрей', 'Виктория', 'Павел', 'Юлия',
+  'Никита', 'Дарья', 'Роман', 'Ксения', 'Артём', 'Полина', 'Егор', 'София',
+]
+
+const FAKE_LAST_NAMES = [
+  'Иванов', 'Смирнова', 'Кузнецов', 'Попова', 'Соколов', 'Лебедева',
+  'Козлов', 'Новикова', 'Морозов', 'Волкова', 'Петров', 'Фёдорова',
+  'Михайлов', 'Егорова', 'Никитин', 'Орлова', 'Захаров', 'Павлова',
+]
+
+const FAKE_MESSAGES = [
+  'Здравствуйте! Подскажите, актуально ещё предложение?',
+  'Добрый день, хочу уточнить по цене',
+  'Привет, а доставка в другой город есть?',
+  'Можно подробнее про условия?',
+  'Здравствуйте, оставлял заявку — что дальше?',
+  'Интересует ваш продукт, как оформить?',
+  'Добрый вечер! Вы работаете сегодня?',
+  'Подскажите сроки, пожалуйста',
+  'А есть скидка при заказе от нескольких штук?',
+  'Хочу записаться на консультацию',
+  'Скиньте, пожалуйста, прайс',
+  'Не приходит ответ, вы на связи?',
+]
+
+function pickRandom<T>(arr: readonly T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)]
+}
+
+function randomHandle(type: string): string {
+  const n = Math.floor(1000 + Math.random() * 9_000_000)
+  switch (type) {
+    case 'telegram':
+      return `@user_${n}`
+    case 'whatsapp':
+      return `+79${String(Math.floor(100_000_000 + Math.random() * 899_999_999))}`
+    case 'vk':
+      return `id${n}`
+    case 'max':
+      return `max_${n}`
+    default:
+      return `web-${n.toString(36)}`
+  }
+}
+
+export interface BulkResult extends ActionResult {
+  created: number
+}
+
+export async function secretBulkCreateConversationsAction(input: {
+  count: number
+  channelIds?: string[]
+  spreadHours: number
+  withMessage: boolean
+  markUnread: boolean
+}): Promise<BulkResult> {
+  await requireAdmin()
+
+  const count = Math.min(Math.max(Math.floor(input.count) || 0, 1), 100)
+  const spreadHours = Math.min(Math.max(input.spreadHours || 24, 0), 24 * 90)
+
+  // Only channels that actually have an owner can host a conversation.
+  const idFilter = input.channelIds?.length ? input.channelIds : null
+  const channels = await query<{ id: string; type: string; manager_id: string }>(
+    `SELECT id, type, manager_id
+       FROM channels
+      WHERE manager_id IS NOT NULL
+        AND ($1::text[] IS NULL OR id = ANY($1::text[]))`,
+    [idFilter],
+  )
+  if (channels.length === 0)
+    return {
+      ok: false,
+      created: 0,
+      message: 'Нет подходящих каналов с назначенным менеджером',
+    }
+
+  let created = 0
+  for (let i = 0; i < count; i++) {
+    const channel = pickRandom(channels)
+    const first = pickRandom(FAKE_FIRST_NAMES)
+    const last = pickRandom(FAKE_LAST_NAMES)
+    const name = `${first} ${last}`
+    const handle = randomHandle(channel.type)
+    const status = pickRandom(CONVERSATION_STATUSES)
+    const offsetMinutes = Math.floor(Math.random() * spreadHours * 60)
+    const body = input.withMessage ? pickRandom(FAKE_MESSAGES) : ''
+    const unread = input.markUnread && input.withMessage ? 1 : 0
+    const convId = randomUUID()
+
+    await query(
+      `INSERT INTO conversations
+         (id, channel_id, channel_type, manager_id, contact_name, contact_handle,
+          last_message, last_message_at, status, unread)
+       VALUES ($1, $2, $3, $4, $5, $6, $7,
+               now() - ($8 * interval '1 minute'), $9, $10)`,
+      [
+        convId,
+        channel.id,
+        channel.type,
+        channel.manager_id,
+        name,
+        handle,
+        body,
+        offsetMinutes,
+        status,
+        unread,
+      ],
+    )
+
+    if (input.withMessage) {
+      await query(
+        `INSERT INTO messages (id, conversation_id, direction, body, author, created_at)
+         VALUES ($1, $2, 'in', $3, $4, now() - ($5 * interval '1 minute'))`,
+        [randomUUID(), convId, body, name, offsetMinutes],
+      )
+    }
+    created++
+  }
+
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    created,
+    message: `Создано диалогов: ${created}`,
+  }
+}
+
 export async function secretSetConversationStatusAction(
   id: string,
   status: string,
