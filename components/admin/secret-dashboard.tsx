@@ -566,14 +566,32 @@ function ManagersTab({
 
 /* --------------------------- Mass import ------------------------------ */
 
-const TIME_WINDOWS: { value: string; label: string; hours: number }[] = [
-  { value: '1', label: 'Последний час', hours: 1 },
-  { value: '24', label: 'Последние 24 часа', hours: 24 },
-  { value: '168', label: 'Последние 7 дней', hours: 168 },
-  { value: '720', label: 'Последние 30 дней', hours: 720 },
+const HOUR_PRESETS: { label: string; hours: number }[] = [
+  { label: '1ч', hours: 1 },
+  { label: '6ч', hours: 6 },
+  { label: '24ч', hours: 24 },
+  { label: '7д', hours: 168 },
+  { label: '30д', hours: 720 },
 ]
 
 const COUNT_PRESETS = [10, 25, 50, 100]
+
+/** Human-readable RU label for a span given in hours. */
+function formatHours(hours: number): string {
+  if (hours <= 0) return 'текущий момент'
+  if (hours < 24) return `${hours} ${plural(hours, 'час', 'часа', 'часов')}`
+  const days = Math.round((hours / 24) * 10) / 10
+  const whole = Number.isInteger(days) ? days : Math.round(days)
+  return `${whole} ${plural(whole, 'день', 'дня', 'дней')}`
+}
+
+function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10
+  const m100 = n % 100
+  if (m10 === 1 && m100 !== 11) return one
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few
+  return many
+}
 
 function MassImportTab({
   channels,
@@ -590,15 +608,13 @@ function MassImportTab({
   const eligible = useMemo(() => channels.filter((c) => c.managerId), [channels])
 
   const [count, setCount] = useState(10)
-  const [windowValue, setWindowValue] = useState('24')
+  const [spreadHours, setSpreadHours] = useState(24)
   const [withMessage, setWithMessage] = useState(true)
   const [markUnread, setMarkUnread] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(eligible.map((c) => c.id)),
   )
 
-  const spreadHours =
-    TIME_WINDOWS.find((w) => w.value === windowValue)?.hours ?? 24
   const selectedIds = eligible.filter((c) => selected.has(c.id)).map((c) => c.id)
   const canGenerate = count > 0 && selectedIds.length > 0 && !pending
 
@@ -683,21 +699,36 @@ function MassImportTab({
 
         {/* Time window */}
         <div className="flex flex-col gap-2">
-          <Label>Разброс по времени</Label>
-          <Select value={windowValue} onValueChange={(v) => setWindowValue(v ?? '24')}>
-            <SelectTrigger className="w-full sm:w-72">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TIME_WINDOWS.map((w) => (
-                <SelectItem key={w.value} value={w.value}>
-                  {w.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label htmlFor="bulk-hours">Разброс по времени (часов)</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            {HOUR_PRESETS.map((h) => (
+              <Button
+                key={h.hours}
+                type="button"
+                size="sm"
+                variant={spreadHours === h.hours ? 'default' : 'outline'}
+                className="press-scale"
+                onClick={() => setSpreadHours(h.hours)}
+              >
+                {h.label}
+              </Button>
+            ))}
+            <Input
+              id="bulk-hours"
+              type="number"
+              min={0}
+              max={2160}
+              value={spreadHours}
+              onChange={(e) =>
+                setSpreadHours(Math.min(Math.max(Number(e.target.value) || 0, 0), 2160))
+              }
+              className="w-24"
+            />
+            <span className="text-xs text-muted-foreground">макс. 2160 ч (90 дней)</span>
+          </div>
           <p className="text-xs text-muted-foreground">
-            Время последнего сообщения распределится случайно в этом окне.
+            Время последнего сообщения распределится случайно за последние{' '}
+            {formatHours(spreadHours)}.
           </p>
         </div>
 
@@ -777,10 +808,7 @@ function MassImportTab({
             label="Каналов выбрано"
             value={`${selectedIds.length} из ${eligible.length}`}
           />
-          <SummaryRow
-            label="Окно времени"
-            value={TIME_WINDOWS.find((w) => w.value === windowValue)?.label ?? '—'}
-          />
+          <SummaryRow label="Окно времени" value={formatHours(spreadHours)} />
           <SummaryRow label="Сообщение" value={withMessage ? 'да' : 'нет'} />
           <SummaryRow
             label="Непрочитанные"
