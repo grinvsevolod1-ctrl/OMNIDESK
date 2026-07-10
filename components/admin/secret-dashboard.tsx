@@ -1,25 +1,82 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { toast } from 'sonner'
+import {
+  Activity,
+  Antenna,
+  ArrowUpRight,
+  Ban,
+  CheckCircle2,
+  Copy,
+  Database,
+  Globe,
+  Loader2,
+  MessageSquare,
+  MessagesSquare,
+  Pause,
+  Phone,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Send,
+  Server,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from 'lucide-react'
+import {
+  secretCreateChannelAction,
+  secretCreateConversationAction,
+  secretDeleteChannelAction,
+  secretDeleteConversationAction,
+  secretSendMessageAction,
+  secretSetChannelStatusAction,
+  secretSetConversationStatusAction,
+  secretSetManagerStatusAction,
+  secretToggleChannelIngestAction,
+  type ActionResult,
+} from '@/app/actions/admin-secret'
+import { StatusBadge, SessionBadge, StatCard, EmptyState } from '@/components/page-parts'
+import { Badge } from '@/components/ui/badge'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { cn } from '@/lib/utils'
+import type { Channel, Manager } from '@/lib/types'
+import { MessagesTrendChart, ChannelsTypeChart } from '@/components/admin/secret-charts'
 
-interface Manager {
-  id: string
-  name: string
-  email: string
-  status: string
-}
-
-interface Channel {
-  id: string
-  name: string
-  type: string
-  status: string
-  managerId: string | null
-  sessionStatus: string
-  phone: string | null
-}
-
-interface Conversation {
+export interface SecretConversation {
   id: string
   contactName: string
   contactHandle: string
@@ -27,455 +84,1117 @@ interface Conversation {
   unread: number
   status: string
   channelId: string
+  channelType: string
+  managerId: string | null
+  lastMessageAt: string
 }
 
-export function SecretDashboard() {
-  const [managers, setManagers] = useState<Manager[]>([])
-  const [channels, setChannels] = useState<Channel[]>([])
-  const [conversations, setConversations] = useState<Conversation[]>([])
-  const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'managers' | 'channels' | 'conversations' | 'messages' | 'stats'>('stats')
-  
-  const [formData, setFormData] = useState({
+export interface SecretStats {
+  managersTotal: number
+  managersActive: number
+  managersOnLunch: number
+  channelsTotal: number
+  channelsConnected: number
+  conversationsTotal: number
+  unreadTotal: number
+  messagesTotal: number
+  messages24h: number
+  channelsByType: { type: string; count: number }[]
+  conversationsByStatus: { status: string; count: number }[]
+  messages7d: { day: string; label: string; incoming: number; outgoing: number }[]
+}
+
+interface SecretSystem {
+  workerConfigured: boolean
+  workerOnline: boolean
+  dbOk: boolean
+  dbMessage: string
+  generatedAt: string
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  telegram: 'Telegram',
+  whatsapp: 'WhatsApp',
+  vk: 'VK',
+  max: 'MAX',
+  livechat: 'Онлайн-чат',
+}
+
+const TYPE_ICON: Record<string, typeof Send> = {
+  telegram: Send,
+  whatsapp: Phone,
+  vk: Users,
+  max: MessageSquare,
+  livechat: Globe,
+}
+
+const CONV_STATUS_LABEL: Record<string, string> = {
+  liquid: 'Ликвид',
+  not_liquid: 'Не ликвид',
+  unsubscribed: 'Отписка',
+  transferred: 'Передан',
+}
+
+const CONV_STATUS_STYLE: Record<string, string> = {
+  liquid: 'bg-success/15 text-success',
+  not_liquid: 'bg-warning/15 text-warning',
+  unsubscribed: 'bg-muted text-muted-foreground',
+  transferred: 'bg-chart-2/15 text-foreground',
+}
+
+/** Module-level so the React Compiler never treats it as reactive state. */
+function copyText(text: string, label = 'ID') {
+  if (typeof navigator === 'undefined' || !navigator.clipboard) {
+    toast.error('Буфер обмена недоступен')
+    return
+  }
+  navigator.clipboard
+    .writeText(text)
+    .then(() => toast.success(`${label} скопирован`))
+    .catch(() => toast.error('Не удалось скопировать'))
+}
+
+function fmtDateTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function convStatusLabel(status: string): string {
+  return CONV_STATUS_LABEL[status] ?? status
+}
+
+export function SecretDashboard({
+  managers,
+  channels,
+  conversations,
+  stats,
+  system,
+}: {
+  managers: Manager[]
+  channels: Channel[]
+  conversations: SecretConversation[]
+  stats: SecretStats
+  system: SecretSystem
+}) {
+  const router = useRouter()
+  const [pending, startTransition] = useTransition()
+  const [autoRefresh, setAutoRefresh] = useState(true)
+
+  // Live refresh: re-run the RSC every 20s so metrics/tables stay current
+  // without any client-side fetching. Pausable to avoid churn while typing.
+  useEffect(() => {
+    if (!autoRefresh) return
+    const id = setInterval(() => router.refresh(), 20_000)
+    return () => clearInterval(id)
+  }, [autoRefresh, router])
+
+  function run(action: () => Promise<ActionResult>, onDone?: () => void) {
+    startTransition(async () => {
+      try {
+        const res = await action()
+        if (res.ok) {
+          toast.success(res.message)
+          onDone?.()
+        } else {
+          toast.error(res.message)
+        }
+      } catch {
+        toast.error('Внутренняя ошибка сервера')
+      }
+      router.refresh()
+    })
+  }
+
+  const managerName = useMemo(() => {
+    const map = new Map(managers.map((m) => [m.id, m.name]))
+    return (id: string | null) => (id ? map.get(id) ?? '—' : '—')
+  }, [managers])
+
+  return (
+    <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 p-4 md:p-8">
+      <SecretHeader
+        system={system}
+        pending={pending}
+        autoRefresh={autoRefresh}
+        onToggleAuto={() => setAutoRefresh((v) => !v)}
+        onRefresh={() => router.refresh()}
+      />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="Менеджеры"
+          value={stats.managersTotal}
+          icon={Users}
+          hint={`${stats.managersActive} активны · ${stats.managersOnLunch} на обеде`}
+        />
+        <StatCard
+          label="Каналы"
+          value={stats.channelsTotal}
+          icon={Antenna}
+          hint={`${stats.channelsConnected} подключено`}
+        />
+        <StatCard
+          label="Диалоги"
+          value={stats.conversationsTotal}
+          icon={MessagesSquare}
+          hint={`${stats.unreadTotal} непрочитанных`}
+        />
+        <StatCard
+          label="Сообщения (24ч)"
+          value={stats.messages24h}
+          icon={Activity}
+          hint={`${stats.messagesTotal} всего`}
+        />
+      </div>
+
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList className="flex w-full flex-wrap justify-start gap-1">
+          <TabsTrigger value="overview">Обзор</TabsTrigger>
+          <TabsTrigger value="managers">Менеджеры</TabsTrigger>
+          <TabsTrigger value="channels">Каналы</TabsTrigger>
+          <TabsTrigger value="conversations">Диалоги</TabsTrigger>
+          <TabsTrigger value="console">Консоль</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="mt-4">
+          <OverviewTab stats={stats} />
+        </TabsContent>
+        <TabsContent value="managers" className="mt-4">
+          <ManagersTab managers={managers} pending={pending} run={run} />
+        </TabsContent>
+        <TabsContent value="channels" className="mt-4">
+          <ChannelsTab
+            channels={channels}
+            managers={managers}
+            managerName={managerName}
+            pending={pending}
+            run={run}
+          />
+        </TabsContent>
+        <TabsContent value="conversations" className="mt-4">
+          <ConversationsTab
+            conversations={conversations}
+            channels={channels}
+            pending={pending}
+            run={run}
+          />
+        </TabsContent>
+        <TabsContent value="console" className="mt-4">
+          <ConsoleTab conversations={conversations} pending={pending} run={run} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+/* ------------------------------- Header ------------------------------- */
+
+function SecretHeader({
+  system,
+  pending,
+  autoRefresh,
+  onToggleAuto,
+  onRefresh,
+}: {
+  system: SecretSystem
+  pending: boolean
+  autoRefresh: boolean
+  onToggleAuto: () => void
+  onRefresh: () => void
+}) {
+  return (
+    <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-3">
+        <div className="flex size-11 items-center justify-center rounded-xl border border-border bg-muted/40">
+          <ShieldCheck className="size-5 text-foreground" />
+        </div>
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
+            Панель супер-администратора
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Прямое управление менеджерами, каналами и диалогами
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <SystemPill
+          ok={system.dbOk}
+          icon={Database}
+          okText="База данных"
+          badText="БД недоступна"
+        />
+        <SystemPill
+          ok={system.workerOnline}
+          icon={Server}
+          okText="Воркер в сети"
+          badText={system.workerConfigured ? 'Воркер оффлайн' : 'Воркер не настроен'}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onToggleAuto}
+          className={cn('gap-1.5', autoRefresh && 'border-success/40 text-success')}
+        >
+          <Activity className="size-4" />
+          {autoRefresh ? 'Авто 20с' : 'Авто выкл'}
+        </Button>
+        <Button variant="outline" size="sm" onClick={onRefresh} disabled={pending} className="gap-1.5">
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="size-4" />
+          )}
+          Обновить
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function SystemPill({
+  ok,
+  icon: Icon,
+  okText,
+  badText,
+}: {
+  ok: boolean
+  icon: typeof Database
+  okText: string
+  badText: string
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+        ok
+          ? 'border-success/30 bg-success/10 text-success'
+          : 'border-destructive/30 bg-destructive/10 text-destructive',
+      )}
+    >
+      <Icon className="size-3.5" />
+      {ok ? okText : badText}
+    </span>
+  )
+}
+
+/* ------------------------------ Overview ------------------------------ */
+
+function OverviewTab({ stats }: { stats: SecretStats }) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Card className="p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="font-medium">Сообщения за 7 дней</h3>
+          <MessagesSquare className="size-4 text-muted-foreground" />
+        </div>
+        <MessagesTrendChart data={stats.messages7d} />
+      </Card>
+
+      <Card className="p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="font-medium">Каналы по типам</h3>
+          <Antenna className="size-4 text-muted-foreground" />
+        </div>
+        {stats.channelsByType.length ? (
+          <ChannelsTypeChart data={stats.channelsByType} />
+        ) : (
+          <p className="py-10 text-center text-sm text-muted-foreground">
+            Нет каналов
+          </p>
+        )}
+      </Card>
+
+      <Card className="p-5 lg:col-span-2">
+        <h3 className="mb-4 font-medium">Диалоги по статусам</h3>
+        {stats.conversationsByStatus.length ? (
+          <div className="flex flex-wrap gap-2">
+            {stats.conversationsByStatus.map((s) => (
+              <span
+                key={s.status}
+                className={cn(
+                  'inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium',
+                  CONV_STATUS_STYLE[s.status] ?? 'bg-muted text-muted-foreground',
+                )}
+              >
+                {convStatusLabel(s.status)}
+                <span className="tabular-nums opacity-80">{s.count}</span>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Нет диалогов</p>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+/* ------------------------------ Managers ------------------------------ */
+
+function ManagersTab({
+  managers,
+  pending,
+  run,
+}: {
+  managers: Manager[]
+  pending: boolean
+  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+}) {
+  const [q, setQ] = useState('')
+  const filtered = managers.filter(
+    (m) =>
+      m.name.toLowerCase().includes(q.toLowerCase()) ||
+      m.email.toLowerCase().includes(q.toLowerCase()),
+  )
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Поиск по имени или email"
+            className="pl-8"
+          />
+        </div>
+        <Link
+          href="/admin/managers"
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'gap-1.5')}
+        >
+          Управление менеджерами
+          <ArrowUpRight className="size-4" />
+        </Link>
+      </div>
+
+      {filtered.length ? (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Имя</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Статус</TableHead>
+                <TableHead className="text-right">Действия</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((m) => (
+                <TableRow key={m.id}>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      {m.name}
+                      {m.onLunch ? (
+                        <Badge variant="outline" className="border-warning/40 text-warning">
+                          На обеде
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{m.email}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        m.status === 'active'
+                          ? 'border-success/40 bg-success/10 text-success'
+                          : 'border-destructive/40 bg-destructive/10 text-destructive',
+                      )}
+                    >
+                      {m.status === 'active' ? 'Активен' : 'Заблокирован'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => copyText(m.id)}
+                        className="gap-1.5"
+                      >
+                        <Copy className="size-3.5" />
+                        ID
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={pending}
+                        onClick={() =>
+                          run(() =>
+                            secretSetManagerStatusAction(
+                              m.id,
+                              m.status === 'active' ? 'blocked' : 'active',
+                            ),
+                          )
+                        }
+                        className={cn(
+                          'gap-1.5',
+                          m.status === 'active' && 'text-destructive',
+                        )}
+                      >
+                        {m.status === 'active' ? (
+                          <>
+                            <Ban className="size-3.5" /> Блок
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="size-3.5" /> Разблок
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        <div className="p-6">
+          <EmptyState
+            icon={Users}
+            title="Менеджеры не найдены"
+            description="Измените запрос поиска или создайте менеджера в разделе управления."
+          />
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/* ------------------------------ Channels ------------------------------ */
+
+function ChannelsTab({
+  channels,
+  managers,
+  managerName,
+  pending,
+  run,
+}: {
+  channels: Channel[]
+  managers: Manager[]
+  managerName: (id: string | null) => string
+  pending: boolean
+  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+}) {
+  const [q, setQ] = useState('')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
+
+  const filtered = channels.filter((c) => {
+    const matchesQ =
+      c.name.toLowerCase().includes(q.toLowerCase()) ||
+      (c.detail ?? '').toLowerCase().includes(q.toLowerCase())
+    const matchesType = typeFilter === 'all' || c.type === typeFilter
+    return matchesQ && matchesType
+  })
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-1 flex-col gap-2 sm:flex-row">
+          <div className="relative w-full sm:max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Поиск канала"
+              className="pl-8"
+            />
+          </div>
+          <Select value={typeFilter} onValueChange={setTypeFilter}>
+            <SelectTrigger className="w-full sm:w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все типы</SelectItem>
+              {Object.entries(TYPE_LABEL).map(([v, l]) => (
+                <SelectItem key={v} value={v}>
+                  {l}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <CreateChannelDialog managers={managers} pending={pending} run={run} />
+      </div>
+
+      {filtered.length ? (
+        <div className="divide-y divide-border">
+          {filtered.map((ch) => {
+            const Icon = TYPE_ICON[ch.type] ?? Antenna
+            return (
+              <div
+                key={ch.id}
+                className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
+                    <Icon className="size-4 text-muted-foreground" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{ch.name}</span>
+                      <Badge variant="secondary">{TYPE_LABEL[ch.type] ?? ch.type}</Badge>
+                      <StatusBadge status={ch.status} />
+                      {ch.type === 'telegram' || ch.type === 'whatsapp' ? (
+                        <SessionBadge status={ch.sessionStatus} />
+                      ) : null}
+                      {ch.ingestPaused ? (
+                        <Badge variant="outline" className="border-warning/40 text-warning">
+                          Приём на паузе
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                      {ch.detail || '—'} · Владелец: {managerName(ch.managerId)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => copyText(ch.id)}
+                    className="gap-1.5"
+                  >
+                    <Copy className="size-3.5" /> ID
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => run(() => secretToggleChannelIngestAction(ch.id))}
+                    className="gap-1.5"
+                  >
+                    {ch.ingestPaused ? (
+                      <>
+                        <Play className="size-3.5" /> Возобновить
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="size-3.5" /> Пауза
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() =>
+                      run(() =>
+                        secretSetChannelStatusAction(
+                          ch.id,
+                          ch.status === 'connected' ? 'disconnected' : 'connected',
+                        ),
+                      )
+                    }
+                    className="gap-1.5"
+                  >
+                    <Antenna className="size-3.5" />
+                    {ch.status === 'connected' ? 'Отключить' : 'Подключить'}
+                  </Button>
+                  <ConfirmDeleteButton
+                    label="канал"
+                    name={ch.name}
+                    pending={pending}
+                    onConfirm={() => run(() => secretDeleteChannelAction(ch.id))}
+                  />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="p-6">
+          <EmptyState
+            icon={Antenna}
+            title="Каналы не найдены"
+            description="Создайте новый канал или измените фильтры."
+          />
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function CreateChannelDialog({
+  managers,
+  pending,
+  run,
+}: {
+  managers: Manager[]
+  pending: boolean
+  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({
     name: '',
-    type: 'whatsapp',
+    type: 'telegram',
     managerId: '',
     phone: '',
     token: '',
-    groupId: ''
+    groupId: '',
   })
 
-  const [dialogData, setDialogData] = useState({
+  return (
+    <>
+      <Button size="sm" className="gap-1.5" onClick={() => setOpen(true)}>
+        <Plus className="size-4" /> Новый канал
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Создать канал</DialogTitle>
+          <DialogDescription>
+            Ручное создание записи канала. Для реального подключения Telegram/WhatsApp
+            используйте мастер в разделе «Аккаунты».
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label>Название</Label>
+            <Input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Напр. Основной Telegram"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <Label>Тип</Label>
+              <Select
+                value={form.type}
+                onValueChange={(v) => setForm({ ...form, type: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(TYPE_LABEL).map(([v, l]) => (
+                    <SelectItem key={v} value={v}>
+                      {l}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <Label>Владелец</Label>
+              <Select
+                value={form.managerId}
+                onValueChange={(v) => setForm({ ...form, managerId: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Менеджер" />
+                </SelectTrigger>
+                <SelectContent>
+                  {managers.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Телефон / деталь</Label>
+            <Input
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              placeholder="Необязательно"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            disabled={pending}
+            onClick={() =>
+              run(
+                () => secretCreateChannelAction(form),
+                () => {
+                  setOpen(false)
+                  setForm({
+                    name: '',
+                    type: 'telegram',
+                    managerId: '',
+                    phone: '',
+                    token: '',
+                    groupId: '',
+                  })
+                },
+              )
+            }
+            className="gap-1.5"
+          >
+            {pending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+            Создать
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+/* ---------------------------- Conversations --------------------------- */
+
+function ConversationsTab({
+  conversations,
+  channels,
+  pending,
+  run,
+}: {
+  conversations: SecretConversation[]
+  channels: Channel[]
+  pending: boolean
+  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+}) {
+  const [q, setQ] = useState('')
+  const filtered = conversations.filter(
+    (c) =>
+      c.contactName.toLowerCase().includes(q.toLowerCase()) ||
+      c.contactHandle.toLowerCase().includes(q.toLowerCase()) ||
+      c.lastMessage.toLowerCase().includes(q.toLowerCase()),
+  )
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Поиск по контакту или тексту"
+            className="pl-8"
+          />
+        </div>
+        <CreateConversationDialog channels={channels} pending={pending} run={run} />
+      </div>
+
+      {filtered.length ? (
+        <div className="divide-y divide-border">
+          {filtered.map((conv) => (
+            <div
+              key={conv.id}
+              className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{conv.contactName}</span>
+                  <span className="text-sm text-muted-foreground">{conv.contactHandle}</span>
+                  <Badge variant="secondary">{TYPE_LABEL[conv.channelType] ?? conv.channelType}</Badge>
+                  <span
+                    className={cn(
+                      'rounded-md px-2 py-0.5 text-xs font-medium',
+                      CONV_STATUS_STYLE[conv.status] ?? 'bg-muted text-muted-foreground',
+                    )}
+                  >
+                    {convStatusLabel(conv.status)}
+                  </span>
+                  {conv.unread > 0 ? (
+                    <Badge className="bg-primary text-primary-foreground">
+                      {conv.unread} новых
+                    </Badge>
+                  ) : null}
+                </div>
+                <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                  {conv.lastMessage || '—'} · {fmtDateTime(conv.lastMessageAt)}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Select
+                  value={conv.status}
+                  onValueChange={(v) =>
+                    run(() => secretSetConversationStatusAction(conv.id, v))
+                  }
+                >
+                  <SelectTrigger className="h-8 w-36">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(CONV_STATUS_LABEL).map(([v, l]) => (
+                      <SelectItem key={v} value={v}>
+                        {l}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => copyText(conv.id)}
+                  className="gap-1.5"
+                >
+                  <Copy className="size-3.5" /> ID
+                </Button>
+                <ConfirmDeleteButton
+                  label="диалог"
+                  name={conv.contactName}
+                  pending={pending}
+                  onConfirm={() => run(() => secretDeleteConversationAction(conv.id))}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="p-6">
+          <EmptyState
+            icon={MessagesSquare}
+            title="Диалоги не найдены"
+            description="Создайте новый диалог или измените запрос."
+          />
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function CreateConversationDialog({
+  channels,
+  pending,
+  run,
+}: {
+  channels: Channel[]
+  pending: boolean
+  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({
     channelId: '',
     contactName: '',
     contactHandle: '',
-    message: ''
+    message: '',
   })
-
-  const [messageData, setMessageData] = useState({
-    conversationId: '',
-    body: '',
-    direction: 'out'
-  })
-
-  useEffect(() => {
-    loadData()
-  }, [])
-
-  const loadData = async () => {
-    setLoading(true)
-    try {
-      const [managersRes, channelsRes, convRes] = await Promise.all([
-        fetch('/api/wijegniwjgwjog/managers'),
-        fetch('/api/wijegniwjgwjog/channels'),
-        fetch('/api/wijegniwjgwjog/conversations')
-      ])
-      
-      const managersData = await managersRes.json()
-      const channelsData = await channelsRes.json()
-      const convData = await convRes.json()
-      
-      setManagers(managersData)
-      setChannels(channelsData)
-      setConversations(convData)
-    } catch (error) {
-      console.error('Error loading data:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
-    alert('✅ Скопировано!')
-  }
-
-  const createChannel = async (e: React.FormEvent) => {
-    e.preventDefault()
-    try {
-      const res = await fetch('/api/wijegniwjgwjog/create-channel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-      })
-      if (res.ok) {
-        alert('✅ Канал создан!')
-        loadData()
-        setFormData({ name: '', type: 'whatsapp', managerId: '', phone: '', token: '', groupId: '' })
-      } else {
-        const error = await res.json()
-        alert('❌ Ошибка: ' + error.message)
-      }
-    } catch (error) {
-      alert('❌ Ошибка при создании канала')
-    }
-  }
-
-  const createConversation = async (e: React.FormEvent) => {
-    e.preventDefault()
-    try {
-      const res = await fetch('/api/wijegniwjgwjog/create-conversation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(dialogData)
-      })
-      if (res.ok) {
-        alert('✅ Диалог создан!')
-        loadData()
-        setDialogData({ channelId: '', contactName: '', contactHandle: '', message: '' })
-      } else {
-        const error = await res.json()
-        alert('❌ Ошибка: ' + error.message)
-      }
-    } catch (error) {
-      alert('❌ Ошибка при создании диалога')
-    }
-  }
-
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault()
-    try {
-      const res = await fetch('/api/wijegniwjgwjog/send-message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(messageData)
-      })
-      if (res.ok) {
-        alert('✅ Сообщение отправлено!')
-        loadData()
-        setMessageData({ conversationId: '', body: '', direction: 'out' })
-      } else {
-        const error = await res.json()
-        alert('❌ Ошибка: ' + error.message)
-      }
-    } catch (error) {
-      alert('❌ Ошибка при отправке')
-    }
-  }
-
-  if (loading) return <div className="p-6 text-center text-lg">⏳ Загрузка...</div>
-
-  const stats = {
-    totalManagers: managers.length,
-    totalChannels: channels.length,
-    totalConversations: conversations.length,
-    unread: conversations.reduce((sum, c) => sum + (c.unread || 0), 0)
-  }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto bg-white min-h-screen">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800">🔒 Секретная панель</h1>
-        <span className="text-sm text-gray-500">v2.0 • {new Date().toLocaleString()}</span>
-      </div>
-
-      {/* Статистика */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-blue-50 p-4 rounded-xl border border-blue-200">
-          <div className="text-sm text-blue-600">Менеджеры</div>
-          <div className="text-2xl font-bold text-blue-800">{stats.totalManagers}</div>
-        </div>
-        <div className="bg-green-50 p-4 rounded-xl border border-green-200">
-          <div className="text-sm text-green-600">Каналы</div>
-          <div className="text-2xl font-bold text-green-800">{stats.totalChannels}</div>
-        </div>
-        <div className="bg-purple-50 p-4 rounded-xl border border-purple-200">
-          <div className="text-sm text-purple-600">Диалоги</div>
-          <div className="text-2xl font-bold text-purple-800">{stats.totalConversations}</div>
-        </div>
-        <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
-          <div className="text-sm text-yellow-600">Непрочитано</div>
-          <div className="text-2xl font-bold text-yellow-800">{stats.unread}</div>
-        </div>
-      </div>
-
-      {/* Табы */}
-      <div className="flex gap-2 mb-4 flex-wrap">
-        {[
-          { id: 'stats', label: '📊 Статистика' },
-          { id: 'managers', label: '👤 Менеджеры' },
-          { id: 'channels', label: '📡 Каналы' },
-          { id: 'conversations', label: '💬 Диалоги' },
-          { id: 'messages', label: '✉️ Сообщения' }
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
-            className={`px-4 py-2 rounded-lg transition ${
-              activeTab === tab.id 
-                ? 'bg-blue-600 text-white' 
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Контент */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        {activeTab === 'stats' && (
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <h3 className="font-semibold text-gray-700 mb-3">📊 Общая статистика</h3>
-              <div className="space-y-2 text-gray-600">
-                <div>👤 Менеджеры: <span className="font-bold text-gray-800">{stats.totalManagers}</span></div>
-                <div>📡 Каналы: <span className="font-bold text-gray-800">{stats.totalChannels}</span></div>
-                <div>💬 Диалоги: <span className="font-bold text-gray-800">{stats.totalConversations}</span></div>
-                <div>📨 Непрочитано: <span className="font-bold text-yellow-600">{stats.unread}</span></div>
-              </div>
-            </div>
-            <div>
-              <h3 className="font-semibold text-gray-700 mb-3">📡 Каналы по типам</h3>
-              <div className="space-y-1 text-gray-600">
-                {Object.entries(
-                  channels.reduce((acc, ch) => {
-                    acc[ch.type] = (acc[ch.type] || 0) + 1
-                    return acc
-                  }, {} as Record<string, number>)
-                ).map(([type, count]) => (
-                  <div key={type}><span className="font-medium">{type}:</span> <span className="font-bold text-gray-800">{count}</span></div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'managers' && (
-          <div>
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-semibold text-gray-700">👤 Менеджеры</h3>
-              <button 
-                onClick={() => window.location.href = '/admin/managers'}
-                className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-              >
-                Управление →
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-500 border-b border-gray-200">
-                    <th className="pb-2">Имя</th>
-                    <th className="pb-2">Email</th>
-                    <th className="pb-2">Статус</th>
-                    <th className="pb-2">UUID</th>
-                    <th className="pb-2">Действие</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {managers.map((m) => (
-                    <tr key={m.id} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="py-2 font-medium text-gray-800">{m.name}</td>
-                      <td className="py-2 text-gray-600">{m.email}</td>
-                      <td className="py-2">
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                        }`}>
-                          {m.status}
-                        </span>
-                      </td>
-                      <td className="py-2 text-xs font-mono text-gray-500">{m.id}</td>
-                      <td className="py-2">
-                        <button 
-                          onClick={() => copyToClipboard(m.id)}
-                          className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
-                        >
-                          📋 Копировать
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'channels' && (
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <h3 className="font-semibold text-gray-700 mb-3">📡 Создать канал</h3>
-              <form onSubmit={createChannel} className="space-y-3">
-                <input
-                  type="text"
-                  placeholder="Название"
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                  value={formData.name}
-                  onChange={(e) => setFormData({...formData, name: e.target.value})}
-                  required
-                />
-                <select
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                  value={formData.type}
-                  onChange={(e) => setFormData({...formData, type: e.target.value})}
-                >
-                  <option value="whatsapp">WhatsApp</option>
-                  <option value="vk">VK</option>
-                  <option value="telegram">Telegram</option>
-                  <option value="max">MAX</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="ID менеджера (необязательно)"
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                  value={formData.managerId}
-                  onChange={(e) => setFormData({...formData, managerId: e.target.value})}
-                />
-                <input
-                  type="text"
-                  placeholder="Номер телефона"
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({...formData, phone: e.target.value})}
-                />
-                <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
-                  🚀 Создать канал
-                </button>
-              </form>
-            </div>
-            <div>
-              <h3 className="font-semibold text-gray-700 mb-3">📡 Все каналы</h3>
-              <div className="max-h-96 overflow-y-auto space-y-2">
+    <>
+      <Button size="sm" className="gap-1.5" onClick={() => setOpen(true)}>
+        <Plus className="size-4" /> Новый диалог
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Создать диалог</DialogTitle>
+          <DialogDescription>
+            Диалог привязывается к каналу и его владельцу.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label>Канал</Label>
+            <Select
+              value={form.channelId}
+              onValueChange={(v) => setForm({ ...form, channelId: v })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Выберите канал" />
+              </SelectTrigger>
+              <SelectContent>
                 {channels.map((ch) => (
-                  <div key={ch.id} className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <span className="font-medium text-gray-800">{ch.name}</span>
-                        <span className="text-xs text-gray-500 ml-2">({ch.type})</span>
-                        <span className={`text-xs ml-2 px-2 py-0.5 rounded ${
-                          ch.status === 'connected' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-                        }`}>
-                          {ch.status}
-                        </span>
-                      </div>
-                      <button 
-                        onClick={() => copyToClipboard(ch.id)}
-                        className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300"
-                      >
-                        📋
-                      </button>
-                    </div>
-                    {ch.phone && <div className="text-xs text-gray-500 mt-1">📱 {ch.phone}</div>}
-                  </div>
+                  <SelectItem key={ch.id} value={ch.id}>
+                    {ch.name} · {TYPE_LABEL[ch.type] ?? ch.type}
+                  </SelectItem>
                 ))}
-              </div>
-            </div>
+              </SelectContent>
+            </Select>
           </div>
-        )}
-
-        {activeTab === 'conversations' && (
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <h3 className="font-semibold text-gray-700 mb-3">💬 Создать диалог</h3>
-              <form onSubmit={createConversation} className="space-y-3">
-                <select
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                  value={dialogData.channelId}
-                  onChange={(e) => setDialogData({...dialogData, channelId: e.target.value})}
-                  required
-                >
-                  <option value="">Выберите канал</option>
-                  {channels.map((ch) => (
-                    <option key={ch.id} value={ch.id}>{ch.name} ({ch.type})</option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  placeholder="Имя контакта"
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                  value={dialogData.contactName}
-                  onChange={(e) => setDialogData({...dialogData, contactName: e.target.value})}
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Handle контакта"
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                  value={dialogData.contactHandle}
-                  onChange={(e) => setDialogData({...dialogData, contactHandle: e.target.value})}
-                  required
-                />
-                <textarea
-                  placeholder="Первое сообщение"
-                  className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none h-20 resize-none"
-                  value={dialogData.message}
-                  onChange={(e) => setDialogData({...dialogData, message: e.target.value})}
-                />
-                <button type="submit" className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700">
-                  💬 Создать диалог
-                </button>
-              </form>
-            </div>
-            <div>
-              <h3 className="font-semibold text-gray-700 mb-3">💬 Все диалоги</h3>
-              <div className="max-h-96 overflow-y-auto space-y-2">
-                {conversations.map((conv) => (
-                  <div key={conv.id} className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <span className="font-medium text-gray-800">{conv.contactName}</span>
-                        <span className="text-xs text-gray-500 ml-2">{conv.contactHandle}</span>
-                        {conv.unread > 0 && (
-                          <span className="text-xs bg-yellow-500 text-white px-2 py-0.5 rounded ml-2">
-                            {conv.unread} 📨
-                          </span>
-                        )}
-                      </div>
-                      <button 
-                        onClick={() => copyToClipboard(conv.id)}
-                        className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300"
-                      >
-                        📋
-                      </button>
-                    </div>
-                    <div className="text-sm text-gray-600 truncate mt-1">{conv.lastMessage}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'messages' && (
-          <div className="max-w-2xl mx-auto">
-            <h3 className="font-semibold text-gray-700 mb-3">✉️ Отправить сообщение</h3>
-            <form onSubmit={sendMessage} className="space-y-3">
-              <select
-                className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                value={messageData.conversationId}
-                onChange={(e) => setMessageData({...messageData, conversationId: e.target.value})}
-                required
-              >
-                <option value="">Выберите диалог</option>
-                {conversations.map((conv) => (
-                  <option key={conv.id} value={conv.id}>
-                    {conv.contactName} ({conv.contactHandle})
-                  </option>
-                ))}
-              </select>
-              <select
-                className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none"
-                value={messageData.direction}
-                onChange={(e) => setMessageData({...messageData, direction: e.target.value})}
-              >
-                <option value="out">📤 От менеджера</option>
-                <option value="in">📥 От клиента</option>
-              </select>
-              <textarea
-                placeholder="Текст сообщения"
-                className="w-full border border-gray-300 rounded px-3 py-2 text-gray-700 focus:border-blue-500 focus:outline-none h-24 resize-none"
-                value={messageData.body}
-                onChange={(e) => setMessageData({...messageData, body: e.target.value})}
-                required
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <Label>Имя контакта</Label>
+              <Input
+                value={form.contactName}
+                onChange={(e) => setForm({ ...form, contactName: e.target.value })}
               />
-              <button type="submit" className="w-full bg-purple-600 text-white py-2 rounded hover:bg-purple-700">
-                ✉️ Отправить
-              </button>
-            </form>
+            </div>
+            <div className="grid gap-1.5">
+              <Label>Хэндл</Label>
+              <Input
+                value={form.contactHandle}
+                onChange={(e) => setForm({ ...form, contactHandle: e.target.value })}
+                placeholder="@user / +7…"
+              />
+            </div>
           </div>
-        )}
+          <div className="grid gap-1.5">
+            <Label>Первое сообщение</Label>
+            <Textarea
+              value={form.message}
+              onChange={(e) => setForm({ ...form, message: e.target.value })}
+              placeholder="Необязательно"
+              className="resize-none"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            disabled={pending}
+            onClick={() =>
+              run(
+                () => secretCreateConversationAction(form),
+                () => {
+                  setOpen(false)
+                  setForm({ channelId: '', contactName: '', contactHandle: '', message: '' })
+                },
+              )
+            }
+            className="gap-1.5"
+          >
+            {pending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+            Создать
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+/* ------------------------------- Console ------------------------------ */
+
+function ConsoleTab({
+  conversations,
+  pending,
+  run,
+}: {
+  conversations: SecretConversation[]
+  pending: boolean
+  run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+}) {
+  const [form, setForm] = useState({
+    conversationId: '',
+    body: '',
+    direction: 'out',
+  })
+
+  return (
+    <Card className="mx-auto max-w-2xl p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <MessageSquare className="size-4 text-muted-foreground" />
+        <h3 className="font-medium">Вставка сообщения в диалог</h3>
       </div>
-    </div>
+      <div className="grid gap-3">
+        <div className="grid gap-1.5">
+          <Label>Диалог</Label>
+          <Select
+            value={form.conversationId}
+            onValueChange={(v) => setForm({ ...form, conversationId: v })}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Выберите диалог" />
+            </SelectTrigger>
+            <SelectContent>
+              {conversations.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.contactName} · {c.contactHandle}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1.5">
+          <Label>Направление</Label>
+          <Select
+            value={form.direction}
+            onValueChange={(v) => setForm({ ...form, direction: v })}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="out">Исходящее (от менеджера)</SelectItem>
+              <SelectItem value="in">Входящее (от клиента)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1.5">
+          <Label>Текст</Label>
+          <Textarea
+            value={form.body}
+            onChange={(e) => setForm({ ...form, body: e.target.value })}
+            placeholder="Текст сообщения"
+            className="min-h-24 resize-none"
+          />
+        </div>
+        <Button
+          disabled={pending}
+          onClick={() =>
+            run(
+              () => secretSendMessageAction(form),
+              () => setForm({ ...form, body: '' }),
+            )
+          }
+          className="gap-1.5"
+        >
+          {pending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+          Добавить сообщение
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+/* ------------------------------ Shared UI ----------------------------- */
+
+function ConfirmDeleteButton({
+  label,
+  name,
+  pending,
+  onConfirm,
+}: {
+  label: string
+  name: string
+  pending: boolean
+  onConfirm: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="gap-1.5 text-destructive"
+        onClick={() => setOpen(true)}
+      >
+        <Trash2 className="size-3.5" /> Удалить
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Удалить {label}?</DialogTitle>
+          <DialogDescription>
+            «{name}» будет удалён безвозвратно вместе со связанными данными.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            Отмена
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={pending}
+            onClick={() => {
+              onConfirm()
+              setOpen(false)
+            }}
+            className="gap-1.5"
+          >
+            {pending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+            Удалить
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      </Dialog>
+    </>
   )
 }
