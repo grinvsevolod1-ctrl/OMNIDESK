@@ -9,9 +9,9 @@ import {
   Loader2,
   MessageSquare,
   Plus,
-  Video,
   VideoOff,
 } from 'lucide-react'
+import { TelemostIcon } from '@/components/channel-icons'
 import { toast } from 'sonner'
 import {
   createStandaloneMeetingAction,
@@ -123,7 +123,7 @@ export function MeetingsView({ meetings, telemostEnabled }: MeetingsViewProps) {
       {telemostEnabled && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <StatCard
-            icon={Video}
+            icon={TelemostIcon}
             label="Всего встреч"
             value={localMeetings.length}
           />
@@ -148,7 +148,7 @@ export function MeetingsView({ meetings, telemostEnabled }: MeetingsViewProps) {
       {localMeetings.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-            <Video className="size-10 text-muted-foreground/50" />
+            <TelemostIcon className="size-10 opacity-60" />
             <div className="space-y-1">
               <p className="font-medium">Встреч ещё нет</p>
               <p className="text-sm text-muted-foreground">

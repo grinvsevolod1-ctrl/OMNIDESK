@@ -7,8 +7,8 @@ import {
   Loader2,
   Trash2,
   TriangleAlert,
-  Video,
 } from 'lucide-react'
+import { TelemostIcon } from '@/components/channel-icons'
 import { toast } from 'sonner'
 import {
   checkTelemostTokenAction,
@@ -230,9 +230,9 @@ export function TelemostAdmin({ status }: { status: TelemostAdminStatus }) {
       </Card>
 
       <Card className="flex flex-col gap-3 p-5">
-        <div className="flex items-center gap-2">
-          <Video className="size-4 text-muted-foreground" />
-          <h2 className="font-medium">Как это работает</h2>
+          <div className="flex items-center gap-2">
+            <TelemostIcon className="size-4" />
+            <h2 className="font-medium">Как это работает</h2>
         </div>
         <div className="space-y-2 text-sm text-muted-foreground">
           <p>

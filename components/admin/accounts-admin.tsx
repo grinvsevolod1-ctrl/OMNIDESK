@@ -4,16 +4,13 @@ import Link from 'next/link'
 import { useMemo, useRef, useState, useTransition } from 'react'
 import {
   Loader2,
-  MessageSquare,
-  Phone,
   Plus,
   RefreshCw,
-  Send,
   Server,
   ShieldAlert,
   Trash2,
-  Users,
 } from 'lucide-react'
+import { channelIcon } from '@/components/channel-icons'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -54,10 +51,10 @@ import type { AdminChannel } from '@/lib/data'
 type CreatableType = 'telegram' | 'vk' | 'max'
 
 const TYPE_ICON = {
-  telegram: Send,
-  whatsapp: Phone,
-  vk: Users,
-  max: MessageSquare,
+  telegram: channelIcon('telegram'),
+  whatsapp: channelIcon('whatsapp'),
+  vk: channelIcon('vk'),
+  max: channelIcon('max'),
 } as const
 
 const SESSION_LABEL: Record<string, string> = {

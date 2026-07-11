@@ -220,7 +220,11 @@ export function channelIcon(type: ChannelType): BrandIconComponent {
   return CHANNEL_ICONS[type] ?? LivechatIcon
 }
 
-/** Render the brand icon for a channel type directly. */
+/**
+ * Render the brand icon for a channel type directly. Uses a switch (rather than
+ * a lookup assigned to a capitalised variable) so it never trips the
+ * "component created during render" lint rule.
+ */
 export function ChannelIcon({
   type,
   className,
@@ -228,6 +232,17 @@ export function ChannelIcon({
   type: ChannelType
   className?: string
 }) {
-  const Icon = channelIcon(type)
-  return <Icon className={className} />
+  switch (type) {
+    case 'telegram':
+      return <TelegramIcon className={className} />
+    case 'whatsapp':
+      return <WhatsappIcon className={className} />
+    case 'vk':
+      return <VkIcon className={className} />
+    case 'max':
+      return <MaxIcon className={className} />
+    case 'livechat':
+    default:
+      return <LivechatIcon className={className} />
+  }
 }

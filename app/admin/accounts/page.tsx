@@ -1,16 +1,10 @@
 import Link from 'next/link'
-import type { LucideIcon } from 'lucide-react'
+import type { ComponentType } from 'react'
+import { ArrowRight, MessageSquare, Server, Wifi } from 'lucide-react'
 import {
-  ArrowRight,
-  MessageCircle,
-  MessageSquare,
-  Phone,
-  Send,
-  Server,
-  Users,
-  Video,
-  Wifi,
-} from 'lucide-react'
+  channelIcon,
+  TelemostIcon,
+} from '@/components/channel-icons'
 import { PageHeader, StatCard } from '@/components/page-parts'
 import { AccountsTable } from '@/components/admin/accounts-admin'
 import { Button } from '@/components/ui/button'
@@ -27,7 +21,7 @@ import { cn } from '@/lib/utils'
 interface SourceMeta {
   label: string
   href: string
-  icon: LucideIcon
+  icon: ComponentType<{ className?: string }>
   accent: string
   /** Channel type used to count accounts. Telemost has no channel rows. */
   type?: ChannelType
@@ -37,14 +31,14 @@ const SOURCES: SourceMeta[] = [
   {
     label: 'Telegram',
     href: '/admin/accounts/telegram',
-    icon: Send,
+    icon: channelIcon('telegram'),
     accent: 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400',
     type: 'telegram',
   },
   {
     label: 'WhatsApp',
     href: '/admin/whatsapp',
-    icon: Phone,
+    icon: channelIcon('whatsapp'),
     accent:
       'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
     type: 'whatsapp',
@@ -52,14 +46,14 @@ const SOURCES: SourceMeta[] = [
   {
     label: 'VK',
     href: '/admin/accounts/vk',
-    icon: Users,
+    icon: channelIcon('vk'),
     accent: 'border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400',
     type: 'vk',
   },
   {
     label: 'MAX',
     href: '/admin/accounts/max',
-    icon: MessageSquare,
+    icon: channelIcon('max'),
     accent:
       'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
     type: 'max',
@@ -67,7 +61,7 @@ const SOURCES: SourceMeta[] = [
   {
     label: 'Онлайн-чат',
     href: '/admin/livechat',
-    icon: MessageCircle,
+    icon: channelIcon('livechat'),
     accent:
       'border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400',
     type: 'livechat',
@@ -75,7 +69,7 @@ const SOURCES: SourceMeta[] = [
   {
     label: 'Телемост',
     href: '/admin/telemost',
-    icon: Video,
+    icon: TelemostIcon,
     accent:
       'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400',
   },

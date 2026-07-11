@@ -2,17 +2,8 @@
 
 import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import {
-  Check,
-  Layers,
-  Loader2,
-  MessageCircle,
-  Phone,
-  Plus,
-  Send,
-  Trash2,
-  Users,
-} from 'lucide-react'
+import { Check, Layers, Loader2, Plus, Trash2, Users } from 'lucide-react'
+import { channelIcon } from '@/components/channel-icons'
 import { toast } from 'sonner'
 import {
   createSourceGroupAction,
@@ -313,22 +304,22 @@ function Report({ analytics }: { analytics: GroupAnalytics }) {
           hint={`${analytics.totalMessages} сообщений`}
         />
         <StatCard
-          label="Telegram"
-          value={analytics.byType.telegram.people}
-          icon={Send}
-          hint={`${analytics.byType.telegram.messages} сообщений`}
+            label="Telegram"
+            value={analytics.byType.telegram.people}
+            icon={channelIcon('telegram')}
+            hint={`${analytics.byType.telegram.messages} сообщений`}
         />
         <StatCard
-          label="WhatsApp"
-          value={analytics.byType.whatsapp.people}
-          icon={Phone}
-          hint={`${analytics.byType.whatsapp.messages} сообщений`}
+            label="WhatsApp"
+            value={analytics.byType.whatsapp.people}
+            icon={channelIcon('whatsapp')}
+            hint={`${analytics.byType.whatsapp.messages} сообщений`}
         />
         <StatCard
-          label="Онлайн-чат"
-          value={analytics.byType.livechat.people}
-          icon={MessageCircle}
-          hint={`${analytics.byType.livechat.messages} сообщений`}
+            label="Онлайн-чат"
+            value={analytics.byType.livechat.people}
+            icon={channelIcon('livechat')}
+            hint={`${analytics.byType.livechat.messages} сообщений`}
         />
       </div>
 

@@ -14,15 +14,12 @@ import {
   Database,
   Globe,
   Loader2,
-  MessageSquare,
   MessagesSquare,
   Pause,
-  Phone,
   Play,
   Plus,
   RefreshCw,
   Search,
-  Send,
   Server,
   ShieldCheck,
   Target,
@@ -34,6 +31,7 @@ import {
   Users,
   Zap,
 } from 'lucide-react'
+import { channelIcon, type BrandIconComponent } from '@/components/channel-icons'
 import {
   secretBulkCreateConversationsAction,
   secretCreateChannelAction,
@@ -116,12 +114,12 @@ const TYPE_LABEL: Record<string, string> = {
   livechat: 'Онлайн-чат',
 }
 
-const TYPE_ICON: Record<string, typeof Send> = {
-  telegram: Send,
-  whatsapp: Phone,
-  vk: Users,
-  max: MessageSquare,
-  livechat: Globe,
+const TYPE_ICON: Record<string, BrandIconComponent> = {
+  telegram: channelIcon('telegram'),
+  whatsapp: channelIcon('whatsapp'),
+  vk: channelIcon('vk'),
+  max: channelIcon('max'),
+  livechat: channelIcon('livechat'),
 }
 
 const CONV_STATUS_LABEL: Record<string, string> = {
@@ -798,7 +796,6 @@ function MassImportTab({
           </div>
           <div className="flex flex-wrap gap-2">
             {eligible.map((c) => {
-              const Icon = TYPE_ICON[c.type] ?? Globe
               const on = selected.has(c.id)
               return (
                 <button
@@ -812,7 +809,7 @@ function MassImportTab({
                       : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',
                   )}
                 >
-                  <Icon className="size-3.5" />
+                  <ChannelIcon type={c.type} className="size-3.5" />
                   {c.name}
                 </button>
               )

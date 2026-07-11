@@ -8,7 +8,7 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react'
-import { channelIcon } from '@/components/channel-icons'
+import { ChannelIcon } from '@/components/channel-icons'
 import { toast } from 'sonner'
 import {
   getChannelStatusAction,
@@ -44,7 +44,6 @@ export function ChannelCard({ channel }: { channel: Channel }) {
   const [lastError, setLastError] = useState(channel.lastError)
   const [autoReconnecting, setAutoReconnecting] = useState(false)
   const attemptsRef = useRef(0)
-  const Icon = channelIcon(channel.type)
 
   // Only Telegram is a socket-backed "personal" account that can drop and needs
   // reconnecting via the worker. WhatsApp (Cloud API), VK and MAX are all
@@ -117,7 +116,7 @@ export function ChannelCard({ channel }: { channel: Channel }) {
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
-            <Icon className="size-5" />
+            <ChannelIcon type={channel.type} className="size-5" />
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-medium">{channel.name}</p>

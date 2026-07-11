@@ -1,9 +1,14 @@
-import type { ReactNode } from 'react'
-import type { LucideIcon } from 'lucide-react'
+import type { ComponentType, ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import type { ChannelStatus, SessionStatus } from '@/lib/types'
+
+/**
+ * Any icon that accepts a `className` — covers both lucide-react glyphs and our
+ * own brand icon components (see `components/channel-icons`).
+ */
+type IconComponent = ComponentType<{ className?: string }>
 
 export function PageHeader({
   title,
@@ -37,7 +42,7 @@ export function StatCard({
 }: {
   label: string
   value: ReactNode
-  icon: LucideIcon
+  icon: IconComponent
   hint?: string
 }) {
   return (
@@ -135,7 +140,7 @@ export function EmptyState({
   description,
   action,
 }: {
-  icon: LucideIcon
+  icon: IconComponent
   title: string
   description: string
   action?: ReactNode

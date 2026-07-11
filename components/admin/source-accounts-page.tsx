@@ -1,5 +1,5 @@
-import type { LucideIcon } from 'lucide-react'
-import { MessageSquare, Send, Users } from 'lucide-react'
+import type { ComponentType } from 'react'
+import { channelIcon } from '@/components/channel-icons'
 import { PageHeader } from '@/components/page-parts'
 import { AccountsAdmin } from '@/components/admin/accounts-admin'
 import { Card } from '@/components/ui/card'
@@ -13,7 +13,7 @@ type Source = 'telegram' | 'vk' | 'max'
 interface SourceMeta {
   title: string
   description: string
-  icon: LucideIcon
+  icon: ComponentType<{ className?: string }>
   /** Tailwind classes for the brand accent (icon tile). */
   accent: string
   /** Telegram needs the worker online; token-based sources don't. */
@@ -26,7 +26,7 @@ const META: Record<Source, SourceMeta> = {
     title: 'Telegram',
     description:
       'Подключение личных аккаунтов Telegram по номеру телефона через MTProto. Для входа нужен запущенный процесс воркера на VPS.',
-    icon: Send,
+    icon: channelIcon('telegram'),
     accent: 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400',
     needsWorker: true,
     steps: [
@@ -39,7 +39,7 @@ const META: Record<Source, SourceMeta> = {
     title: 'VK',
     description:
       'Подключение сообществ VK через ключ доступа с правами на сообщения. Воркер не требуется — сообщения идут по Long Poll API.',
-    icon: Users,
+    icon: channelIcon('vk'),
     accent: 'border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400',
     needsWorker: false,
     steps: [
@@ -52,7 +52,7 @@ const META: Record<Source, SourceMeta> = {
     title: 'MAX',
     description:
       'Подключение ботов мессенджера MAX по токену из @MasterBot. Воркер не требуется.',
-    icon: MessageSquare,
+    icon: channelIcon('max'),
     accent: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
     needsWorker: false,
     steps: [
