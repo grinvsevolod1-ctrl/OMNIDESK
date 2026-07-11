@@ -130,7 +130,13 @@ async function maybeSpawn(
   const active = await countActiveThreads()
   if (active >= maxThreads) return
 
-  const nextDelay = randInt(cadence.spawnMinSec, cadence.spawnMaxSec)
+  let nextDelay = randInt(cadence.spawnMinSec, cadence.spawnMaxSec)
+  // Real traffic isn't metronomic: now and then nobody writes for a while.
+  // ~15% of the time stretch the next gap 2–4x to fake a quiet stretch, and a
+  // rare ~5% "burst" shrinks it so a couple of people show up close together.
+  if (chance(0.15)) nextDelay = Math.round(nextDelay * randInt(2, 4))
+  else if (chance(0.05)) nextDelay = Math.max(15, Math.round(nextDelay * 0.3))
+
   // Atomically claim the spawn slot; only the winner proceeds.
   const won = await claimSpawnSlot(nextDelay)
   if (!won) return

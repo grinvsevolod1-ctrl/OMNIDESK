@@ -44,6 +44,40 @@ function aggressionLabel(v: number): string {
   return 'Токсичный'
 }
 
+/**
+ * Convert a "conversations per hour" target into jittered second bounds. The
+ * window is deliberately wide (0.5×–1.6× the average gap) so spawns land at
+ * irregular, human-looking intervals instead of on a fixed clock. The average
+ * of that window stays close to the requested rate.
+ */
+function perHourToRange(rate: number): { min: number; max: number } {
+  const r = Math.min(Math.max(rate, 1), 60)
+  const avg = 3600 / r
+  return { min: Math.round(avg * 0.5), max: Math.round(avg * 1.6) }
+}
+
+/** Inverse of perHourToRange — recover the approximate per-hour rate. */
+function rangeToPerHour(minSec: number, maxSec: number): number {
+  const avg = (minSec + maxSec) / 2
+  if (avg <= 0) return 10
+  return Math.min(Math.max(Math.round(3600 / avg), 1), 60)
+}
+
+/** Human-friendly seconds → "45с" / "3м" / "2м 30с". */
+function humanSecs(total: number): string {
+  const s = Math.max(0, Math.round(total))
+  if (s < 60) return `${s}с`
+  const m = Math.floor(s / 60)
+  const rem = s % 60
+  return rem === 0 ? `${m}м` : `${m}м ${rem}с`
+}
+
+/** Sub-label under the rate slider explaining the real-world cadence. */
+function perHourHint(rate: number): string {
+  const avgGap = Math.round(3600 / Math.min(Math.max(rate, 1), 60))
+  return `≈ 1 диалог в ${humanSecs(avgGap)}, вразнобой`
+}
+
 export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   const eligible = channels.filter((c) => c.managerId)
 
@@ -54,11 +88,12 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   // Local, editable copies of the tunables (so sliders feel instant); synced
   // from the server snapshot on first load and after saves.
   const [aggression, setAggression] = useState(60)
-  const [maxThreads, setMaxThreads] = useState(8)
-  const [spawnMin, setSpawnMin] = useState(90)
-  const [spawnMax, setSpawnMax] = useState(420)
-  const [replyMin, setReplyMin] = useState(8)
-  const [replyMax, setReplyMax] = useState(90)
+  const [maxThreads, setMaxThreads] = useState(6)
+  // "New conversations per hour" is the human-facing control; it's converted
+  // to jittered second bounds on save (and back on load).
+  const [perHour, setPerHour] = useState(10)
+  const [replyMin, setReplyMin] = useState(20)
+  const [replyMax, setReplyMax] = useState(180)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const hydrated = useRef(false)
 
@@ -67,8 +102,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
     if (hydrateControls) {
       setAggression(s.aggression)
       setMaxThreads(s.maxThreads)
-      setSpawnMin(s.spawnMinSec)
-      setSpawnMax(s.spawnMaxSec)
+      setPerHour(rangeToPerHour(s.spawnMinSec, s.spawnMaxSec))
       setReplyMin(s.replyMinSec)
       setReplyMax(s.replyMaxSec)
       setSelected(new Set(s.channelIds))
@@ -113,9 +147,8 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   }
 
   function save() {
-    // Guard against inverted ranges before sending.
-    const sMin = Math.min(spawnMin, spawnMax)
-    const sMax = Math.max(spawnMin, spawnMax)
+    // Convert the "per hour" target into jittered second bounds.
+    const { min: sMin, max: sMax } = perHourToRange(perHour)
     const rMin = Math.min(replyMin, replyMax)
     const rMax = Math.max(replyMin, replyMax)
     startTransition(async () => {
@@ -292,32 +325,30 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           format={(v) => String(v)}
         />
 
-        {/* Spawn cadence */}
-        <RangeRow
-          label="Новый диалог каждые"
-          icon={Timer}
-          min={5}
-          max={1800}
-          step={5}
-          low={spawnMin}
-          high={spawnMax}
-          onLow={setSpawnMin}
-          onHigh={setSpawnMax}
-          unit="сек"
+        {/* Spawn rate — expressed as new conversations per hour */}
+        <SliderRow
+          id="sim-rate"
+          label="Новых диалогов в час"
+          hint={perHourHint(perHour)}
+          min={1}
+          max={60}
+          value={perHour}
+          onChange={setPerHour}
+          format={(v) => `${v}/час`}
         />
 
         {/* Reply delay */}
         <RangeRow
           label="Задержка ответа менеджеру"
           icon={Timer}
-          min={1}
-          max={600}
-          step={1}
+          min={5}
+          max={900}
+          step={5}
           low={replyMin}
           high={replyMax}
           onLow={setReplyMin}
           onHigh={setReplyMax}
-          unit="сек"
+          format={humanSecs}
         />
 
         {/* Channels */}
@@ -471,7 +502,7 @@ function RangeRow({
   high,
   onLow,
   onHigh,
-  unit,
+  format,
 }: {
   label: string
   icon: React.ComponentType<{ className?: string }>
@@ -482,7 +513,7 @@ function RangeRow({
   high: number
   onLow: (v: number) => void
   onHigh: (v: number) => void
-  unit: string
+  format: (v: number) => string
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -492,7 +523,7 @@ function RangeRow({
           {label}
         </Label>
         <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-semibold tabular-nums">
-          {low}–{high} {unit}
+          {format(low)} – {format(high)}
         </span>
       </div>
       <div className="grid grid-cols-2 gap-3">

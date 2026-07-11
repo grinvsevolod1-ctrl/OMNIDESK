@@ -22,13 +22,15 @@ CREATE TABLE IF NOT EXISTS sim_settings (
   -- how vulgar/aggressive personas skew overall, 0..100
   aggression    integer NOT NULL DEFAULT 60,
   -- how many concurrent live bot threads to maintain
-  max_threads   integer NOT NULL DEFAULT 8,
-  -- new-thread creation cadence bounds (seconds)
-  spawn_min_sec integer NOT NULL DEFAULT 90,
-  spawn_max_sec integer NOT NULL DEFAULT 420,
+  max_threads   integer NOT NULL DEFAULT 6,
+  -- new-thread creation cadence bounds (seconds). Defaults model ~10 new
+  -- conversations per hour with heavy jitter (avg ≈ one every 6 min), so it
+  -- reads like organic traffic rather than a clock.
+  spawn_min_sec integer NOT NULL DEFAULT 180,
+  spawn_max_sec integer NOT NULL DEFAULT 576,
   -- human-like delay before a bot reacts to a manager reply (seconds)
-  reply_min_sec integer NOT NULL DEFAULT 8,
-  reply_max_sec integer NOT NULL DEFAULT 90,
+  reply_min_sec integer NOT NULL DEFAULT 20,
+  reply_max_sec integer NOT NULL DEFAULT 180,
   -- when the engine is next allowed to spawn a thread (atomic spawn slot)
   next_spawn_at timestamptz,
   -- lifetime counters for the dashboard (never reset automatically)
@@ -40,6 +42,14 @@ CREATE TABLE IF NOT EXISTS sim_settings (
 );
 
 INSERT INTO sim_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
+
+-- Keep column defaults in sync when re-running on an older install (only
+-- affects future inserts; never rewrites an existing settings row).
+ALTER TABLE sim_settings ALTER COLUMN max_threads   SET DEFAULT 6;
+ALTER TABLE sim_settings ALTER COLUMN spawn_min_sec SET DEFAULT 180;
+ALTER TABLE sim_settings ALTER COLUMN spawn_max_sec SET DEFAULT 576;
+ALTER TABLE sim_settings ALTER COLUMN reply_min_sec SET DEFAULT 20;
+ALTER TABLE sim_settings ALTER COLUMN reply_max_sec SET DEFAULT 180;
 
 /* ------------------------------- sim_threads ---------------------------- */
 
