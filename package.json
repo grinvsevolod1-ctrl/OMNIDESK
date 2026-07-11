@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts --passWithNoTests",
     "test:browser": "playwright test",
-    "db:migrate": "node --env-file-if-exists=.env.development.local scripts/migrate.mjs",
+    "db:migrate": "node --env-file-if-exists=.env.development.local scripts/migrate.mjs up",
+    "db:status": "node --env-file-if-exists=.env.development.local scripts/migrate.mjs status",
     "check": "pnpm lint && pnpm typecheck && pnpm typecheck:worker && pnpm test"
   },
   "dependencies": {
