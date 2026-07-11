@@ -7,7 +7,10 @@ import type {
   SimSettings,
   SimState,
   SimThreadRow,
+  SimTone,
 } from './types'
+
+const TONES: readonly SimTone[] = ['polite', 'neutral', 'rough', 'mixed']
 
 /* ------------------------------- settings ------------------------------- */
 
@@ -26,6 +29,7 @@ interface SettingsRow {
   started_at: string | Date | null
   updated_at: string | Date
   learned_profile: LearnedProfile | null
+  tone: SimTone
 }
 
 function mapSettings(r: SettingsRow): SimSettings {
@@ -43,20 +47,23 @@ function mapSettings(r: SettingsRow): SimSettings {
     startedAt: r.started_at ? new Date(r.started_at).toISOString() : null,
     updatedAt: new Date(r.updated_at).toISOString(),
     learnedProfile: r.learned_profile ?? null,
+    tone: r.tone ?? 'mixed',
   }
 }
 
+// Columns guaranteed to exist since migration 049.
 const SETTINGS_COLS_BASE = `enabled, channel_ids, aggression, max_threads,
   spawn_min_sec, spawn_max_sec, reply_min_sec, reply_max_sec,
   next_spawn_at, spawned_total, replies_total, started_at, updated_at`
-const SETTINGS_COLS = `${SETTINGS_COLS_BASE}, learned_profile`
+// Optional columns added by later migrations (050: learned_profile, 051: tone).
+const SETTINGS_COLS = `${SETTINGS_COLS_BASE}, learned_profile, tone`
 
-/** Read the singleton settings row, creating it if missing. */
 /**
- * Read the singleton settings row. Resilient to the `learned_profile` column
- * not existing yet (migration 050 not applied): in that case it transparently
- * re-queries without the column instead of throwing a 500 that would take down
- * the whole god panel.
+ * Read the singleton settings row, creating it if missing. Resilient to the
+ * optional columns (`learned_profile`, `tone`) not existing yet — if migrations
+ * 050/051 haven't been applied it transparently re-queries the base column set
+ * and fills defaults, instead of throwing a 500 that would take down the whole
+ * god panel.
  */
 export async function getSettings(): Promise<SimSettings> {
   const selectRow = async (): Promise<SettingsRow | undefined> => {
@@ -69,12 +76,14 @@ export async function getSettings(): Promise<SimSettings> {
       // 42703 = undefined_column. Fall back to the pre-050 column set.
       if (isUndefinedColumn(err)) {
         console.log(
-          '[v0][client-sim] learned_profile column missing — run migration 050. Falling back.',
+          '[v0][client-sim] optional column missing — run migrations 050/051. Falling back.',
         )
-        const rows = await query<Omit<SettingsRow, 'learned_profile'>>(
-          `SELECT ${SETTINGS_COLS_BASE} FROM sim_settings WHERE id = true LIMIT 1`,
-        )
-        return rows[0] ? { ...rows[0], learned_profile: null } : undefined
+        const rows = await query<
+          Omit<SettingsRow, 'learned_profile' | 'tone'>
+        >(`SELECT ${SETTINGS_COLS_BASE} FROM sim_settings WHERE id = true LIMIT 1`)
+        return rows[0]
+          ? { ...rows[0], learned_profile: null, tone: 'mixed' }
+          : undefined
       }
       throw err
     }
@@ -91,13 +100,17 @@ function isUndefinedColumn(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false
   const code = (err as { code?: string }).code
   const msg = (err as { message?: string }).message ?? ''
-  return code === '42703' || /learned_profile|column .* does not exist/i.test(msg)
+  return (
+    code === '42703' ||
+    /learned_profile|\btone\b|column .* does not exist/i.test(msg)
+  )
 }
 
 export interface SettingsPatch {
   enabled?: boolean
   channelIds?: string[]
   aggression?: number
+  tone?: SimTone
   maxThreads?: number
   spawnMinSec?: number
   spawnMaxSec?: number
@@ -134,7 +147,30 @@ export async function updateSettings(patch: SettingsPatch): Promise<SimSettings>
   if (patch.replyMaxSec !== undefined)
     push('reply_max_sec', clampInt(patch.replyMaxSec, 1, 86_400))
 
-  await query(`UPDATE sim_settings SET ${sets.join(', ')} WHERE id = true`, params)
+  // `tone` may target a column that doesn't exist yet (migration 051 not run).
+  // Track its param index so we can retry without it on undefined_column.
+  let toneSetIdx = -1
+  if (patch.tone !== undefined) {
+    const tone: SimTone = TONES.includes(patch.tone) ? patch.tone : 'mixed'
+    params.push(tone)
+    toneSetIdx = sets.length
+    sets.push(`tone = $${params.length}`)
+  }
+
+  try {
+    await query(`UPDATE sim_settings SET ${sets.join(', ')} WHERE id = true`, params)
+  } catch (err) {
+    if (toneSetIdx >= 0 && isUndefinedColumn(err)) {
+      // Retry without the tone assignment so the rest of the save still lands.
+      const without = sets.filter((_, i) => i !== toneSetIdx)
+      await query(
+        `UPDATE sim_settings SET ${without.join(', ')} WHERE id = true`,
+        params.slice(0, params.length - 1),
+      )
+    } else {
+      throw err
+    }
+  }
   return getSettings()
 }
 

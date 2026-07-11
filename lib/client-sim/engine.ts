@@ -1,4 +1,4 @@
-import type { SimState, SimThreadRow } from './types'
+import type { SimState, SimThreadRow, SimTone } from './types'
 import { chance, makePersona, randInt } from './content'
 import { type Behavior, generateReply } from './generate'
 import { ensureLock, releaseLock } from './lock'
@@ -107,7 +107,7 @@ async function tick(): Promise<void> {
     await maybeSpawn(settings.channelIds, settings.aggression, settings.maxThreads, {
       spawnMinSec: settings.spawnMinSec,
       spawnMaxSec: settings.spawnMaxSec,
-    })
+    }, settings.tone)
     await scheduleManagerReactions(settings.replyMinSec, settings.replyMaxSec)
     await processDueThreads()
   } catch (err) {
@@ -127,6 +127,7 @@ async function maybeSpawn(
   aggression: number,
   maxThreads: number,
   cadence: { spawnMinSec: number; spawnMaxSec: number },
+  tone: SimTone,
 ): Promise<void> {
   const active = await countActiveThreads()
   if (active >= maxThreads) return
@@ -146,7 +147,7 @@ async function maybeSpawn(
   if (channels.length === 0) return
 
   const channel: SimChannel = pick(channels)
-  const persona = makePersona(channel.type as ChannelType, aggression)
+  const persona = makePersona(channel.type as ChannelType, aggression, tone)
 
   // Learn the channel's real voice, then write the opening line and seed the
   // conversation + first message atomically (no empty-thread flash).

@@ -4,6 +4,16 @@ import type { ChannelType } from '@/lib/types'
 export type SimGender = 'male' | 'female'
 
 /**
+ * Overall register the simulated clients write in. This is the strong lever
+ * for how "clients" sound, on top of the aggression slider:
+ *   polite  — «Здравствуйте», на «вы», грамотно, без мата
+ *   neutral — обычный разговорный тон, по-человечески, без грубости
+ *   rough   — развязно/панибратски, «привет», «чё», мат по настроению
+ *   mixed   — как раньше: случайный разброс от вежливых до грубых
+ */
+export type SimTone = 'polite' | 'neutral' | 'rough' | 'mixed'
+
+/**
  * Thread state machine:
  *   opening  — just created, opening line sent, waiting for the manager
  *   chatting — active back-and-forth
@@ -47,6 +57,8 @@ export interface SimPersona {
   temper: string
   /** The "job" they believe they found on the site (varied per persona). */
   jobHook: string
+  /** Register this persona writes in (defaults to 'mixed' for legacy rows). */
+  tone?: SimTone
   style: SimStyle
 }
 
@@ -81,6 +93,8 @@ export interface SimSettings {
   enabled: boolean
   channelIds: string[]
   aggression: number
+  /** Register the simulated clients write in. */
+  tone: SimTone
   maxThreads: number
   spawnMinSec: number
   spawnMaxSec: number

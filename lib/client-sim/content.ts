@@ -1,5 +1,5 @@
 import type { ChannelType } from '@/lib/types'
-import type { SimGender, SimPersona, SimStyle } from './types'
+import type { SimGender, SimPersona, SimStyle, SimTone } from './types'
 
 /* ========================================================================= */
 /*  Randomness helpers                                                       */
@@ -114,17 +114,55 @@ const TEMPERS = [
   'ноющий', 'жадный до денег', 'осторожный', 'борзый', 'туповатый',
 ]
 
-function rollStyle(aggression: number): SimStyle {
+function rollStyle(aggression: number, tone: SimTone): SimStyle {
   // aggression 0..100 raises profanity + terseness baselines.
   const a = Math.max(0, Math.min(100, aggression)) / 100
-  return {
-    lowercase: chance(0.7),
-    noPunctuation: chance(0.75),
-    typoRate: Math.min(0.35, 0.05 + Math.random() * 0.28),
-    profanity: Math.min(1, Math.max(0, a * (0.4 + Math.random() * 0.9))),
-    terseness: Math.min(1, 0.3 + a * 0.4 + Math.random() * 0.4),
-    dumbness: Math.random() * 0.7,
-    emojiRate: chance(0.5) ? Math.random() * 0.3 : 0,
+
+  switch (tone) {
+    case 'polite':
+      // Grammatical, capitalised, punctuated, no swearing.
+      return {
+        lowercase: false,
+        noPunctuation: false,
+        typoRate: Math.min(0.06, 0.01 + Math.random() * 0.05),
+        profanity: 0,
+        terseness: 0.2 + Math.random() * 0.3,
+        dumbness: Math.random() * 0.3,
+        emojiRate: chance(0.3) ? Math.random() * 0.15 : 0,
+      }
+    case 'neutral':
+      // Everyday conversational: a little sloppy, but never rude.
+      return {
+        lowercase: chance(0.4),
+        noPunctuation: chance(0.4),
+        typoRate: Math.min(0.15, 0.03 + Math.random() * 0.12),
+        profanity: Math.min(0.15, a * 0.15),
+        terseness: 0.3 + Math.random() * 0.4,
+        dumbness: Math.random() * 0.5,
+        emojiRate: chance(0.45) ? Math.random() * 0.25 : 0,
+      }
+    case 'rough':
+      // Slangy/panibratski, punctuation-light, swears scale with aggression.
+      return {
+        lowercase: chance(0.85),
+        noPunctuation: chance(0.85),
+        typoRate: Math.min(0.35, 0.08 + Math.random() * 0.27),
+        profanity: Math.min(1, Math.max(0.15, a * (0.5 + Math.random() * 0.9))),
+        terseness: Math.min(1, 0.4 + a * 0.4 + Math.random() * 0.3),
+        dumbness: Math.random() * 0.7,
+        emojiRate: chance(0.5) ? Math.random() * 0.3 : 0,
+      }
+    default:
+      // 'mixed' — the original wide random spread.
+      return {
+        lowercase: chance(0.7),
+        noPunctuation: chance(0.75),
+        typoRate: Math.min(0.35, 0.05 + Math.random() * 0.28),
+        profanity: Math.min(1, Math.max(0, a * (0.4 + Math.random() * 0.9))),
+        terseness: Math.min(1, 0.3 + a * 0.4 + Math.random() * 0.4),
+        dumbness: Math.random() * 0.7,
+        emojiRate: chance(0.5) ? Math.random() * 0.3 : 0,
+      }
   }
 }
 
@@ -132,7 +170,11 @@ function rollStyle(aggression: number): SimStyle {
  * Build a channel-appropriate fake client. Telegram leans on weird @nicks,
  * WhatsApp on phone-number handles, VK/MAX on id-style handles + real names.
  */
-export function makePersona(channelType: ChannelType, aggression: number): SimPersona {
+export function makePersona(
+  channelType: ChannelType,
+  aggression: number,
+  tone: SimTone = 'mixed',
+): SimPersona {
   const gender: SimGender = chance(0.55) ? 'male' : 'female'
   const first = pick(gender === 'male' ? MALE_FIRST : FEMALE_FIRST)
   const baseLast = pick(MALE_LAST)
@@ -182,7 +224,8 @@ export function makePersona(channelType: ChannelType, aggression: number): SimPe
     age: randInt(17, 52),
     temper: pick(TEMPERS),
     jobHook: pick(JOB_HOOKS),
-    style: rollStyle(aggression),
+    tone,
+    style: rollStyle(aggression, tone),
   }
 }
 

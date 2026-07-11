@@ -29,7 +29,18 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import type { Channel } from '@/lib/types'
-import type { SimStatus } from '@/lib/client-sim/types'
+import type { SimStatus, SimTone } from '@/lib/client-sim/types'
+
+const TONE_OPTIONS: Array<{ value: SimTone; label: string; hint: string }> = [
+  { value: 'polite', label: 'Вежливый', hint: '«Здравствуйте», на «вы», грамотно, без мата' },
+  { value: 'neutral', label: 'Обычный', hint: 'Спокойный разговорный тон, по-человечески' },
+  { value: 'rough', label: 'Грубый', hint: 'Развязно, панибратски, мат по настроению' },
+  { value: 'mixed', label: 'Разный', hint: 'Случайный разброс — от вежливых до грубых' },
+]
+
+function toneLabel(t: SimTone): string {
+  return TONE_OPTIONS.find((o) => o.value === t)?.label ?? 'Разный'
+}
 
 const STATE_LABEL: Record<string, string> = {
   opening: 'Открывают',
@@ -90,6 +101,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   // Local, editable copies of the tunables (so sliders feel instant); synced
   // from the server snapshot on first load and after saves.
   const [aggression, setAggression] = useState(60)
+  const [tone, setTone] = useState<SimTone>('mixed')
   const [maxThreads, setMaxThreads] = useState(6)
   // "New conversations per hour" is the human-facing control; it's converted
   // to jittered second bounds on save (and back on load).

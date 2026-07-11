@@ -9,7 +9,7 @@ import { makePersona } from '@/lib/client-sim/content'
 import { generateReply } from '@/lib/client-sim/generate'
 import { analyzeDialogues, LearnError } from '@/lib/client-sim/learn'
 import { sampleRealClientLines, updateSettings, type SettingsPatch } from '@/lib/client-sim/store'
-import type { LearnedProfile, SimPersona, SimStatus } from '@/lib/client-sim/types'
+import type { LearnedProfile, SimPersona, SimStatus, SimTone } from '@/lib/client-sim/types'
 import type { ChannelType } from '@/lib/types'
 
 /**
@@ -111,10 +111,11 @@ export interface SimTestStart {
 export async function simTestStartAction(input: {
   channelType: ChannelType
   aggression: number
+  tone?: SimTone
 }): Promise<SimTestStart> {
   await guard()
   const aggression = clampInt(input.aggression, 0, 100, 60)
-  const persona = makePersona(input.channelType, aggression)
+  const persona = makePersona(input.channelType, aggression, input.tone ?? 'mixed')
   const referenceLines = await sampleRealClientLines(input.channelType)
   const opening = await generateReply({
     persona,
