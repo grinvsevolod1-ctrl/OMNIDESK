@@ -321,16 +321,9 @@ interface AccountMetrics {
 
 function accountMetrics(a: FinanceAdAccount): AccountMetrics {
   const topups = a.topups.reduce((s, t) => s + t.amount, 0)
-  let spend = 0
-  let impressions = 0
-  let clicks = 0
-  let leads = 0
-  for (const st of a.stats) {
-    spend += st.spend
-    impressions += st.impressions
-    clicks += st.clicks
-    leads += st.leads
-  }
+  // Метрики берём из единого источника: данные Яндекса (если интеграция включена)
+  // или сумма ручных снимков, поверх которых применяются корректировки god-страницы.
+  const { impressions, clicks, leads, spend } = adEffectiveMetrics(a)
   return {
     topups,
     spend,

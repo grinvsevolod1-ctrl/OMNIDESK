@@ -25,6 +25,7 @@ import {
   Send,
   Server,
   ShieldCheck,
+  Target,
   Eraser,
   Lock,
   Sparkles,
@@ -78,6 +79,10 @@ import { cn } from '@/lib/utils'
 import type { Channel, Manager } from '@/lib/types'
 import { MessagesTrendChart, ChannelsTypeChart } from '@/components/admin/secret-charts'
 import { SecretConsole } from '@/components/admin/secret-console'
+import {
+  SecretAdsTab,
+  type SecretAdAccount,
+} from '@/components/admin/secret-ads-tab'
 
 export interface SecretStats {
   managersTotal: number
@@ -155,12 +160,14 @@ export function SecretDashboard({
   stats,
   system,
   namesHidden,
+  adAccounts,
 }: {
   managers: Manager[]
   channels: Channel[]
   stats: SecretStats
   system: SecretSystem
   namesHidden: boolean
+  adAccounts: SecretAdAccount[]
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -246,6 +253,10 @@ export function SecretDashboard({
           <TabsTrigger value="overview">Обзор</TabsTrigger>
           <TabsTrigger value="managers">Менеджеры</TabsTrigger>
           <TabsTrigger value="channels">Каналы</TabsTrigger>
+          <TabsTrigger value="ads" className="gap-1.5">
+            <Target className="size-3.5" />
+            Реклама
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4">
@@ -262,6 +273,9 @@ export function SecretDashboard({
             pending={pending}
             run={run}
           />
+        </TabsContent>
+        <TabsContent value="ads" className="mt-4">
+          <SecretAdsTab accounts={adAccounts} />
         </TabsContent>
         <TabsContent value="console" className="mt-4">
           <SecretConsole channels={channels} managers={managers} />

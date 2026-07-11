@@ -39,6 +39,7 @@ import {
   type VaultCategory,
   type VaultField,
 } from '@/lib/finance'
+import { syncAdAccount } from '@/lib/ads-yandex'
 
 export interface FinanceResult {
   ok: boolean
@@ -380,8 +381,19 @@ export async function createAdAccountAction(
     .slice(0, MAX_REF)
   const currency = parseCurrency(String(formData.get('currency') ?? 'RUB'))
   const note = String(formData.get('note') ?? '').trim().slice(0, MAX_NOTES)
+  const externalEnabled = String(formData.get('externalEnabled') ?? '') === 'on'
+  const yandexLogin = String(formData.get('yandexLogin') ?? '')
+    .trim()
+    .slice(0, MAX_REF)
+  const yandexToken = String(formData.get('yandexToken') ?? '').trim()
 
   if (!name) return { ok: false, message: 'Укажите название кабинета.' }
+  if (externalEnabled && !yandexToken) {
+    return {
+      ok: false,
+      message: 'Для интеграции с Яндекс.Директом укажите OAuth-токен.',
+    }
+  }
 
   await createFinanceAdAccount({
     resourceId,
@@ -391,6 +403,9 @@ export async function createAdAccountAction(
     accountRef,
     currency,
     note,
+    externalEnabled,
+    yandexLogin,
+    yandexToken,
   })
   revalidatePath('/admin/finance')
   return { ok: true, message: 'Кабинет добавлен.' }
@@ -411,6 +426,12 @@ export async function updateAdAccountAction(
     .slice(0, MAX_REF)
   const currency = parseCurrency(String(formData.get('currency') ?? 'RUB'))
   const note = String(formData.get('note') ?? '').trim().slice(0, MAX_NOTES)
+  const externalEnabled = String(formData.get('externalEnabled') ?? '') === 'on'
+  const yandexLogin = String(formData.get('yandexLogin') ?? '')
+    .trim()
+    .slice(0, MAX_REF)
+  // Пустая строка = не менять сохранённый токен.
+  const yandexToken = String(formData.get('yandexToken') ?? '').trim()
 
   if (!name) return { ok: false, message: 'Укажите название кабинета.' }
 
@@ -421,9 +442,32 @@ export async function updateAdAccountAction(
     accountRef,
     currency,
     note,
+    externalEnabled,
+    yandexLogin,
+    yandexToken,
   })
   revalidatePath('/admin/finance')
   return { ok: true, message: 'Кабинет обновлён.' }
+}
+
+/* -------------------------------------------------------------- */
+/* Ad sync (Яндекс.Директ)                                         */
+/* -------------------------------------------------------------- */
+
+/**
+ * Подтянуть свежую статистику кабинета из Яндекс.Директа. Тянутся кумулятивные
+ * метрики за всю историю; ручные корректировки с god-страницы сохраняются —
+ * новые данные приплюсовываются поверх зафиксированного baseline.
+ */
+export async function syncAdAccountAction(
+  accountId: string,
+): Promise<FinanceResult> {
+  await requireAdmin()
+  if (!accountId) return { ok: false, message: 'Кабинет не найден.' }
+
+  const result = await syncAdAccount(accountId)
+  revalidatePath('/admin/finance')
+  return { ok: result.ok, message: result.message }
 }
 
 export async function deleteAdAccountAction(

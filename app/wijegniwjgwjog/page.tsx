@@ -2,14 +2,30 @@ import { requireAdmin } from '@/lib/auth'
 import { isGodPasscodeConfigured, isGodUnlocked } from '@/lib/god-gate'
 import { checkDbConnection, query } from '@/lib/db'
 import { listAllChannels, listManagers } from '@/lib/data'
+import {
+  getFinanceData,
+  adBaseMetrics,
+  adEffectiveMetrics,
+  type AdPlatform,
+} from '@/lib/finance'
 import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
 import { SecretDashboard } from '@/components/admin/secret-dashboard'
 import { SecretGate } from '@/components/admin/secret-gate'
 import type { SecretStats } from '@/components/admin/secret-dashboard'
+import type { SecretAdAccount } from '@/components/admin/secret-ads-tab'
 
 export const dynamic = 'force-dynamic'
 
 const DAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
+
+const AD_PLATFORM_LABEL: Record<AdPlatform, string> = {
+  yandex_direct: 'Яндекс Директ',
+  google_ads: 'Google Ads',
+  vk_ads: 'VK Реклама',
+  telegram_ads: 'Telegram Ads',
+  mytarget: 'myTarget',
+  other: 'Другое',
+}
 
 /**
  * God-mode admin console. `requireAdmin()` gates the whole route; all heavy
@@ -23,8 +39,16 @@ export default async function SecretPage() {
   // (when SECRET_PANEL_PASSWORD is configured) before any data is fetched.
   if (!(await isGodUnlocked())) return <SecretGate />
 
-  const [managers, channels, msgCounts, msg7dRows, statusRows, convAgg, db] =
-    await Promise.all([
+  const [
+    managers,
+    channels,
+    msgCounts,
+    msg7dRows,
+    statusRows,
+    convAgg,
+    db,
+    finance,
+  ] = await Promise.all([
       listManagers(),
       listAllChannels(),
       query<{ total: number; last24: number }>(`
@@ -56,7 +80,22 @@ export default async function SecretPage() {
         FROM conversations
       `),
       checkDbConnection(),
+      getFinanceData(),
     ])
+
+  const adAccounts: SecretAdAccount[] = finance.adAccounts.map((a) => ({
+    id: a.id,
+    name: a.name,
+    platformLabel: AD_PLATFORM_LABEL[a.platform] ?? 'Другое',
+    externalEnabled: a.externalEnabled,
+    hasToken: a.hasToken,
+    lastSyncAt: a.lastSyncAt,
+    syncError: a.syncError,
+    currency: a.currency,
+    base: adBaseMetrics(a),
+    effective: adEffectiveMetrics(a),
+    overrides: a.overrides,
+  }))
 
   const workerConfigured = isWorkerConfigured
   const workerOnline = workerConfigured ? await workerHealth() : false
@@ -104,6 +143,7 @@ export default async function SecretPage() {
       managers={managers}
       channels={channels}
       stats={stats}
+      adAccounts={adAccounts}
       namesHidden={convAgg[0]?.names_hidden ?? false}
       system={{
         workerConfigured,
