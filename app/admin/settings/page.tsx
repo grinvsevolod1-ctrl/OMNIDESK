@@ -129,12 +129,6 @@ export default async function AdminSettingsPage() {
       hint: 'Подключение к PostgreSQL.',
     },
     {
-      label: 'SECRET_PANEL_PASSWORD задан',
-      ok: Boolean(process.env.SECRET_PANEL_PASSWORD),
-      severity: 'warn',
-      hint: 'Дополнительная защита god-консоли вторым паролем.',
-    },
-    {
       label: 'CRON_SECRET задан',
       ok: Boolean(process.env.CRON_SECRET),
       severity: 'warn',
@@ -168,7 +162,6 @@ export default async function AdminSettingsPage() {
         { key: 'ADMIN_PASSWORD', desc: 'Пароль администратора', required: true },
         { key: 'AUTH_SECRET', desc: 'Секрет подписи JWT-сессий', required: true },
         { key: 'ENCRYPTION_KEY', desc: 'Ключ шифрования AES-256 (hex 64 символа)', required: true },
-        { key: 'SECRET_PANEL_PASSWORD', desc: 'Второй пароль для /wijegniwjgwjog', required: false },
       ],
     },
     {
