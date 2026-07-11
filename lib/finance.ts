@@ -6,10 +6,14 @@ import {
   FINANCE_CURRENCIES,
   FINANCE_ENTRY_STATUSES,
   VAULT_CATEGORIES,
+  AD_METRIC_KEYS,
+  type AdMetricKey,
+  type AdOverride,
   type AdPlatform,
   type AdStatus,
   type FinanceAdAccount,
   type FinanceAdStat,
+  type FinanceAdSyncStat,
   type FinanceAdTopup,
   type FinanceCurrency,
   type FinanceData,
@@ -42,15 +46,22 @@ import {
 export {
   AD_PLATFORMS,
   AD_STATUSES,
+  AD_METRIC_KEYS,
+  AD_METRIC_LABELS,
   FINANCE_CURRENCIES,
   FINANCE_ENTRY_STATUSES,
   VAULT_CATEGORIES,
+  adBaseMetrics,
+  adEffectiveMetrics,
 }
 export type {
+  AdMetricKey,
+  AdOverride,
   AdPlatform,
   AdStatus,
   FinanceAdAccount,
   FinanceAdStat,
+  FinanceAdSyncStat,
   FinanceAdTopup,
   FinanceCurrency,
   FinanceData,
@@ -118,6 +129,30 @@ interface AdAccountRow {
   currency: string
   note: string
   created_at: string | Date
+  updated_at: string | Date
+  external_enabled: boolean
+  yandex_login: string
+  yandex_token_enc: string | null
+  last_sync_at: string | Date | null
+  sync_error: string
+}
+
+interface AdSyncStatRow {
+  account_id: string
+  period_start: string | Date
+  period_end: string | Date
+  impressions: string | number
+  clicks: string | number
+  leads: string | number
+  spend: string | number
+  synced_at: string | Date
+}
+
+interface AdOverrideRow {
+  account_id: string
+  metric: string
+  value: string | number
+  baseline: string | number
   updated_at: string | Date
 }
 
@@ -325,10 +360,24 @@ function mapStat(row: AdStatRow): FinanceAdStat {
   }
 }
 
+function mapSyncStat(row: AdSyncStatRow): FinanceAdSyncStat {
+  return {
+    impressions: Number(row.impressions) || 0,
+    clicks: Number(row.clicks) || 0,
+    leads: Number(row.leads) || 0,
+    spend: Number(row.spend) || 0,
+    periodStart: iso(row.period_start).slice(0, 10),
+    periodEnd: iso(row.period_end).slice(0, 10),
+    syncedAt: iso(row.synced_at),
+  }
+}
+
 function mapAdAccount(
   row: AdAccountRow,
   topups: FinanceAdTopup[],
   stats: FinanceAdStat[],
+  syncStat: FinanceAdSyncStat | null,
+  overrides: Partial<Record<AdMetricKey, AdOverride>>,
 ): FinanceAdAccount {
   return {
     id: row.id,
@@ -343,6 +392,13 @@ function mapAdAccount(
     updatedAt: iso(row.updated_at),
     topups,
     stats,
+    externalEnabled: Boolean(row.external_enabled),
+    yandexLogin: row.yandex_login ?? '',
+    hasToken: Boolean(row.yandex_token_enc),
+    lastSyncAt: row.last_sync_at ? iso(row.last_sync_at) : null,
+    syncError: row.sync_error ?? '',
+    syncStat,
+    overrides,
   }
 }
 
@@ -360,6 +416,8 @@ export async function getFinanceData(): Promise<FinanceData> {
     accountRows,
     topupRows,
     statRows,
+    syncStatRows,
+    overrideRows,
     vaultRows,
   ] = await Promise.all([
     query<ResourceRow>(
@@ -385,7 +443,9 @@ export async function getFinanceData(): Promise<FinanceData> {
     ),
     query<AdAccountRow>(
       `SELECT a.id, a.resource_id, a.name, a.platform, a.status, a.account_ref,
-              a.currency, a.note, a.created_at, a.updated_at
+              a.currency, a.note, a.created_at, a.updated_at,
+              a.external_enabled, a.yandex_login, a.yandex_token_enc,
+              a.last_sync_at, a.sync_error
          FROM finance_ad_accounts a
         ORDER BY a.created_at ASC`,
     ),
@@ -399,6 +459,15 @@ export async function getFinanceData(): Promise<FinanceData> {
               st.impressions, st.clicks, st.leads, st.spend, st.note, st.created_at
          FROM finance_ad_stats st
         ORDER BY st.period_start DESC, st.created_at DESC`,
+    ),
+    query<AdSyncStatRow>(
+      `SELECT s.account_id, s.period_start, s.period_end, s.impressions,
+              s.clicks, s.leads, s.spend, s.synced_at
+         FROM finance_ad_sync_stats s`,
+    ),
+    query<AdOverrideRow>(
+      `SELECT o.account_id, o.metric, o.value, o.baseline, o.updated_at
+         FROM finance_ad_overrides o`,
     ),
     query<VaultItemRow>(
       `SELECT v.id, v.resource_id, v.category, v.title, v.login, v.secret_enc,
@@ -433,6 +502,27 @@ export async function getFinanceData(): Promise<FinanceData> {
     else statsByAccount.set(stat.accountId, [stat])
   }
 
+  const syncByAccount = new Map<string, FinanceAdSyncStat>()
+  for (const row of syncStatRows) {
+    syncByAccount.set(row.account_id, mapSyncStat(row))
+  }
+
+  const overridesByAccount = new Map<
+    string,
+    Partial<Record<AdMetricKey, AdOverride>>
+  >()
+  for (const row of overrideRows) {
+    if (!AD_METRIC_KEYS.includes(row.metric as AdMetricKey)) continue
+    const metric = row.metric as AdMetricKey
+    const entry = overridesByAccount.get(row.account_id) ?? {}
+    entry[metric] = {
+      value: Number(row.value) || 0,
+      baseline: Number(row.baseline) || 0,
+      updatedAt: iso(row.updated_at),
+    }
+    overridesByAccount.set(row.account_id, entry)
+  }
+
   return {
     resources: resourceRows.map(mapResource),
     sections: sectionRows.map(mapSection),
@@ -444,6 +534,8 @@ export async function getFinanceData(): Promise<FinanceData> {
         row,
         topupsByAccount.get(row.id) ?? [],
         statsByAccount.get(row.id) ?? [],
+        syncByAccount.get(row.id) ?? null,
+        overridesByAccount.get(row.id) ?? {},
       ),
     ),
     vaultItems: vaultRows.map(mapVaultItem),
@@ -656,11 +748,17 @@ export async function createFinanceAdAccount(input: {
   accountRef: string
   currency: FinanceCurrency
   note: string
+  externalEnabled: boolean
+  yandexLogin: string
+  /** Открытый OAuth-токен; шифруется здесь. '' = без токена. */
+  yandexToken: string
 }): Promise<void> {
+  const tokenEnc = input.yandexToken ? encrypt(input.yandexToken) : null
   await query(
     `INSERT INTO finance_ad_accounts
-       (resource_id, name, platform, status, account_ref, currency, note)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+       (resource_id, name, platform, status, account_ref, currency, note,
+        external_enabled, yandex_login, yandex_token_enc)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       input.resourceId,
       input.name,
@@ -669,6 +767,9 @@ export async function createFinanceAdAccount(input: {
       input.accountRef,
       input.currency,
       input.note,
+      input.externalEnabled,
+      input.yandexLogin,
+      tokenEnc,
     ],
   )
 }
@@ -682,12 +783,21 @@ export async function updateFinanceAdAccount(
     accountRef: string
     currency: FinanceCurrency
     note: string
+    externalEnabled: boolean
+    yandexLogin: string
+    /** undefined/'' = не менять токен; строка = задать новый. */
+    yandexToken?: string
   },
 ): Promise<void> {
+  // Токен обновляем только если передали новое значение — иначе сохраняем
+  // существующий зашифрованный токен (COALESCE на NULL).
+  const tokenEnc = input.yandexToken ? encrypt(input.yandexToken) : null
   await query(
     `UPDATE finance_ad_accounts
         SET name = $2, platform = $3, status = $4, account_ref = $5,
-            currency = $6, note = $7, updated_at = now()
+            currency = $6, note = $7, external_enabled = $8, yandex_login = $9,
+            yandex_token_enc = COALESCE($10, yandex_token_enc),
+            updated_at = now()
       WHERE id = $1`,
     [
       id,
@@ -697,7 +807,95 @@ export async function updateFinanceAdAccount(
       input.accountRef,
       input.currency,
       input.note,
+      input.externalEnabled,
+      input.yandexLogin,
+      tokenEnc,
     ],
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Ad metrics: base values + god-page overrides                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * «Сырые» метрики кабинета на сервере: из последнего снимка Яндекса, если
+ * интеграция включена, иначе — сумма ручных снимков статистики. Используется
+ * god-страницей, чтобы зафиксировать baseline в момент установки корректировки.
+ */
+export async function getAdBaseMetrics(
+  accountId: string,
+): Promise<Record<AdMetricKey, number>> {
+  const accRows = await query<{ external_enabled: boolean }>(
+    `SELECT external_enabled FROM finance_ad_accounts WHERE id = $1`,
+    [accountId],
+  )
+  if (!accRows[0]) return { impressions: 0, clicks: 0, leads: 0, spend: 0 }
+
+  if (accRows[0].external_enabled) {
+    const rows = await query<AdSyncStatRow>(
+      `SELECT account_id, period_start, period_end, impressions, clicks,
+              leads, spend, synced_at
+         FROM finance_ad_sync_stats WHERE account_id = $1`,
+      [accountId],
+    )
+    const s = rows[0]
+    return {
+      impressions: s ? Number(s.impressions) || 0 : 0,
+      clicks: s ? Number(s.clicks) || 0 : 0,
+      leads: s ? Number(s.leads) || 0 : 0,
+      spend: s ? Number(s.spend) || 0 : 0,
+    }
+  }
+
+  const rows = await query<{
+    impressions: string | number
+    clicks: string | number
+    leads: string | number
+    spend: string | number
+  }>(
+    `SELECT COALESCE(SUM(impressions), 0) AS impressions,
+            COALESCE(SUM(clicks), 0)      AS clicks,
+            COALESCE(SUM(leads), 0)       AS leads,
+            COALESCE(SUM(spend), 0)       AS spend
+       FROM finance_ad_stats WHERE account_id = $1`,
+    [accountId],
+  )
+  const s = rows[0]
+  return {
+    impressions: Number(s?.impressions) || 0,
+    clicks: Number(s?.clicks) || 0,
+    leads: Number(s?.leads) || 0,
+    spend: Number(s?.spend) || 0,
+  }
+}
+
+/** Зафиксировать ручную корректировку метрики с текущим baseline из Яндекса. */
+export async function setAdOverride(
+  accountId: string,
+  metric: AdMetricKey,
+  value: number,
+): Promise<void> {
+  const base = await getAdBaseMetrics(accountId)
+  await query(
+    `INSERT INTO finance_ad_overrides (account_id, metric, value, baseline, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (account_id, metric) DO UPDATE SET
+       value = EXCLUDED.value,
+       baseline = EXCLUDED.baseline,
+       updated_at = now()`,
+    [accountId, metric, value, base[metric]],
+  )
+}
+
+/** Снять ручную корректировку — метрика снова показывает данные Яндекса. */
+export async function clearAdOverride(
+  accountId: string,
+  metric: AdMetricKey,
+): Promise<void> {
+  await query(
+    `DELETE FROM finance_ad_overrides WHERE account_id = $1 AND metric = $2`,
+    [accountId, metric],
   )
 }
 
