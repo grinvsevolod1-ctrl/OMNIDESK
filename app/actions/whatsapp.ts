@@ -213,7 +213,7 @@ export async function addWhatsappNumberAction(input: {
   })
 
   revalidatePath('/admin/whatsapp')
-  revalidatePath('/admin/channels')
+  revalidatePath('/admin/accounts')
   return { ok: true, message: `Номер «${displayPhoneNumber}» добавлен.` }
 }
 
@@ -225,7 +225,7 @@ export async function assignWhatsappNumberAction(
   await requireAdmin()
   await assignWhatsappNumber(channelId, managerId)
   revalidatePath('/admin/whatsapp')
-  revalidatePath('/admin/channels')
+  revalidatePath('/admin/accounts')
   return {
     ok: true,
     message: managerId ? 'Номер назначен менеджеру.' : 'Назначение снято.',
@@ -239,6 +239,6 @@ export async function deleteWhatsappNumberAction(
   await requireAdmin()
   await deleteWhatsappNumber(channelId)
   revalidatePath('/admin/whatsapp')
-  revalidatePath('/admin/channels')
+  revalidatePath('/admin/accounts')
   return { ok: true, message: 'Номер удалён.' }
 }

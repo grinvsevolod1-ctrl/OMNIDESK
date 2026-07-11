@@ -595,7 +595,7 @@ function CreateAccountCard({
 
 /* ----------------------------- Accounts table ---------------------------- */
 
-function AccountsTable({
+export function AccountsTable({
   channels,
   proxies,
   proxyUsage,
