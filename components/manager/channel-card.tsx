@@ -18,7 +18,7 @@ import { SessionBadge, StatusBadge } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { CHANNEL_META, type Channel } from '@/lib/types'
+import { getChannelMeta, type Channel } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 // How often the card re-checks a personal session, and the ceiling on
@@ -121,7 +121,7 @@ export function ChannelCard({ channel }: { channel: Channel }) {
           <div className="min-w-0">
             <p className="truncate text-sm font-medium">{channel.name}</p>
             <p className="truncate text-xs text-muted-foreground">
-              {CHANNEL_META[channel.type].label} · {channel.detail}
+              {getChannelMeta(channel.type).label} · {channel.detail}
             </p>
           </div>
         </div>

@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { requireManager } from '@/lib/auth'
 import { getLeadAnalytics, getManagerStats, listChannels } from '@/lib/data'
-import { CHANNEL_META, type ChannelType } from '@/lib/types'
+import { getChannelMeta, type ChannelType } from '@/lib/types'
 
 const ICONS: Record<ChannelType, BrandIconComponent> = {
   telegram: channelIcon('telegram'),
@@ -139,7 +139,7 @@ export default async function ManagerOverviewPage() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{c.name}</p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {CHANNEL_META[c.type].label} · {c.detail}
+                        {getChannelMeta(c.type).label} · {c.detail}
                       </p>
                     </div>
                   </div>

@@ -4223,6 +4223,9 @@ export async function getGroupAnalytics(
 
   const byType = emptyTypeStats()
   for (const c of byChannel) {
+    // Guard against channel types outside the known union (legacy/bad rows):
+    // a direct byType[c.type] would be undefined and crash on `.people`.
+    if (!byType[c.type]) continue
     byType[c.type].people += c.people
     byType[c.type].messages += c.messages
   }

@@ -489,3 +489,22 @@ export const CHANNEL_META: Record<
       'Connect a VK community by its access token (Callback API webhook).',
   },
 }
+
+/**
+ * Safe accessor for CHANNEL_META. If the DB ever holds a channel with a type
+ * outside the known ChannelType union (legacy rows, bad data, a type added in
+ * the DB before the enum was updated), a direct `CHANNEL_META[type]` lookup
+ * returns undefined and crashes on `.label`. This never throws: it falls back
+ * to a readable label derived from the raw type string.
+ */
+export function getChannelMeta(type: string | null | undefined): {
+  label: string
+  description: string
+} {
+  if (type && type in CHANNEL_META) {
+    return CHANNEL_META[type as ChannelType]
+  }
+  const raw = (type ?? '').trim()
+  const label = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'Канал'
+  return { label, description: '' }
+}

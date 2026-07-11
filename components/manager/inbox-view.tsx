@@ -131,7 +131,7 @@ import {
   mskTodayKeys,
 } from '@/lib/time'
 import {
-  CHANNEL_META,
+  getChannelMeta,
   LEAD_STATUS_META,
   LEAD_STATUS_OPTIONS,
   LEAD_STATUS_ORDER,
@@ -390,7 +390,7 @@ function dayLabel(iso: string): string {
 }
 
 function sourceLabel(c: Conversation): string {
-  return c.channelName?.trim() || CHANNEL_META[c.channelType].label
+    return c.channelName?.trim() || getChannelMeta(c.channelType).label
 }
 
 /** Normalised "@username" for a contact, or null when they don't have one. */
@@ -1275,7 +1275,7 @@ const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
     ],
   },
   {
-    label: 'Жесты',
+    label: 'Ж��сты',
     emojis: [
       '👍', '👎', '👌', '✌️', '🤞', '🤝', '👏', '🙏', '💪', '🫶',
       '👋', '🤙', '✋', '🖐️', '👊', '🤛', '🤜', '☝️', '👆', '👉',

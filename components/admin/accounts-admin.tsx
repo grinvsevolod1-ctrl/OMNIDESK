@@ -44,7 +44,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { CHANNEL_META, type Manager, type Proxy } from '@/lib/types'
+import { getChannelMeta, type Manager, type Proxy } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import type { AdminChannel } from '@/lib/data'
 
@@ -457,7 +457,7 @@ function CreateAccountCard({
             {!workerOnline ? (
               <p className="text-xs text-warning">
                 Воркер не в сети — вход в Telegram сейчас недоступен. Запустите
-                процесс воркера на VPS, чтобы получить код подтверждения.
+                процесс воркера на VPS, ��тобы получить код подтверждения.
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -714,7 +714,7 @@ function AccountRow({
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{channel.name}</p>
           <p className="truncate text-xs text-muted-foreground">
-            {CHANNEL_META[channel.type].label} · {channel.detail} ·{' '}
+            {getChannelMeta(channel.type).label} · {channel.detail} ·{' '}
             {channel.managerName || 'Без менеджера'}
           </p>
         </div>
