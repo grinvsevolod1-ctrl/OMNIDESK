@@ -28,6 +28,7 @@ import {
   Globe,
   KeyRound,
   Layers,
+  Link as LinkIcon,
   ListChecks,
   Loader2,
   Lock,
@@ -71,6 +72,7 @@ import {
   deleteTaskAction,
   deleteVaultItemAction,
   renameSectionAction,
+  syncAdAccountAction,
   toggleTaskAction,
   toggleVaultFavoriteAction,
   updateAdAccountAction,
@@ -128,6 +130,7 @@ import {
   FINANCE_CURRENCIES,
   FINANCE_ENTRY_STATUSES,
   VAULT_CATEGORIES,
+  adEffectiveMetrics,
   type AdPlatform,
   type AdStatus,
   type FinanceAdAccount,
@@ -299,6 +302,18 @@ function formatDate(iso: string): string {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
+  }).format(d)
+}
+
+/** Дата и время для полного ISO-таймстампа (например, момент синхронизации). */
+function formatDateTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
   }).format(d)
 }
 
@@ -726,6 +741,7 @@ export function FinanceAdmin({
             onEdit={(account) => setAccountDialog({ mode: 'edit', account })}
             onTopup={(account) => setTopupDialog(account)}
             onStat={(account) => setStatDialog(account)}
+            onSync={(account) => run(() => syncAdAccountAction(account.id))}
             onDeleteAccount={(account) =>
               setConfirm({
                 title: 'Удалить кабинет?',
@@ -1537,6 +1553,7 @@ function AdsPanel({
   onEdit,
   onTopup,
   onStat,
+  onSync,
   onDeleteAccount,
   onDeleteTopup,
   onDeleteStat,
@@ -1547,6 +1564,7 @@ function AdsPanel({
   onEdit: (a: FinanceAdAccount) => void
   onTopup: (a: FinanceAdAccount) => void
   onStat: (a: FinanceAdAccount) => void
+  onSync: (a: FinanceAdAccount) => void
   onDeleteAccount: (a: FinanceAdAccount) => void
   onDeleteTopup: (id: string) => void
   onDeleteStat: (id: string) => void
@@ -1650,6 +1668,7 @@ function AdsPanel({
               onEdit={() => onEdit(a)}
               onTopup={() => onTopup(a)}
               onStat={() => onStat(a)}
+              onSync={() => onSync(a)}
               onDelete={() => onDeleteAccount(a)}
               onDeleteTopup={onDeleteTopup}
               onDeleteStat={onDeleteStat}
@@ -1765,6 +1784,7 @@ function AdAccountCard({
   onEdit,
   onTopup,
   onStat,
+  onSync,
   onDelete,
   onDeleteTopup,
   onDeleteStat,
@@ -1774,6 +1794,7 @@ function AdAccountCard({
   onEdit: () => void
   onTopup: () => void
   onStat: () => void
+  onSync: () => void
   onDelete: () => void
   onDeleteTopup: (id: string) => void
   onDeleteStat: (id: string) => void
@@ -1801,6 +1822,15 @@ function AdAccountCard({
             {PLATFORM_META[account.platform]}
             {account.accountRef ? ` · ${account.accountRef}` : ''}
           </p>
+          {account.externalEnabled ? (
+            <Badge
+              variant="outline"
+              className="mt-1.5 gap-1 border-primary/30 bg-primary/5 text-primary"
+            >
+              <LinkIcon className="size-3" />
+              Яндекс.Директ
+            </Badge>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button
@@ -1864,19 +1894,58 @@ function AdAccountCard({
         </p>
       ) : null}
 
+      {/* Sync status (integration) */}
+      {account.externalEnabled ? (
+        <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+          {account.syncError ? (
+            <>
+              <AlertTriangle className="size-3.5 text-destructive" />
+              <span className="text-destructive">
+                Ошибка синхронизации: {account.syncError}
+              </span>
+            </>
+          ) : account.lastSyncAt ? (
+            <>
+              <RefreshCw className="size-3.5" />
+              <span>Синхронизировано {formatDateTime(account.lastSyncAt)}</span>
+            </>
+          ) : (
+            <>
+              <AlertTriangle className="size-3.5" />
+              <span>Ещё не синхронизировано — нажмите «Обновить».</span>
+            </>
+          )}
+        </div>
+      ) : null}
+
       {/* Actions */}
       <div className="mt-3 flex flex-wrap gap-2">
         <Button size="sm" className="gap-1.5" onClick={onTopup}>
           <CreditCard className="size-4" /> Пополнить
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="gap-1.5"
-          onClick={onStat}
-        >
-          <BarChart3 className="size-4" /> Статистика
-        </Button>
+        {account.externalEnabled ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={onSync}
+            disabled={pending}
+          >
+            <RefreshCw
+              className={cn('size-4', pending && 'animate-spin')}
+            />
+            Обновить
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            onClick={onStat}
+          >
+            <BarChart3 className="size-4" /> Статистика
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
@@ -1957,7 +2026,7 @@ function AdAccountCard({
                           −{formatMoney(st.spend, account.currency)}
                         </span>
                         <span className="ml-2 text-xs text-muted-foreground">
-                          {formatInt(st.clicks)} кл · {formatInt(st.leads)} лид.
+                          {formatInt(st.clicks)} кл · {formatInt(st.leads)} л��д.
                         </span>
                       </div>
                     </div>
@@ -2796,9 +2865,25 @@ function AdAccountDialog({
   onUpdate: (id: string, fd: FormData) => void
 }) {
   const editing = state?.mode === 'edit' ? state.account : null
+  const [externalEnabled, setExternalEnabled] = useState(false)
+  const [platform, setPlatform] = useState<AdPlatform>('yandex_direct')
+
+  // Синхронизируем локальное состояние при открытии/смене кабинета.
+  useEffect(() => {
+    if (state?.mode === 'edit') {
+      setExternalEnabled(state.account.externalEnabled)
+      setPlatform(state.account.platform)
+    } else if (state?.mode === 'create') {
+      setExternalEnabled(false)
+      setPlatform('yandex_direct')
+    }
+  }, [state])
+
+  const canIntegrate = platform === 'yandex_direct'
+
   return (
     <Dialog open={state != null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <form
           onSubmit={(e) => {
             e.preventDefault()
@@ -2829,7 +2914,8 @@ function AdAccountDialog({
                 <Label htmlFor="acc-platform">Площадка</Label>
                 <Select
                   name="platform"
-                  defaultValue={editing?.platform ?? 'yandex_direct'}
+                  value={platform}
+                  onValueChange={(v) => setPlatform(v as AdPlatform)}
                 >
                   <SelectTrigger id="acc-platform" className="w-full">
                     <SelectValue />
@@ -2888,6 +2974,70 @@ function AdAccountDialog({
                 defaultValue={editing?.note ?? ''}
                 rows={2}
               />
+            </div>
+
+            {/* Прямая интеграция с Яндекс.Директом */}
+            <div className="rounded-lg border border-border bg-muted/30 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <LinkIcon className="size-4 text-muted-foreground" />
+                    <Label
+                      htmlFor="acc-external"
+                      className="cursor-pointer font-medium"
+                    >
+                      Интеграция с Яндекс.Директом
+                    </Label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {canIntegrate
+                      ? 'Статистика (показы, клики, лиды, расход) подтягивается автоматически. Пополнения остаются ручными.'
+                      : 'Доступно только для площадки «Яндекс Директ».'}
+                  </p>
+                </div>
+                <Switch
+                  id="acc-external"
+                  name="externalEnabled"
+                  checked={externalEnabled}
+                  onCheckedChange={setExternalEnabled}
+                  disabled={!canIntegrate}
+                />
+              </div>
+
+              {externalEnabled && canIntegrate ? (
+                <div className="mt-3 space-y-3 border-t border-border pt-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="acc-yandex-login">Логин клиента (необяз.)</Label>
+                    <Input
+                      id="acc-yandex-login"
+                      name="yandexLogin"
+                      defaultValue={editing?.yandexLogin ?? ''}
+                      placeholder="agency-client-login"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Для агентских аккаунтов — логин управляемого клиента.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="acc-yandex-token">OAuth-токен</Label>
+                    <Input
+                      id="acc-yandex-token"
+                      name="yandexToken"
+                      type="password"
+                      autoComplete="off"
+                      placeholder={
+                        editing?.hasToken
+                          ? '•••••••• (сохранён — оставьте пустым, чтобы не менять)'
+                          : 'y0_AgAAAA...'
+                      }
+                      required={!editing?.hasToken}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Токен хранится в зашифрованном виде и не отображается.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
           <DialogFooter>
