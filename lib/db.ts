@@ -1,4 +1,4 @@
-import { Pool, type QueryResultRow } from 'pg'
+import { Pool, type PoolClient, type QueryResultRow } from 'pg'
 
 /**
  * Single source of truth for the PostgreSQL connection.
@@ -74,6 +74,47 @@ export function getPool(): Pool {
     globalForDb.__pgPool = createPool()
   }
   return globalForDb.__pgPool
+}
+
+export interface DbExecutor {
+  query<T extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[],
+  ): Promise<T[]>
+}
+
+function executorFor(client: PoolClient): DbExecutor {
+  return {
+    async query<T extends QueryResultRow = QueryResultRow>(
+      text: string,
+      params?: unknown[],
+    ): Promise<T[]> {
+      const result = await client.query<T>(text, params as never)
+      return result.rows
+    },
+  }
+}
+
+export async function withTransaction<T>(
+  operation: (db: DbExecutor) => Promise<T>,
+  pool: Pick<Pool, 'connect'> = getPool(),
+): Promise<T> {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await operation(executorFor(client))
+    await client.query('COMMIT')
+    return result
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    } catch (rollbackError) {
+      console.error('[db] Transaction rollback failed:', rollbackError)
+    }
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function query<T extends QueryResultRow = QueryResultRow>(

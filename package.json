@@ -5,13 +5,15 @@
   "packageManager": "pnpm@10.34.1",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "pnpm build:widget && next build",
+    "build:widget": "node scripts/build-widget.mjs",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "typecheck:worker": "pnpm --dir worker typecheck",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts --passWithNoTests",
+    "test:browser": "playwright test",
     "db:migrate": "node --env-file-if-exists=.env.development.local scripts/migrate.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm typecheck:worker && pnpm test"
   },
@@ -50,6 +52,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.2.0",
     "@types/bcryptjs": "^3.0.0",
     "@types/node": "^24",
@@ -58,6 +61,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/web-push": "^3.6.4",
+    "esbuild": "^0.28.1",
     "eslint": "^9.39.4",
     "eslint-config-next": "16",
     "postcss": "^8.5.16",

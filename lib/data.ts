@@ -1,5 +1,5 @@
 import { randomUUID, randomBytes } from 'crypto'
-import { query } from './db'
+import { query, withTransaction } from './db'
 import { decrypt, encrypt, maskSecret } from './crypto'
 import type { ProxyDescriptor } from './proxy-agent'
 import { whatsappLinkFromPhone } from './offhours'
@@ -1747,8 +1747,8 @@ export async function listTransferTargets(
  * Hand a conversation off to another manager. Ownership-scoped: only the
  * current owner (fromManagerId) can transfer, which also prevents transferring
  * a thread you can't see. Clears the "reply dismissed" marker so the new owner
- * sees it as awaiting a reply, and records an audit row (best-effort: the
- * transfer still succeeds if migration 041 hasn't been applied yet).
+ * sees it as awaiting a reply, and records the audit row atomically. Migration
+ * 041 is therefore required and is applied by the supported migration runner.
  */
 export async function transferConversation(input: {
   conversationId: string
@@ -1765,17 +1765,17 @@ export async function transferConversation(input: {
     return false
   }
 
-  const rows = await query<{ id: string }>(
-    `UPDATE conversations
-        SET manager_id = $3, reply_dismissed_at = NULL
-      WHERE id = $1 AND manager_id = $2
-      RETURNING id`,
-    [input.conversationId, input.fromManagerId, input.toManagerId],
-  )
-  if (rows.length === 0) return false
+  return withTransaction(async (db) => {
+    const rows = await db.query<{ id: string }>(
+      `UPDATE conversations
+          SET manager_id = $3, reply_dismissed_at = NULL
+        WHERE id = $1 AND manager_id = $2
+        RETURNING id`,
+      [input.conversationId, input.fromManagerId, input.toManagerId],
+    )
+    if (rows.length === 0) return false
 
-  try {
-    await query(
+    await db.query(
       `INSERT INTO conversation_transfers
          (conversation_id, from_manager_id, to_manager_id, note)
        VALUES ($1, $2, $3, $4)`,
@@ -1786,11 +1786,8 @@ export async function transferConversation(input: {
         (input.note ?? '').slice(0, 500),
       ],
     )
-  } catch (err) {
-    // Audit table missing (pre-041) — don't fail the actual hand-off.
-    console.error('[v0] transfer audit skipped:', err)
-  }
-  return true
+    return true
+  })
 }
 
 /* ----------------------------- Live chat ---------------------------- */

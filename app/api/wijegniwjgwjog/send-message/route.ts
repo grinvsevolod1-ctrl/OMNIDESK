@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { requireAdmin } from '@/lib/auth'
-import { query } from '@/lib/db'
+import { query, withTransaction } from '@/lib/db'
 import { inputErrorResponse, readJson } from '@/lib/http/request'
 import { serverErrorResponse } from '@/lib/server-log'
 
@@ -25,17 +25,33 @@ export async function POST(req: Request) {
     }
 
     const author = direction === 'out' ? 'Менеджер' : conv[0].contact_name
-    await query(
-      `INSERT INTO messages (id, conversation_id, direction, body, author)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [randomUUID(), conversationId, direction, body, author],
-    )
-    await query(
-      'UPDATE conversations SET last_message = $2, last_message_at = now() WHERE id = $1',
-      [conversationId, body],
-    )
+    const requestedKey = req.headers.get('idempotency-key')?.trim()
+    const messageId = requestedKey && z.uuid().safeParse(requestedKey).success
+      ? requestedKey
+      : randomUUID()
 
-    return Response.json({ message: 'Сообщение отправлено' })
+    const inserted = await withTransaction(async (db) => {
+      const rows = await db.query<{ id: string }>(
+        `INSERT INTO messages (id, conversation_id, direction, body, author)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
+        [messageId, conversationId, direction, body, author],
+      )
+      if (rows.length === 0) return false
+
+      await db.query(
+        'UPDATE conversations SET last_message = $2, last_message_at = now() WHERE id = $1',
+        [conversationId, body],
+      )
+      return true
+    })
+
+    return Response.json({
+      message: 'Сообщение отправлено',
+      messageId,
+      duplicate: !inserted,
+    })
   } catch (error) {
     return inputErrorResponse(error) ?? serverErrorResponse('admin.send-message', error)
   }
