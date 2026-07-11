@@ -15,6 +15,7 @@ import {
   Users2,
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
+import { SecretSimulatorTest } from '@/components/admin/secret-simulator-test'
 import {
   simStatusAction,
   simToggleAction,
@@ -417,6 +418,9 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           Сохранить настройки
         </Button>
       </Card>
+
+      {/* ---- Interactive test sandbox ---- */}
+      <SecretSimulatorTest aggression={aggression} />
     </div>
   )
 }

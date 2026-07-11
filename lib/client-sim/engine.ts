@@ -266,7 +266,7 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
  * Weighted behaviour selection. Angrier tempers + higher profanity skew toward
  * anger/dismissal; "туповатый" skews confused; everyone can be curious.
  */
-function rollBehavior(
+export function rollBehavior(
   temper: string,
   profanity: number,
   turns: number,
