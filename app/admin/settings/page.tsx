@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   Circle,
   Database,
-  KeyRound,
   Lock,
   Server,
   ShieldCheck,

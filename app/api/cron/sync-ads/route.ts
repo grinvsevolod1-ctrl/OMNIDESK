@@ -1,5 +1,7 @@
+import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { syncAllAdAccounts } from '@/lib/ads-yandex'
+import { logServerError } from '@/lib/server-log'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -13,19 +15,30 @@ export const maxDuration = 60
  */
 export async function GET(request: Request): Promise<Response> {
   const secret = process.env.CRON_SECRET
-  if (secret) {
-    const auth = request.headers.get('authorization')
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
-    }
+  if (!secret) {
+    return NextResponse.json(
+      { ok: false, error: 'service_not_configured' },
+      { status: 503 },
+    )
+  }
+
+  const auth = request.headers.get('authorization') ?? ''
+  const expected = `Bearer ${secret}`
+  const authorized =
+    auth.length === expected.length &&
+    timingSafeEqual(Buffer.from(auth), Buffer.from(expected))
+  if (!authorized) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   }
 
   try {
     const result = await syncAllAdAccounts()
     return NextResponse.json({ ok: true, result })
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'Не удалось синхронизировать кабинеты.'
-    return NextResponse.json({ ok: false, error: message }, { status: 500 })
+  } catch (error) {
+    const errorId = logServerError('cron.sync-ads', error)
+    return NextResponse.json(
+      { ok: false, error: 'server_error', errorId },
+      { status: 500 },
+    )
   }
 }

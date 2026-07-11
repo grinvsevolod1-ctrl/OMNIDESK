@@ -6,6 +6,7 @@ import {
   resolveVkAgentId,
 } from '@/lib/data'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
 import {
   getUser,
@@ -68,9 +69,12 @@ export async function POST(
 
   let update: VkUpdate
   try {
-    update = (await request.json()) as VkUpdate
-  } catch {
-    return text('invalid_json', 400)
+    update = parseJsonBytes(await readBodyBytes(request, 256 * 1024)) as VkUpdate
+  } catch (error) {
+    return text(
+      error instanceof HttpInputError ? error.code : 'invalid_json',
+      error instanceof HttpInputError ? error.status : 400,
+    )
   }
 
   // 1. Handshake: echo the confirmation string. (No secret is sent yet.)

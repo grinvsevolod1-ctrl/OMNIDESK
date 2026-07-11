@@ -1461,7 +1461,7 @@ function OverviewPanel({
       {/* Accounts quick list */}
       {accounts.length > 0 ? (
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold">Кабинеты</h3>
+          <h3 className="text-sm font-semibold">К��бинеты</h3>
           <Card className="divide-y divide-border p-0">
             {accounts.map((a) => {
               const m = accountMetrics(a)
@@ -2868,7 +2868,8 @@ function AdAccountDialog({
   const [externalEnabled, setExternalEnabled] = useState(false)
   const [platform, setPlatform] = useState<AdPlatform>('yandex_direct')
 
-  // Синхронизируем локальное состояние при открытии/смене кабинета.
+  // This reusable dialog remains mounted; a changed entity must reset its draft.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (state?.mode === 'edit') {
       setExternalEnabled(state.account.externalEnabled)
@@ -2878,6 +2879,7 @@ function AdAccountDialog({
       setPlatform('yandex_direct')
     }
   }, [state])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const canIntegrate = platform === 'yandex_direct'
 
@@ -4013,6 +4015,8 @@ function VaultDialog({
   const [favorite, setFavorite] = useState(false)
   const [fields, setFields] = useState<VaultField[]>([])
 
+  // This reusable dialog remains mounted; a changed vault item resets its draft.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!state) return
     if (state.mode === 'edit') {
@@ -4039,6 +4043,7 @@ function VaultDialog({
     }
     setShowSecret(false)
   }, [state])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   function updateField(index: number, patch: Partial<VaultField>) {
     setFields((prev) =>

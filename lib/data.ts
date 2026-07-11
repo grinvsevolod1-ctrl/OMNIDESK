@@ -283,7 +283,7 @@ export async function listAllChannels(): Promise<Channel[]> {
 }
 
 export async function createChannel(input: {
-  managerId: string
+  managerId: string | null
   type: ChannelType
   name: string
   detail: string

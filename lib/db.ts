@@ -54,7 +54,7 @@ function createPool(): Pool {
   if (!connectionString) {
     throw new Error(
       'DATABASE_URL is not set. Configure it in your environment ' +
-        '(see .env.example) and run scripts/001_schema.sql + 003_engine.sql + 004_realtime.sql.',
+        '(see .env.example) and run `pnpm db:migrate`.',
     )
   }
   const pool = new Pool({

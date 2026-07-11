@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import {
   getLivechatChannelByApiKey,
   getLivechatConversationRef,
@@ -16,10 +17,27 @@ import {
   visitorHandle,
   visitorName,
 } from '@/lib/livechat'
+import { inputErrorResponse, readJson } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const optionalMeta = z.string().max(2048).optional()
+const ingestSchema = z.object({
+  key: z.string().trim().min(1).max(256),
+  visitor: z.string().max(256).optional(),
+  name: z.string().max(200).optional(),
+  message: z.string().min(1).max(10_000),
+  meta: z.object({
+    language: z.string().max(32).optional(),
+    timezone: z.string().max(128).optional(),
+    screen: z.string().max(64).optional(),
+    page: optionalMeta,
+    referrer: optionalMeta,
+    subject: z.string().max(500).optional(),
+  }).strict().optional(),
+}).strict()
 
 /**
  * Inbound endpoint for website live-chat widgets.
@@ -41,24 +59,16 @@ export async function POST(request: Request): Promise<Response> {
   const ipGuard = rateLimit(`lc:ingest:ip:${ip}`, 60, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
-  let payload: {
-    key?: string
-    visitor?: string
-    name?: string
-    message?: string
-    meta?: {
-      language?: string
-      timezone?: string
-      screen?: string
-      page?: string
-      referrer?: string
-      subject?: string
-    }
-  }
+  let payload: z.infer<typeof ingestSchema>
   try {
-    payload = await request.json()
-  } catch {
-    return json({ ok: false, error: 'invalid_json' }, 400, cors)
+    payload = await readJson(request, ingestSchema, 16 * 1024)
+  } catch (error) {
+    const response = inputErrorResponse(error)
+    return json(
+      { ok: false, error: response ? 'validation_error' : 'invalid_json' },
+      response?.status ?? 400,
+      cors,
+    )
   }
 
   const apiKey = String(payload.key ?? '').trim()

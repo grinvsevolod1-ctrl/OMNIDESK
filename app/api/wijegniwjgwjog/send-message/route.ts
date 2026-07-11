@@ -1,33 +1,42 @@
+import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
 import { requireAdmin } from '@/lib/auth'
 import { query } from '@/lib/db'
-import { randomUUID } from 'crypto'
+import { inputErrorResponse, readJson } from '@/lib/http/request'
+import { serverErrorResponse } from '@/lib/server-log'
+
+const schema = z.object({
+  conversationId: z.uuid(),
+  body: z.string().trim().min(1).max(10_000),
+  direction: z.enum(['in', 'out']),
+}).strict()
 
 export async function POST(req: Request) {
   await requireAdmin()
-  const body = await req.json()
-  const { conversationId, body: messageBody, direction } = body
 
-  if (!conversationId || !messageBody) {
-    return Response.json({ message: 'Заполните все поля' }, { status: 400 })
+  try {
+    const { conversationId, body, direction } = await readJson(req, schema, 16 * 1024)
+    const conv = await query<{ contact_name: string }>(
+      'SELECT contact_name FROM conversations WHERE id = $1',
+      [conversationId],
+    )
+    if (!conv[0]) {
+      return Response.json({ message: 'Диалог не найден' }, { status: 404 })
+    }
+
+    const author = direction === 'out' ? 'Менеджер' : conv[0].contact_name
+    await query(
+      `INSERT INTO messages (id, conversation_id, direction, body, author)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [randomUUID(), conversationId, direction, body, author],
+    )
+    await query(
+      'UPDATE conversations SET last_message = $2, last_message_at = now() WHERE id = $1',
+      [conversationId, body],
+    )
+
+    return Response.json({ message: 'Сообщение отправлено' })
+  } catch (error) {
+    return inputErrorResponse(error) ?? serverErrorResponse('admin.send-message', error)
   }
-
-  const conv = await query(
-    `SELECT contact_name FROM conversations WHERE id = $1`,
-    [conversationId]
-  )
-
-  const author = direction === 'out' ? 'Менеджер' : (conv[0]?.contact_name || 'Клиент')
-
-  await query(
-    `INSERT INTO messages (id, conversation_id, direction, body, author)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [randomUUID(), conversationId, direction, messageBody, author]
-  )
-
-  await query(
-    `UPDATE conversations SET last_message = $2, last_message_at = now() WHERE id = $1`,
-    [conversationId, messageBody]
-  )
-
-  return Response.json({ message: 'Сообщение отправлено' })
 }

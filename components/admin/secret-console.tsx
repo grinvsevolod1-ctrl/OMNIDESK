@@ -160,11 +160,12 @@ export function SecretConsole({
 
   const listRefetch = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Mirror the selected id into a ref during render so the long-lived SSE
-  // handler (subscribed once) always reads the latest value without needing
-  // to re-subscribe. Assigning in render is safe and lint-clean.
+  // Mirror the selected id after commit so the long-lived SSE handler reads
+  // the latest selection without mutating a ref during render.
   const selectedIdRef = useRef<string | null>(null)
-  selectedIdRef.current = selectedId
+  useEffect(() => {
+    selectedIdRef.current = selectedId
+  }, [selectedId])
 
   /* ----- list loading (server-side search + filter) ----- */
   const loadList = useCallback(
@@ -211,6 +212,7 @@ export function SecretConsole({
 
   // Load (or clear) the open thread whenever the selection changes. This is a
   // legitimate "sync with an external system on selection change" effect.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (selectedId) void loadThread(selectedId)
     else {
@@ -218,6 +220,7 @@ export function SecretConsole({
       setMessages([])
     }
   }, [selectedId, loadThread])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   /* ----- live updates via admin SSE ----- */
   useEffect(() => {
@@ -936,7 +939,7 @@ function CreateConversationDialog({
           </Button>
           <Button disabled={pending} onClick={submit} className="gap-1.5">
             {pending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            Создать
+            Соз��ать
           </Button>
         </DialogFooter>
       </DialogContent>

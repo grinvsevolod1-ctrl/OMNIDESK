@@ -169,6 +169,7 @@ function NavLinks({
     !!item.children && item.children.some((c) => c.href === activeHref)
 
   // Auto-open the group that contains the active route whenever it changes.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setOpenGroups((prev) => {
       const next = { ...prev }
@@ -179,6 +180,7 @@ function NavLinks({
       return next
     })
   }, [activeHref, nav])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     function measure() {

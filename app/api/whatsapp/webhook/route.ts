@@ -9,6 +9,7 @@ import {
 import type { MediaType } from '@/lib/types'
 import { whatsappErrorText } from '@/lib/whatsapp-cloud'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -190,8 +191,17 @@ export async function POST(request: Request): Promise<Response> {
   const { verifyToken, appSecret } = await getWhatsappWebhookSecrets()
   if (!verifyToken) return json({ ok: false, error: 'not_configured' }, 503)
 
-  // Read the raw body so we can verify the signature byte-for-byte.
-  const raw = await request.text()
+  // Read bounded raw bytes so signature verification uses the exact payload.
+  let rawBytes: Uint8Array
+  try {
+    rawBytes = await readBodyBytes(request, 1024 * 1024)
+  } catch (error) {
+    return json(
+      { ok: false, error: error instanceof HttpInputError ? error.code : 'invalid_body' },
+      error instanceof HttpInputError ? error.status : 400,
+    )
+  }
+  const raw = new TextDecoder().decode(rawBytes)
 
   // Verify X-Hub-Signature-256 when an app secret is configured. Without one we
   // can't verify, so we accept (admin opted out of signing).
@@ -213,7 +223,7 @@ export async function POST(request: Request): Promise<Response> {
 
   let body: WaWebhookBody
   try {
-    body = JSON.parse(raw) as WaWebhookBody
+    body = parseJsonBytes(rawBytes) as WaWebhookBody
   } catch {
     return json({ ok: false, error: 'invalid_json' }, 400)
   }

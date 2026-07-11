@@ -1,4 +1,6 @@
+import { z } from 'zod'
 import { getLivechatChannelByApiKey, recordMessengerClick } from '@/lib/data'
+import { inputErrorResponse, readJson } from '@/lib/http/request'
 import {
   clientIp,
   corsHeaders,
@@ -10,6 +12,11 @@ import { rateLimit } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const trackSchema = z.object({
+  key: z.string().trim().min(1).max(256),
+  messenger: z.enum(['telegram', 'whatsapp']),
+}).strict()
 
 /**
  * Records a chat → messenger transition from the website live-chat widget.
@@ -31,18 +38,16 @@ export async function POST(request: Request): Promise<Response> {
   const ipGuard = rateLimit(`lc:track:ip:${clientIp(request.headers)}`, 30, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
-  let payload: { key?: unknown; messenger?: unknown } = {}
+  let payload: z.infer<typeof trackSchema>
   try {
-    payload = await request.json()
-  } catch {
-    return json({ ok: false, error: 'bad_request' }, 400, cors)
+    payload = await readJson(request, trackSchema, 2 * 1024)
+  } catch (error) {
+    const response = inputErrorResponse(error)
+    return json({ ok: false, error: response ? 'validation_error' : 'bad_request' }, response?.status ?? 400, cors)
   }
 
-  const apiKey = String(payload.key ?? '').trim()
-  const messenger = String(payload.messenger ?? '').trim()
-  if (messenger !== 'telegram' && messenger !== 'whatsapp') {
-    return json({ ok: false, error: 'bad_messenger' }, 400, cors)
-  }
+  const apiKey = payload.key
+  const messenger = payload.messenger
 
   const channel = apiKey ? await getLivechatChannelByApiKey(apiKey) : null
   if (!channel) return json({ ok: false, error: 'invalid_key' }, 401, cors)

@@ -5,6 +5,7 @@ import {
   resolveMaxAgentId,
 } from '@/lib/data'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
 import { maxUserName, type MaxUpdate } from '@/lib/max'
 
@@ -56,9 +57,12 @@ export async function POST(
 
   let update: MaxUpdate
   try {
-    update = (await request.json()) as MaxUpdate
-  } catch {
-    return json({ ok: false, error: 'invalid_json' }, 400)
+    update = parseJsonBytes(await readBodyBytes(request, 256 * 1024)) as MaxUpdate
+  } catch (error) {
+    return json(
+      { ok: false, error: error instanceof HttpInputError ? error.code : 'invalid_json' },
+      error instanceof HttpInputError ? error.status : 400,
+    )
   }
 
   // We only ingest text messages. Other update types (bot_started, callbacks,

@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import {
   getLivechatChannelByApiKey,
   getLivechatConversationRef,
@@ -11,11 +12,20 @@ import {
   visitorHandle,
   visitorName,
 } from '@/lib/livechat'
+import { inputErrorResponse, readJson } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
 import { publishRealtime } from '@/lib/realtime'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const typingSchema = z.object({
+  key: z.string().trim().min(1).max(256),
+  visitor: z.string().max(256).optional(),
+  name: z.string().max(200).optional(),
+  typing: z.boolean().optional(),
+  draft: z.string().max(500).optional(),
+}).strict()
 
 /**
  * Ephemeral "visitor is typing" ping from the website widget.
@@ -39,17 +49,12 @@ export async function POST(request: Request): Promise<Response> {
   const ipGuard = rateLimit(`lc:typing:ip:${clientIp(request.headers)}`, 240, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
-  let payload: {
-    key?: string
-    visitor?: string
-    name?: string
-    typing?: boolean
-    draft?: string
-  }
+  let payload: z.infer<typeof typingSchema>
   try {
-    payload = (await request.json()) as typeof payload
-  } catch {
-    return new Response('Bad Request', { status: 400, headers: cors })
+    payload = await readJson(request, typingSchema, 4 * 1024)
+  } catch (error) {
+    const response = inputErrorResponse(error)
+    return new Response(response?.body, { status: response?.status ?? 400, headers: cors })
   }
 
   const apiKey = String(payload.key ?? '').trim()
