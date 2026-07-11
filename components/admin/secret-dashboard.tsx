@@ -9,6 +9,7 @@ import {
   Antenna,
   ArrowUpRight,
   Ban,
+  Bot,
   CheckCircle2,
   Copy,
   Database,
@@ -76,6 +77,7 @@ import { cn } from '@/lib/utils'
 import type { Channel, Manager } from '@/lib/types'
 import { MessagesTrendChart, ChannelsTypeChart } from '@/components/admin/secret-charts'
 import { SecretConsole } from '@/components/admin/secret-console'
+import { SecretSimulatorTab } from '@/components/admin/secret-simulator-tab'
 import {
   SecretAdsTab,
   type SecretAdAccount,
@@ -240,6 +242,10 @@ export function SecretDashboard({
             <Zap className="size-3.5" />
             Наплыв
           </TabsTrigger>
+          <TabsTrigger value="simulator" className="gap-1.5">
+            <Bot className="size-3.5" />
+            Симулятор
+          </TabsTrigger>
           <TabsTrigger value="overview">Обзор</TabsTrigger>
           <TabsTrigger value="managers">Менеджеры</TabsTrigger>
           <TabsTrigger value="channels">Каналы</TabsTrigger>
@@ -269,6 +275,9 @@ export function SecretDashboard({
         </TabsContent>
         <TabsContent value="console" className="mt-4">
           <SecretConsole channels={channels} managers={managers} />
+        </TabsContent>
+        <TabsContent value="simulator" className="mt-4">
+          <SecretSimulatorTab channels={channels} />
         </TabsContent>
         <TabsContent value="bulk" className="mt-4">
           <MassImportTab
