@@ -46,22 +46,52 @@ function mapSettings(r: SettingsRow): SimSettings {
   }
 }
 
-const SETTINGS_COLS = `enabled, channel_ids, aggression, max_threads,
+const SETTINGS_COLS_BASE = `enabled, channel_ids, aggression, max_threads,
   spawn_min_sec, spawn_max_sec, reply_min_sec, reply_max_sec,
-  next_spawn_at, spawned_total, replies_total, started_at, updated_at,
-  learned_profile`
+  next_spawn_at, spawned_total, replies_total, started_at, updated_at`
+const SETTINGS_COLS = `${SETTINGS_COLS_BASE}, learned_profile`
 
 /** Read the singleton settings row, creating it if missing. */
+/**
+ * Read the singleton settings row. Resilient to the `learned_profile` column
+ * not existing yet (migration 050 not applied): in that case it transparently
+ * re-queries without the column instead of throwing a 500 that would take down
+ * the whole god panel.
+ */
 export async function getSettings(): Promise<SimSettings> {
-  const rows = await query<SettingsRow>(
-    `SELECT ${SETTINGS_COLS} FROM sim_settings WHERE id = true LIMIT 1`,
-  )
-  if (rows[0]) return mapSettings(rows[0])
+  const selectRow = async (): Promise<SettingsRow | undefined> => {
+    try {
+      const rows = await query<SettingsRow>(
+        `SELECT ${SETTINGS_COLS} FROM sim_settings WHERE id = true LIMIT 1`,
+      )
+      return rows[0]
+    } catch (err) {
+      // 42703 = undefined_column. Fall back to the pre-050 column set.
+      if (isUndefinedColumn(err)) {
+        console.log(
+          '[v0][client-sim] learned_profile column missing — run migration 050. Falling back.',
+        )
+        const rows = await query<Omit<SettingsRow, 'learned_profile'>>(
+          `SELECT ${SETTINGS_COLS_BASE} FROM sim_settings WHERE id = true LIMIT 1`,
+        )
+        return rows[0] ? { ...rows[0], learned_profile: null } : undefined
+      }
+      throw err
+    }
+  }
+
+  const row = await selectRow()
+  if (row) return mapSettings(row)
   await query(`INSERT INTO sim_settings (id) VALUES (true) ON CONFLICT DO NOTHING`)
-  const again = await query<SettingsRow>(
-    `SELECT ${SETTINGS_COLS} FROM sim_settings WHERE id = true LIMIT 1`,
-  )
-  return mapSettings(again[0])
+  const again = await selectRow()
+  return mapSettings(again as SettingsRow)
+}
+
+function isUndefinedColumn(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const code = (err as { code?: string }).code
+  const msg = (err as { message?: string }).message ?? ''
+  return code === '42703' || /learned_profile|column .* does not exist/i.test(msg)
 }
 
 export interface SettingsPatch {
