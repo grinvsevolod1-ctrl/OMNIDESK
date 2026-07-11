@@ -1,15 +1,10 @@
-import {
-  ArrowRight,
-  MessageCircle,
-  MessageSquare,
-  Phone,
-  Plug,
-  Send,
-  Server,
-  Users,
-} from 'lucide-react'
+import { ArrowRight, Plug, Server } from 'lucide-react'
 import Link from 'next/link'
 import { ChannelCard } from '@/components/manager/channel-card'
+import {
+  channelIcon,
+  type BrandIconComponent,
+} from '@/components/channel-icons'
 import { Button } from '@/components/ui/button'
 import { EmptyState, PageHeader } from '@/components/page-parts'
 import { requireManager } from '@/lib/auth'
@@ -17,13 +12,14 @@ import { listChannels, listProxies } from '@/lib/data'
 import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
 import { type Channel, type ChannelType } from '@/lib/types'
 
-const GROUPS: { type: ChannelType; label: string; icon: typeof Send }[] = [
-  { type: 'telegram', label: 'Telegram', icon: Send },
-  { type: 'whatsapp', label: 'WhatsApp', icon: Phone },
-  { type: 'livechat', label: 'Онлайн-чат', icon: MessageCircle },
-  { type: 'max', label: 'MAX', icon: MessageSquare },
-  { type: 'vk', label: 'VK', icon: Users },
-]
+const GROUPS: { type: ChannelType; label: string; icon: BrandIconComponent }[] =
+  [
+    { type: 'telegram', label: 'Telegram', icon: channelIcon('telegram') },
+    { type: 'whatsapp', label: 'WhatsApp', icon: channelIcon('whatsapp') },
+    { type: 'livechat', label: 'Онлайн-чат', icon: channelIcon('livechat') },
+    { type: 'max', label: 'MAX', icon: channelIcon('max') },
+    { type: 'vk', label: 'VK', icon: channelIcon('vk') },
+  ]
 
 export default async function ConnectionsPage() {
   const session = await requireManager()

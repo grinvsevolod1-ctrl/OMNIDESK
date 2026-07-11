@@ -10,7 +10,6 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  AtSign,
   BarChart3,
   Bot,
   BookOpen,
@@ -21,23 +20,26 @@ import {
   LogOut,
   Menu,
   MessageCircle,
-  MessageSquare,
   MessageSquareText,
   PanelLeft,
-  Phone,
   Plug,
   Radio,
-  Send,
   Server,
   Settings,
   Users,
-  Video,
   Wallet,
   X,
-  type LucideIcon,
 } from 'lucide-react'
+import type { ComponentType } from 'react'
 import { logoutAction } from '@/app/actions/auth'
 import { BrandMark } from '@/components/brand'
+import {
+  MaxIcon,
+  TelegramIcon,
+  TelemostIcon,
+  VkIcon,
+  WhatsappIcon,
+} from '@/components/channel-icons'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
@@ -68,14 +70,14 @@ export type NavIcon =
   | 'docs'
   | 'settings'
 
-const ICONS: Record<NavIcon, LucideIcon> = {
+const ICONS: Record<NavIcon, ComponentType<{ className?: string }>> = {
   overview: LayoutDashboard,
   managers: Users,
   channels: Radio,
-  whatsapp: Phone,
-  telegram: Send,
-  vk: AtSign,
-  max: MessageSquare,
+  whatsapp: WhatsappIcon,
+  telegram: TelegramIcon,
+  vk: VkIcon,
+  max: MaxIcon,
   connections: Plug,
   inbox: Inbox,
   proxies: Server,
@@ -83,7 +85,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   analytics: BarChart3,
   quickReplies: MessageSquareText,
   autopilot: Bot,
-  telemost: Video,
+  telemost: TelemostIcon,
   finance: Wallet,
   docs: BookOpen,
   settings: Settings,

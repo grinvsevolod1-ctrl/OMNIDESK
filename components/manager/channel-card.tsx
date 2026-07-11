@@ -4,15 +4,11 @@ import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   AlertTriangle,
-  MessageCircle,
-  MessageSquare,
   Pause,
-  Phone,
   RefreshCw,
-  Send,
   ShieldCheck,
-  Users,
 } from 'lucide-react'
+import { channelIcon } from '@/components/channel-icons'
 import { toast } from 'sonner'
 import {
   getChannelStatusAction,
@@ -22,16 +18,8 @@ import { SessionBadge, StatusBadge } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { CHANNEL_META, type Channel, type ChannelType } from '@/lib/types'
+import { CHANNEL_META, type Channel } from '@/lib/types'
 import { cn } from '@/lib/utils'
-
-const ICONS: Record<ChannelType, typeof Send> = {
-  telegram: Send,
-  whatsapp: Phone,
-  livechat: MessageCircle,
-  max: MessageSquare,
-  vk: Users,
-}
 
 // How often the card re-checks a personal session, and the ceiling on
 // consecutive automatic restart attempts before we stop and defer to the admin.
@@ -56,7 +44,7 @@ export function ChannelCard({ channel }: { channel: Channel }) {
   const [lastError, setLastError] = useState(channel.lastError)
   const [autoReconnecting, setAutoReconnecting] = useState(false)
   const attemptsRef = useRef(0)
-  const Icon = ICONS[channel.type]
+  const Icon = channelIcon(channel.type)
 
   // Only Telegram is a socket-backed "personal" account that can drop and needs
   // reconnecting via the worker. WhatsApp (Cloud API), VK and MAX are all

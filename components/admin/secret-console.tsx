@@ -13,7 +13,6 @@ import {
   ArrowLeft,
   Ban,
   CheckCheck,
-  Globe,
   Loader2,
   Mail,
   MailOpen,
@@ -21,7 +20,6 @@ import {
   MessagesSquare,
   Paperclip,
   Pencil,
-  Phone,
   Plus,
   Radio,
   Search,
@@ -29,8 +27,8 @@ import {
   ShieldCheck,
   Trash2,
   UserRound,
-  Users,
 } from 'lucide-react'
+import { channelIcon, type BrandIconComponent } from '@/components/channel-icons'
 import {
   secretCreateConversationAction,
   secretDeleteConversationAction,
@@ -78,12 +76,12 @@ const TYPE_LABEL: Record<string, string> = {
   livechat: 'Онлайн-чат',
 }
 
-const TYPE_ICON: Record<string, typeof Send> = {
-  telegram: Send,
-  whatsapp: Phone,
-  vk: Users,
-  max: MessageSquare,
-  livechat: Globe,
+const TYPE_ICON: Record<string, BrandIconComponent> = {
+  telegram: channelIcon('telegram'),
+  whatsapp: channelIcon('whatsapp'),
+  vk: channelIcon('vk'),
+  max: channelIcon('max'),
+  livechat: channelIcon('livechat'),
 }
 
 const CONV_STATUS_LABEL: Record<string, string> = {

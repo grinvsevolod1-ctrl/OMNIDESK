@@ -31,14 +31,11 @@ import {
   Loader2,
   MapPin,
   MessageCircle,
-  MessageSquare,
   Monitor,
   MoreVertical,
   Paperclip,
-  Phone,
   Reply,
   Search,
-  Send,
   SendHorizonal,
   SlidersHorizontal,
   Smile,
@@ -46,8 +43,6 @@ import {
   Tag,
   Trash2,
   UserPlus,
-  Users,
-  Video,
   X,
   Zap,
 } from 'lucide-react'
@@ -121,6 +116,11 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { AutopilotToggle } from '@/components/manager/autopilot-toggle'
+import {
+  channelIcon,
+  TelemostIcon,
+  type BrandIconComponent,
+} from '@/components/channel-icons'
 import { cn } from '@/lib/utils'
 import {
   APP_TIME_ZONE,
@@ -160,17 +160,23 @@ import type {
  */
 const CHANNEL_VISUAL: Record<
   ChannelType,
-  { icon: typeof Send; short: string; badge: string; accentText: string; dot: string }
+  {
+    icon: BrandIconComponent
+    short: string
+    badge: string
+    accentText: string
+    dot: string
+  }
 > = {
   telegram: {
-    icon: Send,
+    icon: channelIcon('telegram'),
     short: 'Telegram',
     badge: 'bg-sky-500/10 text-sky-600 border-sky-500/20 dark:text-sky-400',
     accentText: 'text-sky-600 dark:text-sky-400',
     dot: 'bg-sky-500',
   },
   whatsapp: {
-    icon: Phone,
+    icon: channelIcon('whatsapp'),
     short: 'WhatsApp',
     badge:
       'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 dark:text-emerald-400',
@@ -178,14 +184,14 @@ const CHANNEL_VISUAL: Record<
     dot: 'bg-emerald-500',
   },
   livechat: {
-    icon: MessageCircle,
+    icon: channelIcon('livechat'),
     short: 'Виджет',
     badge: 'bg-muted text-muted-foreground border-border',
     accentText: 'text-muted-foreground',
     dot: 'bg-muted-foreground',
   },
   max: {
-    icon: MessageSquare,
+    icon: channelIcon('max'),
     short: 'MAX',
     badge:
       'bg-amber-500/10 text-amber-600 border-amber-500/20 dark:text-amber-400',
@@ -193,7 +199,7 @@ const CHANNEL_VISUAL: Record<
     dot: 'bg-amber-500',
   },
   vk: {
-    icon: Users,
+    icon: channelIcon('vk'),
     short: 'VK',
     badge:
       'bg-blue-500/10 text-blue-600 border-blue-500/20 dark:text-blue-400',
@@ -698,13 +704,10 @@ function ContactAvatar({
         </AvatarFallback>
       </Avatar>
       <span
-        className={cn(
-          'absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full border-2 border-card',
-          v.dot,
-        )}
+        className="absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-card ring-2 ring-card"
         aria-hidden
       >
-        <Icon className="size-2 text-white" />
+        <Icon className="size-4 rounded-full" />
       </span>
     </div>
   )
@@ -1498,7 +1501,7 @@ function DeliveryTicks({ status }: { status?: Message['status'] }) {
     )
   }
   if (status === 'read') {
-    return <CheckCheck className="size-3 text-sky-400" aria-label="Прочитано" />
+    return <CheckCheck className="size-3 text-sky-400" aria-label="Прочи��ано" />
   }
   if (status === 'delivered') {
     return <CheckCheck className="size-3" aria-label="Доставлено" />
@@ -3531,7 +3534,7 @@ export function InboxView({
                     {meetingPending ? (
                       <Loader2 className="size-4 animate-spin" />
                     ) : (
-                      <Video className="size-4" />
+                      <TelemostIcon className="size-4" />
                     )}
                   </Button>
                 ) : null}
