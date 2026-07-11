@@ -12,7 +12,6 @@ import {
   CheckCircle2,
   Copy,
   Database,
-  Globe,
   Loader2,
   MessagesSquare,
   Pause,
@@ -31,7 +30,7 @@ import {
   Users,
   Zap,
 } from 'lucide-react'
-import { channelIcon, type BrandIconComponent } from '@/components/channel-icons'
+import { ChannelIcon } from '@/components/channel-icons'
 import {
   secretBulkCreateConversationsAction,
   secretCreateChannelAction,
@@ -114,13 +113,6 @@ const TYPE_LABEL: Record<string, string> = {
   livechat: 'Онлайн-чат',
 }
 
-const TYPE_ICON: Record<string, BrandIconComponent> = {
-  telegram: channelIcon('telegram'),
-  whatsapp: channelIcon('whatsapp'),
-  vk: channelIcon('vk'),
-  max: channelIcon('max'),
-  livechat: channelIcon('livechat'),
-}
 
 const CONV_STATUS_LABEL: Record<string, string> = {
   liquid: 'Ликвид',
@@ -506,7 +498,7 @@ function ManagersTab({
                       {m.name}
                       {m.onLunch ? (
                         <Badge variant="outline" className="border-warning/40 text-warning">
-                          На обеде
+                          ��а обеде
                         </Badge>
                       ) : null}
                     </div>
@@ -1038,7 +1030,6 @@ function ChannelsTab({
       {filtered.length ? (
         <div className="divide-y divide-border">
           {filtered.map((ch) => {
-            const Icon = TYPE_ICON[ch.type] ?? Antenna
             return (
               <div
                 key={ch.id}
@@ -1046,7 +1037,7 @@ function ChannelsTab({
               >
                 <div className="flex items-start gap-3">
                   <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
-                    <Icon className="size-4 text-muted-foreground" />
+                    <ChannelIcon type={ch.type} className="size-4" />
                   </div>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1164,7 +1155,7 @@ function CreateChannelDialog({
           <DialogTitle>Создать канал</DialogTitle>
           <DialogDescription>
             Ручное создание записи канала. Для реального подключения Telegram/WhatsApp
-            используйте мастер в разделе «Аккаунты».
+            используйте мастер в разделе «Акк��унты».
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">

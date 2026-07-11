@@ -28,7 +28,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react'
-import { channelIcon, type BrandIconComponent } from '@/components/channel-icons'
+import { ChannelIcon } from '@/components/channel-icons'
 import {
   secretCreateConversationAction,
   secretDeleteConversationAction,
@@ -74,14 +74,6 @@ const TYPE_LABEL: Record<string, string> = {
   vk: 'VK',
   max: 'MAX',
   livechat: 'Онлайн-чат',
-}
-
-const TYPE_ICON: Record<string, BrandIconComponent> = {
-  telegram: channelIcon('telegram'),
-  whatsapp: channelIcon('whatsapp'),
-  vk: channelIcon('vk'),
-  max: channelIcon('max'),
-  livechat: channelIcon('livechat'),
 }
 
 const CONV_STATUS_LABEL: Record<string, string> = {
@@ -404,7 +396,6 @@ export function SecretConsole({
           ) : (
             <ul>
               {conversations.map((c) => {
-                const Icon = TYPE_ICON[c.channelType] ?? MessageSquare
                 const active = c.id === selectedId
                 return (
                   <li key={c.id}>
@@ -420,8 +411,8 @@ export function SecretConsole({
                         <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
                           {initials(c.contactName)}
                         </div>
-                        <span className="absolute -bottom-1 -right-1 flex size-4.5 items-center justify-center rounded-full border-2 border-card bg-muted">
-                          <Icon className="size-2.5 text-muted-foreground" />
+                        <span className="absolute -bottom-1 -right-1 flex size-4.5 items-center justify-center rounded-full border-2 border-card bg-card">
+                          <ChannelIcon type={c.channelType} className="size-3 rounded-full" />
                         </span>
                       </div>
                       <div className="min-w-0 flex-1">
@@ -605,7 +596,6 @@ function ThreadHeader({
   onEdit: () => void
   onDelete: () => void
 }) {
-  const Icon = TYPE_ICON[conversation.channelType] ?? MessageSquare
   const blocked = Boolean(conversation.contactBlocked)
   return (
     <div className="flex flex-col gap-2 border-b border-border p-3">
@@ -626,7 +616,7 @@ function ThreadHeader({
           <div className="flex items-center gap-2">
             <span className="truncate font-semibold">{conversation.contactName}</span>
             <Badge variant="secondary" className="gap-1">
-              <Icon className="size-3" />
+              <ChannelIcon type={conversation.channelType} className="size-3 rounded-full" />
               {TYPE_LABEL[conversation.channelType] ?? conversation.channelType}
             </Badge>
             {blocked && (

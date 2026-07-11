@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, type ComponentType } from 'react'
 import {
   Calendar,
   Check,
@@ -267,7 +267,7 @@ function StatCard({
   label,
   value,
 }: {
-  icon: typeof Video
+  icon: ComponentType<{ className?: string }>
   label: string
   value: string | number
 }) {
