@@ -1,6 +1,7 @@
 import type { SimState, SimThreadRow } from './types'
 import { chance, makePersona, randInt } from './content'
 import { type Behavior, generateReply } from './generate'
+import { ensureLock, releaseLock } from './lock'
 import {
   bumpRepliesTotal,
   claimDueThreads,
@@ -29,8 +30,12 @@ import type { ChannelType } from '@/lib/types'
  *
  * All timing is persisted in the DB (next_run_at / next_spawn_at), so the loop
  * is stateless and survives restarts — on boot it simply resumes from whatever
- * is due. Only ONE process should run the loop; we guard with a global flag and
- * the DB-level atomic claims make double-processing harmless anyway.
+ * is due.
+ *
+ * Single-instance: work only happens in the process that holds a PostgreSQL
+ * advisory lock (see ./lock). On a single-process VPS that's always this one;
+ * in a cluster, standby processes idle and take over if the owner dies. The
+ * DB-level atomic claims make any brief overlap harmless anyway.
  */
 
 const TICK_MS = 5_000
@@ -75,6 +80,8 @@ export function stopEngine(): void {
     h.timer = null
   }
   h.running = false
+  // Give up the lock so a standby process (if any) can take over immediately.
+  void releaseLock()
   console.log('[v0][client-sim] engine stopped')
 }
 
@@ -86,6 +93,13 @@ async function tick(): Promise<void> {
   h.ticking = true
   try {
     if (!process.env.DATABASE_URL) return
+
+    // Single-instance guard: only the process holding the advisory lock does
+    // real work. Standby processes keep ticking and will take over if the
+    // owner dies (PostgreSQL frees the lock on session end).
+    const owns = await ensureLock()
+    if (!owns) return
+
     const settings = await getSettings()
     if (!settings.enabled) return
 
