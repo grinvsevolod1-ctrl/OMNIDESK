@@ -15,6 +15,7 @@ import {
   Users2,
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
+import { SecretSimulatorLearn } from '@/components/admin/secret-simulator-learn'
 import { SecretSimulatorTest } from '@/components/admin/secret-simulator-test'
 import {
   simStatusAction,
@@ -295,6 +296,12 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           ))}
         </Card>
       )}
+
+      {/* ---- Learn from real dialogues ---- */}
+      <SecretSimulatorLearn
+        key={status?.learnedProfile?.learnedAt ?? 'none'}
+        initial={status?.learnedProfile ?? null}
+      />
 
       {/* ---- Tunables ---- */}
       <Card className="flex flex-col gap-6 p-5">

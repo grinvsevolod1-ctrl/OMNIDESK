@@ -1,6 +1,7 @@
 import { generateText } from 'ai'
 import type { SimPersona } from './types'
 import { applyStyle, templateLine, type TemplateKind } from './content'
+import { getLearnedPointersCached } from './store'
 
 /**
  * What the persona is doing on this turn. The engine rolls this from the
@@ -45,6 +46,8 @@ interface GenArgs {
   behavior: Behavior
   /** Real client lines sampled from past dialogues, used as a style reference. */
   referenceLines?: string[]
+  /** Distilled pointers from the "learn from all dialogues" run. */
+  learnedPointers?: string[]
 }
 
 function referenceBlock(lines: string[] | undefined): string {
@@ -59,10 +62,21 @@ function referenceBlock(lines: string[] | undefined): string {
   ].join('\n')
 }
 
+function learnedBlock(pointers: string[] | undefined): string {
+  if (!pointers || pointers.length === 0) return ''
+  const list = pointers.slice(0, 12).map((p) => `- ${p}`).join('\n')
+  return [
+    '',
+    'ВЫВОДЫ ИЗ АНАЛИЗА РЕАЛЬНЫХ ДИАЛОГОВ (следуй этим наблюдениям, чтобы звучать максимально правдоподобно):',
+    list,
+  ].join('\n')
+}
+
 function systemPrompt(
   persona: SimPersona,
   behavior: Behavior,
   referenceLines?: string[],
+  learnedPointers?: string[],
 ): string {
   const s = persona.style
   return [
@@ -84,6 +98,7 @@ function systemPrompt(
     '',
     'Менеджер часто предлагает мутную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
     referenceBlock(referenceLines),
+    learnedBlock(learnedPointers),
     '',
     `СЕЙЧАС: ${BEHAVIOR_HINT[behavior]}`,
     '',
@@ -119,6 +134,10 @@ export async function generateReply(args: GenArgs): Promise<string> {
 
   if (aiConfigured()) {
     try {
+      // Pull in whatever the last "learn" run distilled (cached, cheap). Falls
+      // back to the caller-provided pointers if present.
+      const learnedPointers =
+        args.learnedPointers ?? (await getLearnedPointersCached())
       // Recent context only — keeps it cheap and snappy.
       const recent = history.slice(-12)
       const messages = recent.map((m) => ({
@@ -132,7 +151,7 @@ export async function generateReply(args: GenArgs): Promise<string> {
 
       const { text } = await generateText({
         model: MODEL,
-        system: systemPrompt(persona, behavior, referenceLines),
+        system: systemPrompt(persona, behavior, referenceLines, learnedPointers),
         messages,
         temperature: 1,
         maxOutputTokens: 120,

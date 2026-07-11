@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { query } from '@/lib/db'
 import type { ChannelType } from '@/lib/types'
 import type {
+  LearnedProfile,
   SimPersona,
   SimSettings,
   SimState,
@@ -24,6 +25,7 @@ interface SettingsRow {
   replies_total: number
   started_at: string | Date | null
   updated_at: string | Date
+  learned_profile: LearnedProfile | null
 }
 
 function mapSettings(r: SettingsRow): SimSettings {
@@ -40,12 +42,14 @@ function mapSettings(r: SettingsRow): SimSettings {
     repliesTotal: r.replies_total,
     startedAt: r.started_at ? new Date(r.started_at).toISOString() : null,
     updatedAt: new Date(r.updated_at).toISOString(),
+    learnedProfile: r.learned_profile ?? null,
   }
 }
 
 const SETTINGS_COLS = `enabled, channel_ids, aggression, max_threads,
   spawn_min_sec, spawn_max_sec, reply_min_sec, reply_max_sec,
-  next_spawn_at, spawned_total, replies_total, started_at, updated_at`
+  next_spawn_at, spawned_total, replies_total, started_at, updated_at,
+  learned_profile`
 
 /** Read the singleton settings row, creating it if missing. */
 export async function getSettings(): Promise<SimSettings> {
@@ -457,4 +461,105 @@ export async function sampleRealClientLines(
 
   refCache.set(key, { lines, expires: Date.now() + REF_TTL_MS })
   return lines
+}
+
+/* --------------------------- learning corpus ---------------------------- */
+/*
+ * "Изучить все диалоги": read whole real dialogues (client + manager turns) so
+ * the analyzer can understand not just isolated phrases but the flow of a real
+ * conversation. Bot-driven threads are excluded so it only studies humans.
+ */
+
+export interface CorpusDialogue {
+  channelType: string
+  lines: Array<{ role: 'client' | 'manager'; body: string }>
+}
+
+/**
+ * Sample up to `maxDialogues` real conversations that have at least a couple of
+ * messages, returning their transcripts (trimmed to `maxLinesPerDialogue`).
+ */
+export async function sampleRealDialogues(
+  maxDialogues = 40,
+  maxLinesPerDialogue = 12,
+): Promise<CorpusDialogue[]> {
+  const convs = await query<{ id: string; channel_type: string }>(
+    `SELECT c.id, c.channel_type
+       FROM conversations c
+      WHERE c.id NOT IN (SELECT conversation_id FROM sim_threads)
+        AND EXISTS (
+          SELECT 1 FROM messages m
+           WHERE m.conversation_id = c.id AND m.direction = 'in'
+        )
+      ORDER BY c.last_message_at DESC NULLS LAST
+      LIMIT $1`,
+    [Math.max(1, maxDialogues)],
+  )
+  if (convs.length === 0) return []
+
+  const out: CorpusDialogue[] = []
+  for (const c of convs) {
+    const msgs = await query<{ direction: 'in' | 'out'; body: string }>(
+      `SELECT direction, body
+         FROM messages
+        WHERE conversation_id = $1
+          AND char_length(body) BETWEEN 1 AND 400
+          AND body !~ '^\\['
+        ORDER BY created_at ASC
+        LIMIT $2`,
+      [c.id, Math.max(2, maxLinesPerDialogue)],
+    )
+    const lines = msgs
+      .map((m) => ({
+        role: (m.direction === 'in' ? 'client' : 'manager') as 'client' | 'manager',
+        body: m.body.replace(/\s+/g, ' ').trim(),
+      }))
+      .filter((l) => l.body)
+    if (lines.some((l) => l.role === 'client')) {
+      out.push({ channelType: c.channel_type, lines })
+    }
+  }
+  return out
+}
+
+/** Persist the latest learned profile onto the singleton settings row. */
+export async function saveLearnedProfile(profile: LearnedProfile): Promise<void> {
+  await query(
+    `UPDATE sim_settings
+        SET learned_profile = $1::jsonb, updated_at = now()
+      WHERE id = true`,
+    [JSON.stringify(profile)],
+  )
+  // Refresh the generator cache immediately.
+  learnedCache = { pointers: buildPointers(profile), expires: Date.now() + LEARN_TTL_MS }
+}
+
+/* -------- learned-profile cache consumed by the generator ---------------- */
+
+const LEARN_TTL_MS = 5 * 60_000
+let learnedCache: { pointers: string[]; expires: number } | null = null
+
+function buildPointers(p: LearnedProfile | null): string[] {
+  if (!p) return []
+  // The most directly actionable signals for imitation.
+  return [...p.stylePointers, ...p.toneNotes].filter(Boolean).slice(0, 12)
+}
+
+/**
+ * Style pointers distilled by the last "learn" run, for injection into the
+ * generator prompt. Cached in-process and refreshed lazily from the DB.
+ */
+export async function getLearnedPointersCached(): Promise<string[]> {
+  if (learnedCache && learnedCache.expires > Date.now()) return learnedCache.pointers
+  let pointers: string[] = []
+  try {
+    const rows = await query<{ learned_profile: LearnedProfile | null }>(
+      `SELECT learned_profile FROM sim_settings WHERE id = true LIMIT 1`,
+    )
+    pointers = buildPointers(rows[0]?.learned_profile ?? null)
+  } catch {
+    pointers = []
+  }
+  learnedCache = { pointers, expires: Date.now() + LEARN_TTL_MS }
+  return pointers
 }
