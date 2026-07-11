@@ -314,20 +314,31 @@ export async function listUsableChannels(
 }
 
 /**
- * Create a brand-new conversation for a persona and register the bot thread.
- * Mirrors the god-console bulk-create path so the row is indistinguishable from
- * a real inbound conversation.
+ * Create a brand-new conversation for a persona, seeded with its opening
+ * message, and register the bot thread.
+ *
+ * This is deliberately byte-for-byte equivalent to how the WHATSAPP/TELEGRAM/VK
+ * worker writes a genuine first inbound message (see worker/src/repo.ts):
+ *   - `status` is left NULL (auto-derived as "new" from unread) — we must NOT
+ *     set a literal status, both because real inbound leaves it NULL and
+ *     because the post-035 CHECK constraint rejects legacy values like 'new'.
+ *   - `contact_username` is populated for telegram/vk just like the real path.
+ *   - the conversation is seeded with the first message body + unread=1 in one
+ *     shot, so it never flashes into the manager's list as an empty thread.
+ * The result is indistinguishable from an organic incoming conversation.
  */
 export async function createSimConversation(
   channel: SimChannel,
   persona: SimPersona,
+  firstBody: string,
 ): Promise<string> {
   const convId = randomUUID()
+  const contactUsername = persona.username ?? null
   await query(
     `INSERT INTO conversations
        (id, channel_id, channel_type, manager_id, contact_name, contact_handle,
-        last_message, last_message_at, status, unread)
-     VALUES ($1, $2, $3, $4, $5, $6, '', now(), 'new', 0)`,
+        contact_username, last_message, last_message_at, unread)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), 1)`,
     [
       convId,
       channel.id,
@@ -335,7 +346,14 @@ export async function createSimConversation(
       channel.managerId,
       persona.name,
       persona.username ? `@${persona.username}` : persona.handle,
+      contactUsername,
+      firstBody,
     ],
+  )
+  await query(
+    `INSERT INTO messages (id, conversation_id, direction, body, author)
+     VALUES ($1, $2, 'in', $3, $4)`,
+    [randomUUID(), convId, firstBody, persona.name],
   )
   await query(
     `INSERT INTO sim_threads (conversation_id, channel_id, persona, state, next_run_at)
@@ -387,4 +405,56 @@ export async function getTranscript(
     [conversationId, limit],
   )
   return rows.reverse().map((r) => ({ direction: r.direction, body: r.body }))
+}
+
+/* ----------------------- real-dialogue style reference ------------------ */
+/*
+ * The bot studies how ACTUAL people wrote to managers and mimics that voice.
+ * We sample short, genuine inbound lines per channel — explicitly excluding the
+ * bot's own threads (sim_threads) so it never learns from itself — and cache
+ * them in-process so generation stays cheap.
+ */
+
+const REF_TTL_MS = 10 * 60_000
+const refCache = new Map<string, { lines: string[]; expires: number }>()
+
+/**
+ * Return up to `limit` real client message samples for a channel type, freshly
+ * randomised and cached for a few minutes. Filters out media placeholders,
+ * links, over-long paragraphs and anything from a simulated thread.
+ */
+export async function sampleRealClientLines(
+  channelType: ChannelType,
+  limit = 12,
+): Promise<string[]> {
+  const key = `${channelType}:${limit}`
+  const hit = refCache.get(key)
+  if (hit && hit.expires > Date.now()) return hit.lines
+
+  let lines: string[] = []
+  try {
+    const rows = await query<{ body: string }>(
+      `SELECT m.body
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.direction = 'in'
+          AND c.channel_type = $1
+          AND char_length(m.body) BETWEEN 2 AND 160
+          AND m.body !~ '^\\['              -- skip "[фото]" / "[файл]" placeholders
+          AND m.body !~* 'https?://'        -- skip links
+          AND m.conversation_id NOT IN (SELECT conversation_id FROM sim_threads)
+        ORDER BY random()
+        LIMIT $2`,
+      [channelType, Math.max(1, limit)],
+    )
+    lines = rows.map((r) => r.body.replace(/\s+/g, ' ').trim()).filter(Boolean)
+  } catch (err) {
+    console.log(
+      '[v0][client-sim] reference sampling failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+
+  refCache.set(key, { lines, expires: Date.now() + REF_TTL_MS })
+  return lines
 }

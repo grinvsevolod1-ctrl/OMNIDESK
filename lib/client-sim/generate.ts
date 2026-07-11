@@ -43,9 +43,27 @@ interface GenArgs {
   persona: SimPersona
   history: Array<{ role: 'manager' | 'client'; body: string }>
   behavior: Behavior
+  /** Real client lines sampled from past dialogues, used as a style reference. */
+  referenceLines?: string[]
 }
 
-function systemPrompt(persona: SimPersona, behavior: Behavior): string {
+function referenceBlock(lines: string[] | undefined): string {
+  if (!lines || lines.length === 0) return ''
+  // A handful of real examples is enough to anchor the voice without letting
+  // the model copy them verbatim.
+  const sample = lines.slice(0, 10).map((l) => `- ${l}`).join('\n')
+  return [
+    '',
+    'ВОТ КАК РЕАЛЬНЫЕ ЛЮДИ ПИСАЛИ В ЭТОТ КАНАЛ (это образец живого стиля — впитай манеру, длину, тон, ошибки; НЕ копируй дословно, НЕ повторяй эти фразы):',
+    sample,
+  ].join('\n')
+}
+
+function systemPrompt(
+  persona: SimPersona,
+  behavior: Behavior,
+  referenceLines?: string[],
+): string {
   const s = persona.style
   return [
     'Ты играешь РОЛЬ обычного русского человека, который написал в мессенджер по объявлению о работе.',
@@ -65,6 +83,7 @@ function systemPrompt(persona: SimPersona, behavior: Behavior): string {
     '- Иногда неси лёгкую бытовую чушь/оффтоп, как живой человек.',
     '',
     'Менеджер часто предлагает мутную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
+    referenceBlock(referenceLines),
     '',
     `СЕЙЧАС: ${BEHAVIOR_HINT[behavior]}`,
     '',
@@ -96,7 +115,7 @@ function looksLikeRefusal(text: string): boolean {
  * the simulation never stalls.
  */
 export async function generateReply(args: GenArgs): Promise<string> {
-  const { persona, history, behavior } = args
+  const { persona, history, behavior, referenceLines } = args
 
   if (aiConfigured()) {
     try {
@@ -113,7 +132,7 @@ export async function generateReply(args: GenArgs): Promise<string> {
 
       const { text } = await generateText({
         model: MODEL,
-        system: systemPrompt(persona, behavior),
+        system: systemPrompt(persona, behavior, referenceLines),
         messages,
         temperature: 1,
         maxOutputTokens: 120,

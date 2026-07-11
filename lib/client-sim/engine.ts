@@ -13,6 +13,7 @@ import {
   getTranscript,
   insertInboundMessage,
   listUsableChannels,
+  sampleRealClientLines,
   scheduleReaction,
   updateThread,
   type SimChannel,
@@ -146,11 +147,17 @@ async function maybeSpawn(
 
   const channel: SimChannel = pick(channels)
   const persona = makePersona(channel.type as ChannelType, aggression)
-  const conversationId = await createSimConversation(channel, persona)
 
-  // Opening line, sent right away (the thread's next_run_at was set to now()).
-  const body = await generateReply({ persona, history: [], behavior: 'open' })
-  await insertInboundMessage(conversationId, persona.name, body)
+  // Learn the channel's real voice, then write the opening line and seed the
+  // conversation + first message atomically (no empty-thread flash).
+  const referenceLines = await sampleRealClientLines(channel.type as ChannelType)
+  const body = await generateReply({
+    persona,
+    history: [],
+    behavior: 'open',
+    referenceLines,
+  })
+  const conversationId = await createSimConversation(channel, persona, body)
   await updateThread(conversationId, {
     state: 'chatting',
     turns: 1,
@@ -233,7 +240,8 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
     return
   }
 
-  const body = await generateReply({ persona, history, behavior })
+  const referenceLines = await sampleRealClientLines(persona.channelType)
+  const body = await generateReply({ persona, history, behavior, referenceLines })
   await insertInboundMessage(conversationId, persona.name, body)
   await bumpRepliesTotal()
 
