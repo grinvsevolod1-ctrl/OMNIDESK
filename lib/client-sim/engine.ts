@@ -192,11 +192,22 @@ async function scheduleManagerReactions(
 ): Promise<void> {
   const pending = await findThreadsAwaitingReaction(25)
   for (const p of pending) {
+    let delay: number
     // Sometimes a real person just... doesn't answer for a long while.
-    const ignoreRoll = chance(0.12)
-    const delay = ignoreRoll
-      ? randInt(replyMaxSec * 3, replyMaxSec * 8)
-      : randInt(replyMinSec, replyMaxSec)
+    if (chance(0.12)) {
+      delay = randInt(replyMaxSec * 3, replyMaxSec * 8)
+    } else if (chance(0.08)) {
+      // "Glanced at the phone" — a rare near-instant reply.
+      delay = randInt(3, 12)
+    } else {
+      delay = randInt(replyMinSec, replyMaxSec)
+    }
+    // People are slower at night: stretch delays during 23:00–08:00 (server
+    // local time) so the daily rhythm isn't perfectly flat around the clock.
+    const hour = new Date().getHours()
+    if (hour >= 23 || hour < 8) {
+      delay = Math.round(delay * (2 + Math.random() * 4))
+    }
     await scheduleReaction(p.thread.conversationId, p.managerMessageId, delay)
   }
 }
@@ -292,7 +303,7 @@ export function rollBehavior(
 
   // Temperament nudges.
   if (/наглый|дерзкий|борзый|вспыльчивый|нервный/.test(temper)) weights.angry += 4
-  if (/подозрительн|осторожн/.test(temper)) weights.dismissive += 3
+  if (/подозрительн|ос��орожн/.test(temper)) weights.dismissive += 3
   if (/тупова|простоват/.test(temper)) weights.confused += 4
   if (/жадн|делов/.test(temper)) weights.curious += 4
   if (/спокойн|дружелюб|уставш/.test(temper)) weights.curious += 2

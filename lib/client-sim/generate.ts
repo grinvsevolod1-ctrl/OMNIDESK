@@ -15,7 +15,10 @@ export type Behavior =
   | 'confused' // doesn't get it, asks naive questions
   | 'nudge' // manager went quiet — pokes them
 
-const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-4o-mini'
+// gpt-4.1-mini follows the "write like a specific messy human, never repeat
+// yourself" instructions markedly better than 4o-mini while staying cheap.
+// Override with CLIENT_SIM_MODEL if you want something stronger/cheaper.
+const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-4.1-mini'
 
 /** AI generation is only possible when the gateway key is present. */
 export function aiConfigured(): boolean {
@@ -72,6 +75,18 @@ function learnedBlock(pointers: string[] | undefined): string {
   ].join('\n')
 }
 
+function avoidBlock(ownLines: string[] | undefined): string {
+  if (!ownLines || ownLines.length === 0) return ''
+  // Show the persona its own recent lines so the model actively avoids
+  // reusing the same openings/words — the #1 tell of a bot.
+  const list = ownLines.slice(-8).map((l) => `- ${l}`).join('\n')
+  return [
+    '',
+    'ТЫ УЖЕ ПИСАЛ ЭТО РАНЬШЕ (НЕ повторяй эти фразы, слова и обороты, начни иначе, скажи по-новому):',
+    list,
+  ].join('\n')
+}
+
 const TONE_REGISTER: Record<string, string> = {
   polite:
     'ТОН ОБЩЕНИЯ — ВЕЖЛИВЫЙ: пиши грамотно и уважительно, на «вы». Здоровайся культурно («Здравствуйте», «Добрый день»). Ставь знаки препинания и заглавные буквы. Никакого мата и грубости, даже если раздражён — оставайся корректным.',
@@ -88,6 +103,7 @@ function systemPrompt(
   behavior: Behavior,
   referenceLines?: string[],
   learnedPointers?: string[],
+  ownLines?: string[],
 ): string {
   const s = persona.style
   const tone = persona.tone ?? 'mixed'
@@ -115,10 +131,11 @@ function systemPrompt(
     '- Иногда неси лёгкую бытовую чушь/оффтоп, как живой человек.',
     '',
     soft
-      ? 'Менеджер часто предлагает мутную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежли��ый отказ — но всегда корректно, без грубости и мата.'
+      ? 'Менеджер часто предлагает мутную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежли����ый отказ — но всегда корректно, без грубости и мата.'
       : 'Менеджер часто предлагает мутную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
     referenceBlock(referenceLines),
     learnedBlock(learnedPointers),
+    avoidBlock(ownLines),
     '',
     `СЕЙЧАС: ${
       soft && behavior === 'angry'
@@ -148,13 +165,52 @@ function looksLikeRefusal(text: string): boolean {
   )
 }
 
+/** Normalise a line for fuzzy comparison (lowercase, strip punctuation). */
+function normLine(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Rough word-overlap similarity (Jaccard) between two lines, 0..1. Used to
+ * catch the model repeating itself even when a few words differ.
+ */
+function similarity(a: string, b: string): number {
+  const wa = new Set(normLine(a).split(' ').filter(Boolean))
+  const wb = new Set(normLine(b).split(' ').filter(Boolean))
+  if (wa.size === 0 || wb.size === 0) return 0
+  let inter = 0
+  for (const w of wa) if (wb.has(w)) inter++
+  return inter / (wa.size + wb.size - inter)
+}
+
+/** True when `line` is too close to any of the persona's recent lines. */
+function tooSimilar(line: string, ownLines: string[]): boolean {
+  const n = normLine(line)
+  return ownLines.some((prev) => {
+    const p = normLine(prev)
+    return p === n || similarity(line, prev) >= 0.6
+  })
+}
+
 /**
  * Produce one in-character client message. Tries the LLM first; on any error,
  * empty output, or refusal, falls back to the randomised template generator so
- * the simulation never stalls.
+ * the simulation never stalls. Includes an anti-repetition guard: the model is
+ * shown its own recent lines to avoid, and near-duplicate output triggers one
+ * retry at higher randomness before we accept it.
  */
 export async function generateReply(args: GenArgs): Promise<string> {
   const { persona, history, behavior, referenceLines } = args
+
+  // The persona's own past lines — used both to steer the prompt away from
+  // repetition and to reject near-duplicate generations.
+  const ownLines = history
+    .filter((m) => m.role === 'client')
+    .map((m) => m.body)
 
   if (aiConfigured()) {
     try {
@@ -173,15 +229,34 @@ export async function generateReply(args: GenArgs): Promise<string> {
         messages.push({ role: 'user', content: '(ты пишешь первым в чат по объявлению о работе)' })
       }
 
-      const { text } = await generateText({
-        model: MODEL,
-        system: systemPrompt(persona, behavior, referenceLines, learnedPointers),
-        messages,
-        temperature: 1,
-        maxOutputTokens: 120,
-      })
+      const system = systemPrompt(
+        persona,
+        behavior,
+        referenceLines,
+        learnedPointers,
+        ownLines,
+      )
 
-      const clean = (text || '').trim().replace(/^["'«»]+|["'«»]+$/g, '')
+      // Up to two attempts: if the first line echoes something the persona
+      // already said, retry once hotter to break the loop.
+      let clean = ''
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const { text } = await generateText({
+          model: MODEL,
+          system,
+          messages,
+          temperature: attempt === 0 ? 1 : 1.15,
+          topP: 0.95,
+          frequencyPenalty: 0.6,
+          presencePenalty: 0.5,
+          maxOutputTokens: 120,
+        })
+        const candidate = (text || '').trim().replace(/^["'«»]+|["'«»]+$/g, '')
+        if (!candidate || looksLikeRefusal(candidate)) continue
+        clean = candidate
+        if (!tooSimilar(candidate, ownLines)) break
+      }
+
       if (clean && !looksLikeRefusal(clean)) {
         // Guarantee the "hand-typed" fingerprint even if the model wrote cleanly,
         // but at a lighter typo rate so AI text stays readable.
