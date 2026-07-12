@@ -1,0 +1,684 @@
+/**
+ * Conversations & messages: listing, status/lead, mute, reactions, dispatch,
+ * read state, reply reminders and conversation transfer.
+ * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
+ */
+import { query, withTransaction } from '../db'
+import type {
+  ChannelType,
+  Conversation,
+  ConversationMeta,
+  LeadStatus,
+  Manager,
+  MediaType,
+  Message,
+  MessageReaction,
+  MessageStatus,
+  NotLiquidReason,
+} from '../types'
+import {
+  DEFAULT_LEAD_STATUS,
+  EFFECTIVE_STATUS_SQL,
+  MESSAGE_REPLY_JOIN,
+  MESSAGE_SELECT,
+  toConversation,
+  toMessage,
+  type ConversationRow,
+  type MessageRow,
+} from './shared'
+
+/* -------------------------- Conversations --------------------------- */
+
+interface ConversationRow {
+  id: string
+  channel_id: string
+  manager_id: string
+  channel_type: ChannelType
+  contact_name: string
+  contact_handle: string
+  contact_username?: string | null
+  last_message: string
+  last_message_at: string | Date
+  unread: number
+  status?: LeadStatus | null
+  status_detail?: NotLiquidReason | null
+  status_updated_at?: string | Date | null
+  reply_dismissed_at?: string | Date | null
+  muted?: boolean | null
+  meta?: ConversationMeta | null
+  visitor_no?: number | null
+  contact_blocked?: boolean | null
+  contact_name_hidden?: boolean | null
+  created_at?: string | Date | null
+}
+
+/**
+ * Default lead status when a manager hasn't pinned one. Every contact that
+ * wrote in starts as «Отписок». Keep this in sync with EFFECTIVE_STATUS_SQL
+ * below so JS and DB derivations never diverge.
+ */
+const DEFAULT_LEAD_STATUS: LeadStatus = 'unsubscribed'
+
+function toConversation(r: ConversationRow): Conversation {
+  const manual = (r.status ?? null) as LeadStatus | null
+  const detail = (r.status_detail ?? null) as NotLiquidReason | null
+  return {
+    id: r.id,
+    channelId: r.channel_id,
+    managerId: r.manager_id,
+    channelType: r.channel_type,
+    // Reversible "names glitch": show "NULL" while hidden, real name is intact in DB.
+    contactName: r.contact_name_hidden ? 'NULL' : r.contact_name,
+    contactHandle: r.contact_handle,
+    contactUsername: r.contact_username ?? undefined,
+    lastMessage: r.last_message,
+    lastMessageAt: new Date(r.last_message_at).toISOString(),
+    unread: Number(r.unread),
+    status: manual ?? DEFAULT_LEAD_STATUS,
+    statusDetail:
+      manual === 'not_liquid' && detail ? detail : undefined,
+    statusManual: manual !== null,
+    statusUpdatedAt: r.status_updated_at
+      ? new Date(r.status_updated_at).toISOString()
+      : undefined,
+    replyDismissedAt: r.reply_dismissed_at
+      ? new Date(r.reply_dismissed_at).toISOString()
+      : undefined,
+    muted: Boolean(r.muted),
+    contactBlocked: Boolean(r.contact_blocked),
+    visitorNo:
+      r.visitor_no === null || r.visitor_no === undefined
+        ? undefined
+        : Number(r.visitor_no),
+    meta:
+      r.meta && Object.keys(r.meta).length > 0
+        ? (r.meta as ConversationMeta)
+        : undefined,
+  }
+}
+
+export async function listConversations(
+  managerId: string,
+): Promise<Conversation[]> {
+  const rows = await query<ConversationRow & { channel_name: string | null }>(
+    `SELECT c.*, ch.name AS channel_name
+       FROM conversations c
+       LEFT JOIN channels ch ON ch.id = c.channel_id
+      WHERE c.manager_id = $1
+      ORDER BY c.last_message_at DESC`,
+    [managerId],
+  )
+  return rows.map((r) => ({
+    ...toConversation(r),
+    channelName: r.channel_name ?? undefined,
+  }))
+}
+
+/**
+ * List a manager's conversations filtered by EFFECTIVE lead status (and, for
+ * «Не ликвид», optionally a reason sub-status). Powers the dashboard status
+ * board's drill-down modal. Manager-scoped — never leaks other managers' leads.
+ */
+export async function listConversationsByStatus(
+  managerId: string,
+  status: LeadStatus,
+  reason?: NotLiquidReason,
+): Promise<Conversation[]> {
+  const params: unknown[] = [managerId, status]
+  let reasonFilter = ''
+  if (status === 'not_liquid' && reason) {
+    params.push(reason)
+    reasonFilter = ` AND c.status_detail = $3`
+  }
+  const rows = await query<ConversationRow & { channel_name: string | null }>(
+    `SELECT c.*, ch.name AS channel_name
+       FROM conversations c
+       LEFT JOIN channels ch ON ch.id = c.channel_id
+      WHERE c.manager_id = $1
+        AND ${EFFECTIVE_STATUS_SQL} = $2${reasonFilter}
+      ORDER BY c.last_message_at DESC`,
+    params,
+  )
+  return rows.map((r) => ({
+    ...toConversation(r),
+    channelName: r.channel_name ?? undefined,
+  }))
+}
+
+export async function getConversation(
+  conversationId: string,
+  managerId: string,
+): Promise<Conversation | null> {
+  const rows = await query<ConversationRow>(
+    'SELECT * FROM conversations WHERE id = $1 AND manager_id = $2 LIMIT 1',
+    [conversationId, managerId],
+  )
+  return rows[0] ? toConversation(rows[0]) : null
+}
+
+/**
+ * Mark a conversation as read on our side: zero its unread counter and return
+ * what the worker needs to send read receipts to the contact (so they see our
+ * blue ticks). Returns null when the manager doesn't own the conversation.
+ */
+export async function markConversationRead(
+  conversationId: string,
+  managerId: string,
+): Promise<{
+  channelId: string
+  channelType: ChannelType
+  contactHandle: string
+} | null> {
+  const rows = await query<{
+    channel_id: string
+    channel_type: ChannelType
+    contact_handle: string
+  }>(
+    `UPDATE conversations
+        SET unread = 0
+      WHERE id = $1 AND manager_id = $2
+      RETURNING channel_id, channel_type, contact_handle`,
+    [conversationId, managerId],
+  )
+  if (!rows[0]) return null
+  return {
+    channelId: rows[0].channel_id,
+    channelType: rows[0].channel_type,
+    contactHandle: rows[0].contact_handle,
+  }
+}
+
+export async function listMessages(
+  conversationId: string,
+  managerId: string,
+): Promise<Message[]> {
+  const rows = await query<MessageRow>(
+    `SELECT ${MESSAGE_SELECT}
+     FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     ${MESSAGE_REPLY_JOIN}
+     WHERE m.conversation_id = $1 AND c.manager_id = $2
+     ORDER BY m.created_at ASC`,
+    [conversationId, managerId],
+  )
+  return rows.map(toMessage)
+}
+
+/** Raw `messages` row shape (with reply/reaction/delete hydration columns). */
+interface MessageRow {
+  id: string
+  conversation_id: string
+  direction: 'in' | 'out'
+  body: string
+  author: string
+  created_at: string | Date
+  media_type: MediaType | null
+  media_mime: string | null
+  media_name: string | null
+  reactions: unknown
+  deleted_at: string | Date | null
+  deleted_origin: 'self' | 'remote' | null
+  status: MessageStatus | null
+  error_reason: string | null
+  reply_to_id: string | null
+  reply_to_author: string | null
+  reply_to_body: string | null
+  reply_to_media_type: MediaType | null
+}
+
+/**
+ * Map a raw `messages` row (with optional media columns) to a `Message`.
+ * `mediaUrl` points at the panel proxy that streams the bytes on demand.
+ */
+function toMessage(r: {
+  id: string
+  conversation_id: string
+  direction: 'in' | 'out'
+  body: string
+  author: string
+  created_at: string | Date
+  media_type?: MediaType | null
+  media_mime?: string | null
+  media_name?: string | null
+  reactions?: unknown
+  deleted_at?: string | Date | null
+  deleted_origin?: 'self' | 'remote' | null
+  status?: MessageStatus | null
+  error_reason?: string | null
+  reply_to_id?: string | null
+  reply_to_author?: string | null
+  reply_to_body?: string | null
+  reply_to_media_type?: MediaType | null
+}): Message {
+  const reactions = Array.isArray(r.reactions)
+    ? (r.reactions as MessageReaction[]).filter(
+        (x) => x && typeof x.emoji === 'string',
+      )
+    : []
+  return {
+    id: r.id,
+    conversationId: r.conversation_id,
+    direction: r.direction,
+    body: r.body,
+    author: r.author,
+    createdAt: new Date(r.created_at).toISOString(),
+    ...(r.media_type
+      ? {
+          mediaType: r.media_type,
+          mediaMime: r.media_mime ?? undefined,
+          mediaName: r.media_name ?? undefined,
+          mediaUrl: `/api/media/${r.id}`,
+        }
+      : {}),
+    ...(reactions.length ? { reactions } : {}),
+    ...(r.deleted_at ? { deletedAt: new Date(r.deleted_at).toISOString() } : {}),
+    ...(r.deleted_origin ? { deletedOrigin: r.deleted_origin } : {}),
+    ...(r.status ? { status: r.status } : {}),
+    ...(r.error_reason ? { errorReason: r.error_reason } : {}),
+    ...(r.reply_to_id
+      ? {
+          replyTo: {
+            id: r.reply_to_id,
+            author: r.reply_to_author ?? '',
+            body: r.reply_to_body ?? '',
+            ...(r.reply_to_media_type
+              ? { mediaType: r.reply_to_media_type }
+              : {}),
+          },
+        }
+      : {}),
+  }
+}
+
+/**
+ * Shared SELECT column list + self-join for hydrating a message with its
+ * reactions, soft-delete marker and quoted-reply preview. `m` is the messages
+ * alias; `rt` is the joined reply-target alias.
+ */
+const MESSAGE_SELECT = `m.id, m.conversation_id, m.direction, m.body, m.author, m.created_at,
+        m.media_type, m.media_mime, m.media_name, m.reactions, m.deleted_at, m.deleted_origin, m.status, m.error_reason,
+        rt.id AS reply_to_id, rt.author AS reply_to_author,
+        rt.body AS reply_to_body, rt.media_type AS reply_to_media_type`
+const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_message_id`
+
+/**
+ * Backfill: every message for a manager created strictly after `since`,
+ * ordered oldest-first. Used by the SSE route to replay events a browser
+ * missed while it was disconnected (gap recovery via Last-Event-ID).
+ */
+export async function getMessagesSince(
+  managerId: string,
+  since: Date,
+): Promise<
+  Array<Message & { contactHandle: string; channelId: string }>
+> {
+  const rows = await query<
+    MessageRow & { channel_id: string; contact_handle: string }
+  >(
+    `SELECT ${MESSAGE_SELECT}, c.channel_id, c.contact_handle
+     FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     ${MESSAGE_REPLY_JOIN}
+     WHERE c.manager_id = $1 AND m.created_at > $2
+     ORDER BY m.created_at ASC
+     LIMIT 500`,
+    [managerId, since.toISOString()],
+  )
+  return rows.map((r) => ({
+    ...toMessage(r),
+    channelId: r.channel_id,
+    contactHandle: r.contact_handle,
+  }))
+}
+
+/**
+ * Persist an outbound (agent -> contact) message and mark the conversation
+ * read. Returns null if the conversation doesn't belong to the manager.
+ */
+export async function addMessage(input: {
+  conversationId: string
+  managerId: string
+  body: string
+  author: string
+  /** Optional media descriptor, e.g. an outgoing sticker or WhatsApp file. */
+  mediaType?: MediaType
+  mediaMime?: string
+  mediaName?: string
+  /**
+   * Small JSON descriptor letting the media proxy re-download the bytes (for an
+   * outbound WhatsApp file: `{ waMediaId }`). Nothing binary is stored.
+   */
+  mediaRef?: Record<string, unknown> | null
+  /** Optional quoted-reply target (a message id in the same conversation). */
+  replyToMessageId?: string
+  /** Conversation-list preview text; defaults to `body` (use for media). */
+  preview?: string
+}): Promise<Message | null> {
+  const owns = await query<{ id: string }>(
+    'SELECT id FROM conversations WHERE id = $1 AND manager_id = $2',
+    [input.conversationId, input.managerId],
+  )
+  if (owns.length === 0) return null
+
+  const rows = await query<{ id: string; created_at: string | Date }>(
+    `INSERT INTO messages
+       (conversation_id, direction, body, author, media_type, media_mime, media_name, media_ref, reply_to_message_id, status)
+     VALUES ($1, 'out', $2, $3, $4, $5, $6, $7, $8, 'sent') RETURNING id, created_at`,
+    [
+      input.conversationId,
+      input.body,
+      input.author,
+      input.mediaType ?? null,
+      input.mediaMime ?? null,
+      input.mediaName ?? null,
+      input.mediaRef ? JSON.stringify(input.mediaRef) : null,
+      input.replyToMessageId ?? null,
+    ],
+  )
+  await query(
+    'UPDATE conversations SET last_message = $2, last_message_at = now(), unread = 0 WHERE id = $1',
+    [input.conversationId, input.preview ?? input.body],
+  )
+  // Re-read through the standard select so the returned message carries the
+  // hydrated reply preview (author/body of the quoted message).
+  const full = await query<MessageRow>(
+    `SELECT ${MESSAGE_SELECT} FROM messages m ${MESSAGE_REPLY_JOIN} WHERE m.id = $1`,
+    [rows[0].id],
+  )
+  return full[0] ? toMessage(full[0]) : null
+}
+
+/**
+ * Resolve everything the worker needs to act on a specific message (reply /
+ * react / delete / forward), scoped to the owning manager. Returns null when
+ * the manager doesn't own the message or it has no provider id yet.
+ */
+export async function getMessageDispatch(
+  messageId: string,
+  managerId: string,
+): Promise<{
+  providerMessageId: string | null
+  contactHandle: string
+  channelId: string
+  channelType: ChannelType
+  direction: 'in' | 'out'
+} | null> {
+  const rows = await query<{
+    provider_message_id: string | null
+    contact_handle: string
+    channel_id: string
+    type: ChannelType
+    direction: 'in' | 'out'
+  }>(
+    `SELECT m.provider_message_id, c.contact_handle, c.channel_id, ch.type,
+            m.direction
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN channels ch ON ch.id = c.channel_id
+      WHERE m.id = $1 AND c.manager_id = $2`,
+    [messageId, managerId],
+  )
+  if (rows.length === 0) return null
+  return {
+    providerMessageId: rows[0].provider_message_id,
+    contactHandle: rows[0].contact_handle,
+    channelId: rows[0].channel_id,
+    channelType: rows[0].type,
+    direction: rows[0].direction,
+  }
+}
+
+/**
+ * Set (or clear, with null) the operator's emoji reaction on a message. Only a
+ * single "fromMe" reaction is kept; any contact reactions are preserved.
+ * Scoped to the owning manager. Returns true when a row was updated.
+ */
+export async function setMessageReaction(
+  messageId: string,
+  managerId: string,
+  emoji: string | null,
+): Promise<boolean> {
+  const owned = await query<{ reactions: unknown }>(
+    `SELECT m.reactions FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.id = $1 AND c.manager_id = $2`,
+    [messageId, managerId],
+  )
+  if (owned.length === 0) return false
+  const existing: MessageReaction[] = Array.isArray(owned[0].reactions)
+    ? (owned[0].reactions as MessageReaction[])
+    : []
+  const others = existing.filter((r) => !r.fromMe)
+  const next = emoji ? [...others, { emoji, fromMe: true }] : others
+  await query('UPDATE messages SET reactions = $2 WHERE id = $1', [
+    messageId,
+    JSON.stringify(next),
+  ])
+  return true
+}
+
+/**
+ * Soft-delete a message (sets deleted_at + deleted_origin='self'). The body and
+ * any media are PRESERVED so the thread keeps the original content with a
+ * "deleted" marker instead of losing it. Scoped to the owning manager. Returns
+ * true when a row was updated. Idempotent: only stamps a row that isn't already
+ * marked deleted.
+ */
+export async function markMessageDeleted(
+  messageId: string,
+  managerId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE messages m
+        SET deleted_at = COALESCE(m.deleted_at, now()),
+            deleted_origin = 'self'
+       FROM conversations c
+      WHERE m.conversation_id = c.id
+        AND m.id = $1 AND c.manager_id = $2
+      RETURNING m.id`,
+    [messageId, managerId],
+  )
+  return rows.length > 0
+}
+
+/**
+ * Resolve the channel a message belongs to, but only if it is owned by the
+ * given manager. Used by the media proxy route to authorize streaming.
+ * Returns the channel id + type, or null when the manager doesn't own it.
+ */
+export async function getMessageOwner(
+  messageId: string,
+  managerId: string,
+): Promise<{ channelId: string; channelType: ChannelType } | null> {
+  const rows = await query<{ channel_id: string; type: ChannelType }>(
+    `SELECT ch.id AS channel_id, ch.type
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN channels ch ON ch.id = c.channel_id
+      WHERE m.id = $1 AND c.manager_id = $2`,
+    [messageId, managerId],
+  )
+  if (rows.length === 0) return null
+  return { channelId: rows[0].channel_id, channelType: rows[0].type }
+}
+
+/**
+ * Resolve a channel id + type owned by the manager. Used by the sticker proxy
+ * routes and sendStickerAction to authorize worker calls.
+ */
+export async function getChannelOwner(
+  channelId: string,
+  managerId: string,
+): Promise<{ channelId: string; channelType: ChannelType } | null> {
+  const rows = await query<{ id: string; type: ChannelType }>(
+    'SELECT id, type FROM channels WHERE id = $1 AND manager_id = $2',
+    [channelId, managerId],
+  )
+  if (rows.length === 0) return null
+  return { channelId: rows[0].id, channelType: rows[0].type }
+}
+
+/**
+ * Pin or clear a lead's manual status. Pass null to clear the manual override
+ * and fall back to the auto-derived status. Scoped to the owning manager.
+ * Returns true when a row was updated.
+ */
+export async function setConversationStatus(
+  conversationId: string,
+  managerId: string,
+  status: LeadStatus | null,
+  detail: NotLiquidReason | null = null,
+): Promise<boolean> {
+  // The reason sub-status only applies to «Не ликвид»; ignore it otherwise so
+  // we never violate the conversations_status_detail_check constraint.
+  const effectiveDetail = status === 'not_liquid' ? detail : null
+  // $3/$4 are cast to ::text explicitly. Without the cast, Postgres cannot infer
+  // the parameter's type when the value is NULL (it only appears in SET / CASE
+  // WHEN ... IS NULL), which throws "could not determine data type of parameter".
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET status = $3::text,
+            status_detail = $4::text,
+            status_updated_at = CASE WHEN $3::text IS NULL THEN NULL ELSE now() END
+      WHERE id = $1 AND manager_id = $2
+      RETURNING id`,
+    [conversationId, managerId, status, effectiveDetail],
+  )
+  return rows.length > 0
+}
+
+/**
+ * Manager: mark a conversation as "no reply needed" by stamping the dismissal
+ * time. The thread stops counting as awaiting a reply until a newer inbound
+ * message arrives. Pass `clear` to undo (set back to NULL). Scoped to the owner.
+ */
+export async function dismissReplyReminder(
+  conversationId: string,
+  managerId: string,
+  clear = false,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET reply_dismissed_at = ${clear ? 'NULL' : 'now()'}
+      WHERE id = $1 AND manager_id = $2
+      RETURNING id`,
+    [conversationId, managerId],
+  )
+  return rows.length > 0
+}
+
+/**
+ * Manager: mute (silence) or unmute a conversation. A muted thread sends no push
+ * notifications, is hidden from the default inbox list and excluded from the
+ * "awaiting reply" sorting/reminders. Scoped to the owning manager.
+ */
+export async function setConversationMuted(
+  conversationId: string,
+  managerId: string,
+  muted: boolean,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET muted = $3
+      WHERE id = $1 AND manager_id = $2
+      RETURNING id`,
+    [conversationId, managerId, muted],
+  )
+  return rows.length > 0
+}
+
+/** True when this conversation is muted. Used by the push dispatcher. */
+export async function isConversationMuted(
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await query<{ muted: boolean }>(
+    `SELECT muted FROM conversations WHERE id = $1`,
+    [conversationId],
+  )
+  return rows.length > 0 ? Boolean(rows[0].muted) : false
+}
+
+/* ------------------------- Conversation transfer ------------------------- */
+
+export interface TransferTarget {
+  id: string
+  name: string
+  /** True when the colleague is on lunch (still selectable, shown greyed). */
+  onLunch: boolean
+}
+
+/**
+ * Active managers a conversation can be handed off to, excluding the caller and
+ * any blocked accounts. On-lunch managers are still returned (a manual transfer
+ * is an explicit choice) but flagged so the UI can de-emphasise them.
+ */
+export async function listTransferTargets(
+  excludeManagerId: string,
+): Promise<TransferTarget[]> {
+  const rows = await query<{
+    id: string
+    name: string
+    on_lunch: boolean | null
+  }>(
+    `SELECT id, name, on_lunch
+       FROM managers
+      WHERE status = 'active' AND id <> $1
+      ORDER BY on_lunch ASC, name ASC`,
+    [excludeManagerId],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    onLunch: r.on_lunch ?? false,
+  }))
+}
+
+/**
+ * Hand a conversation off to another manager. Ownership-scoped: only the
+ * current owner (fromManagerId) can transfer, which also prevents transferring
+ * a thread you can't see. Clears the "reply dismissed" marker so the new owner
+ * sees it as awaiting a reply, and records the audit row atomically. Migration
+ * 041 is therefore required and is applied by the supported migration runner.
+ */
+export async function transferConversation(input: {
+  conversationId: string
+  fromManagerId: string
+  toManagerId: string
+  note?: string
+}): Promise<boolean> {
+  // Guard: the target must be an existing active manager (and not the caller).
+  const target = await query<{ id: string }>(
+    `SELECT id FROM managers WHERE id = $1 AND status = 'active'`,
+    [input.toManagerId],
+  )
+  if (target.length === 0 || input.toManagerId === input.fromManagerId) {
+    return false
+  }
+
+  return withTransaction(async (db) => {
+    const rows = await db.query<{ id: string }>(
+      `UPDATE conversations
+          SET manager_id = $3, reply_dismissed_at = NULL
+        WHERE id = $1 AND manager_id = $2
+        RETURNING id`,
+      [input.conversationId, input.fromManagerId, input.toManagerId],
+    )
+    if (rows.length === 0) return false
+
+    await db.query(
+      `INSERT INTO conversation_transfers
+         (conversation_id, from_manager_id, to_manager_id, note)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        input.conversationId,
+        input.fromManagerId,
+        input.toManagerId,
+        (input.note ?? '').slice(0, 500),
+      ],
+    )
+    return true
+  })
+}
+
+
+/* Live chat widget — extracted to ./data/livechat */
