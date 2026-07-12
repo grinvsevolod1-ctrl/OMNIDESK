@@ -30,6 +30,7 @@ import {
   Link2,
   Loader2,
   MapPin,
+  Sparkles,
   MessageCircle,
   Monitor,
   MoreVertical,
@@ -60,6 +61,7 @@ import {
   deleteMessageAction,
   forwardMessageAction,
   setAgentTypingAction,
+  toggleConversationAiAction,
 } from '@/app/actions/messages'
 import {
   dismissReplyReminderAction,
@@ -1628,6 +1630,8 @@ export function InboxView({
   const [mutedOverrides, setMutedOverrides] = useState<Record<string, boolean>>(
     {},
   )
+  // Optimistic per-conversation AI-lead state, keyed by conversation id.
+  const [aiOverrides, setAiOverrides] = useState<Record<string, boolean>>({})
   // Whether to reveal muted/silenced threads in the list (hidden by default).
   const [showMuted, setShowMuted] = useState(false)
 
@@ -2182,6 +2186,28 @@ export function InboxView({
         toast.error(res.message)
         // Roll back the optimistic override on failure.
         setMutedOverrides((prev) => {
+          const next = { ...prev }
+          delete next[conversationId]
+          return next
+        })
+        return
+      }
+      toast.success(res.message)
+      router.refresh()
+    })
+  }
+
+  // Turn the AI manager-assistant on/off for the active conversation. When it's
+  // switched on, the assistant re-reads the thread and leads from the next
+  // inbound message; when the manager types a manual reply the server flips it
+  // back off automatically (human takeover).
+  function toggleAi(conversationId: string, enabled: boolean) {
+    setAiOverrides((prev) => ({ ...prev, [conversationId]: enabled }))
+    startStatusTransition(async () => {
+      const res = await toggleConversationAiAction(conversationId, enabled)
+      if (!res.ok) {
+        toast.error(res.message)
+        setAiOverrides((prev) => {
           const next = { ...prev }
           delete next[conversationId]
           return next
@@ -3043,6 +3069,29 @@ export function InboxView({
               </button>
 
               <div className="flex items-center gap-1.5">
+                {(() => {
+                  const aiOn = aiOverrides[active.id] ?? Boolean(active.aiAutopilotEnabled)
+                  return (
+                    <Button
+                      variant={aiOn ? 'default' : 'ghost'}
+                      size="sm"
+                      onClick={() => toggleAi(active.id, !aiOn)}
+                      disabled={statusPending}
+                      aria-pressed={aiOn}
+                      title={
+                        aiOn
+                          ? 'ИИ ведёт этот диалог. Нажмите, чтобы отключить.'
+                          : 'Включить ИИ: он проанализирует переписку и продолжит общение.'
+                      }
+                      className="gap-1.5"
+                    >
+                      <Sparkles className="size-4" />
+                      <span className="hidden sm:inline">
+                        {aiOn ? 'ИИ ведёт' : 'ИИ'}
+                      </span>
+                    </Button>
+                  )
+                })()}
                 <StatusChip
                   status={active.status}
                   auto={!active.statusManual}

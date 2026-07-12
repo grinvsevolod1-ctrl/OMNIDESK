@@ -8,8 +8,11 @@ import {
   getConversation,
   getMessageDispatch,
   markMessageDeleted,
+  setConversationAiAutopilot,
   setMessageReaction,
 } from '@/lib/data'
+import { isBrainConfigured } from '@/lib/ai/manager-brain'
+import { getAiAssistSettings } from '@/lib/data/ai-assist'
 import { publishRealtime } from '@/lib/realtime'
 import { setVkTyping } from '@/lib/vk-dispatch'
 
@@ -247,4 +250,49 @@ export async function forwardMessageAction(
 
   revalidatePath('/app/inbox')
   return { ok: true, message: `Переслано: ${dest.contactName}` }
+}
+
+/**
+ * Turn the AI manager-assistant on/off for a single conversation (the per-thread
+ * toggle in the inbox). When switching ON, the AI will re-read the whole thread
+ * and continue leading from the next inbound message. Manager-scoped: you can
+ * only toggle conversations you own. Refuses to switch on when the global
+ * assistant is disabled or the AI Gateway key is missing.
+ */
+export async function toggleConversationAiAction(
+  conversationId: string,
+  enabled: boolean,
+): Promise<SimpleResult> {
+  const session = await requireManager()
+
+  if (enabled) {
+    if (!isBrainConfigured()) {
+      return {
+        ok: false,
+        message: 'ИИ не настроен: не задан ключ AI Gateway.',
+      }
+    }
+    const settings = await getAiAssistSettings()
+    if (!settings.enabled) {
+      return {
+        ok: false,
+        message: 'ИИ отключён администратором в разделе «ИИ-ассистент».',
+      }
+    }
+  }
+
+  const state = await setConversationAiAutopilot(
+    conversationId,
+    session.sub,
+    enabled,
+  )
+  if (state === null) return { ok: false, message: 'Диалог не найден.' }
+
+  revalidatePath('/app/inbox')
+  return {
+    ok: true,
+    message: state
+      ? 'ИИ ведёт этот диалог. Он проанализирует переписку и продолжит общение.'
+      : 'ИИ отключён для этого диалога.',
+  }
 }

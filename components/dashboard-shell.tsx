@@ -26,6 +26,7 @@ import {
   Radio,
   Server,
   Settings,
+  Sparkles,
   Users,
   Wallet,
   X,
@@ -65,6 +66,7 @@ export type NavIcon =
   | 'analytics'
   | 'quickReplies'
   | 'autopilot'
+  | 'ai'
   | 'telemost'
   | 'finance'
   | 'docs'
@@ -85,6 +87,7 @@ const ICONS: Record<NavIcon, ComponentType<{ className?: string }>> = {
   analytics: BarChart3,
   quickReplies: MessageSquareText,
   autopilot: Bot,
+  ai: Sparkles,
   telemost: TelemostIcon,
   finance: Wallet,
   docs: BookOpen,

@@ -118,6 +118,43 @@ export async function listLessons(limit = 50): Promise<AiAssistLesson[]> {
   return rows.map(mapLesson)
 }
 
+/**
+ * Recent turns of a conversation, oldest → newest, mapped to the AI history
+ * shape (inbound = client, outbound = manager). Used by the live-chat AI-lead
+ * runtime to give the brain conversational context.
+ */
+export async function getConversationHistoryForAi(
+  conversationId: string,
+  limit = 16,
+): Promise<Array<{ role: 'client' | 'manager'; body: string }>> {
+  const rows = await query<{ direction: 'in' | 'out'; body: string }>(
+    `SELECT direction, body FROM messages
+      WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [conversationId, Math.max(1, Math.min(50, limit))],
+  )
+  return rows
+    .reverse()
+    .map((r) => ({
+      role: (r.direction === 'in' ? 'client' : 'manager') as
+        | 'client'
+        | 'manager',
+      body: r.body,
+    }))
+}
+
+/** True when the AI is set to lead this specific conversation. */
+export async function isConversationAiLed(
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await query<{ ai_autopilot_enabled: boolean }>(
+    `SELECT ai_autopilot_enabled FROM conversations WHERE id = $1`,
+    [conversationId],
+  )
+  return Boolean(rows[0]?.ai_autopilot_enabled)
+}
+
 /** Lessons in the shape the pure brain expects (for prompt injection). */
 export async function listBrainLessons(limit = 12): Promise<BrainLesson[]> {
   const rows = await query<LessonRow>(

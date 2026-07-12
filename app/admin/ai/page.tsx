@@ -1,4 +1,3 @@
-import { Sparkles } from 'lucide-react'
 import { PageHeader } from '@/components/page-parts'
 import { AiAssistAdmin } from '@/components/admin/ai-assist-admin'
 import { requireAdmin } from '@/lib/auth'
@@ -22,7 +21,6 @@ export default async function AiAssistPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        icon={<Sparkles className="size-5" />}
         title="ИИ-ассистент"
         description="Обучаемый помощник, который ведёт переписку с клиентами вместо менеджера. Настройте тон и контекст, обучите на реальных диалогах — знания общие для всех менеджеров."
       />

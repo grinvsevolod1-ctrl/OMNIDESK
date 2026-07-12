@@ -174,7 +174,7 @@ function SettingsTab({
       <Card className="flex flex-col gap-4 p-4">
         <div className="flex flex-col gap-2">
           <Label htmlFor="ai-tone">Тон общения</Label>
-          <Select value={tone} onValueChange={setTone}>
+          <Select value={tone} onValueChange={(v) => setTone(v ?? 'professional')}>
             <SelectTrigger id="ai-tone" className="w-full sm:w-64">
               <SelectValue />
             </SelectTrigger>
@@ -239,11 +239,9 @@ type ChatTurn = { role: 'client' | 'manager'; body: string }
 function TrainerTab({
   lessons,
   onLessonsChange,
-  onSettingsChange,
 }: {
   lessons: AiAssistLesson[]
   onLessonsChange: (next: AiAssistLesson[]) => void
-  onSettingsChange: (s: AiAssistSettings) => void
 }) {
   const [samples, setSamples] = useState<TrainingSample[]>([])
   const [active, setActive] = useState<TrainingSample | null>(null)

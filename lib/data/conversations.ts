@@ -222,6 +222,12 @@ export async function addMessage(input: {
   replyToMessageId?: string
   /** Conversation-list preview text; defaults to `body` (use for media). */
   preview?: string
+  /**
+   * True when this outbound row was authored by the AI manager-assistant. AI
+   * messages must NOT pause AI-lead; any other (human) outbound message does —
+   * that's how a manual reply hands the conversation back to a person.
+   */
+  byAi?: boolean
 }): Promise<Message | null> {
   const owns = await query<{ id: string }>(
     'SELECT id FROM conversations WHERE id = $1 AND manager_id = $2',
@@ -244,8 +250,14 @@ export async function addMessage(input: {
       input.replyToMessageId ?? null,
     ],
   )
+  // A human outbound message hands the thread back from the AI: clear the
+  // AI-lead flag in the same UPDATE. AI-authored rows keep it on.
   await query(
-    'UPDATE conversations SET last_message = $2, last_message_at = now(), unread = 0 WHERE id = $1',
+    `UPDATE conversations
+        SET last_message = $2, last_message_at = now(), unread = 0${
+          input.byAi ? '' : ', ai_autopilot_enabled = false'
+        }
+      WHERE id = $1`,
     [input.conversationId, input.preview ?? input.body],
   )
   // Re-read through the standard select so the returned message carries the

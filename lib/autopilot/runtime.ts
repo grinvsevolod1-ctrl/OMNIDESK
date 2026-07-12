@@ -1,6 +1,13 @@
 import 'server-only'
 import { query } from '../db'
 import { addMessage, getLivechatWorkingHoursByChannelId } from '../data'
+import {
+  getAiAssistSettings,
+  getConversationHistoryForAi,
+  isConversationAiLed,
+  listBrainLessons,
+} from '../data/ai-assist'
+import { generateManagerReply, isBrainConfigured } from '../ai/manager-brain'
 import { deliverMaxMessage } from '../max-dispatch'
 import { deliverVkMessage } from '../vk-dispatch'
 import { deliverWhatsappMessage } from '../whatsapp-dispatch'
@@ -38,6 +45,12 @@ export async function runLivechatAutopilot(input: {
   text: string
 }): Promise<void> {
   try {
+    // AI-lead takes priority: if the AI is set to lead this conversation, let
+    // it generate a full contextual reply and skip the canned-rule engine so
+    // the two never both answer.
+    const handledByAi = await runLivechatAiLead(input)
+    if (handledByAi) return
+
     const { enabled, rules } = await getActiveAutopilot(input.managerId)
     if (!enabled || rules.length === 0) return
 
@@ -87,6 +100,68 @@ export async function runLivechatAutopilot(input: {
   }
 }
 
+/**
+ * AI-lead for live chat: when the AI is set to lead THIS conversation and the
+ * global assistant is enabled, generate a full contextual reply with the shared
+ * brain (persona + tone + playbook + correction lessons + thread history) and
+ * send it as an outbound message authored as the AI. Returns true when it
+ * handled the inbound (so canned rules are skipped). Best-effort — any failure
+ * returns false so canned autopilot can still try.
+ */
+async function runLivechatAiLead(input: {
+  managerId: string
+  channelId: string
+  conversationId: string
+  text: string
+}): Promise<boolean> {
+  try {
+    if (!isBrainConfigured()) return false
+    if (!(await isConversationAiLed(input.conversationId))) return false
+    const settings = await getAiAssistSettings()
+    if (!settings.enabled) return false
+
+    const [lessons, history] = await Promise.all([
+      listBrainLessons(12),
+      getConversationHistoryForAi(input.conversationId, 16),
+    ])
+
+    const reply = await generateManagerReply({
+      persona: settings.persona,
+      tone: settings.tone,
+      playbook: settings.playbook,
+      lessons,
+      history,
+    })
+    if (!reply) return false
+
+    await sendAiReply(input.managerId, input.conversationId, reply)
+    return true
+  } catch (err) {
+    console.error('[v0] autopilot(livechat) AI-lead failed:', err)
+    return false
+  }
+}
+
+/** Send an AI-authored reply, keeping the AI-lead flag on (byAi). */
+async function sendAiReply(
+  managerId: string,
+  conversationId: string,
+  body: string,
+): Promise<void> {
+  const msg = await addMessage({
+    conversationId,
+    managerId,
+    body,
+    author: 'ИИ-ассистент',
+    byAi: true,
+  })
+  if (msg) {
+    await deliverMaxMessage(conversationId, msg.id, body)
+    await deliverVkMessage(conversationId, msg.id, body)
+    await deliverWhatsappMessage(conversationId, msg.id, body)
+  }
+}
+
 /** Send the auto-reply as an outbound message authored by the manager. */
 async function sendAutoReply(
   managerId: string,
@@ -102,7 +177,9 @@ async function sendAutoReply(
   const author = nameRows[0]?.name?.trim() || 'Поддержка'
   // addMessage inserts the outbound row; the DB notify trigger delivers it to
   // both the widget (SSE) and the manager's inbox in real time.
-  const msg = await addMessage({ conversationId, managerId, body, author })
+  // byAi: automated sends must not clear the AI-lead flag (only a human reply
+  // does). Canned autopilot is automated, so mark it accordingly.
+  const msg = await addMessage({ conversationId, managerId, body, author, byAi: true })
   // Webhook-based channels have no SSE widget — the reply must be pushed to the
   // provider. Both dispatchers no-op for conversations they don't own, so it's
   // safe to call them unconditionally.
