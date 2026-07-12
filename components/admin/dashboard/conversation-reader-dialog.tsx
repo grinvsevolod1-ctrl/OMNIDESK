@@ -25,11 +25,7 @@ import {
   adminListManagerConversationsAction,
   type AdminTranscript,
 } from '@/app/actions/admin-inbox'
-import {
-  LEAD_STATUS_META,
-  type Conversation,
-  type LeadStatus,
-} from '@/lib/types'
+import { LEAD_STATUS_META, type LeadStatus } from '@/lib/types'
 
 const STATUS_DOT: Record<LeadStatus, string> = {
   unsubscribed: 'bg-sky-500',

@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState, useTransition } from 'react'
+import { useCallback, useState, useTransition } from 'react'
+import useSWR from 'swr'
 import {
   ArrowLeft,
   ImageIcon,
@@ -33,7 +34,6 @@ import {
   NOT_LIQUID_REASON_META,
   NOT_LIQUID_REASON_ORDER,
   leadStatusOptionValue,
-  type Conversation,
   type LeadStatus,
   type NotLiquidReason,
 } from '@/lib/types'
@@ -161,8 +161,6 @@ function LeadBoardDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const [conversations, setConversations] = useState<Conversation[]>([])
-  const [listLoading, setListLoading] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<LeadTranscript | null>(null)
   const [transcriptLoading, setTranscriptLoading] = useState(false)
@@ -175,25 +173,29 @@ function LeadBoardDialog({
       : LEAD_STATUS_META[selection.status].label
     : ''
 
-  const loadList = useCallback(() => {
-    if (!selection) return
-    setListLoading(true)
-    setConversations([])
-    setSelectedId(null)
-    setTranscript(null)
-    setMobileView('list')
-    listLeadsByStatusAction(selection.status, selection.reason)
-      .then((rows) => setConversations(rows))
-      .finally(() => setListLoading(false))
-  }, [selection])
+  // Load the bucket's conversations via SWR, keyed by the selected status +
+  // reason, and only while the board is open. SWR dedupes/caches per bucket so
+  // switching back to a previously opened bucket is instant.
+  const {
+    data: conversations = [],
+    isLoading: listLoading,
+    mutate: mutateList,
+  } = useSWR(
+    open && selection
+      ? ['leads-by-status', selection.status, selection.reason ?? '']
+      : null,
+    ([, status, reason]) =>
+      listLeadsByStatusAction(
+        status as Selection['status'],
+        (reason || null) as Selection['reason'],
+      ),
+    { revalidateOnFocus: false },
+  )
 
-  useEffect(() => {
-    if (!open || !selection) return
-    // Fetch the list when the board opens; loadList manages its own loading
-    // state. This is external-data synchronization, not a render-derived value.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadList()
-  }, [open, selection, loadList])
+  // Imperative refresh used after a status change moves a row out of the bucket.
+  const loadList = useCallback(() => {
+    void mutateList()
+  }, [mutateList])
 
   const openConversation = useCallback((id: string) => {
     setSelectedId(id)
@@ -238,6 +240,20 @@ function LeadBoardDialog({
     })
   }
 
+  // Reset the transcript pane / selection when the board closes, so the next
+  // open starts on the list view (the list itself comes from SWR cache).
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setSelectedId(null)
+        setTranscript(null)
+        setMobileView('list')
+      }
+      onOpenChange(next)
+    },
+    [onOpenChange],
+  )
+
   const activeConversation =
     transcript?.conversation ??
     conversations.find((c) => c.id === selectedId) ??
@@ -250,7 +266,7 @@ function LeadBoardDialog({
     : ''
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton
         className="flex h-[85vh] max-h-[85vh] w-[min(64rem,calc(100%-2rem))] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
