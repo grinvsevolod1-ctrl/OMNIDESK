@@ -130,7 +130,8 @@ async function maybeSpawn(
   tone: SimTone,
 ): Promise<void> {
   const active = await countActiveThreads()
-  if (active >= maxThreads) return
+  // maxThreads === 0 means unlimited — skip the cap check entirely.
+  if (maxThreads > 0 && active >= maxThreads) return
 
   let nextDelay = randInt(cadence.spawnMinSec, cadence.spawnMaxSec)
   // Real traffic isn't metronomic: now and then nobody writes for a while.

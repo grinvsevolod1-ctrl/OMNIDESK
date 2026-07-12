@@ -137,7 +137,8 @@ export async function updateSettings(patch: SettingsPatch): Promise<SimSettings>
   if (patch.aggression !== undefined)
     push('aggression', clampInt(patch.aggression, 0, 100))
   if (patch.maxThreads !== undefined)
-    push('max_threads', clampInt(patch.maxThreads, 1, 100))
+    // 0 means unlimited. No upper bound enforced here.
+    push('max_threads', Math.max(0, Math.floor(patch.maxThreads) || 0))
   if (patch.spawnMinSec !== undefined)
     push('spawn_min_sec', clampInt(patch.spawnMinSec, 5, 86_400))
   if (patch.spawnMaxSec !== undefined)

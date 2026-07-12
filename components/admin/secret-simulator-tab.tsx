@@ -367,11 +367,11 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
         <SliderRow
           id="sim-threads"
           label="Одновременных диалогов"
-          min={1}
-          max={40}
+          min={0}
+          max={500}
           value={maxThreads}
           onChange={setMaxThreads}
-          format={(v) => String(v)}
+          format={(v) => (v === 0 ? 'Без лимита' : String(v))}
         />
 
         {/* Spawn rate — expressed as new conversations per hour */}
@@ -425,7 +425,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           {eligible.length === 0 ? (
             <p className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
               Нет каналов с назначенным менеджером. Создайте канал и назначьте
-              владельца во вкладке «Каналы».
+              владельца ��о вкладке «Каналы».
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">
