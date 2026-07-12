@@ -31,6 +31,7 @@ export interface ManagerRow {
   id: string
   name: string
   email: string
+  username: string | null
   password_hash: string
   status: ManagerStatus
   session_version: number
@@ -145,6 +146,7 @@ export function toManager(r: ManagerRow): Manager {
     id: r.id,
     name: r.name,
     email: r.email,
+    username: r.username ?? null,
     status: r.status,
     onLunch: r.on_lunch ?? false,
     createdAt: new Date(r.created_at).toISOString(),

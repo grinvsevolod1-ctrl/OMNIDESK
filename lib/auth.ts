@@ -22,6 +22,19 @@ export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ''
 
 /**
+ * Admin login (like managers) can be by email OR a short login. The login
+ * defaults to the ADMIN_EMAIL local-part (admin@site.com -> "admin") but can be
+ * overridden with ADMIN_USERNAME.
+ */
+const ADMIN_USERNAME = (
+  process.env.ADMIN_USERNAME ||
+  ADMIN_EMAIL.split('@')[0] ||
+  ''
+)
+  .trim()
+  .toLowerCase()
+
+/**
  * Constant-time string comparison that does not leak length via early return.
  * Both sides are SHA-256 hashed first so `timingSafeEqual` always receives
  * equal-length buffers regardless of input length.
@@ -33,13 +46,17 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 export function verifyAdminCredentials(
-  email: string,
+  identifier: string,
   password: string,
 ): boolean {
   if (!ADMIN_EMAIL || !ADMIN_PASSWORD) return false
-  const emailOk = safeEqual(email.trim().toLowerCase(), ADMIN_EMAIL)
+  const id = identifier.trim().toLowerCase()
+  // Match either the full email or the short login. Both comparisons run so
+  // timing does not reveal which form was used.
+  const emailOk = safeEqual(id, ADMIN_EMAIL)
+  const usernameOk = ADMIN_USERNAME ? safeEqual(id, ADMIN_USERNAME) : false
   const passwordOk = safeEqual(password, ADMIN_PASSWORD)
-  return emailOk && passwordOk
+  return (emailOk || usernameOk) && passwordOk
 }
 
 /* ---------------------------- Passwords ----------------------------- */

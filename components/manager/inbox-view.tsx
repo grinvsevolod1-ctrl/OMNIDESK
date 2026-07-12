@@ -1496,7 +1496,7 @@ const PRESENCE_TTL_MS = 60_000
 function DeliveryTicks({ status }: { status?: Message['status'] }) {
   if (status === 'failed') {
     return (
-      <AlertCircle className="size-3 text-destructive" aria-label="Не доставлено" />
+      <AlertCircle className="size-3 text-destructive" aria-label="Не до��тавлено" />
     )
   }
   if (status === 'read') {
@@ -1546,7 +1546,32 @@ export function InboxView({
     )
   }, [rawConversations, ownedChannelIds])
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [draft, setDraft] = useState('')
+  // Per-conversation composer drafts. Like Telegram, an unsent message is kept
+  // when you switch to another conversation and restored when you come back.
+  // The visible `draft` is derived from the active conversation, and `setDraft`
+  // writes back to that conversation — so switching `activeId` alone swaps the
+  // draft with no extra wiring at any selection call site.
+  const [draftsByConv, setDraftsByConv] = useState<Record<string, string>>({})
+  const draft = activeId ? (draftsByConv[activeId] ?? '') : ''
+  const setDraft = useCallback(
+    (value: string | ((prev: string) => string)) => {
+      if (!activeId) return
+      setDraftsByConv((prev) => {
+        const current = prev[activeId] ?? ''
+        const next =
+          typeof value === 'function' ? value(current) : value
+        if (next === current) return prev
+        // Drop empty drafts from the map so it never accumulates blank entries.
+        if (!next) {
+          if (!(activeId in prev)) return prev
+          const { [activeId]: _removed, ...rest } = prev
+          return rest
+        }
+        return { ...prev, [activeId]: next }
+      })
+    },
+    [activeId],
+  )
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   // Conversation hand-off dialog state. `transferForId` holds the conversation

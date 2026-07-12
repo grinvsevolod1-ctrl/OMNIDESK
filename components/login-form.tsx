@@ -33,13 +33,13 @@ export function LoginForm() {
   return (
     <form action={formAction} className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
-        <Label htmlFor="email">Email</Label>
+        <Label htmlFor="identifier">Email или логин</Label>
         <Input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="email"
-          placeholder="you@company.com"
+          id="identifier"
+          name="identifier"
+          type="text"
+          autoComplete="username"
+          placeholder="admin или you@company.com"
           required
           autoFocus
         />

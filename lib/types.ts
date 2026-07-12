@@ -6,6 +6,8 @@ export interface Manager {
   id: string
   name: string
   email: string
+  /** Short login derived from the email local-part; usable to sign in. */
+  username: string | null
   status: ManagerStatus
   /** True while the manager is on lunch — new conversations route elsewhere. */
   onLunch: boolean

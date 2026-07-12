@@ -14,6 +14,14 @@ export interface ManagerWithSecret extends Manager {
   sessionVersion: number
 }
 
+function toManagerWithSecret(row: ManagerRow): ManagerWithSecret {
+  return {
+    ...toManager(row),
+    passwordHash: row.password_hash,
+    sessionVersion: row.session_version ?? 0,
+  }
+}
+
 export async function getManagerByEmail(
   email: string,
 ): Promise<ManagerWithSecret | null> {
@@ -22,12 +30,63 @@ export async function getManagerByEmail(
     'SELECT * FROM managers WHERE lower(email) = $1 LIMIT 1',
     [normalized],
   )
-  if (!rows[0]) return null
-  return {
-    ...toManager(rows[0]),
-    passwordHash: rows[0].password_hash,
-    sessionVersion: rows[0].session_version ?? 0,
-  }
+  return rows[0] ? toManagerWithSecret(rows[0]) : null
+}
+
+/**
+ * Sanitize an arbitrary string into a valid login: lowercase, only
+ * [a-z0-9._-], everything else stripped. Returns '' when nothing survives so
+ * callers can fall back (e.g. to a generated login).
+ */
+export function sanitizeUsername(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '')
+}
+
+/** Derive a login from an email address (its local-part), sanitized. */
+export function usernameFromEmail(email: string): string {
+  return sanitizeUsername(email.split('@')[0] ?? '')
+}
+
+/**
+ * Look up a manager by either their email (identifier contains '@') or their
+ * login. Case-insensitive. Used by the login flow so a single field accepts
+ * both forms.
+ */
+export async function getManagerByIdentifier(
+  identifier: string,
+): Promise<ManagerWithSecret | null> {
+  const id = identifier.trim().toLowerCase()
+  if (!id) return null
+  const byEmail = id.includes('@')
+  const rows = await query<ManagerRow>(
+    byEmail
+      ? 'SELECT * FROM managers WHERE lower(email) = $1 LIMIT 1'
+      : 'SELECT * FROM managers WHERE lower(username) = $1 LIMIT 1',
+    [id],
+  )
+  return rows[0] ? toManagerWithSecret(rows[0]) : null
+}
+
+/**
+ * Resolve a unique login from a desired base, appending -2, -3, … on collision.
+ * Falls back to 'user' when the base sanitizes to empty.
+ */
+async function resolveUniqueUsername(base: string): Promise<string> {
+  const clean = sanitizeUsername(base) || 'user'
+  const taken = await query<{ username: string }>(
+    `SELECT lower(username) AS username FROM managers
+      WHERE username IS NOT NULL
+        AND (lower(username) = $1 OR lower(username) LIKE $1 || '-%')`,
+    [clean],
+  )
+  const used = new Set(taken.map((r) => r.username))
+  if (!used.has(clean)) return clean
+  let n = 2
+  while (used.has(`${clean}-${n}`)) n++
+  return `${clean}-${n}`
 }
 
 /**
@@ -68,13 +127,19 @@ export async function createManager(input: {
   name: string
   email: string
   passwordHash: string
+  /** Optional custom login; defaults to the email local-part when omitted. */
+  username?: string
 }): Promise<Manager> {
   const id = randomUUID()
   const email = input.email.trim().toLowerCase()
+  const desired = input.username?.trim()
+    ? input.username
+    : usernameFromEmail(email)
+  const username = await resolveUniqueUsername(desired)
   const rows = await query<ManagerRow>(
-    `INSERT INTO managers (id, name, email, password_hash, status)
-     VALUES ($1, $2, $3, $4, 'active') RETURNING *`,
-    [id, input.name.trim(), email, input.passwordHash],
+    `INSERT INTO managers (id, name, email, username, password_hash, status)
+     VALUES ($1, $2, $3, $4, $5, 'active') RETURNING *`,
+    [id, input.name.trim(), email, username, input.passwordHash],
   )
   return toManager(rows[0])
 }

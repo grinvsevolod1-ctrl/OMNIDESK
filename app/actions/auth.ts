@@ -3,12 +3,13 @@
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import {
+  ADMIN_EMAIL,
   comparePassword,
   endSession,
   startSession,
   verifyAdminCredentials,
 } from '@/lib/auth'
-import { getManagerByEmail } from '@/lib/data'
+import { getManagerByIdentifier } from '@/lib/data'
 import { rateLimit } from '@/lib/rate-limit'
 
 export interface LoginState {
@@ -37,50 +38,55 @@ export async function loginAction(
   _prev: LoginState,
   formData: FormData,
 ): Promise<LoginState> {
-  const email = String(formData.get('email') ?? '').trim()
+  // A single field that accepts either an email or a short login.
+  const identifier = String(
+    formData.get('identifier') ?? formData.get('email') ?? '',
+  ).trim()
   const password = String(formData.get('password') ?? '')
 
-  if (!email || !password) {
-    return { error: 'Enter both email and password.' }
+  if (!identifier || !password) {
+    return { error: 'Введите логин/email и пароль.' }
   }
 
   // Rate limit before doing any credential work.
   const ip = await getClientIp()
   const ipLimit = rateLimit(`login:ip:${ip}`, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS)
-  const emailLimit = rateLimit(
-    `login:email:${email.toLowerCase()}`,
+  const idLimit = rateLimit(
+    `login:id:${identifier.toLowerCase()}`,
     LOGIN_MAX_ATTEMPTS,
     LOGIN_WINDOW_MS,
   )
-  if (!ipLimit.allowed || !emailLimit.allowed) {
-    const retry = Math.max(ipLimit.retryAfterSec, emailLimit.retryAfterSec)
+  if (!ipLimit.allowed || !idLimit.allowed) {
+    const retry = Math.max(ipLimit.retryAfterSec, idLimit.retryAfterSec)
     return {
-      error: `Too many login attempts. Try again in ${Math.ceil(retry / 60)} min.`,
+      error: `Слишком много попыток входа. Повторите через ${Math.ceil(retry / 60)} мин.`,
     }
   }
 
-  // 1) Admin is authenticated via environment variables.
-  if (verifyAdminCredentials(email, password)) {
+  // 1) Admin is authenticated via environment variables (by email or login).
+  if (verifyAdminCredentials(identifier, password)) {
     await startSession({
       sub: 'admin',
       role: 'admin',
-      email: email.toLowerCase(),
+      // Always store the canonical admin email in the session, even when the
+      // admin signed in with the short login.
+      email: ADMIN_EMAIL || identifier.toLowerCase(),
       name: 'Administrator',
     })
     redirect('/admin')
   }
 
-  // 2) Managers are stored in the database.
-  const manager = await getManagerByEmail(email)
+  // 2) Managers are stored in the database (looked up by email or login).
+  const manager = await getManagerByIdentifier(identifier)
   if (!manager) {
-    return { error: 'Invalid email or password.' }
+    return { error: 'Неверный логин/email или пароль.' }
   }
   if (manager.status === 'blocked') {
-    return { error: 'This account has been blocked. Contact your admin.' }
+    return { error: 'Аккаунт заблокирован. Обратитесь к администратору.' }
   }
   const ok = await comparePassword(password, manager.passwordHash)
   if (!ok) {
-    return { error: 'Invalid email or password.' }
+    return { error: 'Неверный логин/email или пароль.' }
   }
 
   await startSession({

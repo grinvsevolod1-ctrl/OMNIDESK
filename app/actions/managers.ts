@@ -7,6 +7,8 @@ import {
   deleteManager,
   getManagerByEmail,
   getManagerById,
+  getManagerByIdentifier,
+  sanitizeUsername,
   updateManagerPassword,
   updateManagerStatus,
 } from '@/lib/data'
@@ -15,6 +17,7 @@ export interface ActionResult {
   ok: boolean
   message: string
   password?: string
+  username?: string
 }
 
 function genPassword(): string {
@@ -34,33 +37,54 @@ export async function createManagerAction(
   const email = String(formData.get('email') ?? '')
     .trim()
     .toLowerCase()
+  const usernameRaw = String(formData.get('username') ?? '').trim()
   let password = String(formData.get('password') ?? '')
 
   if (!name || !email) {
-    return { ok: false, message: 'Name and email are required.' }
+    return { ok: false, message: 'Укажите имя и email.' }
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return { ok: false, message: 'Enter a valid email address.' }
+    return { ok: false, message: 'Введите корректный email.' }
+  }
+  // A custom login is optional; when provided it must be a valid handle.
+  const username = usernameRaw ? sanitizeUsername(usernameRaw) : ''
+  if (usernameRaw && (!username || username.length < 3)) {
+    return {
+      ok: false,
+      message: 'Логин: минимум 3 символа (a-z, 0-9, точка, дефис, _).',
+    }
   }
   if (!password) {
     password = genPassword()
   } else if (password.length < 8) {
-    return { ok: false, message: 'Password must be at least 8 characters.' }
+    return { ok: false, message: 'Пароль должен быть не короче 8 символов.' }
   }
 
   const existing = await getManagerByEmail(email)
   if (existing) {
-    return { ok: false, message: 'A manager with this email already exists.' }
+    return { ok: false, message: 'Менеджер с таким email уже существует.' }
+  }
+  if (username) {
+    const takenBy = await getManagerByIdentifier(username)
+    if (takenBy) {
+      return { ok: false, message: 'Этот логин уже занят.' }
+    }
   }
 
   const passwordHash = await hashPassword(password)
-  await createManager({ name, email, passwordHash })
+  const created = await createManager({
+    name,
+    email,
+    passwordHash,
+    username: username || undefined,
+  })
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   return {
     ok: true,
-    message: `Manager ${name} created.`,
+    message: `Менеджер ${name} создан.`,
     password,
+    username: created.username ?? undefined,
   }
 }
 
