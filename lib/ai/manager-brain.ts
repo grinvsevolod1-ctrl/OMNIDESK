@@ -1,0 +1,265 @@
+/**
+ * Manager AI "brain" — the shared, PURE reply generator used by BOTH runtimes:
+ *   - the Next.js panel (admin trainer + live-chat auto-lead)
+ *   - the standalone worker (Telegram/WhatsApp auto-lead)
+ *
+ * Like lib/autopilot/match.ts this module MUST stay dependency-free: no
+ * `server-only`, no database, no React, no `@/` path aliases, NO relative
+ * imports, and NOT the `ai` SDK (the worker doesn't install it). It talks to the
+ * Vercel AI Gateway directly over its OpenAI-compatible REST endpoint via
+ * `fetch`, so it runs identically under Next.js and under tsx in the worker.
+ *
+ * The knowledge base is shared across all managers (product decision): a single
+ * business persona, a distilled playbook, and a corpus of correction "lessons".
+ */
+
+/** A single chat turn as the model sees it. */
+export interface BrainMessage {
+  role: 'client' | 'manager'
+  body: string
+}
+
+/** One admin correction used to steer future replies (lightweight RAG). */
+export interface BrainLesson {
+  situation: string
+  corrected: string
+  note?: string
+}
+
+/** Everything the generator needs to produce one in-character manager reply. */
+export interface ManagerBrainInput {
+  /** Business context written by the admin (what we do, how we talk). */
+  persona: string
+  /** Tone/register hint, e.g. "professional", "friendly". */
+  tone: string
+  /** Distilled bullet-point rules the admin has trained. */
+  playbook: string[]
+  /** Recent correction lessons (most relevant first). */
+  lessons: BrainLesson[]
+  /** Conversation so far, oldest → newest. */
+  history: BrainMessage[]
+}
+
+const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/chat/completions'
+
+// gpt-4.1 gives the most coherent, context-aware replies to real clients — the
+// priority for customer-facing messages. Override with MANAGER_AI_MODEL.
+const MODEL = process.env.MANAGER_AI_MODEL || 'openai/gpt-4.1'
+
+/** Reply generation is only possible when the gateway key is present. */
+export function isBrainConfigured(): boolean {
+  return Boolean(process.env.AI_GATEWAY_API_KEY)
+}
+
+const TONE_HINT: Record<string, string> = {
+  professional:
+    'Деловой, вежливый, уверенный тон. Без панибратства, но по-человечески.',
+  friendly: 'Дружелюбный, тёплый тон. Можно проще, но грамотно.',
+  concise: 'Максимально коротко и по делу, без воды.',
+  persuasive:
+    'Убедительный, мотивирующий тон. Мягко ведёшь клиента к следующему шагу.',
+}
+
+function toneLine(tone: string): string {
+  return TONE_HINT[tone] || TONE_HINT.professional
+}
+
+function buildSystemPrompt(input: ManagerBrainInput): string {
+  const parts: string[] = [
+    'Ты — менеджер компании, который лично ведёт переписку с клиентом в мессенджере.',
+    'Пиши так, будто ты живой сотрудник: естественно, без канцелярита и без признаков того, что ты ИИ.',
+    'НИКОГДА не упоминай, что ты бот/ИИ/ассистент. Не извиняйся за то, что ты программа.',
+    'Отвечай ОДНИМ сообщением, как в чате — коротко, живо, по-русски.',
+    '',
+    `ТОН: ${toneLine(input.tone)}`,
+  ]
+
+  if (input.persona.trim()) {
+    parts.push('', 'О КОМПАНИИ И ПРАВИЛАХ ОБЩЕНИЯ:', input.persona.trim())
+  }
+
+  if (input.playbook.length > 0) {
+    parts.push(
+      '',
+      'ПЛЕЙБУК (следуй этим правилам, выведенным из практики):',
+      ...input.playbook.slice(0, 20).map((p) => `- ${p}`),
+    )
+  }
+
+  if (input.lessons.length > 0) {
+    parts.push(
+      '',
+      'ПРИМЕРЫ ХОРОШИХ ОТВЕТОВ (как отвечать в похожих ситуациях):',
+      ...input.lessons.slice(0, 8).map((l) => {
+        const situation = l.situation.trim() || '(общая ситуация)'
+        const note = l.note?.trim() ? ` [важно: ${l.note.trim()}]` : ''
+        return `• Клиент: "${situation}" → Ответ: "${l.corrected.trim()}"${note}`
+      }),
+    )
+  }
+
+  return parts.join('\n')
+}
+
+interface GatewayChoice {
+  message?: { content?: string | null }
+}
+interface GatewayResponse {
+  choices?: GatewayChoice[]
+}
+
+const REFUSAL = [
+  'i cannot',
+  'i can’t',
+  "i can't",
+  'as an ai',
+  'как ии',
+  'как языковая модель',
+  'я не могу помочь',
+]
+
+function looksLikeRefusal(text: string): boolean {
+  const t = text.toLowerCase()
+  return REFUSAL.some((r) => t.includes(r))
+}
+
+/**
+ * Generate ONE in-character manager reply for the current conversation.
+ * Returns the trimmed reply, or null when the AI is unavailable / declined /
+ * produced nothing usable (callers should then stay silent, never post junk).
+ */
+export async function generateManagerReply(
+  input: ManagerBrainInput,
+): Promise<string | null> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  if (!key) return null
+
+  // Only recent turns — keeps it cheap and focused.
+  const recent = input.history.slice(-16)
+  const messages: Array<{ role: string; content: string }> = [
+    { role: 'system', content: buildSystemPrompt(input) },
+  ]
+  for (const m of recent) {
+    messages.push({
+      role: m.role === 'client' ? 'user' : 'assistant',
+      content: m.body,
+    })
+  }
+  // If the client hasn't been quoted yet (fresh AI takeover on an empty-ish
+  // thread) give the model an explicit nudge to open.
+  if (recent.length === 0) {
+    messages.push({
+      role: 'user',
+      content: '(клиент только что написал в чат, начни диалог)',
+    })
+  }
+
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages,
+        temperature: 0.7,
+        max_tokens: 400,
+      }),
+    })
+    if (!res.ok) {
+      console.warn('[manager-brain] gateway HTTP', res.status)
+      return null
+    }
+    const data = (await res.json()) as GatewayResponse
+    const raw = data.choices?.[0]?.message?.content ?? ''
+    const clean = raw.trim().replace(/^["'«»]+|["'«»]+$/g, '')
+    if (!clean || looksLikeRefusal(clean)) return null
+    return clean
+  } catch (err) {
+    console.warn(
+      '[manager-brain] generation failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return null
+  }
+}
+
+/**
+ * Distill a compact bullet-point playbook from the full lesson corpus. Called
+ * after training so the always-injected playbook stays small. Falls back to a
+ * simple heuristic (dedup of correction gists) when the AI is unavailable.
+ */
+export async function distillPlaybook(
+  lessons: BrainLesson[],
+  existingPersona: string,
+): Promise<string[]> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  const corpus = lessons
+    .slice(0, 60)
+    .map(
+      (l, i) =>
+        `${i + 1}. Ситуация: ${l.situation.trim() || '—'}\n   Ответ: ${l.corrected.trim()}${
+          l.note?.trim() ? `\n   Заметка: ${l.note.trim()}` : ''
+        }`,
+    )
+    .join('\n')
+
+  if (!key || lessons.length === 0) {
+    // Heuristic fallback: short, unique corrected-answer gists.
+    return lessons
+      .slice(0, 12)
+      .map((l) => l.note?.trim() || l.corrected.trim())
+      .filter(Boolean)
+  }
+
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты анализируешь примеры переписки менеджера с клиентами и выводишь краткий свод правил (плейбук). ' +
+              'Верни 5–15 коротких правил на русском, каждое с новой строки, без нумерации и лишнего текста. ' +
+              'Правила должны обобщать, КАК отвечать клиентам: тон, что предлагать, чего избегать, как вести к сделке.',
+          },
+          {
+            role: 'user',
+            content:
+              (existingPersona.trim()
+                ? `Контекст компании:\n${existingPersona.trim()}\n\n`
+                : '') + `Примеры:\n${corpus}`,
+          },
+        ],
+        temperature: 0.4,
+        max_tokens: 600,
+      }),
+    })
+    if (!res.ok) throw new Error(`gateway HTTP ${res.status}`)
+    const data = (await res.json()) as GatewayResponse
+    const raw = data.choices?.[0]?.message?.content ?? ''
+    const rules = raw
+      .split('\n')
+      .map((l) => l.replace(/^[\s\d.)*-]+/, '').trim())
+      .filter((l) => l.length > 0)
+      .slice(0, 15)
+    return rules.length > 0 ? rules : []
+  } catch (err) {
+    console.warn(
+      '[manager-brain] distill failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return lessons
+      .slice(0, 12)
+      .map((l) => l.note?.trim() || l.corrected.trim())
+      .filter(Boolean)
+  }
+}

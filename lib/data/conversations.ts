@@ -85,6 +85,44 @@ export async function getConversation(
 }
 
 /**
+ * Turn the AI manager-assistant on/off for a single conversation. Manager-
+ * scoped so a manager can only toggle their own threads. Returns the new state,
+ * or null when the conversation isn't owned by that manager.
+ */
+export async function setConversationAiAutopilot(
+  conversationId: string,
+  managerId: string,
+  enabled: boolean,
+): Promise<boolean | null> {
+  const rows = await query<{ ai_autopilot_enabled: boolean }>(
+    `UPDATE conversations
+        SET ai_autopilot_enabled = $3
+      WHERE id = $1 AND manager_id = $2
+      RETURNING ai_autopilot_enabled`,
+    [conversationId, managerId, enabled],
+  )
+  return rows[0] ? rows[0].ai_autopilot_enabled : null
+}
+
+/**
+ * Disable AI-lead for a conversation because a human just took over (manual
+ * send). Unconditional by id — the caller already resolved ownership. Returns
+ * true when a row was actually flipped from on→off (so callers can log it).
+ */
+export async function disableConversationAiAutopilot(
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET ai_autopilot_enabled = false
+      WHERE id = $1 AND ai_autopilot_enabled = true
+      RETURNING id`,
+    [conversationId],
+  )
+  return rows.length > 0
+}
+
+/**
  * Mark a conversation as read on our side: zero its unread counter and return
  * what the worker needs to send read receipts to the contact (so they see our
  * blue ticks). Returns null when the manager doesn't own the conversation.

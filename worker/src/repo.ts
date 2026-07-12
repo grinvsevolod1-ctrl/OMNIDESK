@@ -925,6 +925,87 @@ export async function clearAutopilotFire(
   )
 }
 
+/* ------------------------- AI manager-assistant ------------------------- */
+
+/** Shared AI-assistant config (singleton row) + distilled playbook. */
+export interface AiAssistConfig {
+  enabled: boolean
+  tone: string
+  persona: string
+  playbook: string[]
+}
+
+/** One correction lesson in the shape the pure brain expects. */
+export interface AiAssistLessonLite {
+  situation: string
+  corrected: string
+  note: string
+}
+
+/** Read the singleton AI-assist settings. Missing row → disabled defaults. */
+export async function getAiAssistConfig(): Promise<AiAssistConfig> {
+  const row = await one<{
+    enabled: boolean
+    tone: string
+    persona: string
+    playbook: unknown
+  }>(
+    `SELECT enabled, tone, persona, playbook
+       FROM ai_assist_settings WHERE id = true`,
+  )
+  return {
+    enabled: !!row?.enabled,
+    tone: row?.tone ?? 'professional',
+    persona: row?.persona ?? '',
+    playbook: Array.isArray(row?.playbook) ? (row!.playbook as string[]) : [],
+  }
+}
+
+/** Most recent correction lessons for prompt injection. */
+export async function listAiLessons(
+  limit = 12,
+): Promise<AiAssistLessonLite[]> {
+  return query<AiAssistLessonLite>(
+    `SELECT situation, corrected, note
+       FROM ai_assist_lessons
+      ORDER BY created_at DESC
+      LIMIT $1`,
+    [Math.max(1, Math.min(50, limit))],
+  )
+}
+
+/** True when the AI is set to lead THIS conversation. */
+export async function isConversationAiLed(
+  conversationId: string,
+): Promise<boolean> {
+  const row = await one<{ ai_autopilot_enabled: boolean }>(
+    `SELECT ai_autopilot_enabled FROM conversations WHERE id = $1`,
+    [conversationId],
+  )
+  return !!row?.ai_autopilot_enabled
+}
+
+/** Recent turns of a conversation, oldest → newest, for the AI prompt. */
+export async function getConversationHistoryForAi(
+  conversationId: string,
+  limit = 16,
+): Promise<Array<{ role: 'client' | 'manager'; body: string }>> {
+  const rows = await query<{ direction: 'in' | 'out'; body: string }>(
+    `SELECT direction, body
+       FROM messages
+      WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [conversationId, Math.max(1, Math.min(50, limit))],
+  )
+  return rows
+    .reverse()
+    .map((r) => ({
+      role: r.direction === 'in' ? 'client' : 'manager',
+      body: r.body,
+    }))
+}
+
 /**
  * Count autopilot sends on a channel within a trailing window (minutes). Used
  * to enforce per-channel anti-ban rate caps for messengers.

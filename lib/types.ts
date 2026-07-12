@@ -355,6 +355,13 @@ export interface Conversation {
    * ingestion, it just reflects that outbound replies won't reach the contact.
    */
   contactBlocked?: boolean
+  /**
+   * When true, the AI manager-assistant is actively leading THIS conversation:
+   * it auto-replies to inbound messages. Turned off automatically the moment a
+   * human manager sends a manual message (human takes over); the manager can
+   * flip it back on and the AI re-reads the thread and continues.
+   */
+  aiAutopilotEnabled?: boolean
 }
 
 /**

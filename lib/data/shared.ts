@@ -77,6 +77,7 @@ export interface ConversationRow {
   visitor_no?: number | null
   contact_blocked?: boolean | null
   contact_name_hidden?: boolean | null
+  ai_autopilot_enabled?: boolean | null
   created_at?: string | Date | null
 }
 
@@ -223,6 +224,7 @@ export function toConversation(r: ConversationRow): Conversation {
       r.meta && Object.keys(r.meta).length > 0
         ? (r.meta as ConversationMeta)
         : undefined,
+    aiAutopilotEnabled: Boolean(r.ai_autopilot_enabled),
   }
 }
 

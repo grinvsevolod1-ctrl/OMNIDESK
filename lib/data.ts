@@ -33,6 +33,9 @@ export * from './data/conversations'
 /* Admin-only contacts / leads database */
 export * from './data/contacts'
 
+/* AI manager-assistant: shared settings, training lessons, playbook */
+export * from './data/ai-assist'
+
 /* Live chat widget channel */
 export * from './data/livechat'
 

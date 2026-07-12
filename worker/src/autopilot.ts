@@ -33,6 +33,7 @@ import {
   type MatchInput,
 } from '../../lib/autopilot/match.js'
 import { isOffHoursFor, type WorkingHoursLike } from '../../lib/offhours.js'
+import { generateManagerReply } from '../../lib/ai/manager-brain.js'
 import { logger } from './logger.js'
 import * as repo from './repo.js'
 
@@ -183,6 +184,79 @@ async function fireRule(params: {
 }
 
 /**
+ * AI-lead handler: when the AI is set to lead THIS conversation (per-thread
+ * toggle) and the global assistant is enabled, generate a full contextual reply
+ * with the shared "brain" and send it with the same anti-ban pacing/caps as
+ * canned rules. Returns true when it handled the inbound (so the caller skips
+ * canned rules and avoids double-answering). Self-guarding: never throws.
+ */
+async function fireAiLead(params: {
+  session: SenderSession
+  channelId: string
+  managerId: string
+  channelType: 'telegram' | 'whatsapp'
+  conversationId: string
+  contactHandle: string
+}): Promise<boolean> {
+  const { session, channelId, managerId, channelType, conversationId, contactHandle } =
+    params
+  try {
+    if (!(await repo.isConversationAiLed(conversationId))) return false
+    const config = await repo.getAiAssistConfig()
+    if (!config.enabled) return false
+    if (!(await withinRateCaps(channelId))) return false
+
+    const [lessons, history] = await Promise.all([
+      repo.listAiLessons(12),
+      repo.getConversationHistoryForAi(conversationId, 16),
+    ])
+
+    const reply = await generateManagerReply({
+      persona: config.persona,
+      tone: config.tone,
+      playbook: config.playbook,
+      lessons,
+      history,
+    })
+    if (!reply) return false
+
+    // Human-like pacing: typing presence, a length-scaled delay, then send.
+    const delayMs = Math.min(
+      45_000,
+      3000 + reply.length * 60 + Math.floor(Math.random() * 4000),
+    )
+    if (session.sendTyping) {
+      await session.sendTyping(contactHandle, true).catch(() => {})
+    }
+    await new Promise((r) => setTimeout(r, delayMs))
+    if (session.sendTyping) {
+      await session.sendTyping(contactHandle, false).catch(() => {})
+    }
+
+    const { providerMessageId } = await session.sendMessage(contactHandle, reply)
+    lastSendByChannel.set(channelId, Date.now())
+
+    await repo.ingestInbound({
+      channelId,
+      managerId,
+      channelType,
+      contactName: contactHandle,
+      contactHandle,
+      body: reply,
+      direction: 'out',
+      author: 'ИИ-ассистент',
+      providerMessageId,
+      isAutopilot: true,
+    })
+    logger.info({ channelId, conversationId }, 'ai-lead: auto-reply sent')
+    return true
+  } catch (err) {
+    logger.error({ err, channelId, conversationId }, 'ai-lead: failed (ignored)')
+    return false
+  }
+}
+
+/**
  * Inbound entry point — call after a messenger inbound is persisted.
  * Self-guarding: never throws.
  */
@@ -197,6 +271,18 @@ export async function onInbound(params: {
   isFirstInbound: boolean
 }): Promise<void> {
   try {
+    // AI-lead takes priority: if the AI is driving this conversation, let it
+    // answer and skip the canned-rule engine entirely (no double replies).
+    const handledByAi = await fireAiLead({
+      session: params.session,
+      channelId: params.channelId,
+      managerId: params.managerId,
+      channelType: params.channelType,
+      conversationId: params.conversationId,
+      contactHandle: params.contactHandle,
+    })
+    if (handledByAi) return
+
     if (!(await repo.autopilotEnabled(params.managerId))) return
     const rules = await loadRules(params.managerId)
     if (rules.length === 0) return
