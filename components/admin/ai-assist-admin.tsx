@@ -106,7 +106,6 @@ export function AiAssistAdmin({
               setLessons(next)
               setLessonCount(next.length)
             }}
-            onSettingsChange={patchSettings}
           />
         </TabsContent>
       </Tabs>
