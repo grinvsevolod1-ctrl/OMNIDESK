@@ -94,12 +94,6 @@ export async function getManagerStats(
 export type GoalMessenger = 'any' | 'telegram' | 'whatsapp'
 export type ClickMessenger = 'telegram' | 'whatsapp'
 
-/**
- * SQL expression that derives the EFFECTIVE lead status from a conversation row.
- * Mirrors DEFAULT_LEAD_STATUS so DB-side aggregates match the per-row JS value.
- */
-const EFFECTIVE_STATUS_SQL = `COALESCE(status, 'unsubscribed')`
-
 function emptyStatusCounts(): Record<LeadStatus, number> {
   return { unsubscribed: 0, liquid: 0, not_liquid: 0, transferred: 0 }
 }
