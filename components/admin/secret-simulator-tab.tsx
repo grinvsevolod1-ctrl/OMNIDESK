@@ -115,6 +115,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
     setStatus(s)
     if (hydrateControls) {
       setAggression(s.aggression)
+      setTone(s.tone ?? 'mixed')
       setMaxThreads(s.maxThreads)
       setPerHour(rangeToPerHour(s.spawnMinSec, s.spawnMaxSec))
       setReplyMin(s.replyMinSec)
@@ -169,6 +170,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
       try {
         const s = await simUpdateSettingsAction({
           aggression,
+          tone,
           maxThreads,
           spawnMinSec: sMin,
           spawnMaxSec: sMax,
@@ -322,6 +324,33 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           <h3 className="font-semibold tracking-tight">Поведение</h3>
         </div>
 
+        {/* Tone */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="sim-tone">Тон общения</Label>
+            <span className="text-xs text-muted-foreground">
+              {TONE_OPTIONS.find((o) => o.value === tone)?.hint}
+            </span>
+          </div>
+          <div className="grid grid-cols-4 gap-1.5" id="sim-tone">
+            {TONE_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => setTone(o.value)}
+                className={cn(
+                  'press-scale rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+                  tone === o.value
+                    ? 'border-foreground/25 bg-foreground text-background'
+                    : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Aggression */}
         <SliderRow
           id="sim-aggr"
@@ -439,7 +468,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
       </Card>
 
       {/* ---- Interactive test sandbox ---- */}
-      <SecretSimulatorTest aggression={aggression} />
+      <SecretSimulatorTest aggression={aggression} tone={tone} />
     </div>
   )
 }

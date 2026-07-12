@@ -15,7 +15,7 @@ import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import type { ChannelType } from '@/lib/types'
-import type { SimPersona } from '@/lib/client-sim/types'
+import type { SimPersona, SimTone } from '@/lib/client-sim/types'
 
 /** Channel types the simulator can role-play, with human labels. */
 const TEST_CHANNELS: { type: ChannelType; label: string }[] = [
@@ -33,9 +33,10 @@ const TEST_CHANNELS: { type: ChannelType; label: string }[] = [
  */
 export function SecretSimulatorTest({
   aggression,
+  tone = 'mixed',
 }: {
-  /** Current aggression from the parent tab, used as the starting tone. */
   aggression: number
+  tone?: SimTone
 }) {
   const [channelType, setChannelType] = useState<ChannelType>('telegram')
   const [persona, setPersona] = useState<SimPersona | null>(null)
@@ -55,7 +56,7 @@ export function SecretSimulatorTest({
   function start() {
     startStart(async () => {
       try {
-        const res = await simTestStartAction({ channelType, aggression })
+        const res = await simTestStartAction({ channelType, aggression, tone })
         setPersona(res.persona)
         setLines([{ role: 'client', body: res.opening }])
         setDraft('')
@@ -211,7 +212,7 @@ export function SecretSimulatorTest({
               <div className="flex justify-start">
                 <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm text-muted-foreground">
                   <Loader2 className="size-3.5 animate-spin" />
-                  печатает…
+                  п��чатает…
                 </div>
               </div>
             )}
@@ -236,9 +237,14 @@ export function SecretSimulatorTest({
               <Send className="size-4" />
             </Button>
           </div>
-          <Badge variant="secondary" className="self-start text-[11px]">
-            Тон при запуске: {aggression}%
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="text-[11px]">
+              Агрессия: {aggression}%
+            </Badge>
+            <Badge variant="secondary" className="text-[11px]">
+              Тон: {tone === 'polite' ? 'Вежливый' : tone === 'neutral' ? 'Обычный' : tone === 'rough' ? 'Грубый' : 'Разный'}
+            </Badge>
+          </div>
         </div>
       )}
     </Card>
