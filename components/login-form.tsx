@@ -39,7 +39,7 @@ export function LoginForm() {
           name="identifier"
           type="text"
           autoComplete="username"
-          placeholder="admin или you@company.com"
+          placeholder="логин или email"
           required
           autoFocus
         />
