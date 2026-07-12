@@ -7,17 +7,13 @@ import { query, withTransaction } from '../db'
 import type {
   ChannelType,
   Conversation,
-  ConversationMeta,
   LeadStatus,
-  Manager,
   MediaType,
   Message,
   MessageReaction,
-  MessageStatus,
   NotLiquidReason,
 } from '../types'
 import {
-  DEFAULT_LEAD_STATUS,
   EFFECTIVE_STATUS_SQL,
   MESSAGE_REPLY_JOIN,
   MESSAGE_SELECT,
@@ -28,74 +24,6 @@ import {
 } from './shared'
 
 /* -------------------------- Conversations --------------------------- */
-
-interface ConversationRow {
-  id: string
-  channel_id: string
-  manager_id: string
-  channel_type: ChannelType
-  contact_name: string
-  contact_handle: string
-  contact_username?: string | null
-  last_message: string
-  last_message_at: string | Date
-  unread: number
-  status?: LeadStatus | null
-  status_detail?: NotLiquidReason | null
-  status_updated_at?: string | Date | null
-  reply_dismissed_at?: string | Date | null
-  muted?: boolean | null
-  meta?: ConversationMeta | null
-  visitor_no?: number | null
-  contact_blocked?: boolean | null
-  contact_name_hidden?: boolean | null
-  created_at?: string | Date | null
-}
-
-/**
- * Default lead status when a manager hasn't pinned one. Every contact that
- * wrote in starts as «Отписок». Keep this in sync with EFFECTIVE_STATUS_SQL
- * below so JS and DB derivations never diverge.
- */
-const DEFAULT_LEAD_STATUS: LeadStatus = 'unsubscribed'
-
-function toConversation(r: ConversationRow): Conversation {
-  const manual = (r.status ?? null) as LeadStatus | null
-  const detail = (r.status_detail ?? null) as NotLiquidReason | null
-  return {
-    id: r.id,
-    channelId: r.channel_id,
-    managerId: r.manager_id,
-    channelType: r.channel_type,
-    // Reversible "names glitch": show "NULL" while hidden, real name is intact in DB.
-    contactName: r.contact_name_hidden ? 'NULL' : r.contact_name,
-    contactHandle: r.contact_handle,
-    contactUsername: r.contact_username ?? undefined,
-    lastMessage: r.last_message,
-    lastMessageAt: new Date(r.last_message_at).toISOString(),
-    unread: Number(r.unread),
-    status: manual ?? DEFAULT_LEAD_STATUS,
-    statusDetail:
-      manual === 'not_liquid' && detail ? detail : undefined,
-    statusManual: manual !== null,
-    statusUpdatedAt: r.status_updated_at
-      ? new Date(r.status_updated_at).toISOString()
-      : undefined,
-    replyDismissedAt: r.reply_dismissed_at
-      ? new Date(r.reply_dismissed_at).toISOString()
-      : undefined,
-    muted: Boolean(r.muted),
-    contactBlocked: Boolean(r.contact_blocked),
-    visitorNo:
-      r.visitor_no === null || r.visitor_no === undefined
-        ? undefined
-        : Number(r.visitor_no),
-    meta:
-      r.meta && Object.keys(r.meta).length > 0
-        ? (r.meta as ConversationMeta)
-        : undefined,
-  }
-}
 
 export async function listConversations(
   managerId: string,
@@ -203,103 +131,6 @@ export async function listMessages(
   )
   return rows.map(toMessage)
 }
-
-/** Raw `messages` row shape (with reply/reaction/delete hydration columns). */
-interface MessageRow {
-  id: string
-  conversation_id: string
-  direction: 'in' | 'out'
-  body: string
-  author: string
-  created_at: string | Date
-  media_type: MediaType | null
-  media_mime: string | null
-  media_name: string | null
-  reactions: unknown
-  deleted_at: string | Date | null
-  deleted_origin: 'self' | 'remote' | null
-  status: MessageStatus | null
-  error_reason: string | null
-  reply_to_id: string | null
-  reply_to_author: string | null
-  reply_to_body: string | null
-  reply_to_media_type: MediaType | null
-}
-
-/**
- * Map a raw `messages` row (with optional media columns) to a `Message`.
- * `mediaUrl` points at the panel proxy that streams the bytes on demand.
- */
-function toMessage(r: {
-  id: string
-  conversation_id: string
-  direction: 'in' | 'out'
-  body: string
-  author: string
-  created_at: string | Date
-  media_type?: MediaType | null
-  media_mime?: string | null
-  media_name?: string | null
-  reactions?: unknown
-  deleted_at?: string | Date | null
-  deleted_origin?: 'self' | 'remote' | null
-  status?: MessageStatus | null
-  error_reason?: string | null
-  reply_to_id?: string | null
-  reply_to_author?: string | null
-  reply_to_body?: string | null
-  reply_to_media_type?: MediaType | null
-}): Message {
-  const reactions = Array.isArray(r.reactions)
-    ? (r.reactions as MessageReaction[]).filter(
-        (x) => x && typeof x.emoji === 'string',
-      )
-    : []
-  return {
-    id: r.id,
-    conversationId: r.conversation_id,
-    direction: r.direction,
-    body: r.body,
-    author: r.author,
-    createdAt: new Date(r.created_at).toISOString(),
-    ...(r.media_type
-      ? {
-          mediaType: r.media_type,
-          mediaMime: r.media_mime ?? undefined,
-          mediaName: r.media_name ?? undefined,
-          mediaUrl: `/api/media/${r.id}`,
-        }
-      : {}),
-    ...(reactions.length ? { reactions } : {}),
-    ...(r.deleted_at ? { deletedAt: new Date(r.deleted_at).toISOString() } : {}),
-    ...(r.deleted_origin ? { deletedOrigin: r.deleted_origin } : {}),
-    ...(r.status ? { status: r.status } : {}),
-    ...(r.error_reason ? { errorReason: r.error_reason } : {}),
-    ...(r.reply_to_id
-      ? {
-          replyTo: {
-            id: r.reply_to_id,
-            author: r.reply_to_author ?? '',
-            body: r.reply_to_body ?? '',
-            ...(r.reply_to_media_type
-              ? { mediaType: r.reply_to_media_type }
-              : {}),
-          },
-        }
-      : {}),
-  }
-}
-
-/**
- * Shared SELECT column list + self-join for hydrating a message with its
- * reactions, soft-delete marker and quoted-reply preview. `m` is the messages
- * alias; `rt` is the joined reply-target alias.
- */
-const MESSAGE_SELECT = `m.id, m.conversation_id, m.direction, m.body, m.author, m.created_at,
-        m.media_type, m.media_mime, m.media_name, m.reactions, m.deleted_at, m.deleted_origin, m.status, m.error_reason,
-        rt.id AS reply_to_id, rt.author AS reply_to_author,
-        rt.body AS reply_to_body, rt.media_type AS reply_to_media_type`
-const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_message_id`
 
 /**
  * Backfill: every message for a manager created strictly after `since`,

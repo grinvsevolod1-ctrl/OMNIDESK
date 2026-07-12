@@ -12,6 +12,7 @@ import {
   useTransition,
 } from 'react'
 import { useRouter } from 'next/navigation'
+import useSWR from 'swr'
 import {
   AlertCircle,
   ArrowLeft,
@@ -1355,21 +1356,19 @@ function StickerPicker({
   onSend: (sticker: StickerItem) => void
 }) {
   const [open, setOpen] = useState(false)
-  const [stickers, setStickers] = useState<StickerItem[] | null>(null)
-  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    if (!open || stickers !== null || loading) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(true)
-    fetch(`/api/stickers?channelId=${encodeURIComponent(channelId)}`)
-      .then((r) => (r.ok ? r.json() : { stickers: [] }))
-      .then((data: { stickers: StickerItem[] }) =>
-        setStickers(data.stickers ?? []),
-      )
-      .catch(() => setStickers([]))
-      .finally(() => setLoading(false))
-  }, [open, channelId, stickers, loading])
+  // Lazy-load the channel's sticker set only once the picker is opened, and let
+  // SWR cache/dedupe it so reopening (or switching back to a channel) is instant
+  // and never re-fetches. `key = null` keeps the request idle until `open`.
+  const { data: stickers, isLoading: loading } = useSWR(
+    open ? `/api/stickers?channelId=${encodeURIComponent(channelId)}` : null,
+    (url: string) =>
+      fetch(url)
+        .then((r) => (r.ok ? r.json() : { stickers: [] }))
+        .then((data: { stickers: StickerItem[] }) => data.stickers ?? [])
+        .catch(() => [] as StickerItem[]),
+    { revalidateOnFocus: false },
+  )
 
   function thumbUrl(s: StickerItem): string {
     const qs = new URLSearchParams({

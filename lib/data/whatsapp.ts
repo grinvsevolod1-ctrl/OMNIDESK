@@ -6,7 +6,7 @@ import { randomUUID, randomBytes } from 'crypto'
 import { query } from '../db'
 import { decrypt, encrypt, maskSecret } from '../crypto'
 import type { ProxyDescriptor } from '../proxy-agent'
-import type { Channel, ChannelStatus, MediaType } from '../types'
+import type { ChannelStatus, MediaType } from '../types'
 import { readPool, type ChannelRow } from './shared'
 // Cross-domain calls resolved at runtime via the facade to avoid import cycles.
 import {

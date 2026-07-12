@@ -16,9 +16,10 @@ import {
   resolveWidgetConfig,
   type LivechatGlobalDefaults,
   type LivechatWidgetConfig,
-  type WidgetWorkingHours,
 } from '../widget-config'
-import { readPool, sanitizeChannelConfig, toChannel, type ChannelRow } from './shared'
+import { readPool, toChannel, type ChannelRow } from './shared'
+// Cross-domain read resolved at runtime via the facade to avoid an import cycle.
+import { listManagers } from '../data'
 
 /* ----------------------------- Channels ----------------------------- */
 

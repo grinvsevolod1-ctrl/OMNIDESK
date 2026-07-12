@@ -9,7 +9,6 @@ import { decrypt, encrypt } from '../crypto'
 import type { ProxyDescriptor } from '../proxy-agent'
 import type {
   ChannelType,
-  Manager,
   ManagerProxySummary,
   Proxy,
   ProxyAnalytics,
@@ -17,6 +16,8 @@ import type {
   ProxyStatus,
   Role,
 } from '../types'
+// Cross-domain read resolved at runtime via the facade to avoid an import cycle.
+import { listManagers } from '../data'
 
 /* ------------------------------ Proxies ----------------------------- */
 

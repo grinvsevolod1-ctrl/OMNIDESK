@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
+import useSWR from 'swr'
 import {
   ArrowLeft,
   Loader2,
@@ -66,36 +67,35 @@ export function ConversationReaderDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const [conversations, setConversations] = useState<Conversation[]>([])
-  const [listLoading, setListLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<AdminTranscript | null>(null)
   const [transcriptLoading, setTranscriptLoading] = useState(false)
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list')
 
-  // Load the manager's conversation list whenever the dialog opens.
-  useEffect(() => {
-    if (!open || !managerId) return
-    let cancelled = false
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setListLoading(true)
-    setConversations([])
-    setSelectedId(null)
-    setTranscript(null)
-    setSearch('')
-    setMobileView('list')
-    adminListManagerConversationsAction(managerId)
-      .then((rows) => {
-        if (!cancelled) setConversations(rows)
-      })
-      .finally(() => {
-        if (!cancelled) setListLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open, managerId])
+  // Load the manager's conversation list via SWR — only while the dialog is
+  // open (key is null otherwise, so it stays idle). SWR caches per manager, so
+  // reopening the same manager renders instantly without a refetch.
+  const { data: conversations = [], isLoading: listLoading } = useSWR(
+    open && managerId ? ['admin-manager-conversations', managerId] : null,
+    ([, id]) => adminListManagerConversationsAction(id),
+    { revalidateOnFocus: false },
+  )
+
+  // Reset the transcript pane / filters each time the dialog is closed so the
+  // next open starts clean (the list itself is served from SWR cache).
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setSelectedId(null)
+        setTranscript(null)
+        setSearch('')
+        setMobileView('list')
+      }
+      onOpenChange(next)
+    },
+    [onOpenChange],
+  )
 
   const openConversation = useCallback((id: string) => {
     setSelectedId(id)
@@ -118,7 +118,7 @@ export function ConversationReaderDialog({
   })
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton
         /* Override the base `sm:max-w-sm` cap (it otherwise wins over a plain

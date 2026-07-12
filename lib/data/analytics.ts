@@ -14,7 +14,6 @@ import type {
   NotLiquidReason,
 } from '../types'
 import {
-  DEFAULT_LEAD_STATUS,
   EFFECTIVE_STATUS_SQL,
   MESSAGE_REPLY_JOIN,
   MESSAGE_SELECT,
