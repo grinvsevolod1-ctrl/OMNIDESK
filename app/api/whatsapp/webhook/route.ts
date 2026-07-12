@@ -204,20 +204,28 @@ export async function POST(request: Request): Promise<Response> {
   const raw = new TextDecoder().decode(rawBytes)
 
   // Verify X-Hub-Signature-256 when an app secret is configured. Without one we
-  // can't verify, so we accept (admin opted out of signing).
+  // can't verify the payload really came from Meta.
   if (appSecret) {
     const sig = request.headers.get('x-hub-signature-256') ?? ''
     if (!verifySignature(raw, sig, appSecret)) {
       return json({ ok: false, error: 'bad_signature' }, 401)
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    // FAIL CLOSED in production: without an app secret we can't verify the
+    // payload, so anyone who learns this URL could inject inbound messages.
+    // Refuse rather than silently trusting it. The operator unlocks the webhook
+    // by adding the WhatsApp app secret under /admin/whatsapp.
+    console.error(
+      '[whatsapp-webhook] rejecting inbound: no app secret configured, cannot ' +
+        'verify X-Hub-Signature-256. Set the WhatsApp app secret in /admin/whatsapp.',
+    )
+    return json({ ok: false, error: 'signature_required' }, 401)
   } else {
-    // No app secret configured: we cannot verify the payload really came from
-    // Meta, so anyone who learns this URL could inject inbound messages. This is
-    // an explicit opt-out — surface it loudly so an operator can lock it down by
-    // adding the app secret under /admin/whatsapp.
+    // Development only: accept unsigned payloads so local testing (ngrok, curl)
+    // works without wiring up the app secret — but make the gap loud.
     console.warn(
-      '[v0] whatsapp webhook: accepting UNSIGNED payload — no app secret configured. ' +
-        'Set the WhatsApp app secret in /admin/whatsapp to enable signature verification.',
+      '[whatsapp-webhook] accepting UNSIGNED payload (dev only) — no app secret ' +
+        'configured. This is rejected in production.',
     )
   }
 
@@ -256,7 +264,7 @@ export async function POST(request: Request): Promise<Response> {
           await updateWhatsappMessageStatus(s.id, st, reason)
           handled++
         } catch (err) {
-          console.error('[v0] whatsapp webhook: status update failed:', err)
+          console.error('[whatsapp-webhook] status update failed:', err)
         }
       }
 
@@ -314,7 +322,7 @@ export async function POST(request: Request): Promise<Response> {
             })
           }
         } catch (err) {
-          console.error('[v0] whatsapp webhook: ingest failed:', err)
+          console.error('[whatsapp-webhook] ingest failed:', err)
         }
       }
     }

@@ -115,7 +115,7 @@ function systemPrompt(
     '- Иногда неси лёгкую бытовую чушь/оффтоп, как живой человек.',
     '',
     soft
-      ? 'Менеджер часто предлагает мутную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежливый отказ — но всегда корректно, без грубости и мата.'
+      ? 'Менеджер часто предлагает мутную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежли��ый отказ — но всегда корректно, без грубости и мата.'
       : 'Менеджер часто предлагает мутную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
     referenceBlock(referenceLines),
     learnedBlock(learnedPointers),
@@ -188,7 +188,7 @@ export async function generateReply(args: GenArgs): Promise<string> {
         return applyStyle(clean, { ...persona.style, typoRate: persona.style.typoRate * 0.5 })
       }
     } catch (err) {
-      console.log('[v0][client-sim] LLM generation failed, using template:', err instanceof Error ? err.message : String(err))
+      console.warn('[client-sim] LLM generation failed, using template:', err instanceof Error ? err.message : String(err))
     }
   }
 

@@ -5,6 +5,7 @@ import {
   getWhatsappMediaDescriptor,
 } from '@/lib/data'
 import { proxiedFetch } from '@/lib/proxy-agent'
+import { assertPublicHttpUrl } from '@/lib/ssrf-guard'
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp-cloud'
 import { isWorkerConfigured, streamFromWorker } from '@/lib/worker-client'
 
@@ -70,6 +71,15 @@ export async function GET(
   if (owner.channelType === 'vk') {
     const desc = await getUrlMediaDescriptor(id)
     if (!desc) return new Response('Media unavailable', { status: 404 })
+    // Defence-in-depth: the url comes from VK API responses (not the user), but
+    // refuse to fetch anything that isn't a public http(s) address so a stray
+    // value can't be used to probe internal services (loopback, worker port,
+    // RFC1918, cloud metadata, non-http schemes).
+    try {
+      assertPublicHttpUrl(desc.url)
+    } catch {
+      return new Response('Media unavailable', { status: 400 })
+    }
     let upstream: Response
     try {
       upstream = await proxiedFetch(

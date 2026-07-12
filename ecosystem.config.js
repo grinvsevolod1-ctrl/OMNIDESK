@@ -55,5 +55,19 @@ module.exports = {
         NODE_ENV: 'production',
       },
     },
+    {
+      // Self-hosted replacement for Vercel Cron: periodically triggers the
+      // ad-sync endpoint on the local panel. Runs as a scheduled one-shot
+      // (autorestart disabled, launched by cron_restart) instead of a
+      // long-lived process. Requires CRON_SECRET in the shared .env.
+      name: 'omnidesk-cron-sync-ads',
+      script: 'scripts/cron-sync-ads.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '0 */6 * * *',
+      env: {
+        NODE_ENV: 'production',
+      },
+    },
   ],
 }

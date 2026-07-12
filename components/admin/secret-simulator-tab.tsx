@@ -38,10 +38,6 @@ const TONE_OPTIONS: Array<{ value: SimTone; label: string; hint: string }> = [
   { value: 'mixed', label: 'Разный', hint: 'Случайный разброс — от вежливых до грубых' },
 ]
 
-function toneLabel(t: SimTone): string {
-  return TONE_OPTIONS.find((o) => o.value === t)?.label ?? 'Разный'
-}
-
 const STATE_LABEL: Record<string, string> = {
   opening: 'Открывают',
   chatting: 'Переписка',
@@ -424,7 +420,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           </div>
           {eligible.length === 0 ? (
             <p className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              Нет каналов с назначенным менеджером. Создайте канал и назначьте
+              Нет каналов с назначенным менеджером. Создайте канал и назначьт��
               владельца ��о вкладке «Каналы».
             </p>
           ) : (

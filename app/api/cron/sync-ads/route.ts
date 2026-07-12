@@ -8,8 +8,10 @@ export const maxDuration = 60
 
 /**
  * Периодическая синхронизация рекламных кабинетов с Яндекс.Директом.
- * Вызывается Vercel Cron (см. vercel.json). Защищено секретом CRON_SECRET:
- * Vercel автоматически шлёт заголовок `Authorization: Bearer <CRON_SECRET>`.
+ * На self-hosted VPS вызывается по расписанию из pm2/crontab через
+ * `scripts/cron-sync-ads.mjs` (см. ecosystem.config.js, app
+ * `omnidesk-cron-sync-ads`). Защищено секретом CRON_SECRET: триггер шлёт
+ * заголовок `Authorization: Bearer <CRON_SECRET>`.
  * Ручные корректировки god-страницы при этом сохраняются — новые данные
  * приплюсовываются поверх зафиксированного baseline.
  */

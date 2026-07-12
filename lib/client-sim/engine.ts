@@ -70,7 +70,7 @@ export function startEngine(): void {
   }, TICK_MS)
   // Kick an immediate tick so enabling feels responsive.
   void tick()
-  console.log('[v0][client-sim] engine started')
+  console.log('[client-sim] engine started')
 }
 
 /** Stop the loop. Threads stay in the DB and resume when re-enabled. */
@@ -83,7 +83,7 @@ export function stopEngine(): void {
   h.running = false
   // Give up the lock so a standby process (if any) can take over immediately.
   void releaseLock()
-  console.log('[v0][client-sim] engine stopped')
+  console.log('[client-sim] engine stopped')
 }
 
 /* --------------------------------- tick --------------------------------- */

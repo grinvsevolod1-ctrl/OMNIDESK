@@ -50,12 +50,29 @@ export async function signGodToken(): Promise<string> {
     .sign(getAuthSecret())
 }
 
+// Emit the "no passcode configured" warning at most once per process so the
+// fail-open state is visible in logs instead of being silent — without
+// spamming a line on every request.
+let warnedNoPasscode = false
+function warnFailOpenOnce(): void {
+  if (warnedNoPasscode) return
+  warnedNoPasscode = true
+  console.warn(
+    '[god-gate] SECRET_PANEL_PASSWORD is not set — the god-mode console is ' +
+      'protected only by requireAdmin(), with NO second factor. Set ' +
+      'SECRET_PANEL_PASSWORD to enable the passcode gate.',
+  )
+}
+
 /**
  * Whether the current request may see the panel: either no passcode is
  * configured, or a valid unlock cookie is present.
  */
 export async function isGodUnlocked(): Promise<boolean> {
-  if (!isGodPasscodeConfigured()) return true
+  if (!isGodPasscodeConfigured()) {
+    warnFailOpenOnce()
+    return true
+  }
   const store = await cookies()
   const token = store.get(GOD_COOKIE)?.value
   if (!token) return false
