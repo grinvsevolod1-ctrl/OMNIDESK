@@ -22,7 +22,6 @@ import {
   CheckCheck,
   ChevronDown,
   Clock,
-  Copy,
   Download,
   ExternalLink,
   FileText,
@@ -394,12 +393,6 @@ function sourceLabel(c: Conversation): string {
     return c.channelName?.trim() || getChannelMeta(c.channelType).label
 }
 
-/** Normalised "@username" for a contact, or null when they don't have one. */
-function contactUsernameTag(c: Conversation): string | null {
-  const u = c.contactUsername?.trim()
-  return u ? `@${u.replace(/^@/, '')}` : null
-}
-
 /**
  * Human-readable per-channel ordinal for an anonymous live-chat visitor
  * (e.g. "#7"), or null for messenger contacts / pre-migration rows. Lets a
@@ -442,16 +435,6 @@ const FilterChip = forwardRef<
     </button>
   )
 })
-
-/**
- * Public profile link for a contact's username (Telegram only — t.me/<user>).
- * Returns null when there's nothing meaningful to link to.
- */
-function contactProfileUrl(c: Conversation): string | null {
-  const u = c.contactUsername?.trim().replace(/^@/, '')
-  if (!u) return null
-  return c.channelType === 'telegram' ? `https://t.me/${u}` : null
-}
 
 function deviceLabel(ua: string): string {
   const browser = /Edg/.test(ua)
@@ -806,26 +789,6 @@ function DetailsPanel({
                 </span>
               ) : null}
             </p>
-            {contactUsernameTag(conversation) ? (
-              contactProfileUrl(conversation) ? (
-                <a
-                  href={contactProfileUrl(conversation) as string}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
-                >
-                  {contactUsernameTag(conversation)}
-                </a>
-              ) : (
-                <p className="text-xs font-medium text-muted-foreground">
-                  {contactUsernameTag(conversation)}
-                </p>
-              )
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                {conversation.contactHandle}
-              </p>
-            )}
           </div>
           <div className="flex flex-wrap items-center justify-center gap-1.5">
             <SourceChip conversation={conversation} />
@@ -1496,7 +1459,7 @@ const PRESENCE_TTL_MS = 60_000
 function DeliveryTicks({ status }: { status?: Message['status'] }) {
   if (status === 'failed') {
     return (
-      <AlertCircle className="size-3 text-destructive" aria-label="Не до��тавлено" />
+      <AlertCircle className="size-3 text-destructive" aria-label="Не до����тавлено" />
     )
   }
   if (status === 'read') {
@@ -2054,9 +2017,7 @@ export function InboxView({
       if (
         c.contactName.toLowerCase().includes(q) ||
         c.lastMessage.toLowerCase().includes(q) ||
-        sourceLabel(c).toLowerCase().includes(q) ||
-        (c.contactUsername?.toLowerCase().includes(q.replace(/^@/, '')) ??
-          false)
+        sourceLabel(c).toLowerCase().includes(q)
       ) {
         return true
       }
@@ -2540,13 +2501,6 @@ export function InboxView({
     })
   }
 
-  function copyHandle(handle: string) {
-    navigator.clipboard
-      ?.writeText(handle)
-      .then(() => toast.success('Контакт скопирован'))
-      .catch(() => toast.error('Не удалось скопировать'))
-  }
-
   // Clear any pending reply when switching conversations.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -3021,10 +2975,6 @@ export function InboxView({
                       Заглушить контакт
                     </ContextMenuItem>
                   )}
-                    <ContextMenuItem onClick={() => copyHandle(c.contactHandle)}>
-                      <Copy className="size-4" />
-                      Скопировать контакт
-                    </ContextMenuItem>
                     {transferTargets.length > 0 ? (
                       <>
                         <ContextMenuSeparator />
@@ -3088,27 +3038,6 @@ export function InboxView({
                   </p>
                   <div className="flex min-w-0 items-center gap-1.5">
                     <SourceChip conversation={active} size="xs" />
-                    {contactUsernameTag(active) ? (
-                      contactProfileUrl(active) ? (
-                        <a
-                          href={contactProfileUrl(active) as string}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="truncate text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
-                        >
-                          {contactUsernameTag(active)}
-                        </a>
-                      ) : (
-                        <span className="truncate text-xs font-medium text-muted-foreground">
-                          {contactUsernameTag(active)}
-                        </span>
-                      )
-                    ) : (
-                      <span className="truncate text-xs text-muted-foreground">
-                        {active.contactHandle}
-                      </span>
-                    )}
                   </div>
                 </div>
               </button>
@@ -3156,12 +3085,6 @@ export function InboxView({
                     <DropdownMenuItem onClick={() => setDetailsOpen(true)}>
                       <Info className="size-4" />
                       Данные и источник
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => copyHandle(active.contactHandle)}
-                    >
-                      <Copy className="size-4" />
-                      Скопировать контакт
                     </DropdownMenuItem>
                     {transferTargets.length > 0 ? (
                       <>

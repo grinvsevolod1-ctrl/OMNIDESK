@@ -30,6 +30,9 @@ export * from './data/jobs'
 /* Conversations & messages (incl. transfer) */
 export * from './data/conversations'
 
+/* Admin-only contacts / leads database */
+export * from './data/contacts'
+
 /* Live chat widget channel */
 export * from './data/livechat'
 

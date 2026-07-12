@@ -357,6 +357,34 @@ export interface Conversation {
   contactBlocked?: boolean
 }
 
+/**
+ * A lead/contact row for the admin-only «Контакты» database. Carries the raw
+ * identifiers (handle, username) that are deliberately hidden from managers in
+ * the inbox, so an administrator can still export or contact them.
+ */
+export interface ContactRecord {
+  id: string
+  channelType: ChannelType
+  channelName: string | null
+  contactName: string
+  /** Raw per-channel identifier: phone, Telegram id, VK id, etc. */
+  contactHandle: string
+  /** Public @username where the channel exposes one (Telegram/VK). */
+  contactUsername: string | null
+  managerName: string | null
+  status: LeadStatus
+  createdAt: string
+  lastMessageAt: string
+}
+
+/** Per-channel grouping used by the «Контакты» tab cards. */
+export interface ContactChannelGroup {
+  channelType: ChannelType
+  label: string
+  count: number
+  contacts: ContactRecord[]
+}
+
 /** Kinds of media a message can carry (mirrors the DB check constraint). */
 export type MediaType =
   | 'image'
