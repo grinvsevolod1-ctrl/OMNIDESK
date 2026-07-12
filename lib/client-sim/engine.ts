@@ -4,6 +4,7 @@ import { type Behavior, generateReply } from './generate'
 import { ensureLock, releaseLock } from './lock'
 import {
   bumpRepliesTotal,
+  bumpSpawnedTotal,
   claimDueThreads,
   claimSpawnSlot,
   countActiveThreads,
@@ -140,12 +141,16 @@ async function maybeSpawn(
   if (chance(0.15)) nextDelay = Math.round(nextDelay * randInt(2, 4))
   else if (chance(0.05)) nextDelay = Math.max(15, Math.round(nextDelay * 0.3))
 
+  // Bail out BEFORE claiming a spawn slot if there's nowhere to spawn — a
+  // claimed slot both reschedules next_spawn_at and (previously) bumped the
+  // spawned_total counter, so consuming it with no usable channel wasted a
+  // window and inflated the stat.
+  const channels = await listUsableChannels(channelIds)
+  if (channels.length === 0) return
+
   // Atomically claim the spawn slot; only the winner proceeds.
   const won = await claimSpawnSlot(nextDelay)
   if (!won) return
-
-  const channels = await listUsableChannels(channelIds)
-  if (channels.length === 0) return
 
   const channel: SimChannel = pick(channels)
   const persona = makePersona(channel.type as ChannelType, aggression, tone)
@@ -160,6 +165,9 @@ async function maybeSpawn(
     referenceLines,
   })
   const conversationId = await createSimConversation(channel, persona, body)
+  // Count the spawn only once the conversation actually exists, so the stat
+  // reflects real spawns rather than claimed-but-failed attempts.
+  await bumpSpawnedTotal()
   await updateThread(conversationId, {
     state: 'chatting',
     turns: 1,

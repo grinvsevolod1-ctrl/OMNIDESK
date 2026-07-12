@@ -182,13 +182,14 @@ function clampInt(n: number, min: number, max: number): number {
 /**
  * Atomically claim the next spawn slot. Returns true only for the single caller
  * that wins the race (guards against double-spawning across concurrent ticks).
- * On success it also reschedules the next spawn window.
+ * On success it also reschedules the next spawn window. The `spawned_total`
+ * counter is NOT bumped here — call `bumpSpawnedTotal()` once the conversation
+ * is actually created so the stat only counts real spawns.
  */
 export async function claimSpawnSlot(nextDelaySec: number): Promise<boolean> {
   const rows = await query<{ id: boolean }>(
     `UPDATE sim_settings
         SET next_spawn_at = now() + make_interval(secs => $1::int),
-            spawned_total = spawned_total + 1,
             updated_at = now()
       WHERE id = true
         AND enabled = true
@@ -197,6 +198,13 @@ export async function claimSpawnSlot(nextDelaySec: number): Promise<boolean> {
     [Math.max(1, Math.floor(nextDelaySec))],
   )
   return rows.length > 0
+}
+
+/** Record that a conversation was actually spawned. */
+export async function bumpSpawnedTotal(): Promise<void> {
+  await query(
+    `UPDATE sim_settings SET spawned_total = spawned_total + 1, updated_at = now() WHERE id = true`,
+  )
 }
 
 export async function bumpRepliesTotal(): Promise<void> {

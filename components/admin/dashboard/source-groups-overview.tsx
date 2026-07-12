@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
+import useSWR from 'swr'
 import { useRouter } from 'next/navigation'
 import { Check, Layers, Loader2, Plus, Trash2, Users } from 'lucide-react'
 import { channelIcon } from '@/components/channel-icons'
@@ -102,8 +103,44 @@ export function SourceGroupsOverview({
     ymd(rangeFromPreset('7d').from),
   )
   const [customTo, setCustomTo] = useState(() => ymd(startOfDay(new Date())))
-  const [analytics, setAnalytics] = useState<GroupAnalytics | null>(null)
-  const [pending, startTransition] = useTransition()
+  // Committed query that actually drives the report fetch. Handlers update it
+  // (group change, preset change, custom "Показать"), so editing the custom
+  // date inputs never refetches on every keystroke — only on apply. Seeded with
+  // "today" for the initial group so the default report loads immediately.
+  const [reportQuery, setReportQuery] = useState<
+    { groupId: string; from: string; to: string } | null
+  >(() => {
+    if (!initialGroupId) return null
+    const r = rangeFromPreset('today')
+    return {
+      groupId: initialGroupId,
+      from: r.from.toISOString(),
+      to: r.to.toISOString(),
+    }
+  })
+
+  // Report data via SWR, keyed by the committed query so switching back to a
+  // previously viewed range is instant (cached). The browser's timezone offset
+  // is sent so the server buckets days by the admin's local clock, not UTC —
+  // which is also why we don't render analytics on the server.
+  const { data: analytics = null, isValidating: pending } = useSWR(
+    reportQuery
+      ? ['group-analytics', reportQuery.groupId, reportQuery.from, reportQuery.to]
+      : null,
+    async ([, gid, from, to]) => {
+      const tz = new Date().getTimezoneOffset()
+      const res = await getGroupAnalyticsAction(gid, from, to, tz)
+      if (res.ok && res.data) return res.data
+      throw new Error(res.message ?? 'Не удалось загрузить отчёт.')
+    },
+    {
+      revalidateOnFocus: false,
+      onError: (e: unknown) =>
+        toast.error(
+          e instanceof Error ? e.message : 'Не удалось загрузить отчёт.',
+        ),
+    },
+  )
 
   function currentRange(p: Preset): { from: string; to: string } {
     if (p === 'custom') {
@@ -117,39 +154,23 @@ export function SourceGroupsOverview({
     return { from: r.from.toISOString(), to: r.to.toISOString() }
   }
 
-  function load(nextGroupId: string | null, p: Preset) {
+  function runReport(nextGroupId: string | null, p: Preset) {
     if (!nextGroupId) {
-      setAnalytics(null)
+      setReportQuery(null)
       return
     }
     const { from, to } = currentRange(p)
-    // The browser knows the admin's timezone; the server buckets days with it
-    // so "today" matches the local clock instead of the server's UTC date.
-    const tz = new Date().getTimezoneOffset()
-    startTransition(async () => {
-      const res = await getGroupAnalyticsAction(nextGroupId, from, to, tz)
-      if (res.ok && res.data) setAnalytics(res.data)
-      else toast.error(res.message ?? 'Не удалось загрузить отчёт.')
-    })
+    setReportQuery({ groupId: nextGroupId, from, to })
   }
-
-  // Load the default report ("today") once on mount, using the client's real
-  // timezone. We deliberately don't render analytics on the server because it
-  // would compute "today" in UTC and be off by a day for the admin.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (initialGroupId) load(initialGroupId, 'today')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   function onGroupChange(id: string | null) {
     if (!id) return
     setGroupId(id)
-    load(id, preset)
+    runReport(id, preset)
   }
   function onPresetChange(p: Preset) {
     setPreset(p)
-    if (p !== 'custom') load(groupId, p)
+    if (p !== 'custom') runReport(groupId, p)
   }
 
   return (
@@ -266,7 +287,7 @@ export function SourceGroupsOverview({
                 </div>
                 <Button
                   size="sm"
-                  onClick={() => load(groupId, 'custom')}
+                  onClick={() => runReport(groupId, 'custom')}
                   disabled={pending}
                 >
                   Показать

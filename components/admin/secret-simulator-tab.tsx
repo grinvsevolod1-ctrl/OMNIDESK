@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
+import { useCallback, useRef, useState, useTransition } from 'react'
+import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
   Bot,
@@ -90,8 +91,6 @@ function perHourHint(rate: number): string {
 export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   const eligible = channels.filter((c) => c.managerId)
 
-  const [status, setStatus] = useState<SimStatus | null>(null)
-  const [loadError, setLoadError] = useState(false)
   const [pending, startTransition] = useTransition()
 
   // Local, editable copies of the tunables (so sliders feel instant); synced
@@ -107,49 +106,43 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const hydrated = useRef(false)
 
-  const applySnapshot = useCallback((s: SimStatus, hydrateControls: boolean) => {
-    setStatus(s)
-    if (hydrateControls) {
-      setAggression(s.aggression)
-      setTone(s.tone ?? 'mixed')
-      setMaxThreads(s.maxThreads)
-      setPerHour(rangeToPerHour(s.spawnMinSec, s.spawnMaxSec))
-      setReplyMin(s.replyMinSec)
-      setReplyMax(s.replyMaxSec)
-      setSelected(new Set(s.channelIds))
-    }
+  // Push a server snapshot into the local editable controls. Called only on the
+  // first successful load, so live polling never clobbers edits in progress.
+  const hydrateControls = useCallback((s: SimStatus) => {
+    setAggression(s.aggression)
+    setTone(s.tone ?? 'mixed')
+    setMaxThreads(s.maxThreads)
+    setPerHour(rangeToPerHour(s.spawnMinSec, s.spawnMaxSec))
+    setReplyMin(s.replyMinSec)
+    setReplyMax(s.replyMaxSec)
+    setSelected(new Set(s.channelIds))
   }, [])
 
-  // Initial load + light polling for live counters.
-  useEffect(() => {
-    let alive = true
-    const load = async (hydrate: boolean) => {
-      try {
-        const s = await simStatusAction()
-        if (!alive) return
-        setLoadError(false)
-        applySnapshot(s, hydrate)
-      } catch {
-        if (alive) setLoadError(true)
+  // Live status via SWR: dedupes requests, pauses polling while the tab is
+  // hidden, and refreshes the counters every 6s. The first successful load also
+  // seeds the editable controls (once).
+  const {
+    data: status = null,
+    error,
+    mutate: mutateStatus,
+  } = useSWR<SimStatus>('sim-status', () => simStatusAction(), {
+    refreshInterval: 6_000,
+    revalidateOnFocus: false,
+    onSuccess: (s) => {
+      if (!hydrated.current) {
+        hydrateControls(s)
+        hydrated.current = true
       }
-    }
-    void load(!hydrated.current).then(() => {
-      hydrated.current = true
-    })
-    const id = setInterval(() => void load(false), 6_000)
-    return () => {
-      alive = false
-      clearInterval(id)
-    }
-  }, [applySnapshot])
-
+    },
+  })
+  const loadError = Boolean(error)
   const running = status?.enabled ?? false
 
   function toggle(next: boolean) {
     startTransition(async () => {
       try {
         const s = await simToggleAction(next)
-        applySnapshot(s, false)
+        void mutateStatus(s, { revalidate: false })
         toast.success(next ? 'Симулятор запущен' : 'Симулятор остановлен')
       } catch {
         toast.error('Не удалось переключить симулятор')
@@ -174,7 +167,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           replyMaxSec: rMax,
           channelIds: Array.from(selected),
         })
-        applySnapshot(s, false)
+        void mutateStatus(s, { revalidate: false })
         toast.success('Настройки сохранены')
       } catch {
         toast.error('Не удалось сохранить настройки')
