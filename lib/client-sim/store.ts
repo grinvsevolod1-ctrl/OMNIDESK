@@ -347,6 +347,34 @@ export async function countActiveThreads(): Promise<number> {
   return Number(rows[0]?.n ?? 0)
 }
 
+/**
+ * Retire threads that have been idle too long and close them out as `done`.
+ *
+ * A thread waiting on a manager reply sits with `next_run_at = NULL` and its
+ * `updated_at` frozen at the last client action, so it never becomes "due" and
+ * never advances on its own. When the manager side is silent (e.g. the AI is
+ * paused or out of credits) these pile up, permanently occupy the active-thread
+ * cap, and choke off new dialog spawns — exactly the "91/31, ждёт" symptom.
+ *
+ * Reaping them reads as natural churn: a real person who never got an answer
+ * eventually gives up. Returns the number of threads closed so the caller can
+ * surface it in the logs.
+ */
+export async function expireStaleThreads(idleMinutes = 120): Promise<number> {
+  const rows = await query<{ n: string }>(
+    `WITH reaped AS (
+       UPDATE sim_threads
+          SET state = 'done', next_run_at = NULL, updated_at = now()
+        WHERE state <> 'done'
+          AND updated_at < now() - ($1 || ' minutes')::interval
+        RETURNING conversation_id
+     )
+     SELECT count(*)::text AS n FROM reaped`,
+    [String(Math.max(1, Math.round(idleMinutes)))],
+  )
+  return Number(rows[0]?.n ?? 0)
+}
+
 /** Threads-per-state breakdown for the dashboard. */
 export async function threadsByState(): Promise<Record<SimState, number>> {
   const rows = await query<{ state: SimState; n: string }>(

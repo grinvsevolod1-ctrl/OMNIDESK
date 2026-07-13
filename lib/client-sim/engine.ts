@@ -9,6 +9,7 @@ import {
   claimSpawnSlot,
   countActiveThreads,
   createSimConversation,
+  expireStaleThreads,
   findThreadsAwaitingReaction,
   getSettings,
   getTranscript,
@@ -42,6 +43,14 @@ import type { ChannelType } from '@/lib/types'
  */
 
 const TICK_MS = 5_000
+
+/**
+ * How long a thread may sit idle (waiting on a manager reply that never comes)
+ * before the simulator gives up on it and closes it as `done`. Two hours reads
+ * as a realistic "client stopped waiting" window while keeping the active-thread
+ * pool from clogging when the manager/AI side goes quiet.
+ */
+const STALE_THREAD_MINUTES = 120
 
 /**
  * De-duplicated skip notices for the "Логи" tab. The tick runs every ~5s, so a
@@ -141,6 +150,20 @@ async function tick(): Promise<void> {
         'Симулятор выключен в настройках — новые диалоги не создаются.',
       )
       return
+    }
+
+    // Retire abandoned threads first so they stop occupying the active-thread
+    // cap. A thread waiting on a manager who never answers would otherwise clog
+    // the simulator forever (the "91/31, ждёт" deadlock).
+    const reaped = await expireStaleThreads(STALE_THREAD_MINUTES)
+    if (reaped > 0) {
+      lastSimNote = ''
+      void logAi({
+        level: 'info',
+        source: 'sim',
+        event: 'reaped',
+        message: `Закрыто ${reaped} «зависших» диалогов (клиент так и не дождался ответа ≥ ${STALE_THREAD_MINUTES} мин) — освободил место для новых.`,
+      })
     }
 
     // Everything is derived autonomously from the single "dialogues per day"
