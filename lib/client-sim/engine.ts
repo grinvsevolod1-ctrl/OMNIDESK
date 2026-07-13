@@ -10,6 +10,7 @@ import {
   countActiveThreads,
   createSimConversation,
   expireStaleThreads,
+  findConversationsAwaitingManager,
   findThreadsAwaitingReaction,
   getConversationRouting,
   getSettings,
@@ -18,6 +19,7 @@ import {
   listUsableChannels,
   sampleRealClientLines,
   scheduleReaction,
+  touchThread,
   updateThread,
   type SimChannel,
 } from './store'
@@ -167,6 +169,11 @@ async function tick(): Promise<void> {
         message: `Закрыто ${reaped} «зависших» диалогов (клиент так и не дождался ответа ≥ ${STALE_THREAD_MINUTES} мин) — освободил место для новых.`,
       })
     }
+
+    // Nudge the AI manager on any dialogue that's stuck waiting for a reply
+    // (last message is the client's). Covers old conversations created before
+    // the auto-trigger existed, or ones where the manager call failed earlier.
+    await sweepBacklog()
 
     // Everything is derived autonomously from the single "dialogues per day"
     // knob — concurrency, spawn cadence and reply timing are all computed here
@@ -374,6 +381,33 @@ async function triggerManagerReply(
       }`,
       conversationId,
     })
+  }
+}
+
+// How many stuck dialogues to re-nudge per tick. Bounded so a large backlog
+// drains gradually instead of hammering the gateway all at once.
+const BACKLOG_BATCH = 5
+
+/**
+ * Re-trigger the AI manager on dialogues whose last message is the client's and
+ * that have been sitting unanswered. This is what unblocks the "old hanging
+ * dialogues": each tick we grab a small batch and knock on the manager's door
+ * again. The manager's own single-flight + AI-led guards make repeat nudges
+ * safe (a duplicate never produces a double reply).
+ */
+async function sweepBacklog(): Promise<void> {
+  const stuck = await findConversationsAwaitingManager(BACKLOG_BATCH)
+  if (stuck.length === 0) return
+  void logAi({
+    level: 'info',
+    source: 'sim',
+    event: 'backlog.nudge',
+    message: `Догоняю ${stuck.length} «зависших» диалогов — прошу ИИ-менеджера ответить.`,
+  })
+  for (const c of stuck) {
+    await triggerManagerReply(c.conversationId, c.lastClientBody)
+    // Rotate to the back of the queue so the next tick picks different ones.
+    await touchThread(c.conversationId)
   }
 }
 

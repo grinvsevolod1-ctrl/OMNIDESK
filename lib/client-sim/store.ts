@@ -457,6 +457,61 @@ export async function findThreadsAwaitingReaction(
   }))
 }
 
+/**
+ * Find simulated conversations that are stuck waiting on the AI manager: the
+ * thread is still live and the LATEST message is inbound (from the client), so
+ * the client sent something and no manager reply followed. These are the "old
+ * hanging dialogues" — they were created before the AI-trigger wiring existed,
+ * or the manager call failed at the time, so nothing ever nudged the AI again.
+ *
+ * `staleSeconds` skips very fresh messages so we don't race the normal trigger
+ * that already fires right after a client posts. Returns the last client line
+ * so the engine can hand it to the manager exactly like a fresh inbound.
+ */
+export interface StuckConversation {
+  conversationId: string
+  lastClientBody: string
+}
+
+export async function findConversationsAwaitingManager(
+  limit: number,
+  staleSeconds = 90,
+): Promise<StuckConversation[]> {
+  const rows = await query<{ conversation_id: string; body: string }>(
+    `SELECT t.conversation_id, m.body
+       FROM sim_threads t
+       JOIN LATERAL (
+         SELECT direction, body, created_at
+           FROM messages
+          WHERE conversation_id = t.conversation_id
+          ORDER BY created_at DESC
+          LIMIT 1
+       ) m ON true
+      WHERE t.state <> 'done'
+        AND m.direction = 'in'
+        AND m.created_at < now() - make_interval(secs => $2::int)
+      ORDER BY t.updated_at ASC
+      LIMIT $1`,
+    [Math.max(1, limit), Math.max(0, Math.floor(staleSeconds))],
+  )
+  return rows.map((r) => ({
+    conversationId: r.conversation_id,
+    lastClientBody: r.body,
+  }))
+}
+
+/**
+ * Bump a thread's `updated_at` without changing anything else. Used by the
+ * backlog sweep so re-nudged dialogues rotate to the back of the queue and the
+ * whole backlog gets a fair turn instead of hammering the same few.
+ */
+export async function touchThread(conversationId: string): Promise<void> {
+  await query(
+    `UPDATE sim_threads SET updated_at = now() WHERE conversation_id = $1`,
+    [conversationId],
+  )
+}
+
 /** Mark that we've seen a manager message and schedule a delayed reaction. */
 export async function scheduleReaction(
   conversationId: string,
