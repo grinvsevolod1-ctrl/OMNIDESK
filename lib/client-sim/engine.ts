@@ -1,5 +1,12 @@
 import type { SimOutcome, SimState, SimThreadRow, SimTone } from './types'
-import { chance, makePersona, randInt, splitIntoMessages } from './content'
+import {
+  chance,
+  humanizeBubbles,
+  makePersona,
+  randInt,
+  reactionMessage,
+  splitIntoMessages,
+} from './content'
 import { type Behavior, generateReply } from './generate'
 import { ensureLock, releaseLock } from './lock'
 import {
@@ -546,6 +553,28 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
     ? rollBehavior(persona.temper, persona.style.profanity, thread.turns, mood)
     : 'nudge'
 
+  // Sticker/emoji reaction: mid-conversation, a real person sometimes just taps
+  // a 👍/😂/«))» at the manager's message instead of typing a reply. Only when
+  // the manager just spoke, a few turns in, and not while sulking/angry. This
+  // still counts as engagement, so we post it and keep waiting on the manager.
+  if (
+    managerSpoke &&
+    thread.turns >= 1 &&
+    rolled !== 'angry' &&
+    (persona.style.emojiRate ?? 0) > 0.1 &&
+    chance(0.12)
+  ) {
+    await insertInboundMessage(conversationId, persona.name, reactionMessage())
+    await bumpRepliesTotal()
+    await updateThread(conversationId, {
+      state: 'chatting',
+      turns: thread.turns + 1,
+      nextRunAt: null,
+    })
+    void triggerManagerReply(conversationId, '(реакция)')
+    return
+  }
+
   // Decide what shape this turn takes: a normal reply, a quick "busy, later",
   // a short sulk, a long vanish, or an outright ending (with a reason).
   const plan = rollTurnPlan(rolled, thread.turns, wasDormant)
@@ -619,9 +648,11 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
     })
   }
 
-  // Split into chat bubbles: post the first now, advance the state machine, then
-  // deliver the rest with typing gaps and trigger the manager once at the end.
-  const bubbles = splitIntoMessages(body, persona.style)
+  // Split into chat bubbles, then weave in believable human glitches (typo +
+  // «*правка», autocorrect blunder, accidental early send, double-tap dupes).
+  // Post the first bubble now, advance the state machine, then deliver the rest
+  // with typing gaps and trigger the manager once at the end.
+  const bubbles = humanizeBubbles(splitIntoMessages(body, persona.style), persona.style)
   await insertInboundMessage(conversationId, persona.name, bubbles[0] ?? body)
   await bumpRepliesTotal()
 

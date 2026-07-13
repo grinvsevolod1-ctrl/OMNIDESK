@@ -298,7 +298,7 @@ const MOTIVATIONS = [
   'надоело на основной работе', 'нужны деньги срочно, долги',
   'хочет накопить на машину', 'просто пробует, интересно',
   'сократили с прошлой работы', 'хочет уйти от начальника-самодура',
-  'нужны деньги на лечение', 'копит на свадьбу', 'хочет финансо��ую подушку',
+  'нужны деньги на лечение', 'копит на свадьбу', 'хочет финансо����ую подушку',
   'ребёнок пошёл в школу, нужны деньги', 'платит алименты, не хватает',
   'хочет уволиться и работать на себя', 'нужны карманные деньги',
 ]
@@ -667,6 +667,104 @@ export function applyStyle(text: string, style: SimStyle): string {
 }
 
 /* ========================================================================= */
+/*  Human "sбои" — typos-with-correction, autocorrect, strays, duplicates    */
+/*  Applied at DELIVERY time (per bubble) so they read as separate messages, */
+/*  exactly how a real person fixes themselves in chat.                      */
+/* ========================================================================= */
+
+/** Emojis people actually fire as a standalone reaction to a message. */
+const REACTION_EMOJIS = ['👍', '😂', '🔥', '🤝', '👌', '🤔', ')', '))', ')))', '🙃', '😅', '🤷']
+
+/** A standalone reaction "message" (emoji or a bracket-smiley), no words. */
+export function reactionMessage(): string {
+  return pick(REACTION_EMOJIS)
+}
+
+/**
+ * Classic RU-chat autocorrect blunders: the phone "fixes" a word into a wrong
+ * but real one. Keyed on common substrings so it only fires when plausible.
+ */
+const AUTOCORRECT: Array<[RegExp, string]> = [
+  [/\bсейчас\b/i, 'сейчак'],
+  [/\bпривет\b/i, 'приает'],
+  [/\bконечно\b/i, 'конесно'],
+  [/\bнормально\b/i, 'нормаьлно'],
+  [/\bработа\b/i, 'ращота'],
+  [/\bденьги\b/i, 'деньнги'],
+  [/\bспасибо\b/i, 'спасбо'],
+  [/\bпонятно\b/i, 'понятон'],
+]
+
+/**
+ * Given the ordered bubbles the persona is about to send, occasionally weave in
+ * believable human glitches, returning the NEW ordered list of bubbles:
+ *
+ *   • typo + correction — a bubble ships with a typo, next bubble is «*слово».
+ *   • autocorrect + fix — an autocorrected word, then the corrected word alone.
+ *   • accidental send    — a short unfinished fragment fired before the real one.
+ *   • duplicate          — the same short bubble sent twice (double-tap send).
+ *
+ * Rates are deliberately low so glitches are seasoning, not noise. `typoRate`
+ * scales how error-prone this persona is (polite personas ~never glitch).
+ */
+export function humanizeBubbles(bubbles: string[], style: SimStyle): string[] {
+  if (bubbles.length === 0) return bubbles
+  const glitchiness = Math.max(0, Math.min(1, style.typoRate ?? 0))
+  if (glitchiness <= 0.02) return bubbles
+
+  const out: string[] = []
+  for (let idx = 0; idx < bubbles.length; idx++) {
+    const bubble = bubbles[idx]
+    const words = bubble.split(/\s+/).filter(Boolean)
+
+    // --- accidental early send: fire the first 1-2 words as a stray, then the
+    // full bubble (as if the send button was hit too soon). Only on longer ones.
+    if (idx === 0 && words.length >= 5 && chance(glitchiness * 0.35)) {
+      out.push(words.slice(0, randInt(1, 2)).join(' '))
+    }
+
+    // --- autocorrect blunder + standalone fix ------------------------------
+    let handled = false
+    if (chance(glitchiness * 0.4)) {
+      for (const [re, wrong] of AUTOCORRECT) {
+        const m = bubble.match(re)
+        if (m) {
+          out.push(bubble.replace(re, wrong))
+          out.push(m[0].toLowerCase()) // the corrected word, sent alone
+          handled = true
+          break
+        }
+      }
+    }
+
+    // --- typo + «*correction» ---------------------------------------------
+    if (!handled && words.length >= 2 && chance(glitchiness * 0.5)) {
+      // Pick a "meaty" word to fumble, typo it, ship the bubble, then correct.
+      const targetIdx = words.findIndex((w) => w.length >= 5)
+      if (targetIdx >= 0) {
+        const correct = words[targetIdx].replace(/[.,!?…]+$/, '')
+        const mangled = typoWord(correct)
+        if (mangled !== correct) {
+          const typoed = words.slice()
+          typoed[targetIdx] = typoed[targetIdx].replace(correct, mangled)
+          out.push(typoed.join(' '))
+          out.push(`*${correct}`)
+          handled = true
+        }
+      }
+    }
+
+    if (!handled) out.push(bubble)
+
+    // --- accidental duplicate (double-tap) on short bubbles ----------------
+    if (words.length <= 4 && chance(glitchiness * 0.15)) {
+      out.push(bubble)
+    }
+  }
+  return out
+}
+
+/* ========================================================================= */
 /*  Template fallback pools                                                  */
 /*  Used only when the LLM is unavailable. Composed + mangled so even the    */
 /*  fallback varies wildly and rarely repeats.                               */
@@ -697,7 +795,7 @@ const OPENERS = [
   'здрасте нашёл {hook} в телеге куда обращаться',
   'привет это правда что по {hook} платят каждый день',
   'здравствуйте хотел бы попробовать {hook}',
-  'добрый а {hook} для новичка подойдёт',
+  'добрый а {hook} для новичка п��дойдёт',
   'здарова короче видел {hook} чё по чём',
   'здравствуйте можно узнать про {hook} поподробнее',
   'привет а {hook} без опыта берёте',
