@@ -57,39 +57,80 @@ function mapSettings(r: SettingsRow): SimSettings {
 const SETTINGS_COLS_BASE = `enabled, channel_ids, aggression, max_threads,
   spawn_min_sec, spawn_max_sec, reply_min_sec, reply_max_sec,
   next_spawn_at, spawned_total, replies_total, started_at, updated_at`
-// Optional columns added by later migrations (050: learned_profile, 051: tone,
-// 055: dialogs_per_day).
-const SETTINGS_COLS = `${SETTINGS_COLS_BASE}, learned_profile, tone, dialogs_per_day`
+// Columns added by later, optional migrations (050: learned_profile,
+// 051: tone, 055: dialogs_per_day). They may not exist yet on a given DB.
+const OPTIONAL_SETTINGS_COLS = ['learned_profile', 'tone', 'dialogs_per_day'] as const
 
 /**
- * Read the singleton settings row, creating it if missing. Resilient to the
- * optional columns (`learned_profile`, `tone`, `dialogs_per_day`) not existing
- * yet — if migrations 050/051/055 haven't been applied it transparently
- * re-queries the base column set and fills defaults, instead of throwing a 500
- * that would take down the whole god panel.
+ * Which optional columns actually exist on the `sim_settings` table THIS
+ * connection resolves to. Probed at runtime rather than assumed from migration
+ * files, so we never issue a query that references a missing column — doing so
+ * spams `[db] Query failed` even when we recover, and is the exact symptom seen
+ * when the app's DB (or search_path) points at a table without the newer
+ * columns despite the migration "having run" elsewhere.
+ *
+ * `to_regclass('sim_settings')` resolves the table the SAME way the real queries
+ * do (through search_path), so the probe and the queries can never disagree —
+ * even if another schema holds a stale `sim_settings`. Cached with a short TTL
+ * so a freshly-applied migration is picked up automatically, no redeploy needed.
+ */
+const OPTIONAL_COLS_TTL_MS = 60_000
+let optionalColsCache: { cols: Set<string>; expires: number } | null = null
+
+async function getExistingOptionalCols(): Promise<Set<string>> {
+  if (optionalColsCache && optionalColsCache.expires > Date.now()) {
+    return optionalColsCache.cols
+  }
+  let cols = new Set<string>()
+  try {
+    const rows = await query<{ column_name: string }>(
+      `SELECT a.attname AS column_name
+         FROM pg_attribute a
+        WHERE a.attrelid = to_regclass('sim_settings')
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND a.attname = ANY($1)`,
+      [OPTIONAL_SETTINGS_COLS as unknown as string[]],
+    )
+    cols = new Set(rows.map((r) => r.column_name))
+  } catch (err) {
+    // If even the probe fails, assume the safe base schema (no optional cols).
+    console.log(
+      '[v0][client-sim] optional-column probe failed, assuming base schema:',
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+  optionalColsCache = { cols, expires: Date.now() + OPTIONAL_COLS_TTL_MS }
+  return cols
+}
+
+/**
+ * Read the singleton settings row, creating it if missing. Selects only the
+ * optional columns that actually exist (probed at runtime) and fills defaults
+ * for the rest — so it works on any DB regardless of which migrations have run,
+ * and never throws a 500 (or logs a scary query failure) that would take down
+ * the whole god panel.
  */
 export async function getSettings(): Promise<SimSettings> {
+  const existing = await getExistingOptionalCols()
+  const present = OPTIONAL_SETTINGS_COLS.filter((c) => existing.has(c))
+  const cols = present.length
+    ? `${SETTINGS_COLS_BASE}, ${present.join(', ')}`
+    : SETTINGS_COLS_BASE
+
   const selectRow = async (): Promise<SettingsRow | undefined> => {
-    try {
-      const rows = await query<SettingsRow>(
-        `SELECT ${SETTINGS_COLS} FROM sim_settings WHERE id = true LIMIT 1`,
-      )
-      return rows[0]
-    } catch (err) {
-      // 42703 = undefined_column. Fall back to the pre-050 column set.
-      if (isUndefinedColumn(err)) {
-        console.log(
-          '[v0][client-sim] optional column missing — run migrations 050/051/055. Falling back.',
-        )
-        const rows = await query<
-          Omit<SettingsRow, 'learned_profile' | 'tone' | 'dialogs_per_day'>
-        >(`SELECT ${SETTINGS_COLS_BASE} FROM sim_settings WHERE id = true LIMIT 1`)
-        return rows[0]
-          ? { ...rows[0], learned_profile: null, tone: 'mixed', dialogs_per_day: 20 }
-          : undefined
-      }
-      throw err
-    }
+    const rows = await query<Partial<SettingsRow>>(
+      `SELECT ${cols} FROM sim_settings WHERE id = true LIMIT 1`,
+    )
+    const r = rows[0]
+    if (!r) return undefined
+    // Fill defaults for any optional column not selected (missing on this DB).
+    return {
+      learned_profile: null,
+      tone: 'mixed',
+      dialogs_per_day: 20,
+      ...r,
+    } as SettingsRow
   }
 
   const row = await selectRow()
@@ -180,13 +221,20 @@ export async function updateSettings(patch: SettingsPatch): Promise<SimSettings>
     await query(`UPDATE sim_settings SET ${sets.join(', ')} WHERE id = true`, params)
   }
 
+  // Drop assignments to optional columns that don't exist on this DB, so we
+  // never reference a missing column (the runtime probe is authoritative).
+  const existing = await getExistingOptionalCols()
+  const effective = assignments.filter((a) => !a.optional || existing.has(a.col))
+
   try {
-    await run(assignments)
+    await run(effective)
   } catch (err) {
-    const hasOptional = assignments.some((a) => a.optional)
+    const hasOptional = effective.some((a) => a.optional)
     if (hasOptional && isUndefinedColumn(err)) {
-      // Retry without the optional assignments so the rest of the save lands.
-      await run(assignments.filter((a) => !a.optional))
+      // Backstop: if the probe was stale, retry without optional assignments so
+      // the rest of the save still lands instead of 500-ing.
+      optionalColsCache = null
+      await run(effective.filter((a) => !a.optional))
     } else {
       throw err
     }
