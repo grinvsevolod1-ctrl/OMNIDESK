@@ -117,7 +117,7 @@ export const SECRET_CONFIG_KEYS = new Set([
 
 /**
  * Default lead status when a manager hasn't pinned one. Every contact that
- * wrote in starts as «Отписок». Keep this in sync with EFFECTIVE_STATUS_SQL
+ * wrote in starts as «Отписок». Keep this in sync with effectiveStatusSql()
  * so JS and DB derivations never diverge.
  */
 export const DEFAULT_LEAD_STATUS: LeadStatus = 'unsubscribed'
