@@ -5,7 +5,6 @@ import { requireAdmin } from '@/lib/auth'
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
   { href: '/admin/managers', label: 'Менеджеры', icon: 'managers' },
-  { href: '/admin/contacts', label: 'Контакты', icon: 'inbox' },
   { href: '/admin/ai', label: 'ИИ-ассистент', icon: 'ai' },
   {
     href: '/admin/accounts',
@@ -23,6 +22,7 @@ const nav: NavItem[] = [
   },
   { href: '/admin/proxies', label: 'Прокси', icon: 'proxies' },
   { href: '/admin/finance', label: 'Учёт', icon: 'finance' },
+  { href: '/admin/contacts', label: 'Контакты', icon: 'inbox' },
   { href: '/admin/settings', label: 'Система', icon: 'settings' },
 ]
 

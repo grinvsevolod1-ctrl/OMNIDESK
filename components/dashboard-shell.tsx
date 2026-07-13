@@ -173,6 +173,22 @@ function NavLinks({
   const groupOwnsActive = (item: NavItem) =>
     !!item.children && item.children.some((c) => c.href === activeHref)
 
+  // True when the active route lives inside a group the user has collapsed. In
+  // the expanded rail its row is clipped to height 0, so the highlight must be
+  // hidden entirely instead of floating at a stale offset (the "съезжает вниз
+  // хотя вкладка закрыта" bug).
+  const activeHiddenInGroup = useMemo(() => {
+    if (collapsed) return false // collapsed rail flattens groups; child is shown
+    for (const item of nav) {
+      if (item.children?.some((c) => c.href === activeHref)) {
+        const open = openGroups[item.href] ?? groupOwnsActive(item)
+        return !open
+      }
+    }
+    return false
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav, activeHref, openGroups, collapsed])
+
   // Auto-open the group that contains the active route whenever it changes.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -188,20 +204,63 @@ function NavLinks({
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
+    // Hide the pill outright when the active item is inside a collapsed group —
+    // otherwise it would sit at the clipped (0-height) row's stale offset.
+    if (activeHiddenInGroup) {
+      setPill(null)
+      return
+    }
+
+    let raf = 0
+    let stopAt = 0
+
     function measure() {
+      const nav = navRef.current
       const el = activeRef.current
-      if (!el) {
+      if (!nav || !el) {
         setPill(null)
         return
       }
-      setPill({ top: el.offsetTop, height: el.offsetHeight })
+      // Measure via bounding rects relative to the nav so the value is correct
+      // even mid-transition (offsetTop can lag while parents animate height).
+      const navRect = nav.getBoundingClientRect()
+      const elRect = el.getBoundingClientRect()
+      const top = elRect.top - navRect.top + nav.scrollTop
+      setPill((prev) => {
+        const next = { top, height: elRect.height }
+        if (prev && prev.top === next.top && prev.height === next.height) {
+          return prev
+        }
+        return next
+      })
     }
-    measure()
+
+    // Group expand/collapse and sidebar width both animate ~300ms; poll on rAF
+    // for that window so the pill follows the item to its final resting place
+    // instead of snapping to a pre-animation position (the "криво/не ту вкладку"
+    // bugs). Then settle and stop.
+    function tick() {
+      measure()
+      if (performance.now() < stopAt) {
+        raf = requestAnimationFrame(tick)
+      }
+    }
+    stopAt = performance.now() + 360
+    tick()
+
+    // Keep tracking on layout changes (font load, scrollbar, container resize).
+    const ro = new ResizeObserver(() => measure())
+    if (navRef.current) ro.observe(navRef.current)
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-    // Re-measure when the route changes, the sidebar collapses, or a group is
-    // expanded/collapsed (item metrics change), so the highlight tracks.
-  }, [pathname, collapsed, nav, openGroups])
+
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+    // Re-run when the route changes, the sidebar collapses, or a group is
+    // expanded/collapsed, so the highlight re-tracks from the new state.
+  }, [pathname, collapsed, nav, openGroups, activeHiddenInGroup])
 
   function renderLink(
     item: NavItem,
