@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
 import { SecretSimulatorLearn } from '@/components/admin/secret-simulator-learn'
+import { SecretSimulatorLogs } from '@/components/admin/secret-simulator-logs'
 import { SecretSimulatorTest } from '@/components/admin/secret-simulator-test'
 import {
   simStatusAction,
@@ -382,6 +383,9 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           Сохранить настройки
         </Button>
       </Card>
+
+      {/* ---- Live activity log (simulator-only, god-panel isolated) ---- */}
+      <SecretSimulatorLogs />
 
       {/* ---- Interactive test sandbox ---- */}
       <SecretSimulatorTest />

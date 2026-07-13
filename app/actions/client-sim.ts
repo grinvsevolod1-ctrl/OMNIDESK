@@ -3,12 +3,30 @@
 import { revalidatePath } from 'next/cache'
 import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
-import { rollBehavior, startEngine, stopEngine } from '@/lib/client-sim/engine'
+import {
+  engineRunning,
+  rollBehavior,
+  startEngine,
+  stopEngine,
+} from '@/lib/client-sim/engine'
 import { getSimStatus } from '@/lib/client-sim/status'
 import { makePersona } from '@/lib/client-sim/content'
 import { generateReply } from '@/lib/client-sim/generate'
 import { analyzeDialogues, LearnError } from '@/lib/client-sim/learn'
-import { sampleRealClientLines, updateSettings, type SettingsPatch } from '@/lib/client-sim/store'
+import {
+  countActiveThreads,
+  getSettings as getSimSettings,
+  listUsableChannels,
+  sampleRealClientLines,
+  updateSettings,
+  type SettingsPatch,
+} from '@/lib/client-sim/store'
+import {
+  clearAiLogs,
+  listAiLogs,
+  type AiLogLevel,
+  type AiLogRow,
+} from '@/lib/data/ai-log'
 import type { LearnedProfile, SimPersona, SimStatus, SimTone } from '@/lib/client-sim/types'
 import type { ChannelType } from '@/lib/types'
 
@@ -158,4 +176,54 @@ function clampInt(v: number, min: number, max: number, fallback: number): number
   const n = Math.round(Number(v))
   if (!Number.isFinite(n)) return fallback
   return Math.min(max, Math.max(min, n))
+}
+
+/* ------------------------- logs (simulator only) ------------------------ */
+/*
+ * The secret simulator's OWN activity log — completely separate from the AI
+ * manager's log in the normal admin panel. Reads are scoped to 'sim' so the two
+ * streams can never mix, and every action runs behind the same admin + god
+ * passcode guard as the rest of this file.
+ */
+
+export interface SimDiagnostics {
+  enabled: boolean
+  engineRunning: boolean
+  usableChannels: number
+  activeThreads: number
+}
+
+/** Health snapshot for the simulator (drives the god-panel banner). */
+export async function simDiagnosticsAction(): Promise<SimDiagnostics> {
+  await guard()
+  const [settings, activeThreads] = await Promise.all([
+    getSimSettings(),
+    countActiveThreads().catch(() => 0),
+  ])
+  const channels = await listUsableChannels(settings.channelIds).catch(() => [])
+  return {
+    enabled: settings.enabled,
+    engineRunning: engineRunning(),
+    usableChannels: channels.length,
+    activeThreads,
+  }
+}
+
+/** Tail the simulator activity log (scope 'sim' only). */
+export async function simLogsAction(opts?: {
+  level?: AiLogLevel | 'all'
+  limit?: number
+}): Promise<AiLogRow[]> {
+  await guard()
+  return listAiLogs({
+    scope: 'sim',
+    level: opts?.level ?? 'all',
+    limit: opts?.limit ?? 200,
+  })
+}
+
+/** Clear the simulator activity log (does not touch the AI-manager log). */
+export async function simClearLogsAction(): Promise<void> {
+  await guard()
+  await clearAiLogs('sim')
 }

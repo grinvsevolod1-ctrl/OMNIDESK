@@ -2,21 +2,14 @@
 
 import { useState } from 'react'
 import useSWR from 'swr'
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Pause,
-  Play,
-  Trash2,
-  XCircle,
-} from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Pause, Play, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  aiClearLogsAction,
-  aiDiagnosticsAction,
-  aiLogsAction,
-  type AiDiagnostics,
-} from '@/app/actions/ai-assist'
+  simClearLogsAction,
+  simDiagnosticsAction,
+  simLogsAction,
+  type SimDiagnostics,
+} from '@/app/actions/client-sim'
 import type { AiLogLevel, AiLogRow } from '@/lib/data/ai-log'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -40,11 +33,7 @@ const LEVEL_OPTIONS: { value: AiLogLevel | 'all'; label: string }[] = [
 ]
 
 const SOURCE_LABEL: Record<string, string> = {
-  brain: 'Модель',
-  'ai-lead': 'ИИ-ведение',
-  handoff: 'Передача',
-  worker: 'Воркер',
-  ai: 'ИИ',
+  sim: 'Симулятор',
 }
 
 function levelClasses(level: AiLogLevel): string {
@@ -85,16 +74,18 @@ function formatTime(iso: string): string {
   }
 }
 
-export function AiLogsTab() {
+/**
+ * God-panel-only activity log for the secret client simulator. Reads exclusively
+ * the 'sim' log scope, so it is fully isolated from the AI-manager log shown in
+ * the normal admin panel — the two systems never share a view.
+ */
+export function SecretSimulatorLogs() {
   const [level, setLevel] = useState<AiLogLevel | 'all'>('all')
   const [live, setLive] = useState(true)
 
-  // Log tail — SWR polls on an interval while "live"; pausing stops the poll.
-  // A full tail (newest-first, capped server-side) keeps the client simple and
-  // always consistent with the server ring buffer.
   const { data: logs = [], mutate: mutateLogs } = useSWR<AiLogRow[]>(
-    ['ai-logs', level],
-    () => aiLogsAction({ level, limit: 300 }),
+    ['sim-logs', level],
+    () => simLogsAction({ level, limit: 300 }),
     {
       refreshInterval: live ? POLL_MS : 0,
       revalidateOnFocus: false,
@@ -102,10 +93,9 @@ export function AiLogsTab() {
     },
   )
 
-  // Health snapshot — cheap, refreshed on the same cadence.
-  const { data: diag = null } = useSWR<AiDiagnostics>(
-    'ai-diagnostics',
-    () => aiDiagnosticsAction(),
+  const { data: diag = null } = useSWR<SimDiagnostics>(
+    'sim-diagnostics',
+    () => simDiagnosticsAction(),
     {
       refreshInterval: live ? POLL_MS * 2 : 0,
       revalidateOnFocus: false,
@@ -114,9 +104,9 @@ export function AiLogsTab() {
 
   const clearLog = async () => {
     try {
-      await aiClearLogsAction()
+      await simClearLogsAction()
       await mutateLogs([], { revalidate: false })
-      toast.success('Лог очищен')
+      toast.success('Лог симулятора очищен')
     } catch {
       toast.error('Не удалось очистить лог')
     }
@@ -124,7 +114,7 @@ export function AiLogsTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <DiagnosticsBanner diag={diag} />
+      <SimDiagnosticsBanner diag={diag} />
 
       <Card className="flex flex-col gap-0 overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border p-3">
@@ -136,7 +126,7 @@ export function AiLogsTab() {
               aria-hidden
             />
             <p className="text-sm font-medium">
-              {live ? 'Онлайн-логи' : 'Логи (пауза)'}
+              {live ? 'Онлайн-логи симулятора' : 'Логи симулятора (пауза)'}
             </p>
             <Badge variant="secondary">{logs.length}</Badge>
           </div>
@@ -158,11 +148,7 @@ export function AiLogsTab() {
               </SelectContent>
             </Select>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setLive((v) => !v)}
-            >
+            <Button variant="outline" size="sm" onClick={() => setLive((v) => !v)}>
               {live ? (
                 <>
                   <Pause className="size-4" />
@@ -185,9 +171,8 @@ export function AiLogsTab() {
         <div className="flex max-h-[34rem] flex-col divide-y divide-border/60 overflow-y-auto">
           {logs.length === 0 ? (
             <p className="py-16 text-center text-sm text-muted-foreground">
-              Пока нет событий. Как только ИИ-менеджер начнёт обрабатывать
-              входящие сообщения клиентов, здесь появятся записи в реальном
-              времени.
+              Пока нет событий. Как только симулятор начнёт создавать диалоги и
+              отвечать за клиентов, здесь появятся записи в реальном времени.
             </p>
           ) : (
             logs.map((l) => <LogLine key={l.id} log={l} />)
@@ -217,9 +202,7 @@ function LogLine({ log }: { log: AiLogRow }) {
           {src}
         </Badge>
         {log.channelType ? (
-          <span className="text-xs text-muted-foreground">
-            {log.channelType}
-          </span>
+          <span className="text-xs text-muted-foreground">{log.channelType}</span>
         ) : null}
         <span className="font-mono text-[10px] text-muted-foreground/70">
           {log.event}
@@ -232,17 +215,17 @@ function LogLine({ log }: { log: AiLogRow }) {
   )
 }
 
-function DiagnosticsBanner({ diag }: { diag: AiDiagnostics | null }) {
+function SimDiagnosticsBanner({ diag }: { diag: SimDiagnostics | null }) {
   if (!diag) return null
 
   const problems: string[] = []
-  if (!diag.aiConfigured)
+  if (diag.enabled && !diag.engineRunning)
     problems.push(
-      'Не задан AI_GATEWAY_API_KEY — ИИ не может генерировать ответы.',
+      'Симулятор включён, но движок не запущен в этом процессе — перезапустите панель или переключите тумблер.',
     )
-  if (!diag.aiMasterEnabled)
+  if (diag.enabled && diag.usableChannels === 0)
     problems.push(
-      'Главный выключатель ИИ выключен — авто-ответы не отправляются.',
+      'Нет подходящих каналов — выберите каналы в настройках симулятора ниже.',
     )
 
   const healthy = problems.length === 0
@@ -263,8 +246,10 @@ function DiagnosticsBanner({ diag }: { diag: AiDiagnostics | null }) {
         )}
         <p className="font-medium">
           {healthy
-            ? 'ИИ-менеджер настроен корректно.'
-            : 'Обнаружены причины, по которым ИИ-менеджер может молчать:'}
+            ? diag.enabled
+              ? 'Симулятор работает корректно.'
+              : 'Симулятор выключен.'
+            : 'Обнаружены причины, по которым симулятор может не создавать диалоги:'}
         </p>
       </div>
 
@@ -277,40 +262,23 @@ function DiagnosticsBanner({ diag }: { diag: AiDiagnostics | null }) {
       ) : null}
 
       <div className="flex flex-wrap gap-2 text-xs">
-        <StatusChip ok={diag.aiConfigured} label="Ключ AI Gateway" />
-        <StatusChip ok={diag.aiMasterEnabled} label="Главный выключатель ИИ" />
+        <Badge variant="outline" className="gap-1">
+          Активных диалогов: {diag.activeThreads}
+        </Badge>
+        <Badge variant="outline" className="gap-1">
+          Каналов доступно: {diag.usableChannels}
+        </Badge>
+        <Badge
+          variant="outline"
+          className={`gap-1 ${
+            diag.engineRunning
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-muted-foreground'
+          }`}
+        >
+          Движок: {diag.engineRunning ? 'запущен' : 'остановлен'}
+        </Badge>
       </div>
     </Card>
-  )
-}
-
-function StatusChip({
-  ok,
-  label,
-  neutralWhenOff,
-}: {
-  ok: boolean
-  label: string
-  neutralWhenOff?: boolean
-}) {
-  if (!ok && neutralWhenOff) {
-    return (
-      <Badge variant="outline" className="gap-1 text-muted-foreground">
-        {label}: выкл
-      </Badge>
-    )
-  }
-  return (
-    <Badge
-      variant="outline"
-      className={`gap-1 ${
-        ok
-          ? 'text-emerald-600 dark:text-emerald-400'
-          : 'text-red-600 dark:text-red-400'
-      }`}
-    >
-      {ok ? <CheckCircle2 className="size-3" /> : <XCircle className="size-3" />}
-      {label}
-    </Badge>
   )
 }
