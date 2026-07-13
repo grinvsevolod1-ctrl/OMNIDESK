@@ -595,6 +595,23 @@ export async function insertInboundMessage(
   )
 }
 
+/**
+ * Manager + channel a conversation routes to. Needed so the simulator can hand
+ * a freshly-posted client message to the AI MANAGER through its normal public
+ * entry point (exactly like a real channel webhook would), instead of poking at
+ * the manager's brain directly — the two systems stay code-separate.
+ */
+export async function getConversationRouting(
+  conversationId: string,
+): Promise<{ managerId: string; channelId: string } | null> {
+  const rows = await query<{ manager_id: string; channel_id: string }>(
+    `SELECT manager_id, channel_id FROM conversations WHERE id = $1`,
+    [conversationId],
+  )
+  const r = rows[0]
+  return r ? { managerId: r.manager_id, channelId: r.channel_id } : null
+}
+
 /** Recent transcript for building LLM context (oldest→newest). */
 export interface SimTranscriptLine {
   direction: 'in' | 'out'

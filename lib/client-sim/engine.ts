@@ -11,6 +11,7 @@ import {
   createSimConversation,
   expireStaleThreads,
   findThreadsAwaitingReaction,
+  getConversationRouting,
   getSettings,
   getTranscript,
   insertInboundMessage,
@@ -22,6 +23,7 @@ import {
 } from './store'
 import { pick } from './content'
 import { logAi } from '@/lib/data/ai-log'
+import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import type { ChannelType } from '@/lib/types'
 
 /**
@@ -278,6 +280,8 @@ async function maybeSpawn(
     message: `Создан новый диалог: «${persona.name}» (${persona.channelType}) написал: "${body.slice(0, 160)}"`,
     channelType: persona.channelType,
   })
+  // Let the AI manager answer this opening message like any real inbound.
+  void triggerManagerReply(conversationId, body)
 }
 
 /* --------------------- reacting to manager replies ---------------------- */
@@ -337,6 +341,43 @@ async function processDueThreads(): Promise<void> {
 }
 
 /**
+ * Hand a freshly-posted simulated client message to the AI MANAGER so it
+ * answers it just like a real inbound. We deliberately call the SAME public
+ * entry point a real channel webhook uses (`runLivechatAutopilot`) rather than
+ * touching the manager's brain directly — the simulator and the AI manager stay
+ * completely separate systems; the simulator only "knocks on the front door".
+ *
+ * Fire-and-forget: the manager replies on its own schedule and the reply lands
+ * as a normal outbound message, which the simulator's next tick picks up to
+ * continue the dialogue. Fully self-guarded so it can never break a tick.
+ */
+async function triggerManagerReply(
+  conversationId: string,
+  text: string,
+): Promise<void> {
+  try {
+    const routing = await getConversationRouting(conversationId)
+    if (!routing) return
+    await runLivechatAutopilot({
+      managerId: routing.managerId,
+      channelId: routing.channelId,
+      conversationId,
+      text,
+    })
+  } catch (err) {
+    void logAi({
+      level: 'error',
+      source: 'sim',
+      event: 'manager_trigger.error',
+      message: `Не удалось передать сообщение ИИ-менеджеру: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      conversationId,
+    })
+  }
+}
+
+/**
  * Decide how the persona behaves this turn based on mood + aggression + a die
  * roll, generate the line, post it, and advance the state machine. This is
  * where the "always react differently" behaviour lives: intent is re-rolled
@@ -373,6 +414,8 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
   const body = await generateReply({ persona, history, behavior, referenceLines })
   await insertInboundMessage(conversationId, persona.name, body)
   await bumpRepliesTotal()
+  // Hand this follow-up to the AI manager so the dialogue keeps flowing.
+  void triggerManagerReply(conversationId, body)
 
   const nextState: SimState = outcome === 'end' ? 'done' : 'chatting'
   await updateThread(conversationId, {
