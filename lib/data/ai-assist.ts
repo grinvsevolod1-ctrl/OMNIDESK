@@ -174,15 +174,125 @@ export async function getConversationHistoryForAi(
     }))
 }
 
-/** True when the AI is set to lead this specific conversation. */
+/**
+ * True when the AI is effectively leading this conversation. Global-lead mode
+ * (migration 056): the AI leads EVERY conversation when the master switch is
+ * on, unless the conversation has been manually paused (opt-out). So:
+ *
+ *   led = ai_assist_settings.enabled AND NOT conversations.ai_paused
+ *
+ * A single round-trip via CROSS JOIN keeps this cheap for the schedulers.
+ */
 export async function isConversationAiLed(
   conversationId: string,
 ): Promise<boolean> {
-  const rows = await query<{ ai_autopilot_enabled: boolean }>(
-    `SELECT ai_autopilot_enabled FROM conversations WHERE id = $1`,
+  const rows = await query<{ led: boolean }>(
+    `SELECT (s.enabled AND NOT c.ai_paused) AS led
+       FROM conversations c
+       CROSS JOIN ai_assist_settings s
+      WHERE c.id = $1 AND s.id = true`,
     [conversationId],
   )
-  return Boolean(rows[0]?.ai_autopilot_enabled)
+  return Boolean(rows[0]?.led)
+}
+
+/**
+ * Manager pauses/resumes the AI for a single conversation (the per-conversation
+ * opt-out of global-lead mode). Manager-scoped so a manager can only toggle
+ * their own threads. Returns the new paused state, or null when not owned.
+ */
+export async function setConversationAiPaused(
+  conversationId: string,
+  managerId: string,
+  paused: boolean,
+): Promise<boolean | null> {
+  const rows = await query<{ ai_paused: boolean }>(
+    `UPDATE conversations
+        SET ai_paused = $3
+      WHERE id = $1 AND manager_id = $2
+      RETURNING ai_paused`,
+    [conversationId, managerId, paused],
+  )
+  return rows[0] ? rows[0].ai_paused : null
+}
+
+/**
+ * The AI decided this lead is ready («Ликвид») and hands it to a human. Called
+ * by the AI runtimes (worker + live-chat) — UNSCOPED, no manager session. Only
+ * promotes when the lead still has its default/empty status, so a manual
+ * «Не ликвид»/«Передан» override is never clobbered. Also pauses the AI so the
+ * human takes over cleanly, and flags a pending handoff for the inbox banner.
+ * Returns true when it actually promoted (so the caller can log it once).
+ */
+export async function markAiHandoffToLiquid(
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET status = 'liquid',
+            status_detail = NULL,
+            status_updated_at = now(),
+            ai_paused = true,
+            ai_handoff_pending = true,
+            ai_handoff_at = now()
+      WHERE id = $1
+        AND COALESCE(status, 'unsubscribed') = 'unsubscribed'
+      RETURNING id`,
+    [conversationId],
+  )
+  return rows.length > 0
+}
+
+/** A pending AI→human handoff surfaced in the manager inbox banner. */
+export interface AiHandoff {
+  conversationId: string
+  contactName: string
+  channelType: string
+  at: string
+}
+
+/** Pending handoffs for a manager, newest first (drives the banner + highlight). */
+export async function listPendingAiHandoffs(
+  managerId: string,
+): Promise<AiHandoff[]> {
+  const rows = await query<{
+    id: string
+    contact_name: string
+    contact_name_hidden: boolean | null
+    channel_type: string
+    ai_handoff_at: string | Date | null
+  }>(
+    `SELECT id, contact_name, contact_name_hidden, channel_type, ai_handoff_at
+       FROM conversations
+      WHERE manager_id = $1 AND ai_handoff_pending = true
+      ORDER BY ai_handoff_at DESC NULLS LAST
+      LIMIT 50`,
+    [managerId],
+  )
+  return rows.map((r) => ({
+    conversationId: r.id,
+    contactName: r.contact_name_hidden ? 'Скрыт' : r.contact_name,
+    channelType: r.channel_type,
+    at: r.ai_handoff_at ? new Date(r.ai_handoff_at).toISOString() : '',
+  }))
+}
+
+/**
+ * Manager acknowledges a handoff (opened the thread): clears the pending flag
+ * so the banner/highlight goes away. Manager-scoped. Returns true when cleared.
+ */
+export async function acknowledgeAiHandoff(
+  conversationId: string,
+  managerId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET ai_handoff_pending = false
+      WHERE id = $1 AND manager_id = $2 AND ai_handoff_pending = true
+      RETURNING id`,
+    [conversationId, managerId],
+  )
+  return rows.length > 0
 }
 
 /** Lessons in the shape the pure brain expects (for prompt injection). */

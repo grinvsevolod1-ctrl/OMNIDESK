@@ -362,6 +362,21 @@ export interface Conversation {
    * flip it back on and the AI re-reads the thread and continues.
    */
   aiAutopilotEnabled?: boolean
+  /**
+   * Global-lead mode (migration 056): when the AI master switch is on, the AI
+   * leads EVERY conversation by default. `aiPaused` is the per-conversation
+   * opt-out — a manager pauses the AI here to take over by hand. So the AI is
+   * effectively leading this thread when the master switch is on AND !aiPaused.
+   */
+  aiPaused?: boolean
+  /**
+   * The AI decided this lead is ready («Ликвид») and handed it to a human.
+   * Stays true until the manager opens the thread (acknowledges), so the inbox
+   * can show a banner + highlight without nagging repeatedly.
+   */
+  aiHandoffPending?: boolean
+  /** When the AI handed this lead off (ISO), for ordering notifications. */
+  aiHandoffAt?: string
 }
 
 /**

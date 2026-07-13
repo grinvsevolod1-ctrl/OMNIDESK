@@ -33,7 +33,7 @@ import {
   type MatchInput,
 } from '../../lib/autopilot/match.js'
 import { isOffHoursFor, type WorkingHoursLike } from '../../lib/offhours.js'
-import { generateManagerReply } from '../../lib/ai/manager-brain.js'
+import { assessLeadReady, generateManagerReply } from '../../lib/ai/manager-brain.js'
 import { logger } from './logger.js'
 import * as repo from './repo.js'
 
@@ -280,6 +280,25 @@ async function fireAiLead(params: {
       isAutopilot: true,
     })
     logger.info({ channelId, conversationId }, 'ai-lead: auto-reply sent')
+
+    // After replying, judge whether the client is ready to hand over their data
+    // and start working. If so, promote the lead to «Ликвид» and hand it to a
+    // human (pauses the AI + flags the panel banner). Best-effort — never let a
+    // promotion failure affect the reply we already delivered.
+    try {
+      const ready = await assessLeadReady([
+        ...history,
+        { role: 'manager', body: reply },
+      ])
+      if (ready) {
+        const promoted = await repo.markAiHandoffToLiquid(conversationId)
+        if (promoted) {
+          logger.info({ channelId, conversationId }, 'ai-lead: promoted lead to «Ликвид»')
+        }
+      }
+    } catch (err) {
+      logger.error({ err, channelId, conversationId }, 'ai-lead: readiness check failed (ignored)')
+    }
     return true
   } catch (err) {
     logger.error({ err, channelId, conversationId }, 'ai-lead: failed (ignored)')

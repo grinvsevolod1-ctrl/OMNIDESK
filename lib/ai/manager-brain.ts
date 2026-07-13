@@ -187,6 +187,63 @@ export async function generateManagerReply(
 }
 
 /**
+ * Decide whether the client is READY — i.e. has agreed to hand over their
+ * contact/personal data and start working with us (the moment a lead becomes
+ * «Ликвид» and should be handed to a human). Returns true ONLY on a confident
+ * yes, so we never promote prematurely. Pure + dependency-free like the rest of
+ * this module; safe to call from both the worker and the panel. When the AI is
+ * unavailable it conservatively returns false (no promotion, no false alarms).
+ */
+export async function assessLeadReady(history: BrainMessage[]): Promise<boolean> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  if (!key) return false
+  // Need at least a couple of turns to judge readiness.
+  const recent = history.slice(-16)
+  if (recent.filter((m) => m.role === 'client').length === 0) return false
+
+  const transcript = recent
+    .map((m) => `${m.role === 'client' ? 'Клиент' : 'Менеджер'}: ${m.body}`)
+    .join('\n')
+
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты анализируешь переписку менеджера с клиентом. Определи, ГОТОВ ли клиент ' +
+              'предоставить свои данные (телефон/контакты/реквизиты) и начать работу/сотрудничество. ' +
+              'Отвечай СТРОГО одним словом: "ДА" — если клиент явно согласился и готов начать; ' +
+              '"НЕТ" — если ещё сомневается, задаёт вопросы, отказывается или неясно. ' +
+              'Не объясняй, только ДА или НЕТ.',
+          },
+          { role: 'user', content: transcript },
+        ],
+        temperature: 0,
+        max_tokens: 3,
+      }),
+    })
+    if (!res.ok) return false
+    const data = (await res.json()) as GatewayResponse
+    const raw = (data.choices?.[0]?.message?.content ?? '').trim().toLowerCase()
+    return raw.startsWith('да') || raw.startsWith('yes')
+  } catch (err) {
+    console.warn(
+      '[manager-brain] readiness assessment failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return false
+  }
+}
+
+/**
  * Distill a compact bullet-point playbook from the full lesson corpus. Called
  * after training so the always-injected playbook stays small. Falls back to a
  * simple heuristic (dedup of correction gists) when the AI is unavailable.

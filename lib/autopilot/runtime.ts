@@ -6,8 +6,13 @@ import {
   getConversationHistoryForAi,
   isConversationAiLed,
   listBrainLessons,
+  markAiHandoffToLiquid,
 } from '../data/ai-assist'
-import { generateManagerReply, isBrainConfigured } from '../ai/manager-brain'
+import {
+  assessLeadReady,
+  generateManagerReply,
+  isBrainConfigured,
+} from '../ai/manager-brain'
 import { deliverMaxMessage } from '../max-dispatch'
 import { deliverVkMessage } from '../vk-dispatch'
 import { deliverWhatsappMessage } from '../whatsapp-dispatch'
@@ -156,6 +161,28 @@ async function runLivechatAiLead(input: {
     if (!(await isConversationAiLed(input.conversationId))) return true
 
     await sendAiReply(input.managerId, input.conversationId, reply)
+
+    // After replying, judge whether the client is now ready to hand over their
+    // data and start working. If so, promote the lead to «Ликвид» and hand it
+    // to a human (pauses the AI + flags the inbox banner). Best-effort: never
+    // let a promotion failure affect the reply we already sent.
+    try {
+      const ready = await assessLeadReady([
+        ...history,
+        { role: 'manager', body: reply },
+      ])
+      if (ready) {
+        const promoted = await markAiHandoffToLiquid(input.conversationId)
+        if (promoted) {
+          console.log(
+            '[v0] AI promoted lead to «Ликвид»:',
+            input.conversationId,
+          )
+        }
+      }
+    } catch (err) {
+      console.error('[v0] autopilot(livechat) readiness check failed:', err)
+    }
     return true
   } catch (err) {
     console.error('[v0] autopilot(livechat) AI-lead failed:', err)

@@ -232,12 +232,14 @@ export async function addMessage(input: {
       input.replyToMessageId ?? null,
     ],
   )
-  // A human outbound message hands the thread back from the AI: clear the
-  // AI-lead flag in the same UPDATE. AI-authored rows keep it on.
+  // A human outbound message hands the thread back from the AI: pause AI-lead
+  // for this conversation (global-lead opt-out) in the same UPDATE. AI-authored
+  // rows keep it running. The legacy `ai_autopilot_enabled` flag is cleared too
+  // so both old and new readers agree.
   await query(
     `UPDATE conversations
         SET last_message = $2, last_message_at = now(), unread = 0${
-          input.byAi ? '' : ', ai_autopilot_enabled = false'
+          input.byAi ? '' : ', ai_paused = true, ai_autopilot_enabled = false'
         }
       WHERE id = $1`,
     [input.conversationId, input.preview ?? input.body],

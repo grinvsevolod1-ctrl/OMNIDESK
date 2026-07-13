@@ -78,6 +78,9 @@ export interface ConversationRow {
   contact_blocked?: boolean | null
   contact_name_hidden?: boolean | null
   ai_autopilot_enabled?: boolean | null
+  ai_paused?: boolean | null
+  ai_handoff_pending?: boolean | null
+  ai_handoff_at?: string | Date | null
   created_at?: string | Date | null
 }
 
@@ -279,6 +282,11 @@ export function toConversation(r: ConversationRow): Conversation {
         ? (r.meta as ConversationMeta)
         : undefined,
     aiAutopilotEnabled: Boolean(r.ai_autopilot_enabled),
+    aiPaused: Boolean(r.ai_paused),
+    aiHandoffPending: Boolean(r.ai_handoff_pending),
+    aiHandoffAt: r.ai_handoff_at
+      ? new Date(r.ai_handoff_at).toISOString()
+      : undefined,
   }
 }
 

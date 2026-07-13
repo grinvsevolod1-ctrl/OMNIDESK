@@ -2297,44 +2297,9 @@ export function InboxView({
     messagesEndRef.current?.scrollIntoView({ block: 'end' })
   }, [activeId, thread.length, activeTypingDraft])
 
-  // --- Outbound "agent is typing" → the live-chat visitor -------------------
-  // We only emit for live-chat threads (Telegram/WhatsApp would need provider
-  // support). A short stop-timer sends a "stopped" ping after the manager pauses
-  // so the visitor's indicator clears on its own.
-  const agentTyping = useRef<{ convId: string | null; stop: ReturnType<typeof setTimeout> | null }>(
-    { convId: null, stop: null },
-  )
-
-  const stopAgentTyping = useCallback(() => {
-    const s = agentTyping.current
-    if (s.stop) {
-      clearTimeout(s.stop)
-      s.stop = null
-    }
-    if (s.convId) {
-      const id = s.convId
-      s.convId = null
-      void setAgentTypingAction(id, false)
-    }
-  }, [])
-
-  const pingAgentTyping = useCallback(() => {
-    if (!active || active.channelType !== 'livechat') return
-    const s = agentTyping.current
-    if (s.convId !== active.id) {
-      // Switched threads while typing: stop the previous one first.
-      if (s.convId && s.stop) clearTimeout(s.stop)
-      s.convId = active.id
-      void setAgentTypingAction(active.id, true)
-    }
-    if (s.stop) clearTimeout(s.stop)
-    s.stop = setTimeout(stopAgentTyping, 3_000)
-  }, [active, stopAgentTyping])
-
-  // Stop emitting when the thread changes or the component unmounts.
-  useEffect(() => {
-    return () => stopAgentTyping()
-  }, [activeId, stopAgentTyping])
+  // NOTE: The outbound "agent is typing" indicator (a server action fired on
+  // every keystroke) was removed for performance — a network round-trip per
+  // character made the composer feel laggy. Typing is now purely local.
 
   // Live "visitor is typing" state for the open thread (auto-expired by sweep).
   const activeTyping =
@@ -2643,7 +2608,7 @@ export function InboxView({
                 type="button"
                 onClick={() => setSearch('')}
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Очистить поиск"
+                aria-label="Очистит�� поиск"
               >
                 <X className="size-4" />
               </button>

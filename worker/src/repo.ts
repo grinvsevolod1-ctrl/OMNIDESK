@@ -513,9 +513,10 @@ export async function ingestInbound(input: {
 
   // Manual human takeover from the operator's own device: a real outbound
   // (mirrored fromMe message) that we did NOT generate ourselves hands the
-  // conversation back to the human, so pause the AI-lead flag. Autopilot/AI
-  // sends carry is_autopilot=true and must NOT clear it. Only stamp a freshly
-  // written row (skip replays) on an existing thread.
+  // conversation back to the human, so PAUSE AI-lead for this thread (global-
+  // lead opt-out). Autopilot/AI sends carry is_autopilot=true and must NOT
+  // pause it. Only stamp a freshly written row (skip replays) on an existing
+  // thread. The legacy flag is cleared too so old/new readers agree.
   if (
     inserted &&
     conversationExisted &&
@@ -524,8 +525,8 @@ export async function ingestInbound(input: {
   ) {
     await query(
       `UPDATE conversations
-          SET ai_autopilot_enabled = false
-        WHERE id = $1 AND ai_autopilot_enabled = true`,
+          SET ai_paused = true, ai_autopilot_enabled = false
+        WHERE id = $1 AND ai_paused = false`,
       [conversationId],
     )
   }
@@ -993,15 +994,49 @@ export async function listAiLessons(
   )
 }
 
-/** True when the AI is set to lead THIS conversation. */
+/**
+ * True when the AI is effectively leading THIS conversation. Global-lead mode
+ * (migration 056): the AI leads EVERY conversation while the master switch is
+ * on, unless the conversation was manually paused (opt-out).
+ *
+ *   led = ai_assist_settings.enabled AND NOT conversations.ai_paused
+ */
 export async function isConversationAiLed(
   conversationId: string,
 ): Promise<boolean> {
-  const row = await one<{ ai_autopilot_enabled: boolean }>(
-    `SELECT ai_autopilot_enabled FROM conversations WHERE id = $1`,
+  const row = await one<{ led: boolean }>(
+    `SELECT (s.enabled AND NOT c.ai_paused) AS led
+       FROM conversations c
+       CROSS JOIN ai_assist_settings s
+      WHERE c.id = $1 AND s.id = true`,
     [conversationId],
   )
-  return !!row?.ai_autopilot_enabled
+  return !!row?.led
+}
+
+/**
+ * The AI decided this lead is ready («Ликвид») and hands it to a human. Only
+ * promotes when the lead still has its default status, pauses the AI so the
+ * human takes over, and flags a pending handoff for the panel banner. Returns
+ * true when it actually promoted (mirror of the panel's markAiHandoffToLiquid).
+ */
+export async function markAiHandoffToLiquid(
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET status = 'liquid',
+            status_detail = NULL,
+            status_updated_at = now(),
+            ai_paused = true,
+            ai_handoff_pending = true,
+            ai_handoff_at = now()
+      WHERE id = $1
+        AND COALESCE(status, 'unsubscribed') = 'unsubscribed'
+      RETURNING id`,
+    [conversationId],
+  )
+  return rows.length > 0
 }
 
 /** Recent turns of a conversation, oldest → newest, for the AI prompt. */
