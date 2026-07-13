@@ -348,29 +348,60 @@ export async function countActiveThreads(): Promise<number> {
 }
 
 /**
- * Retire threads that have been idle too long and close them out as `done`.
+ * Retire abandoned threads and close them out as `done`.
  *
- * A thread waiting on a manager reply sits with `next_run_at = NULL` and its
- * `updated_at` frozen at the last client action, so it never becomes "due" and
- * never advances on its own. When the manager side is silent (e.g. the AI is
- * paused or out of credits) these pile up, permanently occupy the active-thread
- * cap, and choke off new dialog spawns — exactly the "91/31, ждёт" symptom.
+ * Crucial distinction so we DON'T kill dialogues the simulator should keep
+ * living:
+ *   - CLIENT GHOSTED (last message is outbound = the manager spoke and the
+ *     client never came back): this is genuine churn — a real person who lost
+ *     interest. Reap after `clientGhostMinutes`.
+ *   - WAITING ON THE MANAGER (last message is inbound = the client wrote and no
+ *     reply came yet): this is NOT the client's fault. Previously these were
+ *     reaped at 2h, which is exactly why a big backlog of dialogues the sim
+ *     created "died" while the AI manager was catching up — once `done`, the
+ *     reaction/backlog sweeps skip them forever. We now KEEP these alive so the
+ *     backlog sweep can still get them answered, and only close them via a much
+ *     longer `hardCapMinutes` safety valve so nothing piles up truly unbounded.
  *
- * Reaping them reads as natural churn: a real person who never got an answer
- * eventually gives up. Returns the number of threads closed so the caller can
- * surface it in the logs.
+ * Returns the number of threads closed so the caller can surface it in the logs.
  */
-export async function expireStaleThreads(idleMinutes = 120): Promise<number> {
+export async function expireStaleThreads(
+  clientGhostMinutes = 180,
+  hardCapMinutes = 2880, // 48h absolute backstop regardless of who spoke last
+): Promise<number> {
   const rows = await query<{ n: string }>(
-    `WITH reaped AS (
-       UPDATE sim_threads
+    `WITH latest AS (
+       SELECT t.conversation_id, t.updated_at,
+              m.direction AS last_dir
+         FROM sim_threads t
+         JOIN LATERAL (
+           SELECT direction
+             FROM messages
+            WHERE conversation_id = t.conversation_id
+            ORDER BY created_at DESC
+            LIMIT 1
+         ) m ON true
+        WHERE t.state <> 'done'
+     ),
+     reaped AS (
+       UPDATE sim_threads t
           SET state = 'done', next_run_at = NULL, updated_at = now()
-        WHERE state <> 'done'
-          AND updated_at < now() - ($1 || ' minutes')::interval
-        RETURNING conversation_id
+         FROM latest l
+        WHERE t.conversation_id = l.conversation_id
+          AND (
+            -- client ghosted: manager spoke last, client never returned
+            (l.last_dir = 'out'
+             AND l.updated_at < now() - ($1 || ' minutes')::interval)
+            -- absolute safety valve: anything ancient, whoever spoke last
+            OR l.updated_at < now() - ($2 || ' minutes')::interval
+          )
+       RETURNING t.conversation_id
      )
      SELECT count(*)::text AS n FROM reaped`,
-    [String(Math.max(1, Math.round(idleMinutes)))],
+    [
+      String(Math.max(1, Math.round(clientGhostMinutes))),
+      String(Math.max(1, Math.round(hardCapMinutes))),
+    ],
   )
   return Number(rows[0]?.n ?? 0)
 }
@@ -667,7 +698,7 @@ export async function getConversationRouting(
   return r ? { managerId: r.manager_id, channelId: r.channel_id } : null
 }
 
-/** Recent transcript for building LLM context (oldest→newest). */
+/** Recent transcript for building LLM context (oldest���newest). */
 export interface SimTranscriptLine {
   direction: 'in' | 'out'
   body: string

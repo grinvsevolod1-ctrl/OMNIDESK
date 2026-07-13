@@ -50,12 +50,13 @@ import type { ChannelType } from '@/lib/types'
 const TICK_MS = 5_000
 
 /**
- * How long a thread may sit idle (waiting on a manager reply that never comes)
- * before the simulator gives up on it and closes it as `done`. Two hours reads
- * as a realistic "client stopped waiting" window while keeping the active-thread
- * pool from clogging when the manager/AI side goes quiet.
+ * How long AFTER THE MANAGER SPOKE a thread may sit before we treat the client
+ * as having ghosted and close it as `done`. This applies ONLY when the client
+ * went silent on a manager reply — dialogues still waiting on the manager are
+ * kept alive (the backlog sweep keeps trying to get them answered) so the sim
+ * never abandons the pile of dialogues it created. See expireStaleThreads.
  */
-const STALE_THREAD_MINUTES = 120
+const CLIENT_GHOST_MINUTES = 180
 
 /**
  * De-duplicated skip notices for the "Логи" tab. The tick runs every ~5s, so a
@@ -157,17 +158,19 @@ async function tick(): Promise<void> {
       return
     }
 
-    // Retire abandoned threads first so they stop occupying the active-thread
-    // cap. A thread waiting on a manager who never answers would otherwise clog
-    // the simulator forever (the "91/31, ждёт" deadlock).
-    const reaped = await expireStaleThreads(STALE_THREAD_MINUTES)
+    // Retire only dialogues the CLIENT abandoned (manager replied, client went
+    // silent ≥ CLIENT_GHOST_MINUTES) plus an absolute 48h backstop. Dialogues
+    // still waiting on the manager are deliberately NOT reaped here — the
+    // backlog sweep keeps trying to get them answered so the sim continues the
+    // pile it created instead of killing it.
+    const reaped = await expireStaleThreads(CLIENT_GHOST_MINUTES)
     if (reaped > 0) {
       lastSimNote = ''
       void logAi({
         level: 'info',
         source: 'sim',
         event: 'reaped',
-        message: `Закрыто ${reaped} «зависших» диалогов (клиент так и не дождался ответа ≥ ${STALE_THREAD_MINUTES} мин) — освободил место для новых.`,
+        message: `Закрыто ${reaped} диалогов, где клиент перестал отвечать (≥ ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
       })
     }
 
@@ -316,7 +319,7 @@ async function scheduleManagerReactions(): Promise<void> {
   // are fixed (not operator-tunable) so behaviour always reads as human.
   const replyMinSec = 20
   const replyMaxSec = 240
-  const pending = await findThreadsAwaitingReaction(25)
+  const pending = await findThreadsAwaitingReaction(40)
   for (const p of pending) {
     let delay: number
     // Sometimes a real person just... doesn't answer for a long while.
@@ -341,7 +344,7 @@ async function scheduleManagerReactions(): Promise<void> {
 /* ---------------------- processing scheduled turns ---------------------- */
 
 async function processDueThreads(): Promise<void> {
-  const due = await claimDueThreads(10)
+  const due = await claimDueThreads(20)
   for (const thread of due) {
     try {
       await runThreadTurn(thread)
@@ -396,8 +399,11 @@ async function triggerManagerReply(
 }
 
 // How many stuck dialogues to re-nudge per tick. Bounded so a large backlog
-// drains gradually instead of hammering the gateway all at once.
-const BACKLOG_BATCH = 5
+// drains gradually instead of hammering the gateway all at once, but high
+// enough that a pile of 100+ sim-created dialogues actually gets worked through
+// (the whole point: the sim must continue the dialogues it created, not just
+// the newest couple).
+const BACKLOG_BATCH = 12
 
 /**
  * Re-trigger the AI manager on dialogues whose last message is the client's and
