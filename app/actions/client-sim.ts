@@ -150,6 +150,10 @@ export async function simTestStartAction(input: {
     behavior: 'open',
     referenceLines,
   })
+  // No template fallback — surface the failure so the UI shows a clear toast.
+  if (!opening) {
+    throw new Error('AI unavailable: не удалось сгенерировать реплику клиента')
+  }
   return { persona, opening }
 }
 
@@ -169,6 +173,10 @@ export async function simTestReplyAction(input: {
   )
   const referenceLines = await sampleRealClientLines(persona.channelType)
   const reply = await generateReply({ persona, history, behavior, referenceLines })
+  // No template fallback — surface the failure so the UI shows a clear toast.
+  if (!reply) {
+    throw new Error('AI unavailable: не удалось сгенерировать реплику клиента')
+  }
   return { reply }
 }
 

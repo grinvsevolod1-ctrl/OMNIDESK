@@ -4,8 +4,10 @@ import { revalidatePath } from 'next/cache'
 import { requireAdmin } from '@/lib/auth'
 import {
   addLesson,
+  countConversationsAwaitingAi,
   countLessons,
   deleteLesson,
+  engageAiEverywhere,
   getAiAssistSettings,
   listBrainLessons,
   listLessons,
@@ -16,6 +18,7 @@ import {
   type AiAssistSettings,
   type TrainingSample,
 } from '@/lib/data/ai-assist'
+import { kickstartAwaitingConversations } from '@/lib/autopilot/runtime'
 import {
   distillPlaybook,
   generateManagerReply,
@@ -63,6 +66,45 @@ export async function aiUpdateSettingsAction(patch: {
   const next = await updateAiAssistSettings(patch)
   revalidatePath(AI_PATH)
   return next
+}
+
+/**
+ * "Включить ИИ во всех диалогах". Flips the master switch on, resets every
+ * conversation except «Передан» to «Отписка» with the AI un-paused, then kicks
+ * off the FIRST batch of unanswered dialogues. Returns the initial waiting
+ * count so the client can loop `aiKickstartBatchAction` until the backlog is
+ * drained. Admin-only.
+ */
+export async function aiEngageAllAction(): Promise<{
+  affected: number
+  kicked: number
+  remaining: number
+}> {
+  await requireAdmin()
+  const { affected } = await engageAiEverywhere()
+  const { kicked, remaining } = await kickstartAwaitingConversations(15)
+  revalidatePath(AI_PATH)
+  return { affected, kicked, remaining }
+}
+
+/**
+ * Process one more batch of dialogues awaiting an AI reply. Called repeatedly by
+ * the client after `aiEngageAllAction` until `remaining` reaches 0 (or stops
+ * decreasing). Kept small per call to avoid request timeouts and to pace the
+ * gateway. Admin-only.
+ */
+export async function aiKickstartBatchAction(): Promise<{
+  kicked: number
+  remaining: number
+}> {
+  await requireAdmin()
+  return kickstartAwaitingConversations(15)
+}
+
+/** Count of dialogues still waiting on an AI reply. */
+export async function aiAwaitingCountAction(): Promise<number> {
+  await requireAdmin()
+  return countConversationsAwaitingAi()
 }
 
 /** List recent training lessons. */

@@ -266,6 +266,16 @@ async function maybeSpawn(
     behavior: 'open',
     referenceLines,
   })
+  // No template fallback: if the AI couldn't write the opening line, DON'T
+  // create a half-baked conversation. Skip this spawn and try again next tick.
+  if (!body) {
+    noteSim(
+      'ai_unavailable',
+      'warn',
+      'ИИ недоступен — новый диалог не создан (без шаблонов). Проверьте AI_GATEWAY_API_KEY и баланс AI Gateway.',
+    )
+    return
+  }
   const conversationId = await createSimConversation(channel, persona, body)
   // Count the spawn only once the conversation actually exists, so the stat
   // reflects real spawns rather than claimed-but-failed attempts.
@@ -457,6 +467,21 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
     referenceLines,
     moodHint: managerSpoke ? mood.hint : undefined,
   })
+  // No template fallback: if the AI couldn't write this turn, post NOTHING and
+  // keep the thread alive to retry shortly. Silence beats robotic filler.
+  if (!body) {
+    void logAi({
+      level: 'warn',
+      source: 'sim',
+      event: 'turn.ai_unavailable',
+      message:
+        'ИИ не сформировал реплику клиента — пропускаю ход (без шаблонов), повтор позже.',
+      conversationId,
+      channelType: persona.channelType,
+    })
+    await updateThread(conversationId, { nextRunAt: isoIn(randInt(45, 180)) })
+    return
+  }
   await insertInboundMessage(conversationId, persona.name, body)
   await bumpRepliesTotal()
   // Hand this follow-up to the AI manager so the dialogue keeps flowing.

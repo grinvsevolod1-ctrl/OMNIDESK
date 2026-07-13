@@ -1,6 +1,6 @@
 import { generateText } from 'ai'
 import type { SimPersona } from './types'
-import { applyStyle, templateLine, type TemplateKind } from './content'
+import { applyStyle } from './content'
 import {
   getGlobalRecentLines,
   getLearnedPointersCached,
@@ -29,15 +29,6 @@ const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-4.1'
 /** AI generation is only possible when the gateway key is present. */
 export function aiConfigured(): boolean {
   return Boolean(process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN)
-}
-
-const BEHAVIOR_TO_TEMPLATE: Record<Behavior, TemplateKind> = {
-  open: 'opener',
-  curious: 'curious',
-  angry: 'angry',
-  dismissive: 'dismissive',
-  confused: 'confused',
-  nudge: 'filler',
 }
 
 const BEHAVIOR_HINT: Record<Behavior, string> = {
@@ -257,13 +248,16 @@ function tooSimilar(line: string, ownLines: string[]): boolean {
 }
 
 /**
- * Produce one in-character client message. Tries the LLM first; on any error,
- * empty output, or refusal, falls back to the randomised template generator so
- * the simulation never stalls. Includes an anti-repetition guard: the model is
- * shown its own recent lines to avoid, and near-duplicate output triggers one
- * retry at higher randomness before we accept it.
+ * Produce one in-character client message with the LLM. Returns `null` when the
+ * AI is unavailable / errored / refused / produced nothing usable — callers
+ * MUST then stay silent and retry later, NEVER post a canned template. This is
+ * a deliberate product decision: templated fallback text reads robotic and
+ * repetitive ("отвечает как долбоёб"), so it's better to say nothing than to
+ * expose obviously-generated filler. Includes an anti-repetition guard: the
+ * model is shown its own + the swarm's recent lines to avoid, and near-
+ * duplicate output triggers a hotter retry before we accept it.
  */
-export async function generateReply(args: GenArgs): Promise<string> {
+export async function generateReply(args: GenArgs): Promise<string | null> {
   const { persona, history, behavior, referenceLines } = args
 
   // The persona's own past lines — used both to steer the prompt away from
@@ -337,12 +331,14 @@ export async function generateReply(args: GenArgs): Promise<string> {
         return styled
       }
     } catch (err) {
-      console.warn('[client-sim] LLM generation failed, using template:', err instanceof Error ? err.message : String(err))
+      console.warn(
+        '[client-sim] LLM generation failed:',
+        err instanceof Error ? err.message : String(err),
+      )
     }
   }
 
-  // Fallback: templates (already mangled by applyStyle inside templateLine).
-  const fallback = templateLine(BEHAVIOR_TO_TEMPLATE[behavior], persona)
-  rememberGlobalLine(fallback)
-  return fallback
+  // No usable AI output — stay silent (no template fallback). The engine keeps
+  // the thread alive and retries on a later tick.
+  return null
 }
