@@ -20,6 +20,7 @@ import {
   type SimChannel,
 } from './store'
 import { pick } from './content'
+import { logAi } from '@/lib/data/ai-log'
 import type { ChannelType } from '@/lib/types'
 
 /**
@@ -41,6 +42,23 @@ import type { ChannelType } from '@/lib/types'
  */
 
 const TICK_MS = 5_000
+
+/**
+ * De-duplicated skip notices for the "Логи" tab. The tick runs every ~5s, so a
+ * standing condition (e.g. "no usable channels") would otherwise flood the log.
+ * We only emit a note when the reason CHANGES, and reset it whenever real work
+ * happens, so the operator sees a single clear line per condition.
+ */
+let lastSimNote = ''
+function noteSim(
+  reason: string,
+  level: 'info' | 'warn',
+  message: string,
+): void {
+  if (lastSimNote === reason) return
+  lastSimNote = reason
+  void logAi({ level, source: 'sim', event: `skip.${reason}`, message })
+}
 
 interface EngineHandle {
   timer: ReturnType<typeof setInterval> | null
@@ -72,6 +90,13 @@ export function startEngine(): void {
   // Kick an immediate tick so enabling feels responsive.
   void tick()
   console.log('[client-sim] engine started')
+  lastSimNote = ''
+  void logAi({
+    level: 'info',
+    source: 'sim',
+    event: 'engine.started',
+    message: 'Симулятор запущен — начинаю создавать диалоги в фоне.',
+  })
 }
 
 /** Stop the loop. Threads stay in the DB and resume when re-enabled. */
@@ -85,6 +110,12 @@ export function stopEngine(): void {
   // Give up the lock so a standby process (if any) can take over immediately.
   void releaseLock()
   console.log('[client-sim] engine stopped')
+  void logAi({
+    level: 'info',
+    source: 'sim',
+    event: 'engine.stopped',
+    message: 'Симулятор остановлен.',
+  })
 }
 
 /* --------------------------------- tick --------------------------------- */
@@ -103,7 +134,14 @@ async function tick(): Promise<void> {
     if (!owns) return
 
     const settings = await getSettings()
-    if (!settings.enabled) return
+    if (!settings.enabled) {
+      noteSim(
+        'disabled',
+        'info',
+        'Симулятор выключен в настройках — новые диалоги не создаются.',
+      )
+      return
+    }
 
     // Everything is derived autonomously from the single "dialogues per day"
     // knob — concurrency, spawn cadence and reply timing are all computed here
@@ -112,10 +150,14 @@ async function tick(): Promise<void> {
     await scheduleManagerReactions()
     await processDueThreads()
   } catch (err) {
-    console.log(
-      '[v0][client-sim] tick error:',
-      err instanceof Error ? err.message : String(err),
-    )
+    const msg = err instanceof Error ? err.message : String(err)
+    console.log('[v0][client-sim] tick error:', msg)
+    void logAi({
+      level: 'error',
+      source: 'sim',
+      event: 'tick.error',
+      message: `Ошибка цикла симулятора: ${msg}`,
+    })
   } finally {
     h.ticking = false
   }
@@ -135,7 +177,14 @@ async function maybeSpawn(
   // letting threads pile up unbounded. Scales with the daily rate.
   const maxThreads = Math.max(5, Math.min(400, Math.round(perDay / 3) + 3))
   const active = await countActiveThreads()
-  if (active >= maxThreads) return
+  if (active >= maxThreads) {
+    noteSim(
+      'at_capacity',
+      'info',
+      `Достигнут потолок активных диалогов (${active}/${maxThreads}) — жду, пока часть завершится.`,
+    )
+    return
+  }
 
   // Human traffic isn't metronomic. Base jitter spreads each gap across
   // 0.45×–1.8× the average; on top of that ~15% of the time we fake a quiet
@@ -153,7 +202,14 @@ async function maybeSpawn(
   // spawned_total counter, so consuming it with no usable channel wasted a
   // window and inflated the stat.
   const channels = await listUsableChannels(channelIds)
-  if (channels.length === 0) return
+  if (channels.length === 0) {
+    noteSim(
+      'no_channels',
+      'warn',
+      'Нет подходящих каналов для симуляции — выберите каналы в настройках симулятора, иначе новые диалоги не создаются.',
+    )
+    return
+  }
 
   // Atomically claim the spawn slot; only the winner proceeds.
   const won = await claimSpawnSlot(nextDelay)
@@ -189,6 +245,16 @@ async function maybeSpawn(
   console.log(
     `[v0][client-sim] spawned ${persona.channelType} thread (${persona.name}) on channel ${channel.id}`,
   )
+  // Real work happened — allow skip notices to fire again next time a standing
+  // condition appears.
+  lastSimNote = ''
+  void logAi({
+    level: 'info',
+    source: 'sim',
+    event: 'spawned',
+    message: `Создан новый диалог: «${persona.name}» (${persona.channelType}) написал: "${body.slice(0, 160)}"`,
+    channelType: persona.channelType,
+  })
 }
 
 /* --------------------- reacting to manager replies ---------------------- */
@@ -235,10 +301,14 @@ async function processDueThreads(): Promise<void> {
     try {
       await runThreadTurn(thread)
     } catch (err) {
-      console.log(
-        '[v0][client-sim] thread turn error:',
-        err instanceof Error ? err.message : String(err),
-      )
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log('[v0][client-sim] thread turn error:', msg)
+      void logAi({
+        level: 'error',
+        source: 'sim',
+        event: 'turn.error',
+        message: `Ошибка при ответе клиента-симуляции: ${msg}`,
+      })
     }
   }
 }

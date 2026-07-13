@@ -13,6 +13,20 @@
  * business persona, a distilled playbook, and a corpus of correction "lessons".
  */
 
+/**
+ * Optional diagnostics sink. The brain stays dependency-free (no DB, no `@/`),
+ * so instead of writing logs itself it emits structured events through this
+ * plain callback. Each runtime injects its own writer: the panel persists to
+ * the `ai_logs` table, the worker does the same via its repo. Passing nothing
+ * keeps the brain silent (its original behaviour).
+ */
+export type BrainLog = (e: {
+  level: 'debug' | 'info' | 'warn' | 'error'
+  event: string
+  message: string
+  meta?: Record<string, unknown>
+}) => void
+
 /** A single chat turn as the model sees it. */
 export interface BrainMessage {
   role: 'client' | 'manager'
@@ -123,6 +137,18 @@ function looksLikeRefusal(text: string): boolean {
   return REFUSAL.some((r) => t.includes(r))
 }
 
+/** Human hint for common AI Gateway HTTP failures (shown in the logs tab). */
+function gatewayStatusHint(status: number): string {
+  if (status === 401 || status === 403)
+    return ' — ключ AI Gateway недействителен или не имеет доступа (проверьте AI_GATEWAY_API_KEY).'
+  if (status === 402)
+    return ' — на аккаунте AI Gateway закончились средства/кредиты (пополните баланс).'
+  if (status === 429)
+    return ' — превышен лимит запросов (rate limit), попробуйте позже.'
+  if (status >= 500) return ' — временная ошибка на стороне AI Gateway.'
+  return ''
+}
+
 /**
  * Generate ONE in-character manager reply for the current conversation.
  * Returns the trimmed reply, or null when the AI is unavailable / declined /
@@ -130,9 +156,17 @@ function looksLikeRefusal(text: string): boolean {
  */
 export async function generateManagerReply(
   input: ManagerBrainInput,
+  log?: BrainLog,
 ): Promise<string | null> {
   const key = process.env.AI_GATEWAY_API_KEY
-  if (!key) return null
+  if (!key) {
+    log?.({
+      level: 'error',
+      event: 'gateway.no_key',
+      message: 'Нет ключа AI_GATEWAY_API_KEY — ответ не сгенерирован.',
+    })
+    return null
+  }
 
   // Only recent turns — keeps it cheap and focused.
   const recent = input.history.slice(-16)
@@ -154,6 +188,13 @@ export async function generateManagerReply(
     })
   }
 
+  log?.({
+    level: 'debug',
+    event: 'gateway.request',
+    message: `Генерирую ответ (${MODEL}), реплик в контексте: ${recent.length}.`,
+    meta: { model: MODEL, turns: recent.length },
+  })
+
   try {
     const res = await fetch(GATEWAY_URL, {
       method: 'POST',
@@ -170,18 +211,47 @@ export async function generateManagerReply(
     })
     if (!res.ok) {
       console.warn('[manager-brain] gateway HTTP', res.status)
+      log?.({
+        level: 'error',
+        event: 'gateway.http_error',
+        message: `AI Gateway вернул HTTP ${res.status}${gatewayStatusHint(res.status)}`,
+        meta: { status: res.status },
+      })
       return null
     }
     const data = (await res.json()) as GatewayResponse
     const raw = data.choices?.[0]?.message?.content ?? ''
     const clean = raw.trim().replace(/^["'«»]+|["'«»]+$/g, '')
-    if (!clean || looksLikeRefusal(clean)) return null
+    if (!clean) {
+      log?.({
+        level: 'warn',
+        event: 'reply.empty',
+        message: 'Модель вернула пустой ответ — ничего не отправлено.',
+      })
+      return null
+    }
+    if (looksLikeRefusal(clean)) {
+      log?.({
+        level: 'warn',
+        event: 'reply.refused',
+        message: `Ответ отброшен (похож на отказ/«я ИИ»): "${clean.slice(0, 160)}"`,
+      })
+      return null
+    }
+    log?.({
+      level: 'info',
+      event: 'reply.generated',
+      message: clean,
+    })
     return clean
   } catch (err) {
-    console.warn(
-      '[manager-brain] generation failed:',
-      err instanceof Error ? err.message : String(err),
-    )
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn('[manager-brain] generation failed:', msg)
+    log?.({
+      level: 'error',
+      event: 'gateway.exception',
+      message: `Сбой запроса к AI Gateway: ${msg}`,
+    })
     return null
   }
 }
@@ -194,7 +264,10 @@ export async function generateManagerReply(
  * this module; safe to call from both the worker and the panel. When the AI is
  * unavailable it conservatively returns false (no promotion, no false alarms).
  */
-export async function assessLeadReady(history: BrainMessage[]): Promise<boolean> {
+export async function assessLeadReady(
+  history: BrainMessage[],
+  log?: BrainLog,
+): Promise<boolean> {
   const key = process.env.AI_GATEWAY_API_KEY
   if (!key) return false
   // Need at least a couple of turns to judge readiness.
@@ -230,10 +303,27 @@ export async function assessLeadReady(history: BrainMessage[]): Promise<boolean>
         max_tokens: 3,
       }),
     })
-    if (!res.ok) return false
+    if (!res.ok) {
+      log?.({
+        level: 'warn',
+        event: 'readiness.http_error',
+        message: `Оценка готовности лида: HTTP ${res.status}${gatewayStatusHint(res.status)}`,
+        meta: { status: res.status },
+      })
+      return false
+    }
     const data = (await res.json()) as GatewayResponse
     const raw = (data.choices?.[0]?.message?.content ?? '').trim().toLowerCase()
-    return raw.startsWith('да') || raw.startsWith('yes')
+    const ready = raw.startsWith('да') || raw.startsWith('yes')
+    log?.({
+      level: 'debug',
+      event: 'readiness.assessed',
+      message: ready
+        ? 'Клиент выглядит готовым передать данные — кандидат в «Ликвид».'
+        : 'Клиент пока не готов — продолжаем вести диалог.',
+      meta: { ready },
+    })
+    return ready
   } catch (err) {
     console.warn(
       '[manager-brain] readiness assessment failed:',

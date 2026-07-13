@@ -1039,6 +1039,50 @@ export async function markAiHandoffToLiquid(
   return rows.length > 0
 }
 
+/**
+ * Append one AI activity-log entry to the SHARED `ai_logs` table (migration
+ * 058), so messenger/worker AI events show up in the panel "Логи" tab alongside
+ * live-chat + simulator activity. Best-effort: never throws (a missing table or
+ * DB hiccup must not break message ingestion). Trims opportunistically so the
+ * ring buffer stays bounded.
+ */
+export async function logAi(input: {
+  level?: 'debug' | 'info' | 'warn' | 'error'
+  source?: string
+  event: string
+  message?: string
+  conversationId?: string | null
+  channelType?: string | null
+  meta?: Record<string, unknown> | null
+}): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO ai_logs
+         (level, source, event, message, conversation_id, channel_type, meta)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+      [
+        input.level ?? 'info',
+        input.source ?? 'worker',
+        input.event,
+        (input.message ?? '').slice(0, 4000),
+        input.conversationId ?? null,
+        input.channelType ?? null,
+        input.meta ? JSON.stringify(input.meta) : null,
+      ],
+    )
+    if (Math.random() < 0.04) {
+      await query(
+        `DELETE FROM ai_logs
+          WHERE id <= (
+            SELECT id FROM ai_logs ORDER BY id DESC OFFSET 1500 LIMIT 1
+          )`,
+      )
+    }
+  } catch {
+    // Diagnostics must never break the observed path.
+  }
+}
+
 /** Recent turns of a conversation, oldest → newest, for the AI prompt. */
 export async function getConversationHistoryForAi(
   conversationId: string,

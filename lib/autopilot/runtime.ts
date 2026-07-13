@@ -10,9 +10,11 @@ import {
 } from '../data/ai-assist'
 import {
   assessLeadReady,
+  type BrainLog,
   generateManagerReply,
   isBrainConfigured,
 } from '../ai/manager-brain'
+import { logAi } from '../data/ai-log'
 import { deliverMaxMessage } from '../max-dispatch'
 import { deliverVkMessage } from '../vk-dispatch'
 import { deliverWhatsappMessage } from '../whatsapp-dispatch'
@@ -129,48 +131,134 @@ async function runLivechatAiLead(input: {
   conversationId: string
   text: string
 }): Promise<boolean> {
+  // Diagnostics sink for this conversation — everything lands in the panel
+  // "Логи" tab tagged to this thread/channel.
+  const log: BrainLog = (e) =>
+    void logAi({
+      level: e.level,
+      source: 'brain',
+      event: e.event,
+      message: e.message,
+      conversationId: input.conversationId,
+      channelType: 'livechat',
+      meta: e.meta ?? null,
+    })
+
   // Single-flight per conversation: if a reply is already being generated for
   // this thread, treat this inbound as handled so we never double-answer.
   if (aiLeadInFlight.has(input.conversationId)) return true
 
   try {
-    if (!isBrainConfigured()) return false
-    if (!(await isConversationAiLed(input.conversationId))) return false
+    if (!isBrainConfigured()) {
+      void logAi({
+        level: 'error',
+        source: 'ai-lead',
+        event: 'skip.no_key',
+        message:
+          'ИИ не настроен: отсутствует AI_GATEWAY_API_KEY. Ответы не отправляются.',
+        conversationId: input.conversationId,
+        channelType: 'livechat',
+      })
+      return false
+    }
+    if (!(await isConversationAiLed(input.conversationId))) {
+      void logAi({
+        level: 'info',
+        source: 'ai-lead',
+        event: 'skip.not_led',
+        message:
+          'Диалог не ведётся ИИ (мастер-выключатель выключен или диалог на паузе) — пропускаю.',
+        conversationId: input.conversationId,
+        channelType: 'livechat',
+      })
+      return false
+    }
     const settings = await getAiAssistSettings()
-    if (!settings.enabled) return false
+    if (!settings.enabled) {
+      void logAi({
+        level: 'info',
+        source: 'ai-lead',
+        event: 'skip.master_off',
+        message: 'Мастер-выключатель ИИ выключен — ответ не отправляется.',
+        conversationId: input.conversationId,
+        channelType: 'livechat',
+      })
+      return false
+    }
 
     aiLeadInFlight.add(input.conversationId)
+
+    void logAi({
+      level: 'debug',
+      source: 'ai-lead',
+      event: 'inbound',
+      message: `Новое сообщение клиента: "${input.text.slice(0, 200)}" — готовлю ответ.`,
+      conversationId: input.conversationId,
+      channelType: 'livechat',
+    })
 
     const [lessons, history] = await Promise.all([
       listBrainLessons(12),
       getConversationHistoryForAi(input.conversationId, 16),
     ])
 
-    const reply = await generateManagerReply({
-      persona: settings.persona,
-      tone: settings.tone,
-      playbook: settings.playbook,
-      lessons,
-      history,
-    })
-    if (!reply) return false
+    const reply = await generateManagerReply(
+      {
+        persona: settings.persona,
+        tone: settings.tone,
+        playbook: settings.playbook,
+        lessons,
+        history,
+      },
+      log,
+    )
+    if (!reply) {
+      void logAi({
+        level: 'warn',
+        source: 'ai-lead',
+        event: 'no_reply',
+        message: 'ИИ не сформировал ответ — клиенту ничего не отправлено.',
+        conversationId: input.conversationId,
+        channelType: 'livechat',
+      })
+      return false
+    }
 
     // Re-check the AI-lead flag right before sending: a human may have sent a
     // manual reply (which clears the flag) while we were composing. If so, bail
     // out so the AI doesn't talk over the human.
-    if (!(await isConversationAiLed(input.conversationId))) return true
+    if (!(await isConversationAiLed(input.conversationId))) {
+      void logAi({
+        level: 'info',
+        source: 'ai-lead',
+        event: 'handover.during_gen',
+        message:
+          'Пока ИИ готовил ответ, в диалог вошёл человек — отправка отменена.',
+        conversationId: input.conversationId,
+        channelType: 'livechat',
+      })
+      return true
+    }
 
     await sendAiReply(input.managerId, input.conversationId, reply)
+    void logAi({
+      level: 'info',
+      source: 'ai-lead',
+      event: 'reply.sent',
+      message: `Ответ отправлен клиенту: "${reply.slice(0, 200)}"`,
+      conversationId: input.conversationId,
+      channelType: 'livechat',
+    })
 
     // After replying, judge whether the client is now ready to hand over their
     // data and start working. If so, promote the lead to «Ликвид» and hand it
     // to a human (pauses the AI + flags the inbox banner). Best-effort: never
     // let a promotion failure affect the reply we already sent.
     try {
-      const ready = await assessLeadReady([
-        ...history,
-        { role: 'manager', body: reply },
-      ])
+      const ready = await assessLeadReady(
+        [...history, { role: 'manager', body: reply }],
+        log,
+      )
       if (ready) {
         const promoted = await markAiHandoffToLiquid(input.conversationId)
         if (promoted) {
@@ -178,6 +266,15 @@ async function runLivechatAiLead(input: {
             '[v0] AI promoted lead to «Ликвид»:',
             input.conversationId,
           )
+          void logAi({
+            level: 'info',
+            source: 'handoff',
+            event: 'promoted',
+            message:
+              'ИИ передал лид человеку: статус повышен до «Ликвид», ИИ поставлен на паузу.',
+            conversationId: input.conversationId,
+            channelType: 'livechat',
+          })
         }
       }
     } catch (err) {
@@ -186,6 +283,14 @@ async function runLivechatAiLead(input: {
     return true
   } catch (err) {
     console.error('[v0] autopilot(livechat) AI-lead failed:', err)
+    void logAi({
+      level: 'error',
+      source: 'ai-lead',
+      event: 'error',
+      message: `Сбой ИИ-лида: ${err instanceof Error ? err.message : String(err)}`,
+      conversationId: input.conversationId,
+      channelType: 'livechat',
+    })
     return false
   } finally {
     aiLeadInFlight.delete(input.conversationId)

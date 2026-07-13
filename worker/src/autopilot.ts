@@ -33,7 +33,11 @@ import {
   type MatchInput,
 } from '../../lib/autopilot/match.js'
 import { isOffHoursFor, type WorkingHoursLike } from '../../lib/offhours.js'
-import { assessLeadReady, generateManagerReply } from '../../lib/ai/manager-brain.js'
+import {
+  assessLeadReady,
+  type BrainLog,
+  generateManagerReply,
+} from '../../lib/ai/manager-brain.js'
 import { logger } from './logger.js'
 import * as repo from './repo.js'
 
@@ -210,32 +214,98 @@ async function fireAiLead(params: {
   const { session, channelId, managerId, channelType, conversationId, contactHandle } =
     params
 
+  // Diagnostics sink → shared ai_logs table → panel "Логи" tab.
+  const log: BrainLog = (e) =>
+    void repo.logAi({
+      level: e.level,
+      source: 'brain',
+      event: e.event,
+      message: e.message,
+      conversationId,
+      channelType,
+      meta: e.meta ?? null,
+    })
+
   // Single-flight per conversation: if a reply is already being generated for
   // this thread, treat this inbound as handled (the in-flight generation will
   // answer) instead of starting a second one that would double-reply.
   if (aiLeadInFlight.has(conversationId)) return true
 
   try {
-    if (!(await repo.isConversationAiLed(conversationId))) return false
+    if (!(await repo.isConversationAiLed(conversationId))) {
+      void repo.logAi({
+        level: 'info',
+        source: 'ai-lead',
+        event: 'skip.not_led',
+        message:
+          'Диалог не ведётся ИИ (мастер-выключатель выключен или диалог на паузе) — пропускаю.',
+        conversationId,
+        channelType,
+      })
+      return false
+    }
     const config = await repo.getAiAssistConfig()
-    if (!config.enabled) return false
-    if (!(await withinRateCaps(channelId))) return false
+    if (!config.enabled) {
+      void repo.logAi({
+        level: 'info',
+        source: 'ai-lead',
+        event: 'skip.master_off',
+        message: 'Мастер-выключатель ИИ выключен — ответ не отправляется.',
+        conversationId,
+        channelType,
+      })
+      return false
+    }
+    if (!(await withinRateCaps(channelId))) {
+      void repo.logAi({
+        level: 'warn',
+        source: 'ai-lead',
+        event: 'skip.rate_cap',
+        message:
+          'Достигнут анти-бан лимит отправок по каналу — ответ отложен.',
+        conversationId,
+        channelType,
+      })
+      return false
+    }
 
     aiLeadInFlight.add(conversationId)
+
+    void repo.logAi({
+      level: 'debug',
+      source: 'ai-lead',
+      event: 'inbound',
+      message: 'Новое сообщение клиента в мессенджере — готовлю ответ.',
+      conversationId,
+      channelType,
+    })
 
     const [lessons, history] = await Promise.all([
       repo.listAiLessons(12),
       repo.getConversationHistoryForAi(conversationId, 16),
     ])
 
-    const reply = await generateManagerReply({
-      persona: config.persona,
-      tone: config.tone,
-      playbook: config.playbook,
-      lessons,
-      history,
-    })
-    if (!reply) return false
+    const reply = await generateManagerReply(
+      {
+        persona: config.persona,
+        tone: config.tone,
+        playbook: config.playbook,
+        lessons,
+        history,
+      },
+      log,
+    )
+    if (!reply) {
+      void repo.logAi({
+        level: 'warn',
+        source: 'ai-lead',
+        event: 'no_reply',
+        message: 'ИИ не сформировал ответ — клиенту ничего не отправлено.',
+        conversationId,
+        channelType,
+      })
+      return false
+    }
 
     // Human-like pacing: typing presence, a length-scaled delay, then send.
     const delayMs = Math.min(
