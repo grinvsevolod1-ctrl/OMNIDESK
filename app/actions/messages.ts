@@ -12,7 +12,10 @@ import {
   setMessageReaction,
 } from '@/lib/data'
 import { isBrainConfigured } from '@/lib/ai/manager-brain'
-import { getAiAssistSettings } from '@/lib/data/ai-assist'
+import {
+  acknowledgeAiHandoff,
+  getAiAssistSettings,
+} from '@/lib/data/ai-assist'
 import { publishRealtime } from '@/lib/realtime'
 import { setVkTyping } from '@/lib/vk-dispatch'
 
@@ -295,4 +298,17 @@ export async function toggleConversationAiAction(
       ? 'ИИ ведёт этот диалог. Он проанализирует переписку и продолжит общение.'
       : 'ИИ отключён для этого диалога.',
   }
+}
+
+/**
+ * Manager acknowledges an AI→human handoff (opened the «Ликвид» thread): clears
+ * the pending-handoff flag so the inbox banner/highlight goes away. Manager-
+ * scoped and best-effort — a stale ack must never surface an error to the user.
+ */
+export async function acknowledgeAiHandoffAction(
+  conversationId: string,
+): Promise<void> {
+  const session = await requireManager()
+  await acknowledgeAiHandoff(conversationId, session.sub).catch(() => {})
+  revalidatePath('/app/inbox')
 }

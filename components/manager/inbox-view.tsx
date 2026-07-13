@@ -60,8 +60,8 @@ import {
   reactMessageAction,
   deleteMessageAction,
   forwardMessageAction,
-  setAgentTypingAction,
   toggleConversationAiAction,
+  acknowledgeAiHandoffAction,
 } from '@/app/actions/messages'
 import {
   dismissReplyReminderAction,
@@ -1479,6 +1479,7 @@ export function InboxView({
   currentUser,
   quickReplies = [],
   autopilot,
+  aiMasterEnabled = false,
   ownedChannelIds = [],
   transferTargets = [],
   telemostEnabled = false,
@@ -1488,6 +1489,12 @@ export function InboxView({
   currentUser: string
   quickReplies?: QuickReply[]
   autopilot?: { enabled: boolean; enabledCount: number }
+  /**
+   * Global AI master switch (set on /admin/ai). When on, the AI leads every
+   * conversation by default; a manager pauses individual threads to reply by
+   * hand. Drives the blocked composer + "AI is leading" affordance.
+   */
+  aiMasterEnabled?: boolean
   /**
    * Channel ids this manager actually owns. Leads routed in from a shared/pool
    * account (e.g. while another manager was on lunch) keep a foreign channel —
@@ -1632,6 +1639,20 @@ export function InboxView({
   )
   // Optimistic per-conversation AI-lead state, keyed by conversation id.
   const [aiOverrides, setAiOverrides] = useState<Record<string, boolean>>({})
+  // Conversations whose AI→«Ликвид» handoff this manager has already opened, so
+  // the banner/highlight clear instantly (before the server round-trip lands).
+  const [ackedHandoffs, setAckedHandoffs] = useState<Record<string, boolean>>(
+    {},
+  )
+  // Set true briefly to shake the AI button — the hint shown when a manager
+  // tries to send while the AI is leading the thread.
+  const [aiButtonPulse, setAiButtonPulse] = useState(false)
+  const aiPulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pulseAiButton = useCallback(() => {
+    if (aiPulseTimer.current) clearTimeout(aiPulseTimer.current)
+    setAiButtonPulse(true)
+    aiPulseTimer.current = setTimeout(() => setAiButtonPulse(false), 600)
+  }, [])
   // Whether to reveal muted/silenced threads in the list (hidden by default).
   const [showMuted, setShowMuted] = useState(false)
 
@@ -2289,6 +2310,26 @@ export function InboxView({
   )
   const thread = activeId ? (localMessages[activeId] ?? []) : []
 
+  // Is the AI currently leading the open thread? Under global-lead mode the AI
+  // leads whenever the master switch is on AND the thread isn't paused. An
+  // optimistic override (from the inbox toggle) wins so the UI reacts instantly.
+  const activeAiLed = useMemo(() => {
+    if (!active) return false
+    const override = aiOverrides[active.id]
+    if (override !== undefined) return override
+    return aiMasterEnabled && !active.aiPaused
+  }, [active, aiOverrides, aiMasterEnabled])
+
+  // Leads the AI just judged ready and handed off to a human («Ликвид»). Drives
+  // the inbox banner + list highlight until the manager opens each thread.
+  const pendingHandoffs = useMemo(
+    () =>
+      conversations.filter(
+        (c) => c.aiHandoffPending && !ackedHandoffs[c.id] && c.id !== activeId,
+      ),
+    [conversations, ackedHandoffs, activeId],
+  )
+
   // Auto-scroll the thread to the newest message (and as the visitor's live
   // typing draft grows, so the preview stays in view).
   const activeTypingDraft =
@@ -2321,10 +2362,26 @@ export function InboxView({
     void markConversationReadAction(activeId)
   }, [activeId, conversations])
 
+  // Opening a thread the AI handed off («Ликвид») acknowledges it: locally drop
+  // the highlight instantly, then clear the server flag so the banner/highlight
+  // don't come back on refresh. Guarded so it fires once per opened handoff.
+  useEffect(() => {
+    if (!activeId) return
+    const conv = conversations.find((c) => c.id === activeId)
+    if (!conv?.aiHandoffPending || ackedHandoffs[activeId]) return
+    setAckedHandoffs((prev) => ({ ...prev, [activeId]: true }))
+    void acknowledgeAiHandoffAction(activeId)
+  }, [activeId, conversations, ackedHandoffs])
+
   function send() {
     if (!activeId || !draft.trim()) return
-    // We're sending now — clear our "typing" indicator on the visitor's side.
-    stopAgentTyping()
+    // While the AI is leading this thread, manual sends are blocked. Nudge the
+    // manager to pause the AI first (the AI button vibrates as the hint).
+    if (activeAiLed) {
+      pulseAiButton()
+      toast.error('ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.')
+      return
+    }
     const body = draft.trim()
     const replyTo = replyTarget
     const optimistic: Message = {
@@ -2352,8 +2409,6 @@ export function InboxView({
     }))
     setDraft('')
     setReplyTarget(null)
-    // Collapse the auto-grown composer back to a single row after sending.
-    requestAnimationFrame(resizeComposer)
     startTransition(async () => {
       const res =
         replyTo && active?.channelType === 'telegram'
@@ -2373,15 +2428,13 @@ export function InboxView({
       const base = prev.trimEnd()
       return base ? `${base} ${text}` : text
     })
-    if (text.trim()) pingAgentTyping()
-    // Refocus + resize after the controlled value updates.
+    // Refocus after the controlled value updates.
     requestAnimationFrame(() => {
       const el = composerRef.current
       if (!el) return
       el.focus()
       const end = el.value.length
       el.setSelectionRange(end, end)
-      resizeComposer()
     })
   }
 
@@ -2532,7 +2585,32 @@ export function InboxView({
       : 'auto'
 
   return (
-    <div className="relative flex h-full overflow-hidden bg-card">
+    <div className="relative flex h-full flex-col overflow-hidden bg-card">
+      {/* ------------------------------------------------------------------ */}
+      {/* AI hand-off banner — leads the AI promoted to «Ликвид» and handed   */}
+      {/* to a human. Click to jump to the newest; opening a thread clears it. */}
+      {/* ------------------------------------------------------------------ */}
+      {pendingHandoffs.length > 0 ? (
+        <button
+          type="button"
+          onClick={() => setActiveId(pendingHandoffs[0].id)}
+          className="flex shrink-0 items-center gap-2.5 border-b border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-left text-sm text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-300"
+        >
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-emerald-50">
+            <Sparkles className="size-3.5" />
+          </span>
+          <span className="flex-1 font-medium">
+            {pendingHandoffs.length === 1
+              ? `ИИ передал лид «${pendingHandoffs[0].contactName}» — готов к работе (Ликвид).`
+              : `ИИ передал ${pendingHandoffs.length} лид(ов) — готовы к работе (Ликвид).`}
+          </span>
+          <span className="shrink-0 rounded-full bg-emerald-500 px-2.5 py-0.5 text-xs font-semibold text-emerald-50">
+            Открыть
+          </span>
+        </button>
+      ) : null}
+
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
       {/* ------------------------------------------------------------------ */}
       {/* Conversation list                                                  */}
       {/* ------------------------------------------------------------------ */}
@@ -2824,6 +2902,9 @@ export function InboxView({
                         activeId === c.id
                           ? 'bg-secondary hover:bg-secondary'
                           : '',
+                        c.aiHandoffPending && !ackedHandoffs[c.id] && activeId !== c.id
+                          ? 'bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/40 hover:bg-emerald-500/15'
+                          : '',
                       )}
                     />
                   }
@@ -3034,29 +3115,27 @@ export function InboxView({
               </button>
 
               <div className="flex items-center gap-1.5">
-                {(() => {
-                  const aiOn = aiOverrides[active.id] ?? Boolean(active.aiAutopilotEnabled)
-                  return (
-                    <Button
-                      variant={aiOn ? 'default' : 'ghost'}
-                      size="sm"
-                      onClick={() => toggleAi(active.id, !aiOn)}
-                      disabled={statusPending}
-                      aria-pressed={aiOn}
-                      title={
-                        aiOn
-                          ? 'ИИ ведёт этот диалог. Нажмите, чтобы отключить.'
-                          : 'Включить ИИ: он проанализирует переписку и продолжит общение.'
-                      }
-                      className="gap-1.5"
-                    >
-                      <Sparkles className="size-4" />
-                      <span className="hidden sm:inline">
-                        {aiOn ? 'ИИ ведёт' : 'ИИ'}
-                      </span>
-                    </Button>
-                  )
-                })()}
+                <Button
+                  variant={activeAiLed ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => toggleAi(active.id, !activeAiLed)}
+                  disabled={statusPending}
+                  aria-pressed={activeAiLed}
+                  title={
+                    activeAiLed
+                      ? 'ИИ ведёт этот диалог. Нажмите, чтобы отключить и ответить самому.'
+                      : 'Включить ИИ: он проанализирует переписку и продолжит общение.'
+                  }
+                  className={cn(
+                    'gap-1.5',
+                    aiButtonPulse && 'animate-shake ring-2 ring-primary',
+                  )}
+                >
+                  <Sparkles className="size-4" />
+                  <span className="hidden sm:inline">
+                    {activeAiLed ? 'ИИ ведёт' : 'ИИ'}
+                  </span>
+                </Button>
                 <StatusChip
                   status={active.status}
                   auto={!active.statusManual}
@@ -3435,6 +3514,23 @@ export function InboxView({
                 </div>
               ) : null}
 
+              {activeAiLed ? (
+                <button
+                  type="button"
+                  onClick={() => toggleAi(active.id, false)}
+                  disabled={statusPending}
+                  className="flex w-full items-center gap-2 border-b border-primary/20 bg-primary/10 px-4 py-2 text-left text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+                >
+                  <Sparkles className="size-3.5 shrink-0" />
+                  <span className="flex-1">
+                    ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.
+                  </span>
+                  <span className="shrink-0 rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground">
+                    Отключить ИИ
+                  </span>
+                </button>
+              ) : null}
+
               <form
                 className="flex items-end gap-1.5 p-3"
                 onSubmit={(e) => {
@@ -3506,25 +3602,46 @@ export function InboxView({
                   onChange={(e) => {
                     setDraft(e.target.value)
                     resizeComposer()
-                    if (e.target.value.trim()) pingAgentTyping()
-                    else stopAgentTyping()
                   }}
                   onKeyDown={(e) => {
+                    // Don't submit mid-IME-composition (CJK): Enter confirms the
+                    // candidate, and Safari reports keyCode 229 for that.
+                    if (
+                      e.nativeEvent.isComposing ||
+                      e.keyCode === 229
+                    )
+                      return
                     // Enter sends, Shift+Enter inserts a newline (messenger UX).
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
                       send()
                     }
                   }}
-                  placeholder="Написать сообщение…"
+                  onMouseDown={(e) => {
+                    // While the AI leads the thread the composer is locked —
+                    // vibrate the AI button to point the manager at the fix.
+                    if (activeAiLed) {
+                      e.preventDefault()
+                      pulseAiButton()
+                    }
+                  }}
+                  readOnly={activeAiLed}
+                  placeholder={
+                    activeAiLed
+                      ? 'ИИ отвечает за вас. Отключите ИИ, чтобы писать.'
+                      : 'Написать сообщение…'
+                  }
                   aria-label="Текст ответа"
-                  className="scrollbar-thin max-h-40 min-h-[40px] flex-1 resize-none rounded-2xl bg-muted px-4 py-2.5 text-sm leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/30"
+                  className={cn(
+                    'scrollbar-thin max-h-40 min-h-[40px] flex-1 resize-none rounded-2xl bg-muted px-4 py-2.5 text-sm leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/30',
+                    activeAiLed && 'cursor-not-allowed opacity-60',
+                  )}
                 />
                 <Button
                   type="submit"
                   size="icon"
                   className="size-10 shrink-0 rounded-full"
-                  disabled={pending || !draft.trim()}
+                  disabled={pending || !draft.trim() || activeAiLed}
                   aria-label="Отправить"
                 >
                   <SendHorizonal className="size-4" />
@@ -3576,6 +3693,7 @@ export function InboxView({
           />
         ) : null}
       </aside>
+      </div>
 
       {/* Hand-off dialog: pick a colleague and optionally leave a note. */}
       <Dialog

@@ -11,6 +11,7 @@ import {
   listQuickReplies,
   listTransferTargets,
 } from '@/lib/data'
+import { getAiAssistSettings } from '@/lib/data/ai-assist'
 import { isTelemostConfigured } from '@/lib/telemost'
 import type { Message } from '@/lib/types'
 
@@ -29,6 +30,17 @@ export default async function InboxPage() {
   // Whether the Yandex Telemost video-meeting button should appear in the
   // composer (only when the admin has configured and enabled it).
   const telemostEnabled = await isTelemostConfigured()
+
+  // Global AI master switch: when on, the AI leads every conversation by default
+  // (managers pause individual threads to take over). Drives the inbox's blocked
+  // composer + "AI is leading" affordance. Best-effort: default off if the
+  // ai_assist tables (migration 054) aren't applied yet.
+  let aiMasterEnabled = false
+  try {
+    aiMasterEnabled = (await getAiAssistSettings()).enabled
+  } catch (err) {
+    console.error('[v0] inbox: AI settings unavailable:', err)
+  }
 
   // Personal accounts whose session is degraded/paused — surfaced as a banner in
   // the inbox so the operator knows live sync may be affected for those sources,
@@ -90,6 +102,7 @@ export default async function InboxPage() {
             currentUser={session.name}
             quickReplies={quickReplies}
             autopilot={autopilot}
+            aiMasterEnabled={aiMasterEnabled}
             ownedChannelIds={channels.map((c) => c.id)}
             transferTargets={transferTargets}
             telemostEnabled={telemostEnabled}

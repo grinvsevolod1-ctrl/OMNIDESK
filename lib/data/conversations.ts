@@ -85,23 +85,32 @@ export async function getConversation(
 }
 
 /**
- * Turn the AI manager-assistant on/off for a single conversation. Manager-
- * scoped so a manager can only toggle their own threads. Returns the new state,
- * or null when the conversation isn't owned by that manager.
+ * Resume/pause the AI for a single conversation (the per-thread inbox toggle).
+ * Under global-lead mode (migration 056) the AI leads every thread while the
+ * master switch is on, so this toggle is really "pause = opt out here":
+ *
+ *   enabled = true  → resume  → ai_paused = false
+ *   enabled = false → pause    → ai_paused = true
+ *
+ * The legacy `ai_autopilot_enabled` flag is kept in sync so old readers agree.
+ * Resuming also clears any pending handoff banner. Manager-scoped; returns the
+ * new "AI is leading here" state, or null when the thread isn't owned.
  */
 export async function setConversationAiAutopilot(
   conversationId: string,
   managerId: string,
   enabled: boolean,
 ): Promise<boolean | null> {
-  const rows = await query<{ ai_autopilot_enabled: boolean }>(
+  const rows = await query<{ ai_paused: boolean }>(
     `UPDATE conversations
-        SET ai_autopilot_enabled = $3
+        SET ai_paused = $3,
+            ai_autopilot_enabled = $4,
+            ai_handoff_pending = CASE WHEN $4 THEN false ELSE ai_handoff_pending END
       WHERE id = $1 AND manager_id = $2
-      RETURNING ai_autopilot_enabled`,
-    [conversationId, managerId, enabled],
+      RETURNING ai_paused`,
+    [conversationId, managerId, !enabled, enabled],
   )
-  return rows[0] ? rows[0].ai_autopilot_enabled : null
+  return rows[0] ? !rows[0].ai_paused : null
 }
 
 /**
