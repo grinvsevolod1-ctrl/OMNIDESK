@@ -5,7 +5,7 @@
 import { randomUUID } from 'crypto'
 import { query } from '../db'
 import type { Manager, ManagerStatus } from '../types'
-import { toManager, type ManagerRow } from './shared'
+import { excludeAdminSql, isAdminIdentity, toManager, type ManagerRow } from './shared'
 
 /* ----------------------------- Managers ----------------------------- */
 
@@ -117,8 +117,12 @@ export async function getManagerById(id: string): Promise<Manager | null> {
 }
 
 export async function listManagers(): Promise<Manager[]> {
+  // Exclude the env-backed administrator: it is not a real manager and must
+  // never appear in the managers pool (assignment, transfer, blocking, etc.).
   const rows = await query<ManagerRow>(
-    'SELECT * FROM managers ORDER BY created_at DESC',
+    `SELECT * FROM managers
+      WHERE true ${excludeAdminSql('managers')}
+      ORDER BY created_at DESC`,
   )
   return rows.map(toManager)
 }

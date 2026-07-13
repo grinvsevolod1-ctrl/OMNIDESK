@@ -14,7 +14,7 @@ import type {
   NotLiquidReason,
 } from '../types'
 import {
-  EFFECTIVE_STATUS_SQL,
+  effectiveStatusSql,
   MESSAGE_REPLY_JOIN,
   MESSAGE_SELECT,
   toConversation,
@@ -130,7 +130,7 @@ export async function getLeadAnalytics(
   const [statusRows, reasonRows, totalRows, weekRows, byDayRows] =
     await Promise.all([
     query<{ eff: LeadStatus; n: string }>(
-      `SELECT ${EFFECTIVE_STATUS_SQL} AS eff, count(*)::int AS n
+      `SELECT ${effectiveStatusSql()} AS eff, count(*)::int AS n
          FROM conversations ${scope}
         GROUP BY eff`,
       params,
@@ -431,7 +431,7 @@ export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
               max(last_message_at) AS last_activity
          FROM (
            SELECT manager_id, unread, last_message_at,
-                  ${EFFECTIVE_STATUS_SQL} AS eff
+                    ${effectiveStatusSql()} AS eff
              FROM conversations
          ) c
         GROUP BY manager_id`,

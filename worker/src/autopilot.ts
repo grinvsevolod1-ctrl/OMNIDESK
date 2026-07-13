@@ -46,6 +46,15 @@ const CHANNEL_COOLDOWN_MS = 8000
 /** In-memory last-send timestamp per channel for the cooldown (best-effort). */
 const lastSendByChannel = new Map<string, number>()
 
+/**
+ * Conversations with an AI-lead generation currently in flight. A messenger
+ * inbound can arrive while the model is still composing the previous reply;
+ * without this guard both calls pass the pre-checks and the contact receives
+ * two answers. We claim the conversation up-front and release it in a finally,
+ * so only one AI reply is ever generated per conversation at a time.
+ */
+const aiLeadInFlight = new Set<string>()
+
 /** A session able to send a message to a contact handle. */
 export interface SenderSession {
   sendMessage(
@@ -200,11 +209,19 @@ async function fireAiLead(params: {
 }): Promise<boolean> {
   const { session, channelId, managerId, channelType, conversationId, contactHandle } =
     params
+
+  // Single-flight per conversation: if a reply is already being generated for
+  // this thread, treat this inbound as handled (the in-flight generation will
+  // answer) instead of starting a second one that would double-reply.
+  if (aiLeadInFlight.has(conversationId)) return true
+
   try {
     if (!(await repo.isConversationAiLed(conversationId))) return false
     const config = await repo.getAiAssistConfig()
     if (!config.enabled) return false
     if (!(await withinRateCaps(channelId))) return false
+
+    aiLeadInFlight.add(conversationId)
 
     const [lessons, history] = await Promise.all([
       repo.listAiLessons(12),
@@ -233,6 +250,20 @@ async function fireAiLead(params: {
       await session.sendTyping(contactHandle, false).catch(() => {})
     }
 
+    // Re-check the AI-lead flag right before sending: a human may have taken
+    // over (manual reply clears the flag) while we were composing. If so, bail
+    // out so the AI doesn't talk over the human.
+    if (!(await repo.isConversationAiLed(conversationId))) {
+      if (session.sendTyping) {
+        await session.sendTyping(contactHandle, false).catch(() => {})
+      }
+      logger.info(
+        { channelId, conversationId },
+        'ai-lead: human took over during generation, skipping send',
+      )
+      return true
+    }
+
     const { providerMessageId } = await session.sendMessage(contactHandle, reply)
     lastSendByChannel.set(channelId, Date.now())
 
@@ -253,6 +284,8 @@ async function fireAiLead(params: {
   } catch (err) {
     logger.error({ err, channelId, conversationId }, 'ai-lead: failed (ignored)')
     return false
+  } finally {
+    aiLeadInFlight.delete(conversationId)
   }
 }
 

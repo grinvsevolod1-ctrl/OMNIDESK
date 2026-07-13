@@ -24,6 +24,16 @@ import {
 } from './match'
 
 /**
+ * Conversations with an AI-lead generation currently in flight. A second
+ * inbound can arrive while the model is still composing; without this guard
+ * both pass the pre-checks and the visitor receives two answers. Claimed
+ * up-front and released in a finally so only one AI reply is generated per
+ * conversation at a time. Module-scoped (per Node process) — the live-chat
+ * ingest route runs single-instance, matching the worker's guard.
+ */
+const aiLeadInFlight = new Set<string>()
+
+/**
  * Autopilot runtime for LIVE-CHAT inbound (runs inside the Next.js ingest
  * route). Messenger inbound (Telegram/WhatsApp) is handled separately in the
  * worker, which shares the same pure matcher (lib/autopilot/match.ts).
@@ -114,11 +124,17 @@ async function runLivechatAiLead(input: {
   conversationId: string
   text: string
 }): Promise<boolean> {
+  // Single-flight per conversation: if a reply is already being generated for
+  // this thread, treat this inbound as handled so we never double-answer.
+  if (aiLeadInFlight.has(input.conversationId)) return true
+
   try {
     if (!isBrainConfigured()) return false
     if (!(await isConversationAiLed(input.conversationId))) return false
     const settings = await getAiAssistSettings()
     if (!settings.enabled) return false
+
+    aiLeadInFlight.add(input.conversationId)
 
     const [lessons, history] = await Promise.all([
       listBrainLessons(12),
@@ -134,11 +150,18 @@ async function runLivechatAiLead(input: {
     })
     if (!reply) return false
 
+    // Re-check the AI-lead flag right before sending: a human may have sent a
+    // manual reply (which clears the flag) while we were composing. If so, bail
+    // out so the AI doesn't talk over the human.
+    if (!(await isConversationAiLed(input.conversationId))) return true
+
     await sendAiReply(input.managerId, input.conversationId, reply)
     return true
   } catch (err) {
     console.error('[v0] autopilot(livechat) AI-lead failed:', err)
     return false
+  } finally {
+    aiLeadInFlight.delete(input.conversationId)
   }
 }
 

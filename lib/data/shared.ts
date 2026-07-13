@@ -123,11 +123,65 @@ export const SECRET_CONFIG_KEYS = new Set([
 export const DEFAULT_LEAD_STATUS: LeadStatus = 'unsubscribed'
 
 /**
+ * The administrator is authenticated purely from environment variables and has
+ * NO row in the `managers` table (see lib/auth.ts). If a manager row was ever
+ * created with the admin's email/login (e.g. a legacy seed), it must never be
+ * treated as a real manager: an admin is not part of the conversation-handling
+ * pool, must not be assignable/transferable, and must not be blockable through
+ * the manager UI (blocking the admin identity would be meaningless and
+ * confusing). These helpers let manager-facing queries defensively exclude it.
+ */
+function adminIdentifiers(): string[] {
+  const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
+  const username = (
+    process.env.ADMIN_USERNAME ||
+    email.split('@')[0] ||
+    ''
+  )
+    .trim()
+    .toLowerCase()
+  return [email, username].filter(Boolean)
+}
+
+/** True when a manager row actually represents the env-backed administrator. */
+export function isAdminIdentity(
+  m: { email?: string | null; username?: string | null } | null | undefined,
+): boolean {
+  if (!m) return false
+  const ids = adminIdentifiers()
+  if (ids.length === 0) return false
+  const email = (m.email || '').trim().toLowerCase()
+  const username = (m.username || '').trim().toLowerCase()
+  return (email !== '' && ids.includes(email)) ||
+    (username !== '' && ids.includes(username))
+}
+
+/**
+ * A reusable SQL predicate (for a `managers` alias) that excludes the admin
+ * identity from a result set. Returns an empty string when no admin email is
+ * configured. Uses inlined, lowercased literals derived from env (never user
+ * input), so it's safe to interpolate and needs no bound parameters.
+ */
+export function excludeAdminSql(alias = 'managers'): string {
+  const ids = adminIdentifiers()
+  if (ids.length === 0) return ''
+  const list = ids.map((v) => `'${v.replace(/'/g, "''")}'`).join(', ')
+  return `AND lower(${alias}.email) NOT IN (${list}) AND lower(COALESCE(${alias}.username, '')) NOT IN (${list})`
+}
+
+/**
  * SQL expression deriving the effective lead status of a conversation, matching
  * DEFAULT_LEAD_STATUS on the JS side. Shared between conversation queries and
  * analytics rollups so both agree on how a null status is interpreted.
+ *
+ * Pass the `conversations` table alias whenever the query JOINs another table
+ * that also has a `status` column (e.g. `channels`, `managers`). Without the
+ * qualifier Postgres raises `column reference "status" is ambiguous`.
  */
-export const EFFECTIVE_STATUS_SQL = `COALESCE(status, 'unsubscribed')`
+export function effectiveStatusSql(alias?: string): string {
+  const prefix = alias ? `${alias}.` : ''
+  return `COALESCE(${prefix}status, 'unsubscribed')`
+}
 
 /**
  * Shared SELECT column list + self-join for hydrating a message with its

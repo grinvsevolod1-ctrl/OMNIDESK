@@ -14,7 +14,7 @@ import type {
   NotLiquidReason,
 } from '../types'
 import {
-  EFFECTIVE_STATUS_SQL,
+  effectiveStatusSql,
   MESSAGE_REPLY_JOIN,
   MESSAGE_SELECT,
   toConversation,
@@ -63,7 +63,7 @@ export async function listConversationsByStatus(
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
       WHERE c.manager_id = $1
-        AND ${EFFECTIVE_STATUS_SQL} = $2${reasonFilter}
+        AND ${effectiveStatusSql('c')} = $2${reasonFilter}
       ORDER BY c.last_message_at DESC`,
     params,
   )
@@ -102,24 +102,6 @@ export async function setConversationAiAutopilot(
     [conversationId, managerId, enabled],
   )
   return rows[0] ? rows[0].ai_autopilot_enabled : null
-}
-
-/**
- * Disable AI-lead for a conversation because a human just took over (manual
- * send). Unconditional by id — the caller already resolved ownership. Returns
- * true when a row was actually flipped from on→off (so callers can log it).
- */
-export async function disableConversationAiAutopilot(
-  conversationId: string,
-): Promise<boolean> {
-  const rows = await query<{ id: string }>(
-    `UPDATE conversations
-        SET ai_autopilot_enabled = false
-      WHERE id = $1 AND ai_autopilot_enabled = true
-      RETURNING id`,
-    [conversationId],
-  )
-  return rows.length > 0
 }
 
 /**

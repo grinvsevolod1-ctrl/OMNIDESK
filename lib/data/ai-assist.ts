@@ -1,6 +1,28 @@
 import 'server-only'
 import { query } from '../db'
 import type { BrainLesson } from '../ai/manager-brain'
+import type { MediaType } from '../types'
+
+/** Short human-readable stand-in for a media-only message in AI history. */
+function mediaPlaceholder(type: MediaType | null): string {
+  switch (type) {
+    case 'image':
+      return '[фото]'
+    case 'video':
+    case 'video_note':
+      return '[видео]'
+    case 'audio':
+      return '[аудио]'
+    case 'voice':
+      return '[голосовое сообщение]'
+    case 'sticker':
+      return '[стикер]'
+    case 'document':
+      return '[документ]'
+    default:
+      return '[вложение]'
+  }
+}
 
 /** Shared (singleton) AI-assistant configuration + distilled playbook. */
 export interface AiAssistSettings {
@@ -127,9 +149,17 @@ export async function getConversationHistoryForAi(
   conversationId: string,
   limit = 16,
 ): Promise<Array<{ role: 'client' | 'manager'; body: string }>> {
-  const rows = await query<{ direction: 'in' | 'out'; body: string }>(
-    `SELECT direction, body FROM messages
-      WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
+  // Include media-only turns (empty body) so the AI knows a sticker/photo/voice
+  // message occurred instead of silently dropping it from the thread context.
+  const rows = await query<{
+    direction: 'in' | 'out'
+    body: string
+    media_type: MediaType | null
+  }>(
+    `SELECT direction, body, media_type FROM messages
+      WHERE conversation_id = $1
+        AND deleted_at IS NULL
+        AND (body <> '' OR media_type IS NOT NULL)
       ORDER BY created_at DESC
       LIMIT $2`,
     [conversationId, Math.max(1, Math.min(50, limit))],
@@ -140,7 +170,7 @@ export async function getConversationHistoryForAi(
       role: (r.direction === 'in' ? 'client' : 'manager') as
         | 'client'
         | 'manager',
-      body: r.body,
+      body: r.body.trim() || mediaPlaceholder(r.media_type),
     }))
 }
 

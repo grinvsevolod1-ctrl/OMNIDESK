@@ -11,7 +11,7 @@ import {
   type ContactRecord,
   type LeadStatus,
 } from '../types'
-import { EFFECTIVE_STATUS_SQL } from './shared'
+import { effectiveStatusSql } from './shared'
 
 interface ContactRow {
   id: string
@@ -64,7 +64,7 @@ export async function listContactsByChannel(): Promise<ContactChannelGroup[]> {
             c.contact_handle,
             c.contact_username,
             m.name               AS manager_name,
-            ${EFFECTIVE_STATUS_SQL} AS status,
+            ${effectiveStatusSql('c')} AS status,
             c.created_at,
             c.last_message_at
        FROM conversations c
