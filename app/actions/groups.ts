@@ -24,7 +24,9 @@ export async function createSourceGroupAction(
   if (!clean) return { ok: false, message: 'Введите название источника.' }
   try {
     await createSourceGroup(clean, channelIds)
+    // Источник теперь единая сущность — обновляем и Обзор, и Учёт.
     revalidatePath('/admin')
+    revalidatePath('/admin/finance')
     return { ok: true, message: 'Источник создан.' }
   } catch (err) {
     console.error('[groups] create failed:', err)
@@ -43,6 +45,7 @@ export async function updateSourceGroupAction(
   try {
     await updateSourceGroup(id, { name: clean, channelIds })
     revalidatePath('/admin')
+    revalidatePath('/admin/finance')
     return { ok: true, message: 'Источник обновлён.' }
   } catch (err) {
     console.error('[groups] update failed:', err)
@@ -57,6 +60,7 @@ export async function deleteSourceGroupAction(
   try {
     await deleteSourceGroup(id)
     revalidatePath('/admin')
+    revalidatePath('/admin/finance')
     return { ok: true, message: 'Источник удалён.' }
   } catch (err) {
     console.error('[groups] delete failed:', err)

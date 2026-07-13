@@ -414,7 +414,7 @@ function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
                 </div>
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                   <span>{c.people} чел.</span>
-                  <span>{c.messages} сообщений</span>
+                  <span>{c.messages} со��бщений</span>
                 </div>
               </div>
             )
@@ -488,6 +488,12 @@ function ManageGroupsDialog({
   }
 
   function remove(id: string) {
+    // Источник теперь единая сущность: удаление снесёт и его финансы (кабинеты,
+    // расходы, хранилище) в «Учёте», а не только привязку каналов. Предупреждаем.
+    const ok = window.confirm(
+      'Удалить источник целиком?\n\nВместе с ним из «Учёта» удалятся все рекламные кабинеты, расходы и данные хранилища этого источника. Это действие необратимо.',
+    )
+    if (!ok) return
     startTransition(async () => {
       const res = await deleteSourceGroupAction(id)
       if (res.ok) {
