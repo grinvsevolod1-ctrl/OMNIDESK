@@ -300,7 +300,10 @@ export async function assessLeadReady(
           { role: 'user', content: transcript },
         ],
         temperature: 0,
-        max_tokens: 3,
+        // Must be large enough that the model can emit the word plus any
+        // whitespace/framing tokens; a value as low as 3 makes some gateway
+        // models reject the request with HTTP 400.
+        max_tokens: 16,
       }),
     })
     if (!res.ok) {
