@@ -14,12 +14,23 @@ ALTER TABLE finance_entries
   ADD COLUMN IF NOT EXISTS orig_currency text           NOT NULL DEFAULT 'USD',
   ADD COLUMN IF NOT EXISTS fx_rate       numeric(18, 8) NOT NULL DEFAULT 1;
 
--- Бэкофилл существующих записей: считаем, что сумма уже была в валюте ресурса,
--- курс 1:1 (исторический курс восстановить нельзя). Значение amount не трогаем.
+-- Бэкофилл существующих записей: исходная сумма считается введённой в валюте
+-- ресурса. amount переводим в USD по приблизительному фиксированному курсу
+-- (исторический курс восстановить нельзя): USD/USDT = 1, RUB ≈ 0.011, EUR ≈ 1.08.
 UPDATE finance_entries e
    SET orig_amount   = e.amount,
        orig_currency = COALESCE(r.currency, 'USD'),
-       fx_rate       = 1
+       fx_rate       = CASE COALESCE(r.currency, 'USD')
+                         WHEN 'RUB' THEN 0.011
+                         WHEN 'EUR' THEN 1.08
+                         ELSE 1
+                       END,
+       amount        = round(
+                         e.amount * CASE COALESCE(r.currency, 'USD')
+                           WHEN 'RUB' THEN 0.011
+                           WHEN 'EUR' THEN 1.08
+                           ELSE 1
+                         END, 2)
   FROM finance_resources r
  WHERE e.resource_id = r.id
    AND e.orig_amount = 0

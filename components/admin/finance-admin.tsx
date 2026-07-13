@@ -21,7 +21,6 @@ import {
   BarChart3,
   ClipboardCopy,
   Download,
-  LayoutDashboard,
   Table2,
   Upload,
   Check,
@@ -1141,41 +1140,6 @@ function GlobalDashboard({
         )}
       </section>
     </div>
-  )
-}
-
-function AlertCard({
-  tone,
-  icon: Icon,
-  title,
-  items,
-}: {
-  tone: 'destructive' | 'warning'
-  icon: typeof KeyRound
-  title: string
-  items: string[]
-}) {
-  const toneCls =
-    tone === 'destructive'
-      ? 'border-destructive/40 bg-destructive/5 text-destructive'
-      : 'border-warning/40 bg-warning/5 text-warning'
-  return (
-    <Card className={cn('flex items-start gap-3 p-4', toneCls)}>
-      <Icon className="mt-0.5 size-5 shrink-0" />
-      <div className="min-w-0 space-y-1">
-        <p className="font-medium">{title}</p>
-        <ul className="space-y-0.5 text-sm text-muted-foreground">
-          {items.slice(0, 4).map((it, i) => (
-            <li key={i} className="truncate">
-              {it}
-            </li>
-          ))}
-          {items.length > 4 ? (
-            <li className="text-xs">и ещё {items.length - 4}…</li>
-          ) : null}
-        </ul>
-      </div>
-    </Card>
   )
 }
 
@@ -3108,6 +3072,30 @@ function EntryDialog({
   onUpdate: (id: string, fd: FormData) => void
 }) {
   const editing = state?.mode === 'edit' ? state.entry : null
+  const rates = useRates()
+
+  // Локальное состояние суммы/валюты для живого превью в USD.
+  const [amount, setAmount] = useState('')
+  const [currency, setCurrency] = useState<FinanceCurrency>('USD')
+
+  // Сброс значений при каждом открытии диалога под конкретную запись.
+  useEffect(() => {
+    if (!state) return
+    if (state.mode === 'edit') {
+      setAmount(String(state.entry.origAmount || state.entry.amount || ''))
+      setCurrency(state.entry.origCurrency ?? 'USD')
+    } else {
+      setAmount('')
+      setCurrency('USD')
+    }
+  }, [state])
+
+  const parsedAmount = Number.parseFloat(amount.replace(',', '.'))
+  const usdPreview =
+    Number.isFinite(parsedAmount) && parsedAmount > 0
+      ? toUsd(parsedAmount, currency, rates)
+      : null
+
   return (
     <Dialog open={state != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
@@ -3123,6 +3111,10 @@ function EntryDialog({
             <DialogTitle>
               {editing ? 'Изменить расход' : 'Новый расход'}
             </DialogTitle>
+            <DialogDescription>
+              Сумму можно ввести в любой валюте — она сразу переводится в USD по
+              текущему курсу и фиксируется.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
@@ -3136,28 +3128,43 @@ function EntryDialog({
                 required
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label htmlFor="entry-vendor">Контрагент</Label>
-                <Input
-                  id="entry-vendor"
-                  name="vendor"
-                  defaultValue={editing?.vendor ?? ''}
-                  placeholder="Кому платим"
-                />
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="entry-vendor">Контрагент</Label>
+              <Input
+                id="entry-vendor"
+                name="vendor"
+                defaultValue={editing?.vendor ?? ''}
+                placeholder="Кому платим"
+              />
+            </div>
+            <div className="grid grid-cols-[1fr_auto] gap-3">
               <div className="space-y-2">
                 <Label htmlFor="entry-amount">Сумма</Label>
                 <Input
                   id="entry-amount"
                   name="amount"
                   inputMode="decimal"
-                  defaultValue={editing ? String(editing.amount) : ''}
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
                   placeholder="0"
                   required
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="entry-currency">Валюта</Label>
+                <CurrencySelect
+                  name="currency"
+                  value={currency}
+                  onValueChange={(v) => setCurrency(v)}
+                />
+              </div>
             </div>
+            {usdPreview != null && currency !== 'USD' && currency !== 'USDT' ? (
+              <p className="-mt-1 text-sm text-muted-foreground">
+                ≈ <span className="font-semibold text-foreground">{formatUsd(usdPreview)}</span>{' '}
+                по курсу на сегодня
+              </p>
+            ) : null}
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-2">
                 <Label htmlFor="entry-status">Статус</Label>
@@ -3234,13 +3241,26 @@ function EntryDialog({
 function CurrencySelect({
   name,
   defaultValue,
+  value,
+  onValueChange,
 }: {
   name: string
-  defaultValue: FinanceCurrency
+  defaultValue?: FinanceCurrency
+  value?: FinanceCurrency
+  onValueChange?: (v: FinanceCurrency) => void
 }) {
   return (
-    <Select name={name} defaultValue={defaultValue}>
-      <SelectTrigger className="w-full">
+    <Select
+      name={name}
+      defaultValue={defaultValue}
+      value={value}
+      onValueChange={
+        onValueChange
+          ? (v) => onValueChange(v as FinanceCurrency)
+          : undefined
+      }
+    >
+      <SelectTrigger className="w-[110px]">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
