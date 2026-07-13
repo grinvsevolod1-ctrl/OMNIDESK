@@ -60,6 +60,7 @@ import {
   Vault,
   Wallet,
   X,
+  type LucideIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -458,6 +459,67 @@ function summarizeAds(
 }
 
 /* ================================================================== */
+/* Source sub-tab card                                                 */
+/* ================================================================== */
+
+/**
+ * Крупная масштабируемая «карта-вкладка» источника вместо сжатых чипов.
+ * Иконка + название + живая метрика (лиды / кабинеты / расход / секреты).
+ * Построена поверх shadcn TabsTrigger, поэтому переключение и доступность
+ * работают штатно, а сетка в TabsList тянется на всю ширину.
+ */
+function SourceTabCard({
+  value,
+  active,
+  icon: Icon,
+  label,
+  stat,
+}: {
+  value: string
+  active: boolean
+  icon: LucideIcon
+  label: string
+  stat: string
+}) {
+  return (
+    <TabsTrigger
+      value={value}
+      className={cn(
+        'flex h-auto flex-col items-start gap-2 rounded-xl border p-3 text-left transition-colors sm:p-4',
+        'data-[state=active]:border-primary data-[state=active]:bg-primary/5 data-[state=active]:shadow-none',
+        active
+          ? 'border-primary bg-primary/5'
+          : 'border-border bg-card hover:bg-muted/50',
+      )}
+    >
+      <span
+        className={cn(
+          'flex size-9 items-center justify-center rounded-lg',
+          active
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-muted text-muted-foreground',
+        )}
+      >
+        <Icon className="size-4.5" />
+      </span>
+      <span className="flex flex-col">
+        <span
+          className={cn(
+            'text-sm font-semibold',
+            active ? 'text-foreground' : 'text-foreground/90',
+          )}
+        >
+          {label}
+        </span>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {stat}
+        </span>
+      </span>
+    </TabsTrigger>
+  )
+}
+
+/* ================================================================== */
 /* Table controls types                                                */
 /* ================================================================== */
 
@@ -478,6 +540,7 @@ export function FinanceAdmin({
   vaultItems,
   encryptionReady,
   rates,
+  resourceLeads,
 }: {
   resources: FinanceResource[]
   sections: FinanceSection[]
@@ -486,6 +549,12 @@ export function FinanceAdmin({
   vaultItems: VaultItem[]
   encryptionReady: boolean
   rates: UsdRates
+  /**
+   * Реальные лиды по источнику: distinct входящих обращений из привязанных
+   * каналов (resourceId → число). Это заменяет фейковые «лиды» из статистики
+   * кабинетов. Рекламные лиды/CPL остаются отдельно во вкладке «Реклама».
+   */
+  resourceLeads?: Record<string, number>
 }) {
   const [pending, startTransition] = useTransition()
   const [view, setView] = useState<'dashboard' | 'resource'>('dashboard')
@@ -563,14 +632,16 @@ export function FinanceAdmin({
     [vaultItems, activeResource],
   )
 
+  // Реальные лиды источника — из обращений по привязанным каналам (приходят с
+  // сервера). Больше НЕ берём из статистики рекламных кабинетов: то число ни к
+  // чему реальному не привязано и жило само по себе.
   const leadCountByResource = useMemo(() => {
     const map = new Map<string, number>()
-    for (const a of adAccounts) {
-      const leads = a.stats.reduce((s, st) => s + st.leads, 0)
-      map.set(a.resourceId, (map.get(a.resourceId) ?? 0) + leads)
+    for (const [id, n] of Object.entries(resourceLeads ?? {})) {
+      map.set(id, n)
     }
     return map
-  }, [adAccounts])
+  }, [resourceLeads])
 
   /* ---------------- Back bar (resource view only) ---------------- */
 
@@ -653,6 +724,14 @@ export function FinanceAdmin({
 
   const adSummary = summarizeAds(resourceAccounts, rates)
 
+  // Сумма расходов источника в USD — для подписи на вкладке «Расходы».
+  // Записи уже хранятся в USD (origAmount переводится при вводе); в этом UI все
+  // записи — расходы, поэтому суммируем amount по всем.
+  const resourceExpenseTotal = resourceEntries.reduce(
+    (s, e) => s + e.amount,
+    0,
+  )
+
   return (
     <RatesContext.Provider value={rates}>
     <div className="flex flex-col gap-5">
@@ -691,24 +770,39 @@ export function FinanceAdmin({
       ) : null}
 
       <Tabs value={subTab} onValueChange={(v) => setSubTab(v as SubTab)}>
-        <TabsList>
-          <TabsTrigger value="overview" className="gap-1.5">
-            <BarChart3 className="size-4" /> Обзор
-          </TabsTrigger>
-          <TabsTrigger value="ads" className="gap-1.5">
-            <Wallet className="size-4" /> Реклама
-          </TabsTrigger>
-          <TabsTrigger value="expenses" className="gap-1.5">
-            <TrendingDown className="size-4" /> Расходы
-          </TabsTrigger>
-          <TabsTrigger value="vault" className="gap-1.5">
-            <Vault className="size-4" /> Хранилище
-            {resourceVaultItems.length > 0 ? (
-              <span className="ml-0.5 rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">
-                {resourceVaultItems.length}
-              </span>
-            ) : null}
-          </TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-2 bg-transparent p-0 sm:grid-cols-4">
+          <SourceTabCard
+            value="overview"
+            active={subTab === 'overview'}
+            icon={BarChart3}
+            label="Обзор"
+            stat={`${formatInt(leadCountByResource.get(activeResource.id) ?? 0)} лид.`}
+          />
+          <SourceTabCard
+            value="ads"
+            active={subTab === 'ads'}
+            icon={Wallet}
+            label="Реклама"
+            stat={`${adSummary.activeAccounts}/${adSummary.totalAccounts} кабин.`}
+          />
+          <SourceTabCard
+            value="expenses"
+            active={subTab === 'expenses'}
+            icon={TrendingDown}
+            label="Расходы"
+            stat={formatUsd(resourceExpenseTotal)}
+          />
+          <SourceTabCard
+            value="vault"
+            active={subTab === 'vault'}
+            icon={Vault}
+            label="Хранилище"
+            stat={
+              resourceVaultItems.length > 0
+                ? `${formatInt(resourceVaultItems.length)} секр.`
+                : 'пусто'
+            }
+          />
         </TabsList>
 
         {/* ---------------- Overview ---------------- */}
@@ -3708,7 +3802,7 @@ function VaultCard({
             meta.tint,
           )}
         >
-          <Icon className="size-4.5" />
+        <Icon className="size-5" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">

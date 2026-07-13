@@ -591,9 +591,13 @@ export async function listConversationsAdmin(opts?: {
 }
 
 /* --------------------------- Source groups ----------------------------- */
-// A "source group" bundles the channels (Telegram / WhatsApp accounts + the
-// live-chat widget) that belong to ONE website. It is configured once and used
-// only for the admin overview report — it never touches inbox routing.
+// A "source" (исторически "source group") — это ЕДИНАЯ сущность проекта: она же
+// finance_resources в Учёте. К ней привязаны каналы (Telegram / WhatsApp +
+// виджет онлайн-чата) через source_channels — это используется отчётом «Обзор».
+// После унификации source_groups больше не читаются: канонический список
+// источников берётся из finance_resources, а членство каналов — из
+// source_channels. Функции сохраняют прежние имена/сигнатуры, чтобы вызывающий
+// код (app/actions/groups.ts) не менялся.
 
 export interface SourceGroupChannel {
   id: string
@@ -610,7 +614,7 @@ export interface SourceGroup {
   channels: SourceGroupChannel[]
 }
 
-/** All source groups with their member channels. */
+/** All sources (finance resources) with their member channels. */
 export async function listSourceGroups(): Promise<SourceGroup[]> {
   const rows = await query<{
     id: string
@@ -622,13 +626,14 @@ export async function listSourceGroups(): Promise<SourceGroup[]> {
     channel_detail: string | null
     channel_status: ChannelStatus | null
   }>(
-    `SELECT g.id, g.name, g.created_at,
+    `SELECT r.id, r.name, r.created_at,
             ch.id AS channel_id, ch.type AS channel_type, ch.name AS channel_name,
             ch.detail AS channel_detail, ch.status AS channel_status
-       FROM source_groups g
-       LEFT JOIN source_group_channels sgc ON sgc.group_id = g.id
-       LEFT JOIN channels ch ON ch.id = sgc.channel_id
-      ORDER BY g.created_at ASC, ch.type ASC, ch.name ASC`,
+       FROM finance_resources r
+       LEFT JOIN source_channels sc ON sc.resource_id = r.id
+       LEFT JOIN channels ch ON ch.id = sc.channel_id
+      WHERE r.archived = false
+      ORDER BY r.created_at ASC, ch.type ASC, ch.name ASC`,
   )
 
   const map = new Map<string, SourceGroup>()
@@ -656,21 +661,21 @@ export async function listSourceGroups(): Promise<SourceGroup[]> {
   return [...map.values()]
 }
 
-/** Replace a group's channel membership with the given channel ids. */
+/** Replace a source's channel membership with the given channel ids. */
 async function setGroupChannels(
-  groupId: string,
+  resourceId: string,
   channelIds: string[],
 ): Promise<void> {
-  await query(`DELETE FROM source_group_channels WHERE group_id = $1`, [groupId])
+  await query(`DELETE FROM source_channels WHERE resource_id = $1`, [resourceId])
   const ids = [...new Set(channelIds)].filter(Boolean)
   for (const channelId of ids) {
-    // A channel belongs to at most one group; steal it from any other group so
+    // A channel belongs to at most one source; steal it from any other source so
     // the latest assignment wins instead of erroring on the UNIQUE constraint.
     await query(
-      `INSERT INTO source_group_channels (group_id, channel_id)
+      `INSERT INTO source_channels (resource_id, channel_id)
        VALUES ($1, $2)
-       ON CONFLICT (channel_id) DO UPDATE SET group_id = EXCLUDED.group_id`,
-      [groupId, channelId],
+       ON CONFLICT (channel_id) DO UPDATE SET resource_id = EXCLUDED.resource_id`,
+      [resourceId, channelId],
     )
   }
 }
@@ -679,8 +684,11 @@ export async function createSourceGroup(
   name: string,
   channelIds: string[],
 ): Promise<SourceGroup> {
+  // Creating a source in «Обзор» creates the SAME finance_resource that «Учёт»
+  // uses — one entity, visible in both places.
   const rows = await query<{ id: string }>(
-    `INSERT INTO source_groups (name) VALUES ($1) RETURNING id`,
+    `INSERT INTO finance_resources (name, description, currency)
+     VALUES ($1, '', 'USDT') RETURNING id`,
     [name.trim() || 'Источник'],
   )
   const id = rows[0].id
@@ -694,7 +702,7 @@ export async function updateSourceGroup(
   input: { name?: string; channelIds?: string[] },
 ): Promise<void> {
   if (typeof input.name === 'string') {
-    await query(`UPDATE source_groups SET name = $2 WHERE id = $1`, [
+    await query(`UPDATE finance_resources SET name = $2 WHERE id = $1`, [
       id,
       input.name.trim() || 'Источник',
     ])
@@ -705,7 +713,50 @@ export async function updateSourceGroup(
 }
 
 export async function deleteSourceGroup(id: string): Promise<void> {
-  await query(`DELETE FROM source_groups WHERE id = $1`, [id])
+  // Deleting a source now removes the whole entity — finance data included —
+  // via ON DELETE CASCADE. The UI warns the operator before calling this.
+  await query(`DELETE FROM finance_resources WHERE id = $1`, [id])
+}
+
+/* ----------------------- Real lead counts per source -------------------- */
+
+/**
+ * Real inbound-lead counts per source (finance resource), derived from the
+ * conversations on its attached channels — the SAME definition «Обзор» uses
+ * ("distinct people who wrote in"). This replaces the old fake per-cabinet lead
+ * numbers in «Учёт». Returns a map of resourceId → distinct inbound people.
+ * Pass a date range to scope it; omit for all-time.
+ */
+export async function getResourceLeadCounts(
+  resourceIds: string[],
+  range?: { fromISO: string; toISO: string },
+): Promise<Record<string, number>> {
+  const ids = [...new Set(resourceIds)].filter(Boolean)
+  if (ids.length === 0) return {}
+
+  const params: unknown[] = [ids]
+  let dateFilter = ''
+  if (range) {
+    params.push(range.fromISO, range.toISO)
+    dateFilter = `AND m.created_at >= $2 AND m.created_at < $3`
+  }
+
+  const rows = await query<{ resource_id: string; people: string }>(
+    `SELECT sc.resource_id,
+            count(DISTINCT c.id)::int AS people
+       FROM source_channels sc
+       JOIN conversations c ON c.channel_id = sc.channel_id
+       JOIN messages m ON m.conversation_id = c.id
+            AND m.direction = 'in' ${dateFilter}
+      WHERE sc.resource_id = ANY($1::uuid[])
+      GROUP BY sc.resource_id`,
+    params,
+  )
+
+  const out: Record<string, number> = {}
+  for (const id of ids) out[id] = 0
+  for (const r of rows) out[r.resource_id] = Number(r.people)
+  return out
 }
 
 /* ----------------------- Source group analytics ------------------------ */
@@ -782,7 +833,7 @@ export async function getGroupAnalytics(
   tzOffsetMinutes = 0,
 ): Promise<GroupAnalytics> {
   const groupRows = await query<{ name: string }>(
-    `SELECT name FROM source_groups WHERE id = $1`,
+    `SELECT name FROM finance_resources WHERE id = $1`,
     [groupId],
   )
   const groupName = groupRows[0]?.name ?? 'Источник'
@@ -795,12 +846,12 @@ export async function getGroupAnalytics(
   const [totalRows, channelRows, dayRows] = await Promise.all([
     query<{ people: string; messages: string }>(
       `SELECT count(DISTINCT c.id)::int AS people, count(m.id)::int AS messages
-         FROM source_group_channels sgc
+         FROM source_channels sgc
          JOIN conversations c ON c.channel_id = sgc.channel_id
          JOIN messages m ON m.conversation_id = c.id
               AND m.direction = 'in'
               AND m.created_at >= $2 AND m.created_at < $3
-        WHERE sgc.group_id = $1`,
+        WHERE sgc.resource_id = $1`,
       params,
     ),
     query<{
@@ -813,13 +864,13 @@ export async function getGroupAnalytics(
       `SELECT ch.id AS channel_id, ch.name, ch.type,
               count(DISTINCT c.id) FILTER (WHERE m.id IS NOT NULL)::int AS people,
               count(m.id)::int AS messages
-         FROM source_group_channels sgc
+         FROM source_channels sgc
          JOIN channels ch ON ch.id = sgc.channel_id
          LEFT JOIN conversations c ON c.channel_id = ch.id
          LEFT JOIN messages m ON m.conversation_id = c.id
               AND m.direction = 'in'
               AND m.created_at >= $2 AND m.created_at < $3
-        WHERE sgc.group_id = $1
+        WHERE sgc.resource_id = $1
         GROUP BY ch.id, ch.name, ch.type
         ORDER BY people DESC, ch.name ASC`,
       params,
@@ -827,13 +878,13 @@ export async function getGroupAnalytics(
     query<{ d: string; type: ChannelType; people: string }>(
       `SELECT ${localDayExpr} AS d, ch.type,
               count(DISTINCT c.id)::int AS people
-         FROM source_group_channels sgc
+         FROM source_channels sgc
          JOIN channels ch ON ch.id = sgc.channel_id
          JOIN conversations c ON c.channel_id = ch.id
          JOIN messages m ON m.conversation_id = c.id
               AND m.direction = 'in'
               AND m.created_at >= $2 AND m.created_at < $3
-        WHERE sgc.group_id = $1
+        WHERE sgc.resource_id = $1
         GROUP BY 1, 2
         ORDER BY 1`,
       dayParams,
@@ -895,13 +946,13 @@ export async function getGroupAnalytics(
     const hourRows = await query<{ h: number; type: ChannelType; people: string }>(
       `SELECT ${localHourExpr} AS h, ch.type,
               count(DISTINCT c.id)::int AS people
-         FROM source_group_channels sgc
+         FROM source_channels sgc
          JOIN channels ch ON ch.id = sgc.channel_id
          JOIN conversations c ON c.channel_id = ch.id
          JOIN messages m ON m.conversation_id = c.id
               AND m.direction = 'in'
               AND m.created_at >= $2 AND m.created_at < $3
-        WHERE sgc.group_id = $1
+        WHERE sgc.resource_id = $1
         GROUP BY 1, 2`,
       dayParams,
     )

@@ -1,6 +1,7 @@
 import { FinanceAdmin } from '@/components/admin/finance-admin'
 import { PageHeader } from '@/components/page-parts'
 import { requireAdmin } from '@/lib/auth'
+import { getResourceLeadCounts } from '@/lib/data/analytics'
 import { getFinanceData } from '@/lib/finance'
 import { getUsdRates } from '@/lib/fx'
 
@@ -10,6 +11,12 @@ export const dynamic = 'force-dynamic'
 export default async function AdminFinancePage() {
   await requireAdmin()
   const [data, rates] = await Promise.all([getFinanceData(), getUsdRates()])
+
+  // Реальные лиды по каждому источнику: обращения из привязанных каналов
+  // (единая логика с «Обзором»), а не выдуманные числа из кабинетов.
+  const resourceLeads = await getResourceLeadCounts(
+    data.resources.map((r) => r.id),
+  )
 
   return (
     <div className="flex flex-col gap-6">
@@ -25,6 +32,7 @@ export default async function AdminFinancePage() {
         vaultItems={data.vaultItems}
         encryptionReady={data.encryptionReady}
         rates={rates}
+        resourceLeads={resourceLeads}
       />
     </div>
   )
