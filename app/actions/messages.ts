@@ -16,67 +16,10 @@ import {
   acknowledgeAiHandoff,
   getAiAssistSettings,
 } from '@/lib/data/ai-assist'
-import { publishRealtime } from '@/lib/realtime'
-import { setVkTyping } from '@/lib/vk-dispatch'
 
 export interface SimpleResult {
   ok: boolean
   message: string
-}
-
-/**
- * Tell the website visitor that their assigned agent is typing (live-chat only).
- *
- * Ephemeral and best-effort. Per channel:
- *   • Live-chat: publishes a `typing` realtime event the widget's SSE stream
- *     relays as "<name> печатает". Nothing is stored.
- *   • VK: real "typing…" indicator via messages.setActivity (account proxy).
- *   • Telegram: native typing action via the worker (MTProto SetTyping).
- *   • WhatsApp/MAX: no-op — the provider API exposes no usable typing signal.
- */
-export async function setAgentTypingAction(
-  conversationId: string,
-  typing: boolean,
-): Promise<void> {
-  const session = await requireManager()
-  const conv = await getConversation(conversationId, session.sub)
-  if (!conv) return
-
-  // VK exposes a real "typing…" indicator via messages.setActivity — surface it
-  // to the user through the account's proxy. Only meaningful when turning on.
-  if (conv.channelType === 'vk') {
-    if (typing) await setVkTyping(conversationId)
-    return
-  }
-
-  // Telegram: show the native "typing…" action via the worker (MTProto session).
-  // Telegram auto-expires it after ~6s and the composer re-pings while the
-  // operator keeps typing. Best-effort: never block the operator on a queue miss.
-  if (conv.channelType === 'telegram') {
-    if (typing) {
-      await enqueueJob({
-        channelId: conv.channelId,
-        managerId: session.sub,
-        action: 'set_typing',
-        payload: { target: conv.contactHandle },
-      }).catch((err) => {
-        console.error('[panel] failed to enqueue set_typing job:', err)
-      })
-    }
-    return
-  }
-
-  // Live-chat typing is an ephemeral realtime event relayed to the widget.
-  if (conv.channelType !== 'livechat') return
-  await publishRealtime({
-    type: 'typing',
-    actor: 'agent',
-    channelId: conv.channelId,
-    conversationId,
-    contactHandle: conv.contactHandle,
-    authorName: session.name,
-    typing,
-  })
 }
 
 /**

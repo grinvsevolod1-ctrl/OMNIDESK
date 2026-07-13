@@ -1639,11 +1639,10 @@ export function InboxView({
   )
   // Optimistic per-conversation AI-lead state, keyed by conversation id.
   const [aiOverrides, setAiOverrides] = useState<Record<string, boolean>>({})
-  // Conversations whose AI→«Ликвид» handoff this manager has already opened, so
-  // the banner/highlight clear instantly (before the server round-trip lands).
-  const [ackedHandoffs, setAckedHandoffs] = useState<Record<string, boolean>>(
-    {},
-  )
+  // Handoffs already acknowledged this session (guards the ack effect against
+  // duplicate server calls). Not state: acknowledgement clears visually via the
+  // "exclude the active thread" rule, and the server flag drives everything else.
+  const ackedHandoffsRef = useRef<Record<string, boolean>>({})
   // Set true briefly to shake the AI button — the hint shown when a manager
   // tries to send while the AI is leading the thread.
   const [aiButtonPulse, setAiButtonPulse] = useState(false)
@@ -2325,9 +2324,9 @@ export function InboxView({
   const pendingHandoffs = useMemo(
     () =>
       conversations.filter(
-        (c) => c.aiHandoffPending && !ackedHandoffs[c.id] && c.id !== activeId,
+        (c) => c.aiHandoffPending && c.id !== activeId,
       ),
-    [conversations, ackedHandoffs, activeId],
+    [conversations, activeId],
   )
 
   // Auto-scroll the thread to the newest message (and as the visitor's live
@@ -2362,16 +2361,17 @@ export function InboxView({
     void markConversationReadAction(activeId)
   }, [activeId, conversations])
 
-  // Opening a thread the AI handed off («Ликвид») acknowledges it: locally drop
-  // the highlight instantly, then clear the server flag so the banner/highlight
-  // don't come back on refresh. Guarded so it fires once per opened handoff.
+  // Opening a thread the AI handed off («Ликвид») acknowledges it. The banner
+  // and list highlight already exclude the active thread, so it clears visually
+  // the instant it's opened — here we only clear the SERVER flag so it doesn't
+  // return on refresh. A ref guard keeps this to one call per opened handoff.
   useEffect(() => {
     if (!activeId) return
     const conv = conversations.find((c) => c.id === activeId)
-    if (!conv?.aiHandoffPending || ackedHandoffs[activeId]) return
-    setAckedHandoffs((prev) => ({ ...prev, [activeId]: true }))
+    if (!conv?.aiHandoffPending || ackedHandoffsRef.current[activeId]) return
+    ackedHandoffsRef.current[activeId] = true
     void acknowledgeAiHandoffAction(activeId)
-  }, [activeId, conversations, ackedHandoffs])
+  }, [activeId, conversations])
 
   function send() {
     if (!activeId || !draft.trim()) return
@@ -2902,7 +2902,7 @@ export function InboxView({
                         activeId === c.id
                           ? 'bg-secondary hover:bg-secondary'
                           : '',
-                        c.aiHandoffPending && !ackedHandoffs[c.id] && activeId !== c.id
+                        c.aiHandoffPending && activeId !== c.id
                           ? 'bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/40 hover:bg-emerald-500/15'
                           : '',
                       )}
