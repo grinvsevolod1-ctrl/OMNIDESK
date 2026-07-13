@@ -105,11 +105,11 @@ async function tick(): Promise<void> {
     const settings = await getSettings()
     if (!settings.enabled) return
 
-    await maybeSpawn(settings.channelIds, settings.aggression, settings.maxThreads, {
-      spawnMinSec: settings.spawnMinSec,
-      spawnMaxSec: settings.spawnMaxSec,
-    }, settings.tone)
-    await scheduleManagerReactions(settings.replyMinSec, settings.replyMaxSec)
+    // Everything is derived autonomously from the single "dialogues per day"
+    // knob — concurrency, spawn cadence and reply timing are all computed here
+    // so the operator only ever sets throughput.
+    await maybeSpawn(settings.channelIds, settings.dialogsPerDay)
+    await scheduleManagerReactions()
     await processDueThreads()
   } catch (err) {
     console.log(
@@ -125,21 +125,28 @@ async function tick(): Promise<void> {
 
 async function maybeSpawn(
   channelIds: string[],
-  aggression: number,
-  maxThreads: number,
-  cadence: { spawnMinSec: number; spawnMaxSec: number },
-  tone: SimTone,
+  dialogsPerDay: number,
 ): Promise<void> {
-  const active = await countActiveThreads()
-  // maxThreads === 0 means unlimited — skip the cap check entirely.
-  if (maxThreads > 0 && active >= maxThreads) return
+  // Average seconds between new dialogues to hit the daily target.
+  const perDay = Math.max(1, Math.floor(dialogsPerDay) || 1)
+  const avgGapSec = Math.max(20, Math.round(86_400 / perDay))
 
-  let nextDelay = randInt(cadence.spawnMinSec, cadence.spawnMaxSec)
-  // Real traffic isn't metronomic: now and then nobody writes for a while.
-  // ~15% of the time stretch the next gap 2–4x to fake a quiet stretch, and a
-  // rare ~5% "burst" shrinks it so a couple of people show up close together.
+  // Autonomous concurrency cap: enough headroom for the throughput without
+  // letting threads pile up unbounded. Scales with the daily rate.
+  const maxThreads = Math.max(5, Math.min(400, Math.round(perDay / 3) + 3))
+  const active = await countActiveThreads()
+  if (active >= maxThreads) return
+
+  // Human traffic isn't metronomic. Base jitter spreads each gap across
+  // 0.45×–1.8× the average; on top of that ~15% of the time we fake a quiet
+  // stretch (2–4×) and ~6% a burst (0.25×) so arrivals cluster and gap
+  // unpredictably instead of ticking like a clock.
+  let nextDelay = Math.round(avgGapSec * (0.45 + Math.random() * 1.35))
   if (chance(0.15)) nextDelay = Math.round(nextDelay * randInt(2, 4))
-  else if (chance(0.05)) nextDelay = Math.max(15, Math.round(nextDelay * 0.3))
+  else if (chance(0.06)) nextDelay = Math.max(15, Math.round(nextDelay * 0.25))
+  // People show up less at night: stretch gaps during 23:00–08:00 local time.
+  const hour = new Date().getHours()
+  if (hour >= 23 || hour < 8) nextDelay = Math.round(nextDelay * (1.5 + Math.random() * 2))
 
   // Bail out BEFORE claiming a spawn slot if there's nowhere to spawn — a
   // claimed slot both reschedules next_spawn_at and (previously) bumped the
@@ -153,7 +160,13 @@ async function maybeSpawn(
   if (!won) return
 
   const channel: SimChannel = pick(channels)
-  const persona = makePersona(channel.type as ChannelType, aggression, tone)
+  // "Polygamous" population: every persona rolls its OWN tone and aggression so
+  // the swarm spans polite→toxic instead of sounding like one configured voice.
+  const persona = makePersona(
+    channel.type as ChannelType,
+    rollAggression(),
+    rollTone(),
+  )
 
   // Learn the channel's real voice, then write the opening line and seed the
   // conversation + first message atomically (no empty-thread flash).
@@ -186,10 +199,12 @@ async function maybeSpawn(
  * next_run_at a few seconds/minutes out so it reads as a real person typing
  * back later.
  */
-async function scheduleManagerReactions(
-  replyMinSec: number,
-  replyMaxSec: number,
-): Promise<void> {
+async function scheduleManagerReactions(): Promise<void> {
+  // Autonomous reply pacing: a person typically answers within ~20s–4min, but
+  // sometimes near-instantly and sometimes not for a long while. These bounds
+  // are fixed (not operator-tunable) so behaviour always reads as human.
+  const replyMinSec = 20
+  const replyMaxSec = 240
   const pending = await findThreadsAwaitingReaction(25)
   for (const p of pending) {
     let delay: number
@@ -336,6 +351,30 @@ function rollOutcome(behavior: Behavior, turns: number): Outcome {
   if (turns >= 10 && chance(0.5)) return 'end'
 
   return chance(0.08) ? 'ghost' : 'reply'
+}
+
+/**
+ * Roll a per-persona writing register. Weighted toward neutral/rough (that's
+ * how most people actually message cold job ads) with a healthy spread so the
+ * population never sounds uniform. 'mixed' lets a persona drift within a chat.
+ */
+function rollTone(): SimTone {
+  return weightedPick<SimTone>({
+    polite: 2,
+    neutral: 4,
+    rough: 3,
+    mixed: 2,
+  })
+}
+
+/**
+ * Roll a per-persona aggression level (0..100). Bell-ish spread via averaging
+ * two rolls so extremes are rarer than the messy middle.
+ */
+function rollAggression(): number {
+  const a = randInt(0, 100)
+  const b = randInt(0, 100)
+  return Math.round((a + b) / 2)
 }
 
 function weightedPick<K extends string>(weights: Record<K, number>): K {

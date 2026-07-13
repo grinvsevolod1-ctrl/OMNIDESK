@@ -92,8 +92,18 @@ export interface LearnedProfile {
 export interface SimSettings {
   enabled: boolean
   channelIds: string[]
+  /**
+   * The ONE human-facing knob: how many brand-new dialogues the bots open per
+   * day. Everything else (concurrency, spawn jitter, reply delays, per-persona
+   * tone/aggression) is derived autonomously by the engine.
+   */
+  dialogsPerDay: number
+  /**
+   * Legacy tunables — kept for backward compatibility with the DB columns, but
+   * no longer surfaced in the UI or used by the engine (each persona now rolls
+   * its own tone/aggression, and pacing is derived from `dialogsPerDay`).
+   */
   aggression: number
-  /** Register the simulated clients write in. */
   tone: SimTone
   maxThreads: number
   spawnMinSec: number

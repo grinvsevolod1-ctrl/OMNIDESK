@@ -1,7 +1,11 @@
 import { generateText } from 'ai'
 import type { SimPersona } from './types'
 import { applyStyle, templateLine, type TemplateKind } from './content'
-import { getLearnedPointersCached } from './store'
+import {
+  getGlobalRecentLines,
+  getLearnedPointersCached,
+  rememberGlobalLine,
+} from './store'
 
 /**
  * What the persona is doing on this turn. The engine rolls this from the
@@ -75,14 +79,15 @@ function learnedBlock(pointers: string[] | undefined): string {
   ].join('\n')
 }
 
-function avoidBlock(ownLines: string[] | undefined): string {
-  if (!ownLines || ownLines.length === 0) return ''
-  // Show the persona its own recent lines so the model actively avoids
-  // reusing the same openings/words — the #1 tell of a bot.
-  const list = ownLines.slice(-8).map((l) => `- ${l}`).join('\n')
+function avoidBlock(avoidLines: string[] | undefined): string {
+  if (!avoidLines || avoidLines.length === 0) return ''
+  // Show recently-used lines (this persona's own + what other "clients" just
+  // sent) so the model actively avoids reusing the same openings/words — the
+  // #1 tell of a bot farm.
+  const list = avoidLines.slice(-14).map((l) => `- ${l}`).join('\n')
   return [
     '',
-    'ТЫ УЖЕ ПИСАЛ ЭТО РАНЬШЕ (НЕ повторяй эти фразы, слова и обороты, начни иначе, скажи по-новому):',
+    'ЭТИ ФРАЗЫ УЖЕ ЗВУЧАЛИ НЕДАВНО (НЕ повторяй их и похожие обороты/слова, скажи совершенно иначе, по-своему):',
     list,
   ].join('\n')
 }
@@ -131,7 +136,7 @@ function systemPrompt(
     '- Иногда неси лёгкую бытовую чушь/оффтоп, как живой человек.',
     '',
     soft
-      ? 'Менеджер часто предлагает мутную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежли����ый отказ — но всегда корректно, без грубости и мата.'
+      ? 'Менеджер часто предлагает мутную/серую работу или пред��плату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежли����ый отказ — но всегда корректно, без грубости и мата.'
       : 'Менеджер часто предлагает мутную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
     referenceBlock(referenceLines),
     learnedBlock(learnedPointers),
@@ -212,6 +217,14 @@ export async function generateReply(args: GenArgs): Promise<string> {
     .filter((m) => m.role === 'client')
     .map((m) => m.body)
 
+  // Population-level memory: what OTHER bots sent recently across all threads.
+  // Merged with the persona's own lines so the model avoids both repeating
+  // itself AND echoing what the swarm just said (the dead-giveaway of a bot
+  // farm firing identical/near-identical messages).
+  const avoidLines = Array.from(
+    new Set([...getGlobalRecentLines(40), ...ownLines]),
+  )
+
   if (aiConfigured()) {
     try {
       // Pull in whatever the last "learn" run distilled (cached, cheap). Falls
@@ -234,18 +247,18 @@ export async function generateReply(args: GenArgs): Promise<string> {
         behavior,
         referenceLines,
         learnedPointers,
-        ownLines,
+        avoidLines,
       )
 
-      // Up to two attempts: if the first line echoes something the persona
-      // already said, retry once hotter to break the loop.
+      // Up to three attempts: if the line echoes something this persona OR the
+      // swarm already said, retry hotter to break the loop.
       let clean = ''
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         const { text } = await generateText({
           model: MODEL,
           system,
           messages,
-          temperature: attempt === 0 ? 1 : 1.15,
+          temperature: attempt === 0 ? 1 : attempt === 1 ? 1.15 : 1.3,
           topP: 0.95,
           frequencyPenalty: 0.6,
           presencePenalty: 0.5,
@@ -254,13 +267,18 @@ export async function generateReply(args: GenArgs): Promise<string> {
         const candidate = (text || '').trim().replace(/^["'«»]+|["'«»]+$/g, '')
         if (!candidate || looksLikeRefusal(candidate)) continue
         clean = candidate
-        if (!tooSimilar(candidate, ownLines)) break
+        if (!tooSimilar(candidate, avoidLines)) break
       }
 
       if (clean && !looksLikeRefusal(clean)) {
         // Guarantee the "hand-typed" fingerprint even if the model wrote cleanly,
         // but at a lighter typo rate so AI text stays readable.
-        return applyStyle(clean, { ...persona.style, typoRate: persona.style.typoRate * 0.5 })
+        const styled = applyStyle(clean, {
+          ...persona.style,
+          typoRate: persona.style.typoRate * 0.5,
+        })
+        rememberGlobalLine(styled)
+        return styled
       }
     } catch (err) {
       console.warn('[client-sim] LLM generation failed, using template:', err instanceof Error ? err.message : String(err))
@@ -268,5 +286,7 @@ export async function generateReply(args: GenArgs): Promise<string> {
   }
 
   // Fallback: templates (already mangled by applyStyle inside templateLine).
-  return templateLine(BEHAVIOR_TO_TEMPLATE[behavior], persona)
+  const fallback = templateLine(BEHAVIOR_TO_TEMPLATE[behavior], persona)
+  rememberGlobalLine(fallback)
+  return fallback
 }

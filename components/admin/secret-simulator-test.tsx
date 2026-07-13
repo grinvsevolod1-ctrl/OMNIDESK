@@ -15,7 +15,7 @@ import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import type { ChannelType } from '@/lib/types'
-import type { SimPersona, SimTone } from '@/lib/client-sim/types'
+import type { SimPersona } from '@/lib/client-sim/types'
 
 /** Channel types the simulator can role-play, with human labels. */
 const TEST_CHANNELS: { type: ChannelType; label: string }[] = [
@@ -26,18 +26,20 @@ const TEST_CHANNELS: { type: ChannelType; label: string }[] = [
   { type: 'livechat', label: 'Онлайн-чат' },
 ]
 
+const TONE_LABEL: Record<string, string> = {
+  polite: 'Вежливый',
+  neutral: 'Обычный',
+  rough: 'Грубый',
+  mixed: 'Разный',
+}
+
 /**
  * Interactive rehearsal panel: the admin plays the manager and chats live with
  * a freshly generated AI client. Fully ephemeral — nothing is written to the
- * database or shown to real managers.
+ * database or shown to real managers. The persona's tone/temperament is rolled
+ * autonomously (like the live engine), so each rehearsal is a fresh character.
  */
-export function SecretSimulatorTest({
-  aggression,
-  tone = 'mixed',
-}: {
-  aggression: number
-  tone?: SimTone
-}) {
+export function SecretSimulatorTest() {
   const [channelType, setChannelType] = useState<ChannelType>('telegram')
   const [persona, setPersona] = useState<SimPersona | null>(null)
   const [lines, setLines] = useState<SimTestLine[]>([])
@@ -56,7 +58,7 @@ export function SecretSimulatorTest({
   function start() {
     startStart(async () => {
       try {
-        const res = await simTestStartAction({ channelType, aggression, tone })
+        const res = await simTestStartAction({ channelType })
         setPersona(res.persona)
         setLines([{ role: 'client', body: res.opening }])
         setDraft('')
@@ -237,12 +239,12 @@ export function SecretSimulatorTest({
               <Send className="size-4" />
             </Button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant="secondary" className="text-[11px]">
-              Агрессия: {aggression}%
+              Тон: {TONE_LABEL[persona.tone ?? 'mixed']}
             </Badge>
             <Badge variant="secondary" className="text-[11px]">
-              Тон: {tone === 'polite' ? 'Вежливый' : tone === 'neutral' ? 'Обычный' : tone === 'rough' ? 'Грубый' : 'Разный'}
+              Характер: {persona.temper}
             </Badge>
           </div>
         </div>

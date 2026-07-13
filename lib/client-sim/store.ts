@@ -30,12 +30,14 @@ interface SettingsRow {
   updated_at: string | Date
   learned_profile: LearnedProfile | null
   tone: SimTone
+  dialogs_per_day: number
 }
 
 function mapSettings(r: SettingsRow): SimSettings {
   return {
     enabled: r.enabled,
     channelIds: r.channel_ids ?? [],
+    dialogsPerDay: r.dialogs_per_day ?? 20,
     aggression: r.aggression,
     maxThreads: r.max_threads,
     spawnMinSec: r.spawn_min_sec,
@@ -55,15 +57,16 @@ function mapSettings(r: SettingsRow): SimSettings {
 const SETTINGS_COLS_BASE = `enabled, channel_ids, aggression, max_threads,
   spawn_min_sec, spawn_max_sec, reply_min_sec, reply_max_sec,
   next_spawn_at, spawned_total, replies_total, started_at, updated_at`
-// Optional columns added by later migrations (050: learned_profile, 051: tone).
-const SETTINGS_COLS = `${SETTINGS_COLS_BASE}, learned_profile, tone`
+// Optional columns added by later migrations (050: learned_profile, 051: tone,
+// 055: dialogs_per_day).
+const SETTINGS_COLS = `${SETTINGS_COLS_BASE}, learned_profile, tone, dialogs_per_day`
 
 /**
  * Read the singleton settings row, creating it if missing. Resilient to the
- * optional columns (`learned_profile`, `tone`) not existing yet — if migrations
- * 050/051 haven't been applied it transparently re-queries the base column set
- * and fills defaults, instead of throwing a 500 that would take down the whole
- * god panel.
+ * optional columns (`learned_profile`, `tone`, `dialogs_per_day`) not existing
+ * yet — if migrations 050/051/055 haven't been applied it transparently
+ * re-queries the base column set and fills defaults, instead of throwing a 500
+ * that would take down the whole god panel.
  */
 export async function getSettings(): Promise<SimSettings> {
   const selectRow = async (): Promise<SettingsRow | undefined> => {
@@ -76,13 +79,13 @@ export async function getSettings(): Promise<SimSettings> {
       // 42703 = undefined_column. Fall back to the pre-050 column set.
       if (isUndefinedColumn(err)) {
         console.log(
-          '[v0][client-sim] optional column missing — run migrations 050/051. Falling back.',
+          '[v0][client-sim] optional column missing — run migrations 050/051/055. Falling back.',
         )
         const rows = await query<
-          Omit<SettingsRow, 'learned_profile' | 'tone'>
+          Omit<SettingsRow, 'learned_profile' | 'tone' | 'dialogs_per_day'>
         >(`SELECT ${SETTINGS_COLS_BASE} FROM sim_settings WHERE id = true LIMIT 1`)
         return rows[0]
-          ? { ...rows[0], learned_profile: null, tone: 'mixed' }
+          ? { ...rows[0], learned_profile: null, tone: 'mixed', dialogs_per_day: 20 }
           : undefined
       }
       throw err
@@ -102,13 +105,14 @@ function isUndefinedColumn(err: unknown): boolean {
   const msg = (err as { message?: string }).message ?? ''
   return (
     code === '42703' ||
-    /learned_profile|\btone\b|column .* does not exist/i.test(msg)
+    /learned_profile|\btone\b|dialogs_per_day|column .* does not exist/i.test(msg)
   )
 }
 
 export interface SettingsPatch {
   enabled?: boolean
   channelIds?: string[]
+  dialogsPerDay?: number
   aggression?: number
   tone?: SimTone
   maxThreads?: number
@@ -118,56 +122,71 @@ export interface SettingsPatch {
   replyMaxSec?: number
 }
 
-/** Partial update of the settings row. Enabling stamps started_at. */
+/**
+ * Partial update of the settings row. Enabling stamps started_at.
+ *
+ * Assignments to columns added by optional migrations (`tone`, `dialogs_per_day`)
+ * are marked optional: if the target column doesn't exist yet, the whole update
+ * is transparently retried without the optional assignments so the rest still
+ * lands instead of 500-ing.
+ */
 export async function updateSettings(patch: SettingsPatch): Promise<SimSettings> {
-  const sets: string[] = ['updated_at = now()']
-  const params: unknown[] = []
-  const push = (col: string, val: unknown) => {
-    params.push(val)
-    sets.push(`${col} = $${params.length}`)
-  }
+  // Each assignment is `col = $n`; `optional` ones are dropped on undefined_column.
+  const assignments: Array<{ col: string; val: unknown; optional?: boolean }> = []
+  // Raw SQL fragments with no bound params (e.g. now()).
+  const rawSets: string[] = ['updated_at = now()']
 
   if (patch.enabled !== undefined) {
-    push('enabled', patch.enabled)
+    assignments.push({ col: 'enabled', val: patch.enabled })
     // Stamp started_at the moment it flips on; keep the schedule primed so the
     // engine can spawn immediately rather than waiting a full cycle.
-    if (patch.enabled) sets.push('started_at = now()', 'next_spawn_at = now()')
+    if (patch.enabled) rawSets.push('started_at = now()', 'next_spawn_at = now()')
   }
-  if (patch.channelIds !== undefined) push('channel_ids', patch.channelIds)
+  if (patch.channelIds !== undefined)
+    assignments.push({ col: 'channel_ids', val: patch.channelIds })
+  if (patch.dialogsPerDay !== undefined)
+    assignments.push({
+      col: 'dialogs_per_day',
+      val: clampInt(patch.dialogsPerDay, 1, 5_000),
+      optional: true,
+    })
   if (patch.aggression !== undefined)
-    push('aggression', clampInt(patch.aggression, 0, 100))
+    assignments.push({ col: 'aggression', val: clampInt(patch.aggression, 0, 100) })
   if (patch.maxThreads !== undefined)
     // 0 means unlimited. No upper bound enforced here.
-    push('max_threads', Math.max(0, Math.floor(patch.maxThreads) || 0))
+    assignments.push({ col: 'max_threads', val: Math.max(0, Math.floor(patch.maxThreads) || 0) })
   if (patch.spawnMinSec !== undefined)
-    push('spawn_min_sec', clampInt(patch.spawnMinSec, 5, 86_400))
+    assignments.push({ col: 'spawn_min_sec', val: clampInt(patch.spawnMinSec, 5, 86_400) })
   if (patch.spawnMaxSec !== undefined)
-    push('spawn_max_sec', clampInt(patch.spawnMaxSec, 5, 86_400))
+    assignments.push({ col: 'spawn_max_sec', val: clampInt(patch.spawnMaxSec, 5, 86_400) })
   if (patch.replyMinSec !== undefined)
-    push('reply_min_sec', clampInt(patch.replyMinSec, 1, 86_400))
+    assignments.push({ col: 'reply_min_sec', val: clampInt(patch.replyMinSec, 1, 86_400) })
   if (patch.replyMaxSec !== undefined)
-    push('reply_max_sec', clampInt(patch.replyMaxSec, 1, 86_400))
+    assignments.push({ col: 'reply_max_sec', val: clampInt(patch.replyMaxSec, 1, 86_400) })
+  if (patch.tone !== undefined)
+    assignments.push({
+      col: 'tone',
+      val: TONES.includes(patch.tone) ? patch.tone : 'mixed',
+      optional: true,
+    })
 
-  // `tone` may target a column that doesn't exist yet (migration 051 not run).
-  // Track its param index so we can retry without it on undefined_column.
-  let toneSetIdx = -1
-  if (patch.tone !== undefined) {
-    const tone: SimTone = TONES.includes(patch.tone) ? patch.tone : 'mixed'
-    params.push(tone)
-    toneSetIdx = sets.length
-    sets.push(`tone = $${params.length}`)
+  const run = async (list: typeof assignments) => {
+    const params: unknown[] = []
+    const sets = [...rawSets]
+    for (const a of list) {
+      params.push(a.val)
+      sets.push(`${a.col} = $${params.length}`)
+    }
+    await query(`UPDATE sim_settings SET ${sets.join(', ')} WHERE id = true`, params)
   }
 
   try {
-    await query(`UPDATE sim_settings SET ${sets.join(', ')} WHERE id = true`, params)
+    await run(assignments)
   } catch (err) {
-    if (toneSetIdx >= 0 && isUndefinedColumn(err)) {
-      // Retry without the tone assignment so the rest of the save still lands.
-      const without = sets.filter((_, i) => i !== toneSetIdx)
-      await query(
-        `UPDATE sim_settings SET ${without.join(', ')} WHERE id = true`,
-        params.slice(0, params.length - 1),
-      )
+    const hasOptional = assignments.some((a) => a.optional)
+    if (hasOptional && isUndefinedColumn(err)) {
+      // Retry without the optional assignments so the rest of the save lands.
+      await run(assignments.filter((a) => !a.optional))
     } else {
       throw err
     }
@@ -211,6 +230,41 @@ export async function bumpRepliesTotal(): Promise<void> {
   await query(
     `UPDATE sim_settings SET replies_total = replies_total + 1, updated_at = now() WHERE id = true`,
   )
+}
+
+/* ------------------- cross-thread anti-repetition memory ---------------- */
+
+/**
+ * A process-wide ring buffer of the most recent lines the bots actually sent
+ * across ALL conversations. Per-thread history already stops a single persona
+ * repeating itself; this catches the population-level tell where many "clients"
+ * independently send the same phrase. The generator consults it to avoid
+ * reusing anything the swarm just said, so bots never get caught echoing each
+ * other or firing identical replies at the same time.
+ */
+const GLOBAL_LINE_MEMORY_SIZE = 80
+const g = globalThis as unknown as { __simGlobalLines?: string[] }
+
+function globalLines(): string[] {
+  if (!g.__simGlobalLines) g.__simGlobalLines = []
+  return g.__simGlobalLines
+}
+
+/** Record a line the swarm just sent (deduped, capped). */
+export function rememberGlobalLine(line: string): void {
+  const trimmed = line.trim()
+  if (!trimmed) return
+  const buf = globalLines()
+  buf.push(trimmed)
+  if (buf.length > GLOBAL_LINE_MEMORY_SIZE) {
+    buf.splice(0, buf.length - GLOBAL_LINE_MEMORY_SIZE)
+  }
+}
+
+/** The most recent `n` lines sent anywhere, newest last. */
+export function getGlobalRecentLines(n = 40): string[] {
+  const buf = globalLines()
+  return buf.slice(-Math.max(0, n))
 }
 
 /* ------------------------------- threads -------------------------------- */

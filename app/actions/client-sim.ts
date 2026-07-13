@@ -107,15 +107,24 @@ export interface SimTestStart {
   opening: string
 }
 
+const SIM_TONES: SimTone[] = ['polite', 'neutral', 'rough', 'mixed']
+
 /** Spin up a new persona and get their opening message. */
 export async function simTestStartAction(input: {
   channelType: ChannelType
-  aggression: number
+  /** Optional overrides; omitted → rolled autonomously (like the live engine). */
+  aggression?: number
   tone?: SimTone
 }): Promise<SimTestStart> {
   await guard()
-  const aggression = clampInt(input.aggression, 0, 100, 60)
-  const persona = makePersona(input.channelType, aggression, input.tone ?? 'mixed')
+  // Roll a fresh character each rehearsal so the sandbox mirrors the swarm's
+  // "everyone is different" behaviour rather than a single fixed voice.
+  const aggression =
+    input.aggression !== undefined
+      ? clampInt(input.aggression, 0, 100, 60)
+      : Math.round((Math.random() * 100 + Math.random() * 100) / 2)
+  const tone = input.tone ?? SIM_TONES[Math.floor(Math.random() * SIM_TONES.length)]
+  const persona = makePersona(input.channelType, aggression, tone)
   const referenceLines = await sampleRealClientLines(input.channelType)
   const opening = await generateReply({
     persona,
