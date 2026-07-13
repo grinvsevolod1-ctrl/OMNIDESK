@@ -4,6 +4,7 @@ import { makePersona } from './content'
 import type { ChannelType } from '@/lib/types'
 import type {
   LearnedProfile,
+  SimOutcome,
   SimPersona,
   SimSettings,
   SimState,
@@ -32,6 +33,7 @@ interface SettingsRow {
   learned_profile: LearnedProfile | null
   tone: SimTone
   dialogs_per_day: number
+  max_concurrent: number
 }
 
 function mapSettings(r: SettingsRow): SimSettings {
@@ -39,6 +41,7 @@ function mapSettings(r: SettingsRow): SimSettings {
     enabled: r.enabled,
     channelIds: r.channel_ids ?? [],
     dialogsPerDay: r.dialogs_per_day ?? 20,
+    maxConcurrent: r.max_concurrent ?? 100,
     aggression: r.aggression,
     maxThreads: r.max_threads,
     spawnMinSec: r.spawn_min_sec,
@@ -59,8 +62,14 @@ const SETTINGS_COLS_BASE = `enabled, channel_ids, aggression, max_threads,
   spawn_min_sec, spawn_max_sec, reply_min_sec, reply_max_sec,
   next_spawn_at, spawned_total, replies_total, started_at, updated_at`
 // Columns added by later, optional migrations (050: learned_profile,
-// 051: tone, 055: dialogs_per_day). They may not exist yet on a given DB.
-const OPTIONAL_SETTINGS_COLS = ['learned_profile', 'tone', 'dialogs_per_day'] as const
+// 051: tone, 055: dialogs_per_day, 061: max_concurrent). They may not exist
+// yet on a given DB.
+const OPTIONAL_SETTINGS_COLS = [
+  'learned_profile',
+  'tone',
+  'dialogs_per_day',
+  'max_concurrent',
+] as const
 
 /**
  * Which optional columns actually exist on the `sim_settings` table THIS
@@ -106,6 +115,44 @@ async function getExistingOptionalCols(): Promise<Set<string>> {
 }
 
 /**
+ * Columns added to `sim_threads` by migration 061 (outcome + nudge backoff).
+ * Probed the same way as the settings columns so a DB that hasn't applied 061
+ * yet degrades gracefully (the engine falls back to pre-061 behaviour) instead
+ * of spamming `[db] Query failed` and taking the whole loop down.
+ */
+const OPTIONAL_THREAD_COLS = ['outcome', 'nudge_attempts', 'nudge_next_at'] as const
+let threadColsCache: { cols: Set<string>; expires: number } | null = null
+
+async function getExistingThreadCols(): Promise<Set<string>> {
+  if (threadColsCache && threadColsCache.expires > Date.now()) {
+    return threadColsCache.cols
+  }
+  let cols = new Set<string>()
+  try {
+    const rows = await query<{ column_name: string }>(
+      `SELECT a.attname AS column_name
+         FROM pg_attribute a
+        WHERE a.attrelid = to_regclass('sim_threads')
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND a.attname = ANY($1)`,
+      [OPTIONAL_THREAD_COLS as unknown as string[]],
+    )
+    cols = new Set(rows.map((r) => r.column_name))
+  } catch {
+    // Probe failed — assume the base schema (no realism columns).
+  }
+  threadColsCache = { cols, expires: Date.now() + OPTIONAL_COLS_TTL_MS }
+  return cols
+}
+
+/** True once migration 061's sim_threads columns are present. */
+async function hasThreadRealismCols(): Promise<boolean> {
+  const cols = await getExistingThreadCols()
+  return OPTIONAL_THREAD_COLS.every((c) => cols.has(c))
+}
+
+/**
  * Read the singleton settings row, creating it if missing. Selects only the
  * optional columns that actually exist (probed at runtime) and fills defaults
  * for the rest — so it works on any DB regardless of which migrations have run,
@@ -130,6 +177,7 @@ export async function getSettings(): Promise<SimSettings> {
       learned_profile: null,
       tone: 'mixed',
       dialogs_per_day: 20,
+      max_concurrent: 100,
       ...r,
     } as SettingsRow
   }
@@ -147,7 +195,7 @@ function isUndefinedColumn(err: unknown): boolean {
   const msg = (err as { message?: string }).message ?? ''
   return (
     code === '42703' ||
-    /learned_profile|\btone\b|dialogs_per_day|column .* does not exist/i.test(msg)
+    /learned_profile|\btone\b|dialogs_per_day|max_concurrent|column .* does not exist/i.test(msg)
   )
 }
 
@@ -155,6 +203,7 @@ export interface SettingsPatch {
   enabled?: boolean
   channelIds?: string[]
   dialogsPerDay?: number
+  maxConcurrent?: number
   aggression?: number
   tone?: SimTone
   maxThreads?: number
@@ -190,6 +239,12 @@ export async function updateSettings(patch: SettingsPatch): Promise<SimSettings>
     assignments.push({
       col: 'dialogs_per_day',
       val: clampInt(patch.dialogsPerDay, 1, 5_000),
+      optional: true,
+    })
+  if (patch.maxConcurrent !== undefined)
+    assignments.push({
+      col: 'max_concurrent',
+      val: clampInt(patch.maxConcurrent, 1, 1_000),
       optional: true,
     })
   if (patch.aggression !== undefined)
@@ -326,6 +381,8 @@ interface ThreadRow {
   turns: number
   last_seen_out: string | null
   next_run_at: string | Date | null
+  outcome?: SimOutcome | null
+  nudge_attempts?: number | null
 }
 
 function mapThread(r: ThreadRow): SimThreadRow {
@@ -337,6 +394,8 @@ function mapThread(r: ThreadRow): SimThreadRow {
     turns: r.turns,
     lastSeenOut: r.last_seen_out,
     nextRunAt: r.next_run_at ? new Date(r.next_run_at).toISOString() : null,
+    outcome: r.outcome ?? null,
+    nudgeAttempts: r.nudge_attempts ?? 0,
   }
 }
 
@@ -370,9 +429,19 @@ export async function expireStaleThreads(
   clientGhostMinutes = 180,
   hardCapMinutes = 2880, // 48h absolute backstop regardless of who spoke last
 ): Promise<number> {
+  const hasOutcome = await hasThreadRealismCols()
+  // When the realism columns exist we also stamp WHY it closed:
+  //   - client-ghost branch → 'ghosted'
+  //   - hard-cap backstop    → 'ended'
+  const outcomeSet = hasOutcome
+    ? `, outcome = CASE
+             WHEN l.last_dir = 'out'
+                  AND l.updated_at < now() - ($1 || ' minutes')::interval
+             THEN 'ghosted' ELSE 'ended' END`
+    : ''
   const rows = await query<{ n: string }>(
     `WITH latest AS (
-       SELECT t.conversation_id, t.updated_at,
+       SELECT t.conversation_id, t.updated_at, t.state,
               m.direction AS last_dir
          FROM sim_threads t
          JOIN LATERAL (
@@ -386,12 +455,16 @@ export async function expireStaleThreads(
      ),
      reaped AS (
        UPDATE sim_threads t
-          SET state = 'done', next_run_at = NULL, updated_at = now()
+          SET state = 'done', next_run_at = NULL, updated_at = now()${outcomeSet}
          FROM latest l
         WHERE t.conversation_id = l.conversation_id
           AND (
-            -- client ghosted: manager spoke last, client never returned
+            -- client ghosted: manager spoke last, client never returned.
+            -- Only applies to states where the manager owes / active chat —
+            -- NOT to 'later'/'sleeping'/'vanished', which have a legitimate
+            -- future return scheduled in next_run_at and must not be reaped.
             (l.last_dir = 'out'
+             AND l.state IN ('opening', 'chatting', 'ignoring')
              AND l.updated_at < now() - ($1 || ' minutes')::interval)
             -- absolute safety valve: anything ancient, whoever spoke last
             OR l.updated_at < now() - ($2 || ' minutes')::interval
@@ -416,9 +489,39 @@ export async function threadsByState(): Promise<Record<SimState, number>> {
     opening: 0,
     chatting: 0,
     ignoring: 0,
+    later: 0,
+    sleeping: 0,
+    vanished: 0,
     done: 0,
   }
-  for (const r of rows) out[r.state] = Number(r.n)
+  for (const r of rows) {
+    if (r.state in out) out[r.state] = Number(r.n)
+  }
+  return out
+}
+
+/**
+ * Finished dialogues grouped by outcome (the client's "fate"). Returns all-zero
+ * counts on a DB that hasn't applied migration 061 yet.
+ */
+export async function threadsByOutcome(): Promise<Record<SimOutcome, number>> {
+  const out: Record<SimOutcome, number> = {
+    ended: 0,
+    left: 0,
+    competitor: 0,
+    ghosted: 0,
+    angry: 0,
+  }
+  if (!(await hasThreadRealismCols())) return out
+  const rows = await query<{ outcome: SimOutcome | null; n: string }>(
+    `SELECT outcome, count(*)::text AS n
+       FROM sim_threads
+      WHERE state = 'done' AND outcome IS NOT NULL
+      GROUP BY outcome`,
+  )
+  for (const r of rows) {
+    if (r.outcome && r.outcome in out) out[r.outcome] = Number(r.n)
+  }
   return out
 }
 
@@ -476,7 +579,7 @@ export async function findThreadsAwaitingReaction(
           ORDER BY created_at DESC
           LIMIT 1
        ) m ON true
-      WHERE t.state <> 'done'
+      WHERE t.state IN ('opening', 'chatting', 'ignoring')
         AND (t.last_seen_out IS NULL OR m.id <> t.last_seen_out)
       ORDER BY t.updated_at ASC
       LIMIT $1`,
@@ -509,6 +612,12 @@ export async function findConversationsAwaitingManager(
   limit: number,
   staleSeconds = 90,
 ): Promise<StuckConversation[]> {
+  // Per-conversation backoff: once 061 is applied, skip a dialogue until its
+  // nudge_next_at arrives so a manager that never answers (e.g. master switch
+  // off) isn't poked every tick forever.
+  const backoffClause = (await hasThreadRealismCols())
+    ? 'AND (t.nudge_next_at IS NULL OR t.nudge_next_at <= now())'
+    : ''
   const rows = await query<{ conversation_id: string; body: string }>(
     `SELECT t.conversation_id, m.body
        FROM sim_threads t
@@ -519,9 +628,10 @@ export async function findConversationsAwaitingManager(
           ORDER BY created_at DESC
           LIMIT 1
        ) m ON true
-      WHERE t.state <> 'done'
+      WHERE t.state IN ('opening', 'chatting')
         AND m.direction = 'in'
         AND m.created_at < now() - make_interval(secs => $2::int)
+        ${backoffClause}
       ORDER BY t.updated_at ASC
       LIMIT $1`,
     [Math.max(1, limit), Math.max(0, Math.floor(staleSeconds))],
@@ -530,6 +640,55 @@ export async function findConversationsAwaitingManager(
     conversationId: r.conversation_id,
     lastClientBody: r.body,
   }))
+}
+
+/**
+ * Record that we poked the AI manager for this dialogue without visible
+ * progress: bump the attempt counter and push the next allowed nudge out
+ * exponentially (90s, 3m, 9m, 27m … capped ~2h). Reset by
+ * `scheduleReaction`/`markLatestOutSeen` the moment the manager actually
+ * replies. No-op on a pre-061 DB.
+ */
+export async function bumpNudgeBackoff(conversationId: string): Promise<void> {
+  if (!(await hasThreadRealismCols())) {
+    // Fall back to the old rotate-to-back behaviour so the backlog still cycles.
+    await touchThread(conversationId)
+    return
+  }
+  await query(
+    `UPDATE sim_threads
+        SET nudge_attempts = nudge_attempts + 1,
+            nudge_next_at = now() + make_interval(
+              secs => LEAST(7200, 90 * power(3, LEAST(nudge_attempts, 5))::int)
+            ),
+            updated_at = now()
+      WHERE conversation_id = $1`,
+    [conversationId],
+  )
+}
+
+/**
+ * Mark the latest manager (out) message as "seen" and clear any nudge backoff —
+ * called after the client actually replies, so the reaction sweep doesn't
+ * double-fire and the backoff resets on real progress. No-op on a pre-061 DB
+ * for the backoff reset; the last_seen_out update always runs.
+ */
+export async function markLatestOutSeen(conversationId: string): Promise<void> {
+  const resetBackoff = (await hasThreadRealismCols())
+    ? ', nudge_attempts = 0, nudge_next_at = NULL'
+    : ''
+  await query(
+    `UPDATE sim_threads t
+        SET last_seen_out = COALESCE(
+              (SELECT id FROM messages
+                WHERE conversation_id = $1 AND direction = 'out'
+                ORDER BY created_at DESC LIMIT 1),
+              t.last_seen_out
+            ),
+            updated_at = now()${resetBackoff}
+      WHERE t.conversation_id = $1`,
+    [conversationId],
+  )
 }
 
 /**

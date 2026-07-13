@@ -14,13 +14,36 @@ export type SimGender = 'male' | 'female'
 export type SimTone = 'polite' | 'neutral' | 'rough' | 'mixed'
 
 /**
- * Thread state machine:
+ * Thread state machine. All states except `done` are "active"
+ * (state <> 'done') and are picked up by the due-scheduler.
+ *
  *   opening  — just created, opening line sent, waiting for the manager
  *   chatting — active back-and-forth
- *   ignoring — the persona decided to go quiet (may resurface or die)
- *   done     — conversation is over (blew up / lost interest / "agreed")
+ *   ignoring — went quiet mid-chat (short pause; may resurface soon or die)
+ *   later    — explicitly said "занят, отвечу позже" — will come back in hours
+ *   sleeping — dormant for the night / weekend — resumes when "awake"
+ *   vanished — dropped off for a long stretch (a day+) — may resurface later
+ *   done     — conversation is over (see `outcome` for why)
  */
-export type SimState = 'opening' | 'chatting' | 'ignoring' | 'done'
+export type SimState =
+  | 'opening'
+  | 'chatting'
+  | 'ignoring'
+  | 'later'
+  | 'sleeping'
+  | 'vanished'
+  | 'done'
+
+/**
+ * Why a dialogue ended (set only when state = 'done'). Surfaced in the panel /
+ * logs so the operator can see each simulated client's "fate".
+ *   ended      — natural close / agreed / nothing more to say
+ *   left       — переписался и ушёл (lost interest, wandered off politely)
+ *   competitor — ушёл к конкуренту («уже нашёл другого / там дают больше»)
+ *   ghosted    — просто пропал и не вернулся (reaped after long silence)
+ *   angry      — вспылил и хлопнул дверью (blew up and ended it)
+ */
+export type SimOutcome = 'ended' | 'left' | 'competitor' | 'ghosted' | 'angry'
 
 /**
  * Per-persona writing fingerprint. Every value is rolled once at spawn so a
@@ -148,6 +171,12 @@ export interface SimSettings {
    */
   dialogsPerDay: number
   /**
+   * INDEPENDENT cap on how many dialogues may be live at the same moment.
+   * Decoupled from `dialogsPerDay` so the operator can run a big simultaneous
+   * crowd (up to ~100+) regardless of the daily arrival rate. Defaults to 100.
+   */
+  maxConcurrent: number
+  /**
    * Legacy tunables — kept for backward compatibility with the DB columns, but
    * no longer surfaced in the UI or used by the engine (each persona now rolls
    * its own tone/aggression, and pacing is derived from `dialogsPerDay`).
@@ -175,8 +204,16 @@ export interface SimStatus extends SimSettings {
   activeThreads: number
   /** Threads in each state. */
   byState: Record<SimState, number>
+  /** Finished dialogues grouped by outcome (the client's "fate"). */
+  byOutcome: Record<SimOutcome, number>
   /** Whether AI Gateway generation is available. */
   aiConfigured: boolean
+  /**
+   * Whether the AI MANAGER master switch is on. When false the simulator's
+   * dialogues get no replies, so the engine pauses and surfaces this so the
+   * operator knows why everything went quiet (the #1 "deadlock" cause).
+   */
+  aiManagerEnabled: boolean
 }
 
 /** One row of sim_threads plus its persona. */
@@ -188,4 +225,8 @@ export interface SimThreadRow {
   turns: number
   lastSeenOut: string | null
   nextRunAt: string | null
+  /** Why it ended (only when state = 'done'). */
+  outcome: SimOutcome | null
+  /** How many times the backlog sweep has poked the manager without progress. */
+  nudgeAttempts: number
 }
