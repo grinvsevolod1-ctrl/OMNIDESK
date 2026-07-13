@@ -18,6 +18,9 @@ export type Behavior =
   | 'dismissive' // brushes it off, not interested
   | 'confused' // doesn't get it, asks naive questions
   | 'nudge' // manager went quiet — pokes them
+  | 'later' // busy right now — says they'll answer later, then drops off
+  | 'comeback' // returning after a gap (hours/days) — picks the thread back up
+  | 'leaving' // walking away for good — lost interest / found someone else
 
 // Top-tier chat model (gpt-5.3-chat): it holds a rich persona (archetype,
 // backstory, verbal tics, running mood) far more convincingly than the older
@@ -52,6 +55,9 @@ const BEHAVIOR_HINT: Record<Behavior, string> = {
   dismissive: 'Тебе не заходит, отмахнись коротко и лениво, можешь слить разговор.',
   confused: 'Ты туповато не догоняешь о чём речь, задай наивный/глупый вопрос, переспроси.',
   nudge: 'Менеджер молчит. Ткни его коротко, поторопи, можешь бухтеть.',
+  later: 'Ты сейчас занят (за рулём/на работе/дела). Коротко брось что не можешь сейчас, ответишь позже — и всё, без деталей.',
+  comeback: 'Ты пропадал на какое-то время и возвращаешься к разговору. Извинись/объясни коротко («замотался», «только увидел», «был занят») и продолжи с того на чём остановились или переспроси.',
+  leaving: 'Ты решил слиться окончательно: либо потерял интерес, либо уже нашёл другой вариант/работу. Скажи это коротко и закрой тему, без агрессии.',
 }
 
 interface GenArgs {

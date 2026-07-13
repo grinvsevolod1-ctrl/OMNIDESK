@@ -39,12 +39,37 @@ import type { SimStatus } from '@/lib/client-sim/types'
 const STATE_LABEL: Record<string, string> = {
   opening: 'Открывают',
   chatting: 'Переписка',
-  ignoring: 'Игнорят',
+  ignoring: 'Молчат',
+  later: 'Ответят позже',
+  sleeping: 'Спят / ночь',
+  vanished: 'Пропали',
   done: 'Завершено',
 }
 
+const STATE_ORDER = [
+  'opening',
+  'chatting',
+  'ignoring',
+  'later',
+  'sleeping',
+  'vanished',
+  'done',
+] as const
+
+const OUTCOME_LABEL: Record<string, string> = {
+  ended: 'Договорили',
+  left: 'Ушли (потеряли интерес)',
+  competitor: 'Ушли к конкуренту',
+  ghosted: 'Пропали навсегда',
+  angry: 'Вспылили',
+}
+
+const OUTCOME_ORDER = ['ended', 'left', 'competitor', 'ghosted', 'angry'] as const
+
 const MIN_PER_DAY = 1
 const MAX_PER_DAY = 5000
+const MIN_CONCURRENT = 1
+const MAX_CONCURRENT = 1000
 
 /** Human-friendly seconds → "45с" / "3м" / "2ч". */
 function humanGap(total: number): string {
@@ -70,11 +95,13 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   // The single tunable + channel selection. Synced from the server snapshot on
   // first load and after saves.
   const [perDay, setPerDay] = useState(20)
+  const [maxConcurrent, setMaxConcurrent] = useState(100)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const hydrated = useRef(false)
 
   const hydrateControls = useCallback((s: SimStatus) => {
     setPerDay(s.dialogsPerDay)
+    setMaxConcurrent(s.maxConcurrent)
     setSelected(new Set(s.channelIds))
   }, [])
 
@@ -109,14 +136,20 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
 
   function save() {
     const dialogsPerDay = Math.min(Math.max(Math.round(perDay) || MIN_PER_DAY, MIN_PER_DAY), MAX_PER_DAY)
+    const maxCc = Math.min(
+      Math.max(Math.round(maxConcurrent) || MIN_CONCURRENT, MIN_CONCURRENT),
+      MAX_CONCURRENT,
+    )
     startTransition(async () => {
       try {
         const s = await simUpdateSettingsAction({
           dialogsPerDay,
+          maxConcurrent: maxCc,
           channelIds: Array.from(selected),
         })
         void mutateStatus(s, { revalidate: false })
         setPerDay(s.dialogsPerDay)
+        setMaxConcurrent(s.maxConcurrent)
         toast.success('Настройки сохранены')
       } catch {
         toast.error('Не удалось сохранить настройки')
@@ -126,6 +159,12 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
 
   function bumpPerDay(delta: number) {
     setPerDay((v) => Math.min(Math.max((Math.round(v) || 0) + delta, MIN_PER_DAY), MAX_PER_DAY))
+  }
+
+  function bumpConcurrent(delta: number) {
+    setMaxConcurrent((v) =>
+      Math.min(Math.max((Math.round(v) || 0) + delta, MIN_CONCURRENT), MAX_CONCURRENT),
+    )
   }
 
   function toggleChannel(id: string) {
@@ -198,6 +237,18 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           </div>
         )}
 
+        {status && running && !status.aiManagerEnabled && (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+            <TriangleAlert className="size-4 shrink-0" />
+            <span className="text-pretty">
+              <strong>ИИ-менеджер выключен</strong> (мастер-выключатель ИИ).
+              Симулятор на паузе: клиенты пишут, но ответить им некому, поэтому
+              новые диалоги и «догон» зависших приостановлены. Включите
+              ИИ-ассистента в основной панели — симуляция оживёт сама.
+            </span>
+          </div>
+        )}
+
         {status && !status.aiConfigured && (
           <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
             <TriangleAlert className="size-4 shrink-0" />
@@ -219,7 +270,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
         <MiniStat
           icon={Users2}
           label="Активные диалоги"
-          value={status?.activeThreads ?? 0}
+          value={`${status?.activeThreads ?? 0} / ${status?.maxConcurrent ?? maxConcurrent}`}
         />
         <MiniStat
           icon={MessageCircle}
@@ -238,18 +289,37 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
         />
       </div>
 
-      {/* ---- State breakdown ---- */}
+      {/* ---- Lifecycle state breakdown ---- */}
       {status && (
-        <Card className="flex flex-wrap gap-2 p-4">
-          {(['opening', 'chatting', 'ignoring', 'done'] as const).map((st) => (
-            <div
-              key={st}
-              className="flex items-center gap-2 rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs"
-            >
-              <span className="text-muted-foreground">{STATE_LABEL[st]}</span>
-              <span className="font-semibold tabular-nums">{status.byState[st]}</span>
-            </div>
-          ))}
+        <Card className="flex flex-col gap-3 p-4">
+          <div className="flex flex-wrap gap-2">
+            {STATE_ORDER.map((st) => (
+              <div
+                key={st}
+                className="flex items-center gap-2 rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs"
+              >
+                <span className="text-muted-foreground">{STATE_LABEL[st]}</span>
+                <span className="font-semibold tabular-nums">
+                  {status.byState[st] ?? 0}
+                </span>
+              </div>
+            ))}
+          </div>
+          {/* Fates of finished dialogues */}
+          <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
+            <span className="text-xs text-muted-foreground">Как завершились:</span>
+            {OUTCOME_ORDER.map((oc) => (
+              <div
+                key={oc}
+                className="flex items-center gap-2 rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs"
+              >
+                <span className="text-muted-foreground">{OUTCOME_LABEL[oc]}</span>
+                <span className="font-semibold tabular-nums">
+                  {status.byOutcome[oc] ?? 0}
+                </span>
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
@@ -312,9 +382,66 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground text-pretty">
-            Единственная ручка. Всё остальное — сколько диалогов одновременно,
-            когда именно писать, с какой скоростью и в каком тоне — симулятор
+            Темп прихода новых. Скорость ответов, тон и характер симулятор
             подбирает сам, чтобы поведение было живым и непредсказуемым.
+          </p>
+        </div>
+
+        {/* Max concurrent dialogues — independent of daily throughput */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="sim-max-cc">Одновременных диалогов (лимит)</Label>
+            <span className="text-xs text-muted-foreground">
+              до {MAX_CONCURRENT}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-10 shrink-0"
+              onClick={() => bumpConcurrent(-5)}
+              disabled={maxConcurrent <= MIN_CONCURRENT}
+              aria-label="Меньше"
+            >
+              <Minus className="size-4" />
+            </Button>
+            <Input
+              id="sim-max-cc"
+              type="number"
+              inputMode="numeric"
+              min={MIN_CONCURRENT}
+              max={MAX_CONCURRENT}
+              value={maxConcurrent}
+              onChange={(e) => setMaxConcurrent(Number(e.target.value))}
+              onBlur={() =>
+                setMaxConcurrent((v) =>
+                  Math.min(
+                    Math.max(Math.round(v) || MIN_CONCURRENT, MIN_CONCURRENT),
+                    MAX_CONCURRENT,
+                  ),
+                )
+              }
+              className="h-10 max-w-32 text-center text-base font-semibold tabular-nums"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-10 shrink-0"
+              onClick={() => bumpConcurrent(5)}
+              disabled={maxConcurrent >= MAX_CONCURRENT}
+              aria-label="Больше"
+            >
+              <Plus className="size-4" />
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground text-pretty">
+            Сколько «живых» клиентов может вести переписку одновременно —
+            независимо от суточного потока. Сюда входят и те, кто сейчас спит,
+            обещал ответить позже или временно пропал: они занимают место, но не
+            пишут постоянно. Можно смело ставить до 100.
           </p>
         </div>
 

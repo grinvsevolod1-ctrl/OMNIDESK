@@ -1,8 +1,9 @@
-import type { SimState, SimThreadRow, SimTone } from './types'
+import type { SimOutcome, SimState, SimThreadRow, SimTone } from './types'
 import { chance, makePersona, randInt, splitIntoMessages } from './content'
 import { type Behavior, generateReply } from './generate'
 import { ensureLock, releaseLock } from './lock'
 import {
+  bumpNudgeBackoff,
   bumpRepliesTotal,
   bumpSpawnedTotal,
   claimDueThreads,
@@ -19,7 +20,6 @@ import {
   listUsableChannels,
   sampleRealClientLines,
   scheduleReaction,
-  touchThread,
   updateThread,
   type SimChannel,
 } from './store'
@@ -27,6 +27,7 @@ import { pick } from './content'
 import { computeMood, type MoodResult } from './mood'
 import { logAi } from '@/lib/data/ai-log'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { getAiAssistSettings } from '@/lib/data/ai-assist'
 import type { ChannelType } from '@/lib/types'
 
 /**
@@ -158,6 +159,23 @@ async function tick(): Promise<void> {
       return
     }
 
+    // DEADLOCK GUARD: the simulator only "knocks on the door" — the AI MANAGER
+    // must be switched on to actually answer. If its master switch is off, every
+    // dialogue would sit unanswered and the old code nudged it every 5s forever
+    // (the "backlog.nudge ↔ skip.not_led" loop the operator saw). Instead we
+    // pause the active work and surface ONE clear warning explaining exactly why
+    // everything went quiet. The engine keeps ticking so it resumes instantly
+    // when the switch flips back on.
+    const aiManager = await getAiAssistSettings().catch(() => null)
+    if (!aiManager || !aiManager.enabled) {
+      noteSim(
+        'ai_manager_off',
+        'warn',
+        'ИИ-менеджер выключен (мастер-выключатель ИИ). Симулятор на паузе: клиенты не получают ответов, поэтому новые диалоги и «догон» зависших приостановлены. Включите ИИ-ассистента, чтобы симуляция ожила.',
+      )
+      return
+    }
+
     // Retire only dialogues the CLIENT abandoned (manager replied, client went
     // silent ≥ CLIENT_GHOST_MINUTES) plus an absolute 48h backstop. Dialogues
     // still waiting on the manager are deliberately NOT reaped here — the
@@ -179,10 +197,14 @@ async function tick(): Promise<void> {
     // the auto-trigger existed, or ones where the manager call failed earlier.
     await sweepBacklog()
 
-    // Everything is derived autonomously from the single "dialogues per day"
-    // knob — concurrency, spawn cadence and reply timing are all computed here
-    // so the operator only ever sets throughput.
-    await maybeSpawn(settings.channelIds, settings.dialogsPerDay)
+    // Spawn cadence/timing is derived from "dialogues per day"; the number of
+    // simultaneously-live dialogues is now an INDEPENDENT operator knob
+    // (maxConcurrent, up to ~100+) rather than a function of throughput.
+    await maybeSpawn(
+      settings.channelIds,
+      settings.dialogsPerDay,
+      settings.maxConcurrent,
+    )
     await scheduleManagerReactions()
     await processDueThreads()
   } catch (err) {
@@ -204,20 +226,24 @@ async function tick(): Promise<void> {
 async function maybeSpawn(
   channelIds: string[],
   dialogsPerDay: number,
+  maxConcurrent: number,
 ): Promise<void> {
   // Average seconds between new dialogues to hit the daily target.
   const perDay = Math.max(1, Math.floor(dialogsPerDay) || 1)
   const avgGapSec = Math.max(20, Math.round(86_400 / perDay))
 
-  // Autonomous concurrency cap: enough headroom for the throughput without
-  // letting threads pile up unbounded. Scales with the daily rate.
-  const maxThreads = Math.max(5, Math.min(400, Math.round(perDay / 3) + 3))
+  // INDEPENDENT concurrency cap: how many dialogues may be live at once,
+  // decoupled from throughput. "Live" = every non-done thread, INCLUDING the
+  // ones currently asleep / said-later / vanished — they still occupy a slot
+  // (that's the point: a big simultaneous crowd where many are dormant, not all
+  // typing at once). Defaults to 100.
+  const maxThreads = Math.max(1, Math.min(1_000, Math.round(maxConcurrent) || 100))
   const active = await countActiveThreads()
   if (active >= maxThreads) {
     noteSim(
       'at_capacity',
       'info',
-      `Достигнут потолок активных диалогов (${active}/${maxThreads}) — жду, пока часть завершится.`,
+      `Достигнут потолок одновременных диалогов (${active}/${maxThreads}) — новые не создаю, пока часть не завершится. Часть из них сейчас «спит»/молчит — это нормально.`,
     )
     return
   }
@@ -475,8 +501,10 @@ async function sweepBacklog(): Promise<void> {
   })
   for (const c of stuck) {
     await triggerManagerReply(c.conversationId, c.lastClientBody)
-    // Rotate to the back of the queue so the next tick picks different ones.
-    await touchThread(c.conversationId)
+    // Exponential per-conversation backoff (90s → 3m → 9m … capped ~2h) so a
+    // manager that never answers this particular dialogue isn't poked every
+    // tick forever. A real manager reply resets the backoff (scheduleReaction).
+    await bumpNudgeBackoff(c.conversationId)
   }
 }
 
@@ -488,6 +516,19 @@ async function sweepBacklog(): Promise<void> {
  */
 async function runThreadTurn(thread: SimThreadRow): Promise<void> {
   const { persona, conversationId } = thread
+
+  // A thread that was parked (said "later", was asleep, or had vanished) and is
+  // now due again = the client is coming BACK to the conversation.
+  const wasDormant =
+    thread.state === 'later' ||
+    thread.state === 'sleeping' ||
+    thread.state === 'vanished'
+
+  // Daily rhythm: if they're due to act but it's the middle of the night (or a
+  // lazy weekend), most of the time they just sleep and pick it up later rather
+  // than texting at 3am. Comebacks are already scheduled for daytime, so this
+  // mainly parks night-time nudges/reactions.
+  if (!wasDormant && (await maybeSleepThroughOffHours(thread))) return
 
   const transcript = await getTranscript(conversationId)
   const history = transcript.map((l) => ({
@@ -501,21 +542,47 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
 
   // Whether the manager ever replied determines nudge vs reaction.
   const managerSpoke = transcript.some((l) => l.direction === 'out')
-  const behavior = managerSpoke
+  const rolled = managerSpoke
     ? rollBehavior(persona.temper, persona.style.profanity, thread.turns, mood)
     : 'nudge'
 
-  // Some turns end the conversation instead of replying.
-  const outcome = rollOutcome(behavior, thread.turns)
-  if (outcome === 'ghost') {
-    // Go silent — mark ignoring, maybe resurface much later, maybe die.
-    const resurface = chance(0.4)
+  // Decide what shape this turn takes: a normal reply, a quick "busy, later",
+  // a short sulk, a long vanish, or an outright ending (with a reason).
+  const plan = rollTurnPlan(rolled, thread.turns, wasDormant)
+
+  // --- Silent transitions (no message posted) --------------------------------
+  if (plan.kind === 'ignore') {
+    // Brief sulk — resurface within minutes.
     await updateThread(conversationId, {
-      state: resurface ? 'ignoring' : 'done',
-      nextRunAt: resurface ? isoIn(randInt(180, 1200)) : null,
+      state: 'ignoring',
+      nextRunAt: isoIn(randInt(180, 1200)),
     })
     return
   }
+  if (plan.kind === 'vanish') {
+    // Drop off for a day+ then (usually) come back — a scheduled comeback.
+    await updateThread(conversationId, {
+      state: 'vanished',
+      nextRunAt: isoIn(randInt(20 * 3600, 72 * 3600)),
+    })
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: 'vanished',
+      message: `«${persona.name}» пропал — вернётся через день-другой.`,
+      conversationId,
+      channelType: persona.channelType,
+    })
+    return
+  }
+
+  // --- Turns that DO post a message ------------------------------------------
+  // Pick the register the line should convey.
+  let behavior: Behavior = rolled
+  if (plan.kind === 'later') behavior = 'later'
+  else if (plan.kind === 'end' && (plan.outcome === 'left' || plan.outcome === 'competitor'))
+    behavior = 'leaving'
+  else if (wasDormant) behavior = 'comeback'
 
   const referenceLines = await sampleRealClientLines(persona.channelType)
   const body = await generateReply({
@@ -540,28 +607,75 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
     await updateThread(conversationId, { nextRunAt: isoIn(randInt(45, 180)) })
     return
   }
+
+  if (wasDormant) {
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: 'comeback',
+      message: `«${persona.name}» вернулся в диалог после паузы.`,
+      conversationId,
+      channelType: persona.channelType,
+    })
+  }
+
   // Split into chat bubbles: post the first now, advance the state machine, then
   // deliver the rest with typing gaps and trigger the manager once at the end.
   const bubbles = splitIntoMessages(body, persona.style)
   await insertInboundMessage(conversationId, persona.name, bubbles[0] ?? body)
   await bumpRepliesTotal()
 
-  const nextState: SimState = outcome === 'end' ? 'done' : 'chatting'
-  await updateThread(conversationId, {
-    state: nextState,
-    turns: thread.turns + 1,
-    // After replying we wait on the manager again (no self-schedule), unless
-    // we're nudging an absent manager — then poke again later.
-    nextRunAt:
-      nextState === 'done'
-        ? null
-        : behavior === 'nudge'
-          ? isoIn(randInt(120, 600))
-          : null,
-  })
+  if (plan.kind === 'later') {
+    // Said "busy, later" — go dormant for a few hours, then a comeback fires.
+    await updateThread(conversationId, {
+      state: 'later',
+      turns: thread.turns + 1,
+      nextRunAt: isoIn(randInt(3 * 3600, 10 * 3600)),
+    })
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: 'later',
+      message: `«${persona.name}» занят — обещал ответить позже.`,
+      conversationId,
+      channelType: persona.channelType,
+    })
+  } else if (plan.kind === 'end') {
+    await updateThread(conversationId, {
+      state: 'done',
+      turns: thread.turns + 1,
+      nextRunAt: null,
+      outcome: plan.outcome,
+    })
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: `done.${plan.outcome}`,
+      message: `«${persona.name}»: ${OUTCOME_LABEL[plan.outcome]}.`,
+      conversationId,
+      channelType: persona.channelType,
+    })
+  } else {
+    // Normal reply: wait on the manager again, unless we're poking an absent
+    // manager (nudge) — then schedule another poke later.
+    await updateThread(conversationId, {
+      state: 'chatting',
+      turns: thread.turns + 1,
+      nextRunAt: rolled === 'nudge' ? isoIn(randInt(120, 600)) : null,
+    })
+  }
 
   // Follow-up bubbles + the (single) manager trigger, on a human typing cadence.
   void deliverFollowupBubbles(conversationId, persona.name, bubbles.slice(1), body)
+}
+
+/** Human-readable reasons for the "Логи" tab / dashboard. */
+const OUTCOME_LABEL: Record<SimOutcome, string> = {
+  ended: 'разговор естественно завершился',
+  left: 'переписался и потерял интерес, ушёл',
+  competitor: 'сказал что уже нашёл другой вариант',
+  ghosted: 'просто пропал и не вернулся',
+  angry: 'вспылил и закрыл разговор',
 }
 
 /* ------------------------------- rolls ---------------------------------- */
@@ -583,6 +697,11 @@ export function rollBehavior(
     dismissive: 2,
     confused: 2,
     nudge: 0,
+    // Engine-driven behaviours (chosen by the turn planner / lifecycle), never
+    // picked by this weighted roll — kept at 0 to satisfy the exhaustive record.
+    later: 0,
+    comeback: 0,
+    leaving: 0,
   }
 
   // Temperament nudges.
@@ -608,26 +727,69 @@ export function rollBehavior(
   return weightedPick(weights)
 }
 
-type Outcome = 'reply' | 'end' | 'ghost'
+/**
+ * What shape a turn takes:
+ *   reply  — post a normal message and keep chatting
+ *   later  — post a quick "busy, later" and go dormant for hours
+ *   ignore — brief sulk, resurface in minutes (no message)
+ *   vanish — drop off for a day+ then come back (no message)
+ *   end    — finish the dialogue, with a reason (outcome)
+ */
+type TurnPlan =
+  | { kind: 'reply' }
+  | { kind: 'later' }
+  | { kind: 'ignore' }
+  | { kind: 'vanish' }
+  | { kind: 'end'; outcome: SimOutcome }
 
-/** Decide whether this turn continues, ends, or ghosts. */
-function rollOutcome(behavior: Behavior, turns: number): Outcome {
-  // Early on, almost always keep talking.
-  if (turns < 2) return chance(0.05) ? 'ghost' : 'reply'
+/**
+ * Decide this turn's shape from behaviour + length + whether the client is just
+ * coming back. Tuned so most turns are replies, endings carry a human reason,
+ * and disappearances split between short sulks, "later", and long vanishes.
+ */
+function rollTurnPlan(
+  behavior: Behavior,
+  turns: number,
+  wasDormant: boolean,
+): TurnPlan {
+  // A returning client is here to talk — don't immediately bail on them.
+  if (wasDormant) {
+    if (chance(0.12)) return { kind: 'end', outcome: pickWalkAway() }
+    return { kind: 'reply' }
+  }
+
+  // Early on, almost always keep talking (tiny chance of a brief sulk).
+  if (turns < 2) return chance(0.05) ? { kind: 'ignore' } : { kind: 'reply' }
+
+  // "Занят, отвечу позже" — a small, ever-present chance mid-conversation.
+  if (chance(0.06)) return { kind: 'later' }
 
   if (behavior === 'angry') {
     // Blow-ups sometimes end the chat outright.
-    if (chance(0.35)) return 'end'
+    if (chance(0.35)) return { kind: 'end', outcome: 'angry' }
   }
   if (behavior === 'dismissive') {
-    if (chance(0.3)) return 'end'
-    if (chance(0.2)) return 'ghost'
+    if (chance(0.3)) return { kind: 'end', outcome: pickWalkAway() }
+    if (chance(0.2)) return { kind: 'vanish' }
   }
-  // Natural attrition as threads get long.
-  if (turns >= 6 && chance(0.25)) return chance(0.5) ? 'end' : 'ghost'
-  if (turns >= 10 && chance(0.5)) return 'end'
 
-  return chance(0.08) ? 'ghost' : 'reply'
+  // Natural attrition as threads get long.
+  if (turns >= 6 && chance(0.25)) {
+    return chance(0.5)
+      ? { kind: 'end', outcome: pickWalkAway() }
+      : { kind: 'vanish' }
+  }
+  if (turns >= 10 && chance(0.5)) return { kind: 'end', outcome: pickWalkAway() }
+
+  // Occasional silent disappearance mid-chat: short sulk vs long vanish.
+  if (chance(0.08)) return chance(0.6) ? { kind: 'ignore' } : { kind: 'vanish' }
+
+  return { kind: 'reply' }
+}
+
+/** Pick a "walked away" reason: lost interest vs found a competitor. */
+function pickWalkAway(): SimOutcome {
+  return chance(0.4) ? 'competitor' : 'left'
 }
 
 /**
@@ -668,4 +830,73 @@ function weightedPick<K extends string>(weights: Record<K, number>): K {
 
 function isoIn(seconds: number): string {
   return new Date(Date.now() + seconds * 1000).toISOString()
+}
+
+/* ------------------------- daily-rhythm helpers ------------------------- */
+
+/** Night hours (server local): people mostly don't reply 23:00–08:00. */
+function isNight(d = new Date()): boolean {
+  const h = d.getHours()
+  return h >= 23 || h < 8
+}
+
+/** Weekend (server local): traffic is sparser and lazier. */
+function isWeekend(d = new Date()): boolean {
+  const day = d.getDay()
+  return day === 0 || day === 6
+}
+
+/**
+ * Seconds until "morning" (~08:00 local) with 0–2h jitter so a whole crowd
+ * doesn't wake at the same instant. Used to park sleeping threads overnight.
+ */
+function secondsUntilMorning(): number {
+  const now = new Date()
+  const wake = new Date(now)
+  wake.setHours(8, 0, 0, 0)
+  if (now.getHours() >= 8) wake.setDate(wake.getDate() + 1)
+  const base = Math.round((wake.getTime() - now.getTime()) / 1000)
+  return Math.max(60, base + randInt(0, 2 * 3600))
+}
+
+/**
+ * If the client is due to act but it's night (or a lazy weekend moment), park
+ * the thread as `sleeping`/dormant and reschedule instead of texting at 3am.
+ * Returns true if it deferred (caller should stop processing this turn).
+ */
+async function maybeSleepThroughOffHours(
+  thread: SimThreadRow,
+): Promise<boolean> {
+  const d = new Date()
+  if (isNight(d) && chance(0.85)) {
+    await updateThread(thread.conversationId, {
+      state: 'sleeping',
+      nextRunAt: isoIn(secondsUntilMorning()),
+    })
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: 'sleeping',
+      message: `«${thread.persona.name}» лёг спать — продолжит утром.`,
+      conversationId: thread.conversationId,
+      channelType: thread.persona.channelType,
+    })
+    return true
+  }
+  if (!isNight(d) && isWeekend(d) && chance(0.3)) {
+    await updateThread(thread.conversationId, {
+      state: 'sleeping',
+      nextRunAt: isoIn(randInt(2 * 3600, 8 * 3600)),
+    })
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: 'sleeping',
+      message: `«${thread.persona.name}» отложил на потом — выходной, ответит через несколько часов.`,
+      conversationId: thread.conversationId,
+      channelType: thread.persona.channelType,
+    })
+    return true
+  }
+  return false
 }

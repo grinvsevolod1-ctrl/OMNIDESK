@@ -709,11 +709,16 @@ export async function scheduleReaction(
   managerMessageId: string,
   delaySec: number,
 ): Promise<void> {
+  // The manager replied → real progress. Clear nudge backoff (post-061) so a
+  // future stall is treated fresh instead of staying muted.
+  const resetBackoff = (await hasThreadRealismCols())
+    ? ', nudge_attempts = 0, nudge_next_at = NULL'
+    : ''
   await query(
     `UPDATE sim_threads
         SET last_seen_out = $2,
             next_run_at = now() + make_interval(secs => $3::int),
-            updated_at = now()
+            updated_at = now()${resetBackoff}
       WHERE conversation_id = $1`,
     [conversationId, managerMessageId, Math.max(1, Math.floor(delaySec))],
   )
@@ -722,7 +727,12 @@ export async function scheduleReaction(
 /** Persist a thread's new state / schedule after the engine acts on it. */
 export async function updateThread(
   conversationId: string,
-  patch: { state?: SimState; turns?: number; nextRunAt?: string | null },
+  patch: {
+    state?: SimState
+    turns?: number
+    nextRunAt?: string | null
+    outcome?: SimOutcome | null
+  },
 ): Promise<void> {
   const sets: string[] = ['updated_at = now()']
   const params: unknown[] = [conversationId]
@@ -741,6 +751,11 @@ export async function updateThread(
       params.push(patch.nextRunAt)
       sets.push(`next_run_at = $${params.length}`)
     }
+  }
+  // `outcome` only exists post-061; guard so a lagging DB doesn't error.
+  if (patch.outcome !== undefined && (await hasThreadRealismCols())) {
+    params.push(patch.outcome)
+    sets.push(`outcome = $${params.length}`)
   }
   await query(`UPDATE sim_threads SET ${sets.join(', ')} WHERE conversation_id = $1`, params)
 }
