@@ -19,14 +19,17 @@ export type Behavior =
   | 'confused' // doesn't get it, asks naive questions
   | 'nudge' // manager went quiet — pokes them
 
-// Full gpt-4.1 (not mini): it holds a rich persona — archetype, backstory,
-// verbal tics, running mood — far more convincingly and varies its wording
-// much better, which is exactly what sells "these are real different people".
-// Pricier than the mini, but that's the deliberate trade-off for realism.
-// Override with CLIENT_SIM_MODEL to force something else. NOTE: the "learn from
-// dialogues" analysis uses its OWN model var (CLIENT_SIM_LEARN_MODEL, see
-// learn.ts) so tuning the chat model never silently changes the analysis one.
-const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-4.1'
+// Top-tier chat model (gpt-5.3-chat): it holds a rich persona (archetype,
+// backstory, verbal tics, running mood) far more convincingly than the older
+// gpt-4.1, varies wording much better and sounds genuinely human in short
+// chat-style bursts, without the "reasoning out loud" / stiff register of the
+// pro/reasoning variants. That natural, casual voice is exactly what sells
+// "these are real different people". It is the pricier flagship chat tier, and
+// that cost is the deliberate trade-off for realism. Override with
+// CLIENT_SIM_MODEL to force something else. NOTE: the "learn from dialogues"
+// analysis uses its OWN model var (CLIENT_SIM_LEARN_MODEL, see learn.ts) so
+// tuning the chat model never silently changes the analysis one.
+const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-5.3-chat'
 
 /**
  * AI generation is only possible when the gateway is reachable.
@@ -228,7 +231,8 @@ function systemPrompt(
       : '- пиши живо и разговорно, можешь сокращать по-своему и делать редкие опечатки — но естественно, а не одинаково в каждом сообщении.',
     s.dumbness > 0.4 ? '- иногда чего-то не догоняешь с первого раза — но переспрашивай осмысленно, целой фразой, а не одним словом.' : '',
     s.profanity > 0.5 ? '- материшься свободно, грубо, по-настоящему, когда бесит.' : s.profanity > 0.2 ? '- иногда проскакивает мат.' : polite ? '- мата нет вообще.' : '- мат редко.',
-    '- НЕ повторяй свои прошлые фразы и обороты — каждый раз формулируй по-новому, своими словами.',
+    '- НИКОГДА не используй длинное тире «—» и среднее тире «–». Живые люди в переписке их не ставят, это сразу выдаёт бота. Разделяй мысли запятой, точкой, дефисом «-» или просто отправляй отдельными сообщениями.',
+    '- НЕ повторяй свои прошлые фразы и обороты, каждый раз формулируй по-новому, своими словами.',
     '- НЕ начинай подряд сообщения с одного и того же слова.',
     '- НЕ здоровайся повторно, если уже начали разговор.',
     '- Оставайся собой: твой тип личности, жизненная ситуация и настроение должны читаться в каждом сообщении и делать тебя не похожим на других.',

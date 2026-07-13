@@ -1,5 +1,5 @@
 import type { SimState, SimThreadRow, SimTone } from './types'
-import { chance, makePersona, randInt } from './content'
+import { chance, makePersona, randInt, splitIntoMessages } from './content'
 import { type Behavior, generateReply } from './generate'
 import { ensureLock, releaseLock } from './lock'
 import {
@@ -279,7 +279,12 @@ async function maybeSpawn(
     )
     return
   }
-  const conversationId = await createSimConversation(channel, persona, body)
+  // A real person often opens with a couple of short messages rather than one
+  // line. Seed the conversation with the FIRST bubble, then post the rest with
+  // typing gaps; the manager is triggered once, after the whole opening lands.
+  const bubbles = splitIntoMessages(body, persona.style)
+  const firstBubble = bubbles[0] ?? body
+  const conversationId = await createSimConversation(channel, persona, firstBubble)
   // Count the spawn only once the conversation actually exists, so the stat
   // reflects real spawns rather than claimed-but-failed attempts.
   await bumpSpawnedTotal()
@@ -301,8 +306,9 @@ async function maybeSpawn(
     message: `Создан новый диалог: «${persona.name}» (${persona.channelType}) написал: "${body.slice(0, 160)}"`,
     channelType: persona.channelType,
   })
-  // Let the AI manager answer this opening message like any real inbound.
-  void triggerManagerReply(conversationId, body)
+  // Post any remaining opening bubbles with typing gaps, then let the AI manager
+  // answer the full opening like any real inbound (triggered inside, once).
+  void deliverFollowupBubbles(conversationId, persona.name, bubbles.slice(1), body)
 }
 
 /* --------------------- reacting to manager replies ---------------------- */
@@ -398,6 +404,52 @@ async function triggerManagerReply(
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Human "typing" gap between consecutive bubbles of the SAME message. Short
+// enough to read as one flurry, long enough to look hand-typed.
+const CHUNK_GAP_MIN_SEC = 2
+const CHUNK_GAP_MAX_SEC = 9
+
+/**
+ * Deliver the follow-up bubbles of a client message (everything after the first,
+ * which the caller already posted) with human-like typing gaps, then hand the
+ * FULL message to the AI manager exactly once.
+ *
+ * Fire-and-forget: the engine is a long-lived leader process (setInterval +
+ * advisory lock), so these short timers safely outlive the tick that started
+ * them. The manager is triggered only AFTER the last bubble lands, so it always
+ * answers the complete thought rather than each fragment — and the backlog
+ * sweep's 90s stale guard means nothing else can nudge the manager mid-flurry.
+ * If the process dies mid-delivery, the same backlog sweep later picks the
+ * dialogue up (last message is inbound) and nudges the manager, so no message
+ * is ever permanently orphaned.
+ */
+async function deliverFollowupBubbles(
+  conversationId: string,
+  authorName: string,
+  tail: string[],
+  fullBody: string,
+): Promise<void> {
+  try {
+    for (const bubble of tail) {
+      await sleep(randInt(CHUNK_GAP_MIN_SEC, CHUNK_GAP_MAX_SEC) * 1000)
+      await insertInboundMessage(conversationId, authorName, bubble)
+    }
+  } catch (err) {
+    console.log(
+      '[v0][client-sim] follow-up bubble delivery failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+  } finally {
+    // Always hand the finished message to the manager, even if a tail bubble
+    // failed — silence would otherwise strand the dialogue.
+    void triggerManagerReply(conversationId, fullBody)
+  }
+}
+
 // How many stuck dialogues to re-nudge per tick. Bounded so a large backlog
 // drains gradually instead of hammering the gateway all at once, but high
 // enough that a pile of 100+ sim-created dialogues actually gets worked through
@@ -488,10 +540,11 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
     await updateThread(conversationId, { nextRunAt: isoIn(randInt(45, 180)) })
     return
   }
-  await insertInboundMessage(conversationId, persona.name, body)
+  // Split into chat bubbles: post the first now, advance the state machine, then
+  // deliver the rest with typing gaps and trigger the manager once at the end.
+  const bubbles = splitIntoMessages(body, persona.style)
+  await insertInboundMessage(conversationId, persona.name, bubbles[0] ?? body)
   await bumpRepliesTotal()
-  // Hand this follow-up to the AI manager so the dialogue keeps flowing.
-  void triggerManagerReply(conversationId, body)
 
   const nextState: SimState = outcome === 'end' ? 'done' : 'chatting'
   await updateThread(conversationId, {
@@ -506,6 +559,9 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
           ? isoIn(randInt(120, 600))
           : null,
   })
+
+  // Follow-up bubbles + the (single) manager trigger, on a human typing cadence.
+  void deliverFollowupBubbles(conversationId, persona.name, bubbles.slice(1), body)
 }
 
 /* ------------------------------- rolls ---------------------------------- */

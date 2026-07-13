@@ -298,7 +298,7 @@ const MOTIVATIONS = [
   'надоело на основной работе', 'нужны деньги срочно, долги',
   'хочет накопить на машину', 'просто пробует, интересно',
   'сократили с прошлой работы', 'хочет уйти от начальника-самодура',
-  'нужны деньги на лечение', 'копит на свадьбу', 'хочет финансовую подушку',
+  'нужны деньги на лечение', 'копит на свадьбу', 'хочет финансо��ую подушку',
   'ребёнок пошёл в школу, нужны деньги', 'платит алименты, не хватает',
   'хочет уволиться и работать на себя', 'нужны карманные деньги',
 ]
@@ -541,9 +541,106 @@ const EMOJIS = [
 ]
 
 /** Apply a persona's writing fingerprint to a clean sentence. */
+/**
+ * Replace typographic dashes (em «—», en «–», horizontal bar «―», figure dash,
+ * and the Unicode minus «−») with human punctuation:
+ *   - a dash used as a spaced separator  → a comma (reads natural in RU chat)
+ *   - any other dash (line start, numeric range, glued) → a plain hyphen "-"
+ * Then it repairs any doubled comma the substitution could create.
+ */
+function deDash(text: string): string {
+  return text
+    .replace(/\s+[—–―‒−]\s+/g, ', ')
+    .replace(/[—–―‒−]/g, '-')
+    .replace(/\s*,\s*,\s*/g, ', ')
+    .replace(/\s{2,}/g, ' ')
+}
+
+/**
+ * Split a punctuation-less run-on into two chunks at a word gap near the middle
+ * (with a little jitter) so no-punctuation personas still send separate
+ * messages instead of one long line.
+ */
+function splitRunOn(text: string): string[] {
+  const words = text.split(/\s+/).filter(Boolean)
+  if (words.length < 6) return [text]
+  const mid = Math.round(words.length / 2)
+  const at = Math.max(2, Math.min(words.length - 2, mid + randInt(-1, 1)))
+  return [words.slice(0, at).join(' '), words.slice(at).join(' ')]
+}
+
+/**
+ * Break one generated reply into 1..N chat "bubbles" the way a real person
+ * fires off several short messages instead of one wall of text. Most replies
+ * stay a single bubble; sometimes they split into 2-3 (rarely 4). Works for
+ * both punctuated and no-punctuation personas. The engine posts the first
+ * bubble immediately and the rest with human "typing" gaps.
+ */
+export function splitIntoMessages(text: string, style: SimStyle): string[] {
+  const clean = text.trim()
+  if (!clean) return []
+
+  // Very short lines are always a single bubble.
+  const words = clean.split(/\s+/).filter(Boolean)
+  if (clean.length < 24 || words.length < 4) return [clean]
+
+  // People don't ALWAYS split — keep it one message a good chunk of the time.
+  // Terser personas (short, clipped writers) burst into separate messages more.
+  const terse = style.terseness ?? 0.5
+  const pSingle = Math.max(0.2, 0.55 - terse * 0.25)
+  if (chance(pSingle)) return [clean]
+
+  // Prefer explicit line breaks, then sentence boundaries.
+  let segments = clean
+    .split(/\n+/)
+    .flatMap((p) => p.match(/[^.!?…]+[.!?…]+|\S[^.!?…]*$/g) ?? [p])
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  // No-punctuation text collapses to a single segment: fall back to a mid-point
+  // split so these personas still burst into two messages.
+  if (segments.length < 2) segments = splitRunOn(clean)
+  if (segments.length < 2) return [clean]
+
+  // Group adjacent segments into bubbles, breaking with a moderate chance and
+  // capping the count so we never spray a dozen fragments.
+  const maxParts = 2 + (chance(0.35) ? 1 : 0) + (chance(0.1) ? 1 : 0) // 2..4
+  const parts: string[] = []
+  let cur = ''
+  for (const seg of segments) {
+    const canBreak = cur !== '' && parts.length + 1 < maxParts
+    if (canBreak && chance(0.55)) {
+      parts.push(cur)
+      cur = seg
+    } else {
+      cur = cur ? `${cur} ${seg}` : seg
+    }
+  }
+  if (cur.trim()) parts.push(cur.trim())
+
+  // Merge away useless 1-2 char fragments so no bubble is just punctuation.
+  const bubbles: string[] = []
+  for (const raw of parts) {
+    const p = raw.trim()
+    if (!p) continue
+    if (p.length < 3 && bubbles.length > 0) {
+      bubbles[bubbles.length - 1] += ` ${p}`
+    } else {
+      bubbles.push(p)
+    }
+  }
+  return bubbles.length > 0 ? bubbles : [clean]
+}
+
 export function applyStyle(text: string, style: SimStyle): string {
   let out = text.trim()
   if (!out) return out
+
+  // Kill typographic long dashes — the single biggest "written by an AI" tell.
+  // A real person in chat never types «—»/«–»; they use a comma or a plain
+  // hyphen. This runs on every generated line (belt-and-suspenders on top of
+  // the prompt rule), so a stray dash can never reach the manager.
+  out = deDash(out)
 
   // typos, word by word
   if (style.typoRate > 0) {
