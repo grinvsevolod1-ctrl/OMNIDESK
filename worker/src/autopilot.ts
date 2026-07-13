@@ -275,7 +275,7 @@ async function fireAiLead(params: {
       level: 'debug',
       source: 'ai-lead',
       event: 'inbound',
-      message: 'Новое сообщение клиента в мессенджере — готовлю ответ.',
+      message: 'Новое сообщение клиента в ��ессенджере — готовлю ответ.',
       conversationId,
       channelType,
     })
@@ -331,6 +331,15 @@ async function fireAiLead(params: {
         { channelId, conversationId },
         'ai-lead: human took over during generation, skipping send',
       )
+      void repo.logAi({
+        level: 'info',
+        source: 'ai-lead',
+        event: 'handover.during_gen',
+        message:
+          'Пока ИИ готовил ответ, в диалог вошёл человек — отправка отменена.',
+        conversationId,
+        channelType,
+      })
       return true
     }
 
@@ -350,20 +359,37 @@ async function fireAiLead(params: {
       isAutopilot: true,
     })
     logger.info({ channelId, conversationId }, 'ai-lead: auto-reply sent')
+    void repo.logAi({
+      level: 'info',
+      source: 'ai-lead',
+      event: 'reply.sent',
+      message: `Ответ отправлен клиенту: "${reply.slice(0, 200)}"`,
+      conversationId,
+      channelType,
+    })
 
     // After replying, judge whether the client is ready to hand over their data
     // and start working. If so, promote the lead to «Ликвид» and hand it to a
     // human (pauses the AI + flags the panel banner). Best-effort — never let a
     // promotion failure affect the reply we already delivered.
     try {
-      const ready = await assessLeadReady([
-        ...history,
-        { role: 'manager', body: reply },
-      ])
+      const ready = await assessLeadReady(
+        [...history, { role: 'manager', body: reply }],
+        log,
+      )
       if (ready) {
         const promoted = await repo.markAiHandoffToLiquid(conversationId)
         if (promoted) {
           logger.info({ channelId, conversationId }, 'ai-lead: promoted lead to «Ликвид»')
+          void repo.logAi({
+            level: 'info',
+            source: 'handoff',
+            event: 'promoted',
+            message:
+              'ИИ передал лид человеку: статус повышен до «Ликвид», ИИ поставлен на паузу.',
+            conversationId,
+            channelType,
+          })
         }
       }
     } catch (err) {
@@ -372,6 +398,14 @@ async function fireAiLead(params: {
     return true
   } catch (err) {
     logger.error({ err, channelId, conversationId }, 'ai-lead: failed (ignored)')
+    void repo.logAi({
+      level: 'error',
+      source: 'ai-lead',
+      event: 'error',
+      message: `Сбой ИИ-лида: ${err instanceof Error ? err.message : String(err)}`,
+      conversationId,
+      channelType,
+    })
     return false
   } finally {
     aiLeadInFlight.delete(conversationId)

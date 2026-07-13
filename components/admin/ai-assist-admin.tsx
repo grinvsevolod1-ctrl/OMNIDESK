@@ -6,6 +6,7 @@ import {
   GraduationCap,
   Loader2,
   RefreshCw,
+  ScrollText,
   Send,
   Settings2,
   Sparkles,
@@ -39,6 +40,7 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import { AiLogsTab } from '@/components/admin/ai-logs-tab'
 
 const TONE_OPTIONS = [
   { value: 'professional', label: 'Деловой' },
@@ -93,6 +95,10 @@ export function AiAssistAdmin({
               </Badge>
             ) : null}
           </TabsTrigger>
+          <TabsTrigger value="logs">
+            <ScrollText className="size-4" />
+            Логи
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="settings" className="mt-4">
@@ -107,6 +113,10 @@ export function AiAssistAdmin({
               setLessonCount(next.length)
             }}
           />
+        </TabsContent>
+
+        <TabsContent value="logs" className="mt-4">
+          <AiLogsTab />
         </TabsContent>
       </Tabs>
     </div>

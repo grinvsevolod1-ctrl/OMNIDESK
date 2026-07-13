@@ -21,6 +21,18 @@ import {
   generateManagerReply,
   isBrainConfigured,
 } from '@/lib/ai/manager-brain'
+import {
+  clearAiLogs,
+  listAiLogs,
+  type AiLogLevel,
+  type AiLogRow,
+} from '@/lib/data/ai-log'
+import {
+  countActiveThreads,
+  getSettings as getSimSettings,
+  listUsableChannels,
+} from '@/lib/client-sim/store'
+import { engineRunning } from '@/lib/client-sim/engine'
 
 /**
  * Server actions backing the admin «ИИ» tab: shared assistant settings, the
@@ -138,4 +150,65 @@ export async function aiDeleteLessonAction(id: string): Promise<void> {
   await requireAdmin()
   await deleteLesson(id)
   revalidatePath(AI_PATH)
+}
+
+/* --------------------------------- Logs --------------------------------- */
+
+export interface AiDiagnostics {
+  aiConfigured: boolean
+  aiMasterEnabled: boolean
+  simEnabled: boolean
+  simEngineRunning: boolean
+  simUsableChannels: number
+  simActiveThreads: number
+}
+
+/**
+ * One-shot health snapshot shown as a banner above the log. This is what
+ * answers "почему ИИ молчит / симулятор не создаёт диалоги" at a glance:
+ * missing key, master switch off, or no usable channels each light up here.
+ */
+export async function aiDiagnosticsAction(): Promise<AiDiagnostics> {
+  await requireAdmin()
+  const [aiSettings, simSettings, activeThreads] = await Promise.all([
+    getAiAssistSettings(),
+    getSimSettings(),
+    countActiveThreads().catch(() => 0),
+  ])
+  // Count channels the simulator could actually use, honouring its configured
+  // channel filter (empty filter = any channel).
+  const channels = await listUsableChannels(simSettings.channelIds).catch(
+    () => [],
+  )
+  return {
+    aiConfigured: isBrainConfigured(),
+    aiMasterEnabled: aiSettings.enabled,
+    simEnabled: simSettings.enabled,
+    simEngineRunning: engineRunning(),
+    simUsableChannels: channels.length,
+    simActiveThreads: activeThreads,
+  }
+}
+
+/**
+ * Tail the AI activity log. `sinceId` enables cheap incremental polling from
+ * the client — pass the newest id you already have to fetch only newer rows.
+ */
+export async function aiLogsAction(opts?: {
+  sinceId?: string | null
+  level?: AiLogLevel | 'all'
+  limit?: number
+}): Promise<AiLogRow[]> {
+  await requireAdmin()
+  return listAiLogs({
+    sinceId: opts?.sinceId ?? null,
+    level: opts?.level ?? 'all',
+    limit: opts?.limit ?? 200,
+  })
+}
+
+/** Clear the whole AI activity log. */
+export async function aiClearLogsAction(): Promise<void> {
+  await requireAdmin()
+  await clearAiLogs()
 }
