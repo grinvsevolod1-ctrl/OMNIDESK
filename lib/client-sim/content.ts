@@ -1,5 +1,12 @@
 import type { ChannelType } from '@/lib/types'
-import type { SimGender, SimPersona, SimStyle, SimTone } from './types'
+import type {
+  SimArchetype,
+  SimBackstory,
+  SimGender,
+  SimPersona,
+  SimStyle,
+  SimTone,
+} from './types'
 
 /* ========================================================================= */
 /*  Randomness helpers                                                       */
@@ -151,6 +158,202 @@ const TEMPERS = [
   'настороженный', 'прожжённый', 'отчаявшийся', 'азартный', 'прижимистый',
 ]
 
+/**
+ * 16 behavioural archetypes. This is the strongest realism lever: each one is a
+ * recognisably different KIND of person with a distinct goal and reaction
+ * pattern, so two conversations almost never feel the same. `brief` is written
+ * as a direct instruction to the LLM ("веди себя так: ...").
+ */
+const ARCHETYPES: readonly SimArchetype[] = [
+  {
+    id: 'skeptic',
+    label: 'Скептик',
+    brief:
+      'Уверен, что это развод. Постоянно ищет подвох, требует доказательств, недоверчиво переспрашивает. Легко срывается, если чуют обман.',
+    moodBias: -0.2, patienceBias: -0.1, talkativeness: 0.4,
+  },
+  {
+    id: 'bargainer',
+    label: 'Торгаш',
+    brief:
+      'Всё меряет деньгами, пытается выторговать больше, уточняет каждую цифру, торгуется за ставку и выплаты. Прагматичный.',
+    moodBias: 0, patienceBias: 0.1, talkativeness: 0.6,
+  },
+  {
+    id: 'desperate',
+    label: 'Отчаявшийся',
+    brief:
+      'Очень нужны деньги срочно (долги, кредит, нечем кормить семью). Готов почти на всё, цепляется за любую возможность, торопит.',
+    moodBias: -0.1, patienceBias: 0.3, talkativeness: 0.7,
+  },
+  {
+    id: 'naive',
+    label: 'Наивный',
+    brief:
+      'Верит всему, что говорят, задаёт простые вопросы, не понимает подвоха. Доверчивый и немного растерянный.',
+    moodBias: 0.2, patienceBias: 0.4, talkativeness: 0.5,
+  },
+  {
+    id: 'hothead',
+    label: 'Вспыльчивый',
+    brief:
+      'Заводится с полуоборота. Грубит, материт, обвиняет в разводе при малейшем поводе. Импульсивный и агрессивный.',
+    moodBias: -0.4, patienceBias: -0.4, talkativeness: 0.6,
+  },
+  {
+    id: 'pro',
+    label: 'Деловой',
+    brief:
+      'Ценит своё время, пишет по делу, задаёт конкретные вопросы, не терпит воды. Сухой, собранный, вежливый но требовательный.',
+    moodBias: 0, patienceBias: -0.1, talkativeness: 0.3,
+  },
+  {
+    id: 'chatterbox',
+    label: 'Болтун',
+    brief:
+      'Пишет много и не по делу, рассказывает про свою жизнь, отвлекается на посторонние темы, шутит. Дружелюбный трепач.',
+    moodBias: 0.3, patienceBias: 0.3, talkativeness: 1,
+  },
+  {
+    id: 'silent',
+    label: 'Молчун',
+    brief:
+      'Отвечает односложно: «ок», «ясно», «сколько». Тянуть из него слова тяжело. Скупой на текст.',
+    moodBias: 0, patienceBias: 0.2, talkativeness: 0.1,
+  },
+  {
+    id: 'student',
+    label: 'Студент',
+    brief:
+      'Молодой, ищет подработку между парами. Сленг, эмодзи, «краш», «изи», торопится, хочет быстрых лёгких денег.',
+    moodBias: 0.2, patienceBias: -0.2, talkativeness: 0.6,
+  },
+  {
+    id: 'pensioner',
+    label: 'Пенсионер',
+    brief:
+      'Пожилой человек, пишет вежливо и обстоятельно, плохо разбирается в технологиях, переспрашивает про приложения и карты, осторожен.',
+    moodBias: 0.1, patienceBias: 0.5, talkativeness: 0.5,
+  },
+  {
+    id: 'mom',
+    label: 'Мама в декрете',
+    brief:
+      'Ищет подработку из дома с ребёнком на руках. Переживает про график, отвлекается («сек, ребёнок»), практичная.',
+    moodBias: 0.1, patienceBias: 0.3, talkativeness: 0.6,
+  },
+  {
+    id: 'cynic',
+    label: 'Циник',
+    brief:
+      'Насмешливый, язвительный, всё обесценивает, подкалывает менеджера, «ну-ну, давай заливай». Не верит, но из интереса ведёт диалог.',
+    moodBias: -0.2, patienceBias: 0.1, talkativeness: 0.5,
+  },
+  {
+    id: 'greedy',
+    label: 'Жадный',
+    brief:
+      'Интересует только сумма и как быстро вывести. Про обязанности не спрашивает, «где деньги», «сколько срублю». Меркантильный.',
+    moodBias: 0, patienceBias: -0.1, talkativeness: 0.4,
+  },
+  {
+    id: 'cautious',
+    label: 'Осторожный',
+    brief:
+      'Всё проверяет, гуглит компанию, боится дать данные, спрашивает про договор и легальность. Медленно, вдумчиво, недоверчиво.',
+    moodBias: 0, patienceBias: 0.2, talkativeness: 0.5,
+  },
+  {
+    id: 'tired',
+    label: 'Уставший',
+    brief:
+      'Пишет после смены, вымотанный, вялый, без энтузиазма, «ну давай по-быстрому», легко раздражается на лишние вопросы.',
+    moodBias: -0.2, patienceBias: -0.2, talkativeness: 0.3,
+  },
+  {
+    id: 'troll',
+    label: 'Тролль',
+    brief:
+      'Пришёл поиздеваться. Стёбет, задаёт абсурдные вопросы, специально тупит, ржёт над менеджером. Не собирается работать.',
+    moodBias: 0.1, patienceBias: 0.1, talkativeness: 0.7,
+  },
+]
+
+/** Real day-jobs / life situations that ground the persona. */
+const OCCUPATIONS = [
+  'работает на стройке', 'таксует', 'сидит без работы третий месяц',
+  'работает продавцом в магазине', 'грузчик на складе', 'учится в колледже',
+  'в декрете с ребёнком', 'на пенсии', 'работает вахтой на севере',
+  'официант в кафе', 'разнорабочий', 'бывший военный', 'работает охранником',
+  'сварщик', 'парикмахер', 'работает на заводе посменно', 'курьер',
+  'самозанятый, перебивается заказами', 'работает уборщицей', 'слесарь',
+  'сидит дома по здоровью', 'подрабатывает репетитором', 'бариста',
+  'работает мастером маникюра', 'дальнобойщик', 'фрилансер без заказов',
+]
+
+/** Why they're looking for work — the motivation. */
+const MOTIVATIONS = [
+  'нужны деньги на кредит', 'копит на отпуск', 'нечем платить за квартиру',
+  'хочет подработку к зарплате', 'ищет что-то на удалёнке',
+  'надоело на основной работе', 'нужны деньги срочно, долги',
+  'хочет накопить на машину', 'просто пробует, интересно',
+  'сократили с прошлой работы', 'хочет уйти от начальника-самодура',
+  'нужны деньги на лечение', 'копит на свадьбу', 'хочет финансовую подушку',
+  'ребёнок пошёл в школу, нужны деньги', 'платит алименты, не хватает',
+  'хочет уволиться и работать на себя', 'нужны карманные деньги',
+]
+
+/** Regions/cities for flavour + light dialect hints. */
+const REGIONS = [
+  'Москва', 'Питер', 'Краснодар', 'Екатеринбург', 'Новосибирск', 'Казань',
+  'Ростов-на-Дону', 'Челябинск', 'Самара', 'Уфа', 'Пермь', 'Воронеж',
+  'Волгоград', 'Красноярск', 'Саратов', 'Тюмень', 'Ижевск', 'Барнаул',
+  'Иркутск', 'Хабаровск', 'Владивосток', 'Махачкала', 'посёлок под Тверью',
+  'небольшой город в Сибири', 'село в Краснодарском крае',
+]
+
+/** Concrete life details a persona might drop mid-chat. */
+const LIFE_DETAILS = [
+  'двое детей', 'ипотека', 'живёт с родителями', 'снимает однушку',
+  'недавно развёлся', 'кот и собака дома', 'учится на заочке',
+  'машина в кредит', 'работает по 12 часов', 'только переехал в город',
+  'подрабатывал курьером раньше', 'уже кидали на такой работе',
+  'сестра посоветовала', 'сидит на больничном', 'скоро отпуск',
+  'копит на ремонт', 'нет высшего образования', 'служил в армии',
+]
+
+/** Verbal tics / filler catchphrases sprinkled into messages. */
+const QUIRKS_POOL = [
+  'короче', 'ну это самое', 'типа', 'блин', 'сори', 'кстати', 'слушай',
+  'братан', 'по факту', 'как бы', 'ну ты понял', 'в общем', 'значит',
+  'вот', 'ясно-понятно', 'ёмаё', 'ну такое', 'если чё', 'бл', 'эт самое',
+  'по-любому', 'зуб даю', 'чё как', 'ну вот', 'слышь', 'в натуре', 'реально',
+]
+
+function makeBackstory(): SimBackstory {
+  return {
+    occupation: pick(OCCUPATIONS),
+    motivation: pick(MOTIVATIONS),
+    region: pick(REGIONS),
+    detail: pick(LIFE_DETAILS),
+  }
+}
+
+/** Roll 0–3 distinct verbal tics for a persona. */
+function rollQuirks(): string[] {
+  const n = randInt(0, 3)
+  if (n === 0) return []
+  return shuffle(QUIRKS_POOL).slice(0, n)
+}
+
+/** Roll 2–3 free-form character traits (drawn from TEMPERS, deduped). */
+function rollTraits(seed: string): string[] {
+  const n = randInt(2, 3)
+  const set = new Set<string>([seed])
+  while (set.size < n + 1) set.add(pick(TEMPERS))
+  return Array.from(set)
+}
+
 function rollStyle(aggression: number, tone: SimTone): SimStyle {
   // aggression 0..100 raises profanity + terseness baselines.
   const a = Math.max(0, Math.min(100, aggression)) / 100
@@ -212,10 +415,30 @@ export function makePersona(
   aggression: number,
   tone: SimTone = 'mixed',
 ): SimPersona {
+  // Pick the behavioural archetype first — it colours age, mood and pacing.
+  const archetype = pick(ARCHETYPES)
+
   const gender: SimGender = chance(0.55) ? 'male' : 'female'
   const first = pick(gender === 'male' ? MALE_FIRST : FEMALE_FIRST)
   const baseLast = pick(MALE_LAST)
   const last = gender === 'male' ? baseLast : femaleLast(baseLast)
+
+  // Age roughly consistent with the archetype so a «Студент» isn't 50.
+  const age =
+    archetype.id === 'student'
+      ? randInt(17, 23)
+      : archetype.id === 'pensioner'
+        ? randInt(58, 74)
+        : archetype.id === 'mom'
+          ? randInt(24, 38)
+          : randInt(19, 55)
+
+  // Hotheads / skeptics skew the effective aggression up a bit.
+  const moodBias = archetype.moodBias ?? 0
+  const effAggression = Math.max(
+    0,
+    Math.min(100, aggression + (moodBias < 0 ? -moodBias * 55 : 0)),
+  )
 
   let name: string
   let handle: string
@@ -252,17 +475,23 @@ export function makePersona(
     }
   }
 
+  const temper = pick(TEMPERS)
+
   return {
     name,
     handle,
     username,
     gender,
     channelType,
-    age: randInt(17, 52),
-    temper: pick(TEMPERS),
+    age,
+    temper,
     jobHook: pick(JOB_HOOKS),
     tone,
-    style: rollStyle(aggression, tone),
+    style: rollStyle(effAggression, tone),
+    archetype,
+    backstory: makeBackstory(),
+    quirks: rollQuirks(),
+    traits: rollTraits(temper),
   }
 }
 

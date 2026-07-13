@@ -24,6 +24,7 @@ import {
   type SimChannel,
 } from './store'
 import { pick } from './content'
+import { computeMood, type MoodResult } from './mood'
 import { logAi } from '@/lib/data/ai-log'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import type { ChannelType } from '@/lib/types'
@@ -426,10 +427,14 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
     body: l.body,
   }))
 
+  // Recompute the persona's live mood from the whole conversation — this is
+  // what makes the emotional arc react to how the manager behaves.
+  const mood = computeMood(persona, history, thread.turns)
+
   // Whether the manager ever replied determines nudge vs reaction.
   const managerSpoke = transcript.some((l) => l.direction === 'out')
   const behavior = managerSpoke
-    ? rollBehavior(persona.temper, persona.style.profanity, thread.turns)
+    ? rollBehavior(persona.temper, persona.style.profanity, thread.turns, mood)
     : 'nudge'
 
   // Some turns end the conversation instead of replying.
@@ -445,7 +450,13 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
   }
 
   const referenceLines = await sampleRealClientLines(persona.channelType)
-  const body = await generateReply({ persona, history, behavior, referenceLines })
+  const body = await generateReply({
+    persona,
+    history,
+    behavior,
+    referenceLines,
+    moodHint: managerSpoke ? mood.hint : undefined,
+  })
   await insertInboundMessage(conversationId, persona.name, body)
   await bumpRepliesTotal()
   // Hand this follow-up to the AI manager so the dialogue keeps flowing.
@@ -476,6 +487,7 @@ export function rollBehavior(
   temper: string,
   profanity: number,
   turns: number,
+  mood?: MoodResult,
 ): Behavior {
   const weights: Record<Behavior, number> = {
     open: 0,
@@ -488,7 +500,7 @@ export function rollBehavior(
 
   // Temperament nudges.
   if (/наглый|дерзкий|борзый|вспыльчивый|нервный/.test(temper)) weights.angry += 4
-  if (/подозрительн|ос��орожн/.test(temper)) weights.dismissive += 3
+  if (/подозрительн|осторожн/.test(temper)) weights.dismissive += 3
   if (/тупова|простоват/.test(temper)) weights.confused += 4
   if (/жадн|делов/.test(temper)) weights.curious += 4
   if (/спокойн|дружелюб|уставш/.test(temper)) weights.curious += 2
@@ -497,6 +509,14 @@ export function rollBehavior(
   // offer has landed by now).
   if (turns >= 3) weights.angry += 3
   if (turns >= 5) weights.dismissive += 3
+
+  // Live mood dominates once it builds up: a frustrated/suspicious persona
+  // leans angry, a disengaged one leans dismissive, an interested one curious.
+  if (mood) {
+    weights.angry += mood.angerBoost
+    weights.dismissive += mood.dismissBoost
+    if (mood.interest >= 0.6 && mood.frustration < 0.4) weights.curious += 3
+  }
 
   return weightedPick(weights)
 }

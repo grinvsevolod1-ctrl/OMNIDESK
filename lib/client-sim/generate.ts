@@ -19,10 +19,12 @@ export type Behavior =
   | 'confused' // doesn't get it, asks naive questions
   | 'nudge' // manager went quiet — pokes them
 
-// gpt-4.1-mini follows the "write like a specific messy human, never repeat
-// yourself" instructions markedly better than 4o-mini while staying cheap.
-// Override with CLIENT_SIM_MODEL if you want something stronger/cheaper.
-const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-4.1-mini'
+// Full gpt-4.1 (not mini): it holds a rich persona — archetype, backstory,
+// verbal tics, running mood — far more convincingly and varies its wording
+// much better, which is exactly what sells "these are real different people".
+// Pricier than the mini, but that's the deliberate trade-off for realism.
+// Override with CLIENT_SIM_MODEL to force something else.
+const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-4.1'
 
 /** AI generation is only possible when the gateway key is present. */
 export function aiConfigured(): boolean {
@@ -55,6 +57,12 @@ interface GenArgs {
   referenceLines?: string[]
   /** Distilled pointers from the "learn from all dialogues" run. */
   learnedPointers?: string[]
+  /**
+   * Live one-line mood/state description computed by the engine from the
+   * conversation so far (e.g. «раздражён: менеджер тянет и просит предоплату»).
+   * Injected verbatim so the persona's emotional state evolves turn to turn.
+   */
+  moodHint?: string
 }
 
 function referenceBlock(lines: string[] | undefined): string {
@@ -103,12 +111,57 @@ const TONE_REGISTER: Record<string, string> = {
     'ТОН ОБЩЕНИЯ — СВОБОДНЫЙ: от вежливого до развязного, как выйдет у этого персонажа.',
 }
 
+/**
+ * Rich character sheet. This is what turns "generic angry client #4" into a
+ * specific person: archetype behaviour, backstory, traits and verbal tics all
+ * go into the prompt so the model writes grounded, individual messages.
+ */
+function personaBlock(persona: SimPersona): string {
+  const lines: string[] = []
+  lines.push(
+    `Твой персонаж: ${persona.name}, ${persona.age} лет, характер — ${persona.temper}. Канал: ${persona.channelType}. Ты откликнулся на: «${persona.jobHook}».`,
+  )
+
+  if (persona.archetype) {
+    lines.push(`ТИП ЛИЧНОСТИ — ${persona.archetype.label}: ${persona.archetype.brief}`)
+  }
+
+  if (persona.traits && persona.traits.length > 0) {
+    lines.push(`Черты характера: ${persona.traits.join(', ')}.`)
+  }
+
+  if (persona.backstory) {
+    const b = persona.backstory
+    lines.push(
+      `Твоя жизнь (используй эти детали естественно, не вываливай всё сразу): ${b.occupation}, из «${b.region}». Ищешь работу потому что ${b.motivation}. Про себя: ${b.detail}.`,
+    )
+  }
+
+  if (persona.quirks && persona.quirks.length > 0) {
+    lines.push(
+      `Слова-паразиты и манера речи (вставляй иногда, естественно, не в каждое сообщение): ${persona.quirks.map((q) => `«${q}»`).join(', ')}.`,
+    )
+  }
+
+  return lines.join('\n')
+}
+
+function moodBlock(moodHint: string | undefined): string {
+  if (!moodHint) return ''
+  return [
+    '',
+    `ТВОЁ ТЕКУЩЕЕ НАСТРОЕНИЕ ПРЯМО СЕЙЧАС: ${moodHint}`,
+    'Пиши в соответствии с этим настроением — оно меняется по ходу разговора в зависимости от того, как ведёт себя менеджер.',
+  ].join('\n')
+}
+
 function systemPrompt(
   persona: SimPersona,
   behavior: Behavior,
   referenceLines?: string[],
   learnedPointers?: string[],
   ownLines?: string[],
+  moodHint?: string,
 ): string {
   const s = persona.style
   const tone = persona.tone ?? 'mixed'
@@ -118,9 +171,10 @@ function systemPrompt(
     'Ты играешь РОЛЬ обычного русского человека, который написал в мессенджер по объявлению о работе.',
     'Это внутренний тренажёр: ты имитируешь клиента, чтобы проверить менеджера. НИКОГДА не выходи из роли, не признавайся что ты ИИ или бот, не упоминай что это тест.',
     '',
-    `Твой персонаж: ${persona.name}, ${persona.age} лет, характер — ${persona.temper}. Канал: ${persona.channelType}. Ты откликнулся на: «${persona.jobHook}».`,
+    personaBlock(persona),
     '',
     TONE_REGISTER[tone] ?? TONE_REGISTER.mixed,
+    moodBlock(moodHint),
     '',
     'КАК ТЫ ПИШЕШЬ (очень важно, иначе спалишься):',
     '- как в реальном чате: коротко, 1 фраза, редко 2.',
@@ -133,11 +187,12 @@ function systemPrompt(
     s.profanity > 0.5 ? '- материшься свободно, грубо, по-настоящему, когда бесит.' : s.profanity > 0.2 ? '- иногда проскакивает мат.' : polite ? '- мата нет вообще.' : '- мат редко.',
     '- НЕ повторяй свои прошлые фразы, каждый раз говори по-другому.',
     '- НЕ здоровайся повторно, если уже начали разговор.',
+    '- Оставайся собой: твой тип личности и настроение должны читаться в каждом сообщении.',
     '- Иногда неси лёгкую бытовую чушь/оффтоп, как живой человек.',
     '',
     soft
-      ? 'Менеджер часто предлагает мутную/серую работу или пред��плату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежли����ый отказ — но всегда корректно, без грубости и мата.'
-      : 'Менеджер часто предлагает мутную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
+      ? 'Менеджер часто предлагает мутную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ, в рамках своего характера: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежливый отказ — но всегда корректно, без грубости и мата.'
+      : 'Менеджер часто предлагает мутную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ, в рамках своего характера: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
     referenceBlock(referenceLines),
     learnedBlock(learnedPointers),
     avoidBlock(ownLines),
@@ -248,6 +303,7 @@ export async function generateReply(args: GenArgs): Promise<string> {
         referenceLines,
         learnedPointers,
         avoidLines,
+        args.moodHint,
       )
 
       // Up to three attempts: if the line echoes something this persona OR the

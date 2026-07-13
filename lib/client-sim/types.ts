@@ -44,6 +44,40 @@ export interface SimStyle {
   emojiRate: number
 }
 
+/**
+ * A behavioural archetype — the single strongest lever for "this feels like a
+ * different person every time". Each archetype bundles a goal, a default
+ * attitude and a way of reacting that the generator leans on heavily. All 16
+ * are defined in content.ts. Optional on the persona for legacy rows.
+ */
+export interface SimArchetype {
+  /** Stable id, e.g. 'skeptic', 'bargainer', 'desperate'. */
+  id: string
+  /** Short human label, e.g. «Скептик». */
+  label: string
+  /** One-line description of how this person behaves, fed to the LLM. */
+  brief: string
+  /** Nudges applied on top of rolled style (all optional, -1..1 deltas). */
+  moodBias?: number
+  patienceBias?: number
+  talkativeness?: number
+}
+
+/**
+ * A slice of life the persona carries into the chat. Purely flavour that makes
+ * the LLM write concrete, grounded messages instead of generic ones.
+ */
+export interface SimBackstory {
+  /** Their real day-job / situation, e.g. «работает на стройке вахтой». */
+  occupation: string
+  /** Why they're looking — the motivation, e.g. «нужны деньги на кредит». */
+  motivation: string
+  /** Region/city flavour, e.g. «Краснодар». */
+  region: string
+  /** A concrete life detail they might drop, e.g. «двое детей». */
+  detail: string
+}
+
 /** A fully-formed fake client. */
 export interface SimPersona {
   name: string
@@ -60,6 +94,21 @@ export interface SimPersona {
   /** Register this persona writes in (defaults to 'mixed' for legacy rows). */
   tone?: SimTone
   style: SimStyle
+  /** Behavioural archetype (optional for legacy rows). */
+  archetype?: SimArchetype
+  /** Grounding backstory (optional for legacy rows). */
+  backstory?: SimBackstory
+  /**
+   * Verbal tics this persona sprinkles in — filler words, catchphrases, verbal
+   * habits, e.g. «короче», «ну это самое», «братан». Rolled once at spawn.
+   */
+  quirks?: string[]
+  /**
+   * Free-form character traits shown to the LLM, e.g. «недоверчивый»,
+   * «торопится», «любит поторговаться». A richer replacement for the single
+   * `temper` label (which is kept for backward compat + template picks).
+   */
+  traits?: string[]
 }
 
 /**
