@@ -106,6 +106,9 @@ interface EntryRow {
   title: string
   vendor: string | null
   amount: string | number
+  orig_amount: string | number
+  orig_currency: string
+  fx_rate: string | number
   status: string
   notes: string
   entry_date: string | Date
@@ -327,6 +330,9 @@ function mapEntry(row: EntryRow, tasks: FinanceTask[]): FinanceEntry {
     title: row.title,
     vendor: row.vendor ?? '',
     amount: Number(row.amount) || 0,
+    origAmount: Number(row.orig_amount) || 0,
+    origCurrency: normCurrency(row.orig_currency),
+    fxRate: Number(row.fx_rate) || 1,
     status: normStatus(row.status),
     notes: row.notes ?? '',
     entryDate: iso(row.entry_date).slice(0, 10),
@@ -435,8 +441,9 @@ export async function getFinanceData(): Promise<FinanceData> {
     ),
     query<EntryRow>(
       `SELECT e.id, e.section_id, e.resource_id, e.title, e.vendor, e.amount,
+              e.orig_amount, e.orig_currency, e.fx_rate,
               e.status, e.notes, e.entry_date, e.due_date, e.created_at, e.updated_at
-         FROM finance_entries e
+       FROM finance_entries e
         ORDER BY e.entry_date DESC, e.created_at DESC`,
     ),
     query<TaskRow>(
@@ -627,7 +634,14 @@ export async function createFinanceEntry(input: {
   sectionId: string
   title: string
   vendor: string
+  /** Сумма в USD (уже сконвертирована). */
   amount: number
+  /** Исходная сумма в валюте ввода. */
+  origAmount: number
+  /** Валюта ввода. */
+  origCurrency: FinanceCurrency
+  /** Курс USD за 1 единицу origCurrency на момент добавления. */
+  fxRate: number
   status: FinanceEntryStatus
   notes: string
   entryDate: string
@@ -636,9 +650,11 @@ export async function createFinanceEntry(input: {
   // resource_id is derived from the section so it always stays consistent.
   await query(
     `INSERT INTO finance_entries
-       (section_id, resource_id, title, vendor, type, amount, status, notes,
+       (section_id, resource_id, title, vendor, type, amount,
+        orig_amount, orig_currency, fx_rate, status, notes,
         entry_date, due_date)
-     SELECT s.id, s.resource_id, $2, $3, 'expense', $4, $5, $6, $7, $8
+     SELECT s.id, s.resource_id, $2, $3, 'expense', $4,
+            $5, $6, $7, $8, $9, $10, $11
        FROM finance_sections s
       WHERE s.id = $1`,
     [
@@ -646,6 +662,9 @@ export async function createFinanceEntry(input: {
       input.title,
       input.vendor,
       input.amount,
+      input.origAmount,
+      input.origCurrency,
+      input.fxRate,
       input.status,
       input.notes,
       input.entryDate,
@@ -660,6 +679,9 @@ export async function updateFinanceEntry(
     title: string
     vendor: string
     amount: number
+    origAmount: number
+    origCurrency: FinanceCurrency
+    fxRate: number
     status: FinanceEntryStatus
     notes: string
     entryDate: string
@@ -668,14 +690,19 @@ export async function updateFinanceEntry(
 ): Promise<void> {
   await query(
     `UPDATE finance_entries
-        SET title = $2, vendor = $3, amount = $4, status = $5,
-            notes = $6, entry_date = $7, due_date = $8, updated_at = now()
+        SET title = $2, vendor = $3, amount = $4,
+            orig_amount = $5, orig_currency = $6, fx_rate = $7,
+            status = $8, notes = $9, entry_date = $10, due_date = $11,
+            updated_at = now()
       WHERE id = $1`,
     [
       id,
       input.title,
       input.vendor,
       input.amount,
+      input.origAmount,
+      input.origCurrency,
+      input.fxRate,
       input.status,
       input.notes,
       input.entryDate,

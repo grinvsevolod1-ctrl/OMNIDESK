@@ -6,6 +6,40 @@
  */
 
 export type FinanceCurrency = 'USDT' | 'RUB' | 'USD' | 'EUR'
+
+/* ------------------------------------------------------------------ */
+/* Конвертация валют в USD                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Курс: сколько USD стоит 1 единица валюты.
+ * Пример: RUB → 0.011 значит 1 ₽ ≈ 0.011 $.
+ * USD и USDT всегда 1.
+ */
+export type UsdRates = Record<FinanceCurrency, number>
+
+/** Резервные курсы на случай, если внешний API недоступен. */
+export const DEFAULT_USD_RATES: UsdRates = {
+  USD: 1,
+  USDT: 1,
+  RUB: 0.011,
+  EUR: 1.08,
+}
+
+/** Перевести сумму `amount` из валюты `currency` в USD по курсам `rates`. */
+export function toUsd(
+  amount: number,
+  currency: FinanceCurrency,
+  rates: UsdRates,
+): number {
+  const rate = rates[currency] ?? 1
+  return Math.round(amount * rate * 100) / 100
+}
+
+/** Курс (USD за 1 единицу валюты), который замораживаем в записи. */
+export function usdRateFor(currency: FinanceCurrency, rates: UsdRates): number {
+  return rates[currency] ?? 1
+}
 export type FinanceEntryStatus =
   | 'planned'
   | 'in_progress'
@@ -128,7 +162,14 @@ export interface FinanceEntry {
   resourceId: string
   title: string
   vendor: string
+  /** Сумма в USD (заморожена по курсу на момент добавления). */
   amount: number
+  /** Исходная сумма в валюте ввода. */
+  origAmount: number
+  /** Валюта, в которой вводили сумму. */
+  origCurrency: FinanceCurrency
+  /** Курс (USD за 1 единицу origCurrency) на момент добавления. */
+  fxRate: number
   status: FinanceEntryStatus
   notes: string
   entryDate: string

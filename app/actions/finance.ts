@@ -39,6 +39,8 @@ import {
   type VaultCategory,
   type VaultField,
 } from '@/lib/finance'
+import { toUsd, usdRateFor } from '@/lib/finance-types'
+import { getUsdRates } from '@/lib/fx'
 import { syncAdAccount } from '@/lib/ads-yandex'
 
 export interface FinanceResult {
@@ -157,13 +159,14 @@ export async function createResourceAction(
   const description = String(formData.get('description') ?? '')
     .trim()
     .slice(0, MAX_NOTES)
-  const currency = parseCurrency(String(formData.get('currency') ?? 'USDT'))
+  // Валюта источника не назначается вручную — все суммы ведутся в USD.
+  const currency: FinanceCurrency = 'USD'
 
-  if (!name) return { ok: false, message: 'Укажите название ресурса.' }
+  if (!name) return { ok: false, message: 'Укажите название источника.' }
 
   await createFinanceResource({ name, description, currency })
   revalidatePath('/admin/finance')
-  return { ok: true, message: 'Ресурс добавлен.' }
+  return { ok: true, message: 'Источник добавлен.' }
 }
 
 export async function updateResourceAction(
@@ -175,11 +178,11 @@ export async function updateResourceAction(
   const description = String(formData.get('description') ?? '')
     .trim()
     .slice(0, MAX_NOTES)
-  const currency = parseCurrency(String(formData.get('currency') ?? 'USDT'))
+  const currency: FinanceCurrency = 'USD'
   const archived = String(formData.get('archived') ?? '') === 'true'
 
-  if (!id) return { ok: false, message: 'Ресурс не найден.' }
-  if (!name) return { ok: false, message: 'Укажите название ресурса.' }
+  if (!id) return { ok: false, message: 'Источник не найден.' }
+  if (!name) return { ok: false, message: 'Укажите название источника.' }
 
   await updateFinanceResource(id, { name, description, currency, archived })
   revalidatePath('/admin/finance')
@@ -251,18 +254,27 @@ export async function createEntryAction(
   const notes = String(formData.get('notes') ?? '').trim().slice(0, MAX_NOTES)
   const entryDate = parseDate(String(formData.get('entryDate') ?? ''))
   const dueDate = parseOptionalDate(String(formData.get('dueDate') ?? ''))
-  const amount = parseAmount(String(formData.get('amount') ?? '0'))
+  const origAmount = parseAmount(String(formData.get('amount') ?? '0'))
+  const origCurrency = parseCurrency(String(formData.get('currency') ?? 'USD'))
 
   if (!title) return { ok: false, message: 'Укажите название расхода.' }
-  if (Number.isNaN(amount)) {
+  if (Number.isNaN(origAmount)) {
     return { ok: false, message: 'Введите корректную сумму (не меньше 0).' }
   }
+
+  // Замораживаем курс на момент добавления — сумма сразу переводится в USD.
+  const rates = await getUsdRates()
+  const amount = toUsd(origAmount, origCurrency, rates)
+  const fxRate = usdRateFor(origCurrency, rates)
 
   await createFinanceEntry({
     sectionId,
     title,
     vendor,
     amount,
+    origAmount,
+    origCurrency,
+    fxRate,
     status,
     notes,
     entryDate,
@@ -285,17 +297,26 @@ export async function updateEntryAction(
   const notes = String(formData.get('notes') ?? '').trim().slice(0, MAX_NOTES)
   const entryDate = parseDate(String(formData.get('entryDate') ?? ''))
   const dueDate = parseOptionalDate(String(formData.get('dueDate') ?? ''))
-  const amount = parseAmount(String(formData.get('amount') ?? '0'))
+  const origAmount = parseAmount(String(formData.get('amount') ?? '0'))
+  const origCurrency = parseCurrency(String(formData.get('currency') ?? 'USD'))
 
   if (!title) return { ok: false, message: 'Укажите название расхода.' }
-  if (Number.isNaN(amount)) {
+  if (Number.isNaN(origAmount)) {
     return { ok: false, message: 'Введите корректную сумму (не меньше 0).' }
   }
+
+  // При изменении суммы курс замораживаем заново по текущему.
+  const rates = await getUsdRates()
+  const amount = toUsd(origAmount, origCurrency, rates)
+  const fxRate = usdRateFor(origCurrency, rates)
 
   await updateFinanceEntry(id, {
     title,
     vendor,
     amount,
+    origAmount,
+    origCurrency,
+    fxRate,
     status,
     notes,
     entryDate,

@@ -1,6 +1,14 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -127,10 +135,13 @@ import { cn } from '@/lib/utils'
 import {
   AD_PLATFORMS,
   AD_STATUSES,
+  DEFAULT_USD_RATES,
   FINANCE_CURRENCIES,
   FINANCE_ENTRY_STATUSES,
   VAULT_CATEGORIES,
   adEffectiveMetrics,
+  toUsd,
+  type UsdRates,
   type AdPlatform,
   type AdStatus,
   type FinanceAdAccount,
@@ -282,6 +293,26 @@ function formatMoney(amount: number, currency: FinanceCurrency): string {
   return `${n} ${CURRENCY_SYMBOL[currency]}`
 }
 
+/* ------------------------------------------------------------------ */
+/* Единая валюта отображения — USD                                    */
+/* ------------------------------------------------------------------ */
+
+/** Курсы (USD за 1 единицу валюты) на текущий рендер. */
+const RatesContext = createContext<UsdRates>(DEFAULT_USD_RATES)
+
+function useRates(): UsdRates {
+  return useContext(RatesContext)
+}
+
+/** Отформатировать сумму в USD. */
+function formatUsd(amount: number): string {
+  const n = new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(amount)
+  return `${n} $`
+}
+
 function formatInt(n: number): string {
   return new Intl.NumberFormat('ru-RU').format(n)
 }
@@ -334,11 +365,22 @@ interface AccountMetrics {
   cpc: number
 }
 
-function accountMetrics(a: FinanceAdAccount): AccountMetrics {
-  const topups = a.topups.reduce((s, t) => s + t.amount, 0)
+/**
+ * Метрики кабинета в USD. Пополнения и расход хранятся в валюте кабинета
+ * (`a.currency`) и приводятся к USD по текущему курсу `rates`.
+ */
+function accountMetrics(a: FinanceAdAccount, rates: UsdRates): AccountMetrics {
+  const topupsNative = a.topups.reduce((s, t) => s + t.amount, 0)
   // Метрики берём из единого источника: данные Яндекса (если интеграция включена)
   // или сумма ручных снимков, поверх которых применяются корректировки god-страницы.
-  const { impressions, clicks, leads, spend } = adEffectiveMetrics(a)
+  const {
+    impressions,
+    clicks,
+    leads,
+    spend: spendNative,
+  } = adEffectiveMetrics(a)
+  const topups = toUsd(topupsNative, a.currency, rates)
+  const spend = toUsd(spendNative, a.currency, rates)
   return {
     topups,
     spend,
@@ -353,8 +395,8 @@ function accountMetrics(a: FinanceAdAccount): AccountMetrics {
   }
 }
 
-interface CurrencyBucket {
-  currency: FinanceCurrency
+/** Итог по кабинетам в USD (единая валюта отображения). */
+interface UsdTotals {
   topups: number
   spend: number
   balance: number
@@ -369,33 +411,32 @@ interface ResourceAdSummary {
   cr: number
   activeAccounts: number
   totalAccounts: number
-  buckets: CurrencyBucket[]
+  totals: UsdTotals
   lowBalance: FinanceAdAccount[]
 }
 
-function summarizeAds(accounts: FinanceAdAccount[]): ResourceAdSummary {
+function summarizeAds(
+  accounts: FinanceAdAccount[],
+  rates: UsdRates,
+): ResourceAdSummary {
   let leads = 0
   let clicks = 0
   let impressions = 0
   let activeAccounts = 0
-  const map = new Map<FinanceCurrency, CurrencyBucket>()
+  const totals: UsdTotals = { topups: 0, spend: 0, balance: 0, leads: 0 }
   const lowBalance: FinanceAdAccount[] = []
 
   for (const a of accounts) {
-    const m = accountMetrics(a)
+    const m = accountMetrics(a, rates)
     leads += m.leads
     clicks += m.clicks
     impressions += m.impressions
     if (a.status === 'active') activeAccounts += 1
 
-    const bucket =
-      map.get(a.currency) ??
-      { currency: a.currency, topups: 0, spend: 0, balance: 0, leads: 0 }
-    bucket.topups += m.topups
-    bucket.spend += m.spend
-    bucket.balance += m.balance
-    bucket.leads += m.leads
-    map.set(a.currency, bucket)
+    totals.topups += m.topups
+    totals.spend += m.spend
+    totals.balance += m.balance
+    totals.leads += m.leads
 
     if (a.status !== 'archived' && m.balance <= 0 && m.topups > 0) {
       lowBalance.push(a)
@@ -410,7 +451,7 @@ function summarizeAds(accounts: FinanceAdAccount[]): ResourceAdSummary {
     cr: clicks > 0 ? (leads / clicks) * 100 : 0,
     activeAccounts,
     totalAccounts: accounts.length,
-    buckets: [...map.values()].sort((a, b) => b.balance - a.balance),
+    totals,
     lowBalance,
   }
 }
@@ -1461,7 +1502,7 @@ function OverviewPanel({
       {/* Accounts quick list */}
       {accounts.length > 0 ? (
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold">К��бинеты</h3>
+          <h3 className="text-sm font-semibold">К����бинеты</h3>
           <Card className="divide-y divide-border p-0">
             {accounts.map((a) => {
               const m = accountMetrics(a)
@@ -2901,7 +2942,7 @@ function AdAccountDialog({
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="acc-name">Название</Label>
+              <Label htmlFor="acc-name">Н��звание</Label>
               <Input
                 id="acc-name"
                 name="name"
