@@ -2661,7 +2661,7 @@
       } else {
         t.textContent = 'Установка недоступна в этом браузере'
         s.textContent =
-          'Чтобы написать нам, откройте сайт в Google Chrome (Android/ком��ьютер) и установите приложение.'
+          'Чтобы написать нам, откройте сайт в Google Chrome (Android/компьютер) и установите приложение.'
       }
       txt.appendChild(t)
       txt.appendChild(s)

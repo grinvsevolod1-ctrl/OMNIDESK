@@ -1241,7 +1241,7 @@ const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
     ],
   },
   {
-    label: 'Ж��сты',
+    label: 'Жесты',
     emojis: [
       '👍', '👎', '👌', '✌️', '🤞', '🤝', '👏', '🙏', '💪', '🫶',
       '👋', '🤙', '✋', '🖐️', '👊', '🤛', '🤜', '☝️', '👆', '👉',
@@ -1461,11 +1461,11 @@ const PRESENCE_TTL_MS = 60_000
 function DeliveryTicks({ status }: { status?: Message['status'] }) {
   if (status === 'failed') {
     return (
-      <AlertCircle className="size-3 text-destructive" aria-label="Не до����тавлено" />
+      <AlertCircle className="size-3 text-destructive" aria-label="Не доставлено" />
     )
   }
   if (status === 'read') {
-    return <CheckCheck className="size-3 text-sky-400" aria-label="Прочи��ано" />
+    return <CheckCheck className="size-3 text-sky-400" aria-label="Прочитано" />
   }
   if (status === 'delivered') {
     return <CheckCheck className="size-3" aria-label="Доставлено" />
@@ -2686,7 +2686,7 @@ export function InboxView({
                 type="button"
                 onClick={() => setSearch('')}
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Очистит�� поиск"
+                aria-label="Очистить поиск"
               >
                 <X className="size-4" />
               </button>

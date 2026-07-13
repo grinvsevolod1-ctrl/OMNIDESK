@@ -507,7 +507,7 @@ function ManagersTab({
                       {m.name}
                       {m.onLunch ? (
                         <Badge variant="outline" className="border-warning/40 text-warning">
-                          ��а обеде
+                          На обеде
                         </Badge>
                       ) : null}
                     </div>
@@ -1164,7 +1164,7 @@ function CreateChannelDialog({
           <DialogTitle>Создать канал</DialogTitle>
           <DialogDescription>
             Ручное создание записи канала. Для реального подключения Telegram/WhatsApp
-            используйте мастер в разделе «Акк��унты».
+            используйте мастер в разделе «Аккаунты».
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">

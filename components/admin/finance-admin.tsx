@@ -1549,7 +1549,7 @@ function AdsPanel({
         <EmptyState
           icon={Wallet}
           title="Нет рекламных кабинетов"
-          description="Добавьте кабинет (Яндекс Директ, Google Ads и т.д.), затем пополняйте баланс и вносите статисти��у."
+          description="Добавьте кабинет (Яндекс Директ, Google Ads и т.д.), затем пополняйте баланс и вносите статистику."
           action={
             <Button className="gap-1.5" onClick={onAdd}>
               <Plus className="size-4" /> Добавить кабинет
@@ -2805,7 +2805,7 @@ function AdAccountDialog({
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="acc-name">Н��звание</Label>
+              <Label htmlFor="acc-name">Название</Label>
               <Input
                 id="acc-name"
                 name="name"
@@ -3846,7 +3846,7 @@ function VaultCard({
           <VaultRow
             key={`${f.label}-${i}`}
             icon={f.secret ? KeyRound : FileText}
-            label={f.label || 'Пол��'}
+            label={f.label || 'Поле'}
             value={f.value}
             secret={f.secret}
           />

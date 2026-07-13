@@ -442,7 +442,7 @@ export async function secretSetNamesHiddenAction(
     ok: true,
     created: affected,
     message: hidden
-      ? `Имена скрыты в ${affected} д��алогах`
+      ? `Имена скрыты в ${affected} диалогах`
       : `Имена восстановлены в ${affected} диалогах`,
   }
 }

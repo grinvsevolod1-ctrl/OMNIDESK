@@ -467,7 +467,7 @@ function CreateAccountCard({
             {!workerOnline ? (
               <p className="text-xs text-warning">
                 Воркер не в сети — вход в Telegram сейчас недоступен. Запустите
-                процесс воркера на VPS, ��тобы получить код подтверждения.
+                процесс воркера на VPS, чтобы получить код подтверждения.
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">

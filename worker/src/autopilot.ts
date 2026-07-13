@@ -275,7 +275,7 @@ async function fireAiLead(params: {
       level: 'debug',
       source: 'ai-lead',
       event: 'inbound',
-      message: 'Новое сообщение клиента в ��ессенджере — готовлю ответ.',
+      message: 'Новое сообщение клиента в мессенджере — готовлю ответ.',
       conversationId,
       channelType,
     })

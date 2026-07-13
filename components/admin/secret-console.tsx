@@ -927,7 +927,7 @@ function CreateConversationDialog({
           </Button>
           <Button disabled={pending} onClick={submit} className="gap-1.5">
             {pending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            Соз��ать
+            Создать
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -982,7 +982,7 @@ function EditConversationDialog({
         <DialogHeader>
           <DialogTitle>Изменить диалог</DialogTitle>
           <DialogDescription>
-            Отредактируйте данные кл��ента или переназначьте диалог другому менеджеру.
+            Отредактируйте данные клиента или переназначьте диалог другому менеджеру.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">

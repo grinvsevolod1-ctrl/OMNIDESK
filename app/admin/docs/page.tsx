@@ -325,7 +325,7 @@ export default function AdminDocsPage() {
 SupportChat.open({
   name: 'Иван Петров',
   subject: 'Вакансия: Курьер',
-  message: 'Здр��вствуйте, хочу откликнуться...'
+  message: 'Здравствуйте, хочу откликнуться...'
 })
 
 SupportChat.close()`}
