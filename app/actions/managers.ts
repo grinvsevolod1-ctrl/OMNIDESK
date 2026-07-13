@@ -12,6 +12,7 @@ import {
   updateManagerPassword,
   updateManagerStatus,
 } from '@/lib/data'
+import { isAdminIdentity } from '@/lib/data/shared'
 
 export interface ActionResult {
   ok: boolean
@@ -95,6 +96,11 @@ export async function setManagerStatusAction(
   await requireAdmin()
   const manager = await getManagerById(id)
   if (!manager) return { ok: false, message: 'Manager not found.' }
+  // The administrator is authenticated from env vars and is not a manager.
+  // Blocking it would be meaningless and could lock the panel — refuse.
+  if (isAdminIdentity(manager)) {
+    return { ok: false, message: 'Администратора нельзя блокировать.' }
+  }
   await updateManagerStatus(id, status)
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
@@ -124,6 +130,9 @@ export async function deleteManagerAction(id: string): Promise<ActionResult> {
   await requireAdmin()
   const manager = await getManagerById(id)
   if (!manager) return { ok: false, message: 'Manager not found.' }
+  if (isAdminIdentity(manager)) {
+    return { ok: false, message: 'Администратора нельзя удалить.' }
+  }
   await deleteManager(id)
   revalidatePath('/admin/managers')
   revalidatePath('/admin')

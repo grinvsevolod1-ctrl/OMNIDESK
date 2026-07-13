@@ -5,7 +5,7 @@
 import { randomUUID } from 'crypto'
 import { query } from '../db'
 import type { Manager, ManagerStatus } from '../types'
-import { excludeAdminSql, isAdminIdentity, toManager, type ManagerRow } from './shared'
+import { excludeAdminSql, toManager, type ManagerRow } from './shared'
 
 /* ----------------------------- Managers ----------------------------- */
 

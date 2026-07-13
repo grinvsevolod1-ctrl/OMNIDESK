@@ -377,7 +377,17 @@ function CreateAccountCard({
         </p>
       ) : null}
 
-      {/* Common fields */}
+      {/* Common fields. Wrapped in a <form> so browsers can associate the
+          password inputs (MAX/VK token, TG 2FA) with a form for autofill and
+          to silence "Password field is not contained in a form". */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!pending && !(type === 'telegram' && !workerOnline)) {
+            void submitCreate()
+          }
+        }}
+      >
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <Label>Менеджер-владелец</Label>
@@ -487,7 +497,7 @@ function CreateAccountCard({
 
       <div className="mt-4 flex items-center gap-2">
         <Button
-          onClick={submitCreate}
+          type="submit"
           disabled={pending || (type === 'telegram' && !workerOnline)}
         >
           {pending ? (
@@ -498,6 +508,7 @@ function CreateAccountCard({
           Подключить
         </Button>
       </div>
+      </form>
 
       {/*
         Telegram login modal. It opens automatically as soon as the connect flow
@@ -520,7 +531,13 @@ function CreateAccountCard({
           </DialogHeader>
 
           {tgStep === 'code' ? (
-            <div className="flex flex-col gap-3">
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (!pending && tgCode.trim()) submitCode()
+              }}
+            >
               <div className="flex flex-col gap-1.5">
                 <Label>Код из Telegram</Label>
                 <Input
@@ -539,13 +556,22 @@ function CreateAccountCard({
                   Введите код, который пришёл в приложение Telegram или по SMS.
                 </p>
               </div>
-              <Button onClick={submitCode} disabled={pending || !tgCode.trim()}>
+              <Button
+                type="submit"
+                disabled={pending || !tgCode.trim()}
+              >
                 {pending ? <Loader2 className="size-4 animate-spin" /> : null}
                 Отправить код
               </Button>
-            </div>
+            </form>
           ) : tgStep === 'password' ? (
-            <div className="flex flex-col gap-3">
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (!pending && tgPassword.trim()) submitPassword()
+              }}
+            >
               <div className="flex flex-col gap-1.5">
                 <Label>Пароль двухэтапной аутентификации</Label>
                 <Input
@@ -565,13 +591,13 @@ function CreateAccountCard({
                 </p>
               </div>
               <Button
-                onClick={submitPassword}
+                type="submit"
                 disabled={pending || !tgPassword.trim()}
               >
                 {pending ? <Loader2 className="size-4 animate-spin" /> : null}
                 Отправить пароль
               </Button>
-            </div>
+            </form>
           ) : (
             <div className="flex items-center gap-3 py-4 text-sm text-muted-foreground">
               <Loader2 className="size-5 animate-spin" />
