@@ -3,7 +3,12 @@ import type { LearnedProfile } from './types'
 import { aiConfigured } from './generate'
 import { sampleRealDialogues, saveLearnedProfile } from './store'
 
-const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-4o-mini'
+// Analysis model is INTENTIONALLY separate from the chat model
+// (CLIENT_SIM_MODEL). This is the offline "learn from real dialogues" pass, so a
+// cheaper model is fine and — crucially — tuning the live chat model must not
+// silently change how analysis runs. Defaults to gpt-4.1-mini; override with
+// CLIENT_SIM_LEARN_MODEL.
+const MODEL = process.env.CLIENT_SIM_LEARN_MODEL || 'openai/gpt-4.1-mini'
 
 export class LearnError extends Error {}
 

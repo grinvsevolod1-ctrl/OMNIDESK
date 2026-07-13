@@ -13,6 +13,7 @@ import {
 import {
   assessLeadReady,
   type BrainLog,
+  type BrainMessage,
   generateManagerReply,
   isBrainConfigured,
 } from '../ai/manager-brain'
@@ -256,7 +257,15 @@ async function runLivechatAiLead(input: {
     // data and start working. If so, promote the lead to «Ликвид» and hand it
     // to a human (pauses the AI + flags the inbox banner). Best-effort: never
     // let a promotion failure affect the reply we already sent.
+    //
+    // Cost guard: the readiness check is a second gateway call on every turn, so
+    // we skip it entirely until the client's own recent messages actually show
+    // a readiness signal (agreement / sharing contacts). This cuts the vast
+    // majority of assessment calls without missing the moment a lead converts.
     try {
+      if (!clientShowsReadinessSignal(history)) {
+        return true
+      }
       const ready = await assessLeadReady(
         [...history, { role: 'manager', body: reply }],
         log,
@@ -331,6 +340,31 @@ export async function kickstartAwaitingConversations(
   }
   const remaining = await countConversationsAwaitingAi()
   return { kicked, remaining }
+}
+
+/**
+ * Cheap, dependency-free pre-filter for the readiness assessment. Returns true
+ * only when the CLIENT's recent messages hint they might be agreeing / handing
+ * over contacts — the only situations where the (paid) AI readiness check is
+ * worth running. Deliberately a bit generous so we never miss a real
+ * conversion; the AI call then makes the final confident call.
+ */
+function clientShowsReadinessSignal(history: BrainMessage[]): boolean {
+  const clientLines = history
+    .filter((m) => m.role === 'client')
+    .slice(-3)
+    .map((m) => m.body.toLowerCase())
+  if (clientLines.length === 0) return false
+  const text = clientLines.join(' \n ')
+
+  // Agreement / commitment phrasing.
+  const AGREE =
+    /\b(да|давай|согласен|согласна|готов|готова|хорошо|ок|окей|договорились|подходит|устраивает|начн[её]м|поехали|интересно|где начать|что дальше|куда писать|скинь|скиньте|скину|отправлю|записывайте)\b/i
+  // Sharing / offering to share contact or personal data.
+  const CONTACT =
+    /(\+?\d[\d\s\-()]{8,}|@[a-z0-9_]{3,}|телефон|номер|вотсап|whatsapp|вайбер|телеграм|телег[еу]|почт[аеу]|карт[аеуы]|паспорт|реквизит|мои данные|мой ном)/i
+
+  return AGREE.test(text) || CONTACT.test(text)
 }
 
 /** Send an AI-authored reply, keeping the AI-lead flag on (byAi). */

@@ -23,12 +23,23 @@ export type Behavior =
 // verbal tics, running mood — far more convincingly and varies its wording
 // much better, which is exactly what sells "these are real different people".
 // Pricier than the mini, but that's the deliberate trade-off for realism.
-// Override with CLIENT_SIM_MODEL to force something else.
+// Override with CLIENT_SIM_MODEL to force something else. NOTE: the "learn from
+// dialogues" analysis uses its OWN model var (CLIENT_SIM_LEARN_MODEL, see
+// learn.ts) so tuning the chat model never silently changes the analysis one.
 const MODEL = process.env.CLIENT_SIM_MODEL || 'openai/gpt-4.1'
 
-/** AI generation is only possible when the gateway key is present. */
+/**
+ * AI generation is only possible when the gateway is reachable.
+ *
+ * Primary credential is AI_GATEWAY_API_KEY (works everywhere incl. a self-hosted
+ * VPS). VERCEL_OIDC_TOKEN is a Vercel-only fallback the AI SDK can use for the
+ * gateway, so we only trust it when actually running on Vercel — otherwise a
+ * stale token would make us falsely report "configured" on a VPS. This mirrors
+ * the manager brain's isBrainConfigured() so both AIs agree on a given host.
+ */
 export function aiConfigured(): boolean {
-  return Boolean(process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN)
+  if (process.env.AI_GATEWAY_API_KEY) return true
+  return Boolean(process.env.VERCEL && process.env.VERCEL_OIDC_TOKEN)
 }
 
 const BEHAVIOR_HINT: Record<Behavior, string> = {
@@ -137,6 +148,39 @@ function personaBlock(persona: SimPersona): string {
   return lines.join('\n')
 }
 
+/**
+ * Roll a per-turn target length so messages don't all come out the same size
+ * (a dead giveaway of a bot). Driven by the persona's `terseness` (0..1, higher
+ * = shorter) and archetype `talkativeness`, with random jitter so even one
+ * person varies turn to turn. Returns a prompt hint AND a matching token budget
+ * generous enough that the model finishes its thought instead of being cut off
+ * mid-word.
+ */
+function rollLength(persona: SimPersona): { hint: string; maxTokens: number } {
+  const terse = persona.style.terseness ?? 0.5
+  const talk = persona.archetype?.talkativeness ?? 0.5
+  // Bias 0..1: higher = wordier. Then jitter per turn.
+  const bias = Math.max(0, Math.min(1, 0.5 - terse * 0.6 + talk * 0.4))
+  const roll = Math.random() * 0.6 + bias * 0.7
+
+  if (roll < 0.45) {
+    return {
+      hint: '- сейчас ответь совсем коротко: одно слово или короткая фраза (но законченная, не обрывай).',
+      maxTokens: 90,
+    }
+  }
+  if (roll < 0.85) {
+    return {
+      hint: '- сейчас ответь как обычно в чате: 1–2 короткие фразы.',
+      maxTokens: 180,
+    }
+  }
+  return {
+    hint: '- сейчас ты разговорился: 2–3 предложения, можешь ввернуть деталь из жизни — но по делу, без воды.',
+    maxTokens: 320,
+  }
+}
+
 function moodBlock(moodHint: string | undefined): string {
   if (!moodHint) return ''
   return [
@@ -153,6 +197,7 @@ function systemPrompt(
   learnedPointers?: string[],
   ownLines?: string[],
   moodHint?: string,
+  lengthHint?: string,
 ): string {
   const s = persona.style
   const tone = persona.tone ?? 'mixed'
@@ -167,19 +212,27 @@ function systemPrompt(
     TONE_REGISTER[tone] ?? TONE_REGISTER.mixed,
     moodBlock(moodHint),
     '',
+    'ЛОГИКА ДИАЛОГА (это важнее всего — иначе видно что это бот):',
+    '- ВНИМАТЕЛЬНО прочитай последнее сообщение менеджера и ответь именно на него, по смыслу. Не пиши в пустоту.',
+    '- Веди разговор осмысленно и с памятью: помни, о чём уже договорились и что спрашивал, двигай диалог дальше, а не топчись на месте.',
+    '- Если менеджер ответил на твой вопрос — среагируй на ответ (уточни, согласись, засомневайся), а не задавай тот же вопрос снова.',
+    '- НЕ отвечай пустыми междометиями типа «чё», «а?», «что», если менеджер написал понятную фразу — так пишет только бот. Переспрашивай коротко только когда реально что-то непонятно.',
+    '',
     'КАК ТЫ ПИШЕШЬ (очень важно, иначе спалишься):',
-    '- как в реальном чате: коротко, 1 фраза, редко 2.',
-    s.noPunctuation ? '- почти без знаков препинания, не ставь точки и запятые.' : polite ? '- знаки препинания ставь аккуратно.' : '- знаки препинания ставь небрежно.',
+    lengthHint ?? '- длина сообщений разная: чаще 1–2 короткие фразы, иногда одно слово, иногда 2–3 предложения когда есть что сказать.',
+    '- НИКОГДА не обрывай сообщение на полуслове и посередине мысли — заверши фразу, даже если коротко.',
+    s.noPunctuation ? '- почти без знаков препинания, не ставь точки и запятые.' : polite ? '- знаки препинания ставь аккуратно.' : '- знаки препинания ставь небрежно, но читаемо.',
     s.lowercase ? '- пиши маленькими буквами, без заглавных.' : polite ? '- пиши с заглавных букв, как положено.' : '- регистр как попало.',
     polite
       ? '- пиши грамотно, опечатки редки; сокращения — умеренно.'
-      : '- допускай опечатки и ошибки, пиши разговорно и коряво, сокращай слова (щас, норм, че, скок, мб).',
-    s.dumbness > 0.4 ? '- иногда туповато переспрашивай и не догоняй с первого раза.' : '',
+      : '- пиши живо и разговорно, можешь сокращать по-своему и делать редкие опечатки — но естественно, а не одинаково в каждом сообщении.',
+    s.dumbness > 0.4 ? '- иногда чего-то не догоняешь с первого раза — но переспрашивай осмысленно, целой фразой, а не одним словом.' : '',
     s.profanity > 0.5 ? '- материшься свободно, грубо, по-настоящему, когда бесит.' : s.profanity > 0.2 ? '- иногда проскакивает мат.' : polite ? '- мата нет вообще.' : '- мат редко.',
-    '- НЕ повторяй свои прошлые фразы, каждый раз говори по-другому.',
+    '- НЕ повторяй свои прошлые фразы и обороты — каждый раз формулируй по-новому, своими словами.',
+    '- НЕ начинай подряд сообщения с одного и того же слова.',
     '- НЕ здоровайся повторно, если уже начали разговор.',
-    '- Оставайся собой: твой тип личности и настроение должны читаться в каждом сообщении.',
-    '- Иногда неси лёгкую бытовую чушь/оффтоп, как живой человек.',
+    '- Оставайся собой: твой тип личности, жизненная ситуация и настроение должны читаться в каждом сообщении и делать тебя не похожим на других.',
+    '- Иногда вворачивай конкретную деталь из своей жизни или лёгкий бытовой оффтоп, как живой человек.',
     '',
     soft
       ? 'Менеджер часто предлагает мутную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ, в рамках своего характера: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежливый отказ — но всегда корректно, без грубости и мата.'
@@ -241,10 +294,40 @@ function similarity(a: string, b: string): number {
 /** True when `line` is too close to any of the persona's recent lines. */
 function tooSimilar(line: string, ownLines: string[]): boolean {
   const n = normLine(line)
+  const words = n.split(' ').filter(Boolean)
+  // Short filler lines ("чё", "ну что", "а?") are the worst offenders — the
+  // swarm firing the same 1–3 word interjection is the #1 bot tell — so for
+  // those we demand an EXACT-word-set mismatch, not just a fuzzy one.
+  const isShort = words.length <= 3
   return ownLines.some((prev) => {
     const p = normLine(prev)
-    return p === n || similarity(line, prev) >= 0.6
+    if (p === n) return true
+    if (isShort && p.split(' ').filter(Boolean).length <= 3) {
+      // treat near-identical short lines (same word set) as duplicates
+      if (similarity(line, prev) >= 0.5) return true
+    }
+    return similarity(line, prev) >= 0.6
   })
+}
+
+/**
+ * When a reply was cut off at the token limit it can end mid-word. Drop that
+ * trailing partial token (and any dangling connector) so we never post a
+ * chopped-off word like "предоплат". Keeps everything up to the last complete
+ * word / sentence.
+ */
+function trimDanglingWord(text: string): string {
+  let out = text.trimEnd()
+  if (!out) return out
+  // If it already ends on sentence punctuation, it's a clean stop.
+  if (/[.!?…)]$/.test(out)) return out
+  // Otherwise the final whitespace-delimited token is likely incomplete — cut
+  // it, unless the whole thing is a single word (then keep it as-is).
+  const lastSpace = out.lastIndexOf(' ')
+  if (lastSpace > 0) out = out.slice(0, lastSpace).trimEnd()
+  // Strip a trailing dangling connector left hanging by the cut.
+  out = out.replace(/\s+(и|а|но|что|чтобы|потому|если|как|за|на|в|с|по|о|про|это|мне|мой|моя)$/i, '')
+  return out.trimEnd()
 }
 
 /**
@@ -291,6 +374,10 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         messages.push({ role: 'user', content: '(ты пишешь первым в чат по объявлению о работе)' })
       }
 
+      // Per-turn length target + matching token budget so replies vary in size
+      // and never get truncated mid-word at a fixed limit.
+      const { hint: lengthHint, maxTokens } = rollLength(persona)
+
       const system = systemPrompt(
         persona,
         behavior,
@@ -298,13 +385,14 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         learnedPointers,
         avoidLines,
         args.moodHint,
+        lengthHint,
       )
 
       // Up to three attempts: if the line echoes something this persona OR the
       // swarm already said, retry hotter to break the loop.
       let clean = ''
       for (let attempt = 0; attempt < 3; attempt++) {
-        const { text } = await generateText({
+        const { text, finishReason } = await generateText({
           model: MODEL,
           system,
           messages,
@@ -312,9 +400,12 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
           topP: 0.95,
           frequencyPenalty: 0.6,
           presencePenalty: 0.5,
-          maxOutputTokens: 120,
+          maxOutputTokens: maxTokens,
         })
-        const candidate = (text || '').trim().replace(/^["'«»]+|["'«»]+$/g, '')
+        let candidate = (text || '').trim().replace(/^["'«»]+|["'«»]+$/g, '')
+        // If the model hit the token ceiling it may have stopped mid-word;
+        // drop the dangling fragment so we never post a chopped-off word.
+        if (finishReason === 'length') candidate = trimDanglingWord(candidate)
         if (!candidate || looksLikeRefusal(candidate)) continue
         clean = candidate
         if (!tooSimilar(candidate, avoidLines)) break
@@ -322,10 +413,11 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
 
       if (clean && !looksLikeRefusal(clean)) {
         // Guarantee the "hand-typed" fingerprint even if the model wrote cleanly,
-        // but at a lighter typo rate so AI text stays readable.
+        // but at a much lighter typo rate so AI text stays readable and the
+        // mangling doesn't look mechanically identical across messages.
         const styled = applyStyle(clean, {
           ...persona.style,
-          typoRate: persona.style.typoRate * 0.5,
+          typoRate: persona.style.typoRate * 0.3,
         })
         rememberGlobalLine(styled)
         return styled

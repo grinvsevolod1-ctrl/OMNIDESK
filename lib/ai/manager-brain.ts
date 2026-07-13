@@ -317,7 +317,14 @@ export async function assessLeadReady(
     }
     const data = (await res.json()) as GatewayResponse
     const raw = (data.choices?.[0]?.message?.content ?? '').trim().toLowerCase()
-    const ready = raw.startsWith('да') || raw.startsWith('yes')
+    // Robust parse: look at whole words, not a prefix. `startsWith('да')` used
+    // to match "давай"/"далеко" and falsely promote; and reasoning/verbose
+    // models may wrap the verdict ("Да, готов"). We scan for a standalone
+    // да/yes affirmative while making sure it isn't negated (нет/no) first.
+    const tokens = raw.replace(/[^\p{L}\s]/gu, ' ').split(/\s+/).filter(Boolean)
+    const negative = tokens.some((t) => t === 'нет' || t === 'no' || t === 'not')
+    const affirmative = tokens.some((t) => t === 'да' || t === 'yes' || t === 'готов')
+    const ready = affirmative && !negative
     log?.({
       level: 'debug',
       event: 'readiness.assessed',
