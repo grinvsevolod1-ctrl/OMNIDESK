@@ -14,11 +14,14 @@ import { makePersona } from '@/lib/client-sim/content'
 import { generateReply } from '@/lib/client-sim/generate'
 import { analyzeDialogues, LearnError } from '@/lib/client-sim/learn'
 import {
+  adoptConversations,
   countActiveThreads,
   getSettings as getSimSettings,
+  listAdoptableConversations,
   listUsableChannels,
   sampleRealClientLines,
   updateSettings,
+  type AdoptableConversation,
   type SettingsPatch,
 } from '@/lib/client-sim/store'
 import {
@@ -105,6 +108,60 @@ export async function simLearnAction(): Promise<SimLearnResult> {
       error: `Не удалось изучить диалоги: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
+}
+
+/* -------------------- adopt existing / real dialogues ------------------- */
+/*
+ * The simulator normally only continues conversations it created itself. These
+ * two actions let an admin hand it EXISTING dialogues (organic ones, or any that
+ * predate an update): list every manager-routed conversation, then register the
+ * chosen ones so the engine revives and continues them in-character on a
+ * randomised, staggered schedule.
+ */
+
+/** All manager-routed conversations, for the "continue existing dialogues" table. */
+export async function simListAdoptableAction(): Promise<AdoptableConversation[]> {
+  await guard()
+  return listAdoptableConversations()
+}
+
+export interface SimAdoptResult {
+  adopted: number
+  skipped: number
+}
+
+/**
+ * Register the selected conversations as simulator threads. `spreadMinutes`
+ * controls how widely their first resumed turn is scattered across time (so they
+ * never all fire at once). It is clamped BELOW the engine's 3h ghost-reaper
+ * window so a scheduled turn always fires before the thread could be retired.
+ */
+export async function simAdoptConversationsAction(input: {
+  conversationIds: string[]
+  spreadMinutes?: number
+}): Promise<SimAdoptResult> {
+  await guard()
+  const ids = (input.conversationIds ?? []).filter(Boolean)
+  if (ids.length === 0) return { adopted: 0, skipped: 0 }
+
+  // Roll a character voice for the adopted crowd from the live settings, so the
+  // revived dialogues match the tone the operator configured.
+  const settings = await getSimSettings()
+  const spread = clampInt(input.spreadMinutes ?? 120, 1, 165, 120)
+
+  const result = await adoptConversations(ids, {
+    aggression: settings.aggression,
+    tone: settings.tone,
+    minDelaySec: 20,
+    maxDelaySec: spread * 60,
+  })
+
+  // A restart-safe engine picks these up on its next tick; make sure it's
+  // running if the simulator is enabled, so adoption "just works".
+  if (settings.enabled) startEngine()
+
+  revalidatePath(ADMIN_PATH)
+  return result
 }
 
 /* --------------------------- test sandbox ------------------------------- */

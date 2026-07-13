@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { query } from '@/lib/db'
+import { makePersona } from './content'
 import type { ChannelType } from '@/lib/types'
 import type {
   LearnedProfile,
@@ -698,7 +699,200 @@ export async function getConversationRouting(
   return r ? { managerId: r.manager_id, channelId: r.channel_id } : null
 }
 
-/** Recent transcript for building LLM context (oldest���newest). */
+/* ------------------- adopting real / existing dialogues ----------------- */
+/*
+ * By default the simulator only ever touches conversations IT created (rows in
+ * sim_threads). Everything else — organic dialogues, and anything that existed
+ * before an update — is invisible to the engine, so the bot never continues
+ * them. "Adopting" a conversation simply registers a sim_threads row for it: the
+ * engine then reads the FULL real transcript from `messages` and keeps the
+ * dialogue going, in-character, on a human, randomised schedule.
+ */
+
+export interface AdoptableConversation {
+  id: string
+  channelType: ChannelType
+  contactName: string
+  managerId: string | null
+  managerName: string | null
+  lastMessage: string | null
+  lastMessageAt: string | null
+  messageCount: number
+  /** Who spoke last: 'in' = client, 'out' = manager. */
+  lastDirection: 'in' | 'out' | null
+  /** Already registered as a simulator thread. */
+  adopted: boolean
+}
+
+/**
+ * List conversations the simulator COULD take over: any conversation routed to
+ * a manager. Each row carries the owning manager's name (for the grouped table),
+ * a message count, the last message + who sent it, and whether it is already
+ * adopted. Ordered newest-activity first.
+ */
+export async function listAdoptableConversations(
+  limit = 1000,
+): Promise<AdoptableConversation[]> {
+  const rows = await query<{
+    id: string
+    channel_type: ChannelType
+    contact_name: string | null
+    manager_id: string | null
+    manager_name: string | null
+    last_message: string | null
+    last_message_at: string | Date | null
+    msg_count: number
+    last_direction: 'in' | 'out' | null
+    adopted: boolean
+  }>(
+    `SELECT c.id, c.channel_type, c.contact_name, c.manager_id,
+            mgr.name AS manager_name,
+            c.last_message, c.last_message_at,
+            COALESCE(mc.n, 0) AS msg_count,
+            lm.direction AS last_direction,
+            (st.conversation_id IS NOT NULL) AS adopted
+       FROM conversations c
+       LEFT JOIN managers mgr ON mgr.id = c.manager_id
+       LEFT JOIN sim_threads st ON st.conversation_id = c.id
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS n
+           FROM messages m
+          WHERE m.conversation_id = c.id
+       ) mc ON true
+       LEFT JOIN LATERAL (
+         SELECT direction
+           FROM messages m
+          WHERE m.conversation_id = c.id
+          ORDER BY created_at DESC
+          LIMIT 1
+       ) lm ON true
+      WHERE c.manager_id IS NOT NULL
+      ORDER BY c.last_message_at DESC NULLS LAST
+      LIMIT $1`,
+    [Math.max(1, limit)],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    channelType: r.channel_type,
+    contactName: r.contact_name ?? 'Без имени',
+    managerId: r.manager_id,
+    managerName: r.manager_name,
+    lastMessage: r.last_message,
+    lastMessageAt: r.last_message_at
+      ? new Date(r.last_message_at).toISOString()
+      : null,
+    messageCount: Number(r.msg_count ?? 0),
+    lastDirection: r.last_direction,
+    adopted: r.adopted,
+  }))
+}
+
+export interface AdoptResult {
+  adopted: number
+  skipped: number
+}
+
+/**
+ * Register simulator threads for the given existing conversations so the engine
+ * continues them. For each conversation we:
+ *   - synthesize a fresh random persona (tone/character rolled from settings)
+ *     but pin its NAME/handle to the real contact, so the same person keeps
+ *     talking rather than a stranger;
+ *   - seed `turns` from the real client-message count so behaviour escalation
+ *     picks up where the dialogue actually is;
+ *   - pin `last_seen_out` to the latest manager message so the reaction sweep
+ *     doesn't instantly fire on an old reply — we drive timing ourselves;
+ *   - schedule `next_run_at` at a RANDOM offset within [minDelaySec, maxDelaySec]
+ *     so the swarm revives dialogues staggered over time, never all at once.
+ * Already-adopted conversations are skipped (idempotent via ON CONFLICT).
+ */
+export async function adoptConversations(
+  conversationIds: string[],
+  opts: {
+    aggression: number
+    tone: SimTone
+    minDelaySec?: number
+    maxDelaySec?: number
+  },
+): Promise<AdoptResult> {
+  const ids = [...new Set(conversationIds)].filter(Boolean)
+  if (ids.length === 0) return { adopted: 0, skipped: 0 }
+
+  const seeds = await query<{
+    id: string
+    channel_id: string
+    channel_type: ChannelType
+    contact_name: string | null
+    contact_handle: string | null
+    contact_username: string | null
+    last_out_id: string | null
+    client_turns: number
+    already: boolean
+  }>(
+    `SELECT c.id, c.channel_id, c.channel_type,
+            c.contact_name, c.contact_handle, c.contact_username,
+            lo.id AS last_out_id,
+            COALESCE(ct.n, 0) AS client_turns,
+            (st.conversation_id IS NOT NULL) AS already
+       FROM conversations c
+       LEFT JOIN sim_threads st ON st.conversation_id = c.id
+       LEFT JOIN LATERAL (
+         SELECT id
+           FROM messages m
+          WHERE m.conversation_id = c.id AND m.direction = 'out'
+          ORDER BY created_at DESC
+          LIMIT 1
+       ) lo ON true
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS n
+           FROM messages m
+          WHERE m.conversation_id = c.id AND m.direction = 'in'
+       ) ct ON true
+      WHERE c.id = ANY($1::uuid[])
+        AND c.manager_id IS NOT NULL`,
+    [ids],
+  )
+
+  const minD = Math.max(5, Math.floor(opts.minDelaySec ?? 20))
+  const maxD = Math.max(minD + 1, Math.floor(opts.maxDelaySec ?? 7200))
+
+  let adopted = 0
+  let skipped = 0
+  for (const s of seeds) {
+    if (s.already) {
+      skipped += 1
+      continue
+    }
+    const persona = makePersona(s.channel_type, opts.aggression, opts.tone)
+    // Pin identity to the real contact so it reads as the same person.
+    if (s.contact_name) persona.name = s.contact_name
+    if (s.contact_handle) persona.handle = s.contact_handle
+    persona.username = s.contact_username ?? persona.username
+
+    const delay = minD + Math.floor(Math.random() * (maxD - minD))
+    await query(
+      `INSERT INTO sim_threads
+         (conversation_id, channel_id, persona, state, turns, last_seen_out, next_run_at)
+       VALUES ($1, $2, $3::jsonb, 'chatting', $4, $5, now() + make_interval(secs => $6::int))
+       ON CONFLICT (conversation_id) DO NOTHING`,
+      [
+        s.id,
+        s.channel_id,
+        JSON.stringify(persona),
+        Math.max(1, Number(s.client_turns ?? 1)),
+        s.last_out_id,
+        delay,
+      ],
+    )
+    adopted += 1
+  }
+  // Any requested id not returned by the seed query (no manager / not found) is
+  // counted as skipped so the UI total always reconciles.
+  skipped += ids.length - seeds.length
+  return { adopted, skipped }
+}
+
+/** Recent transcript for building LLM context (oldest→newest). */
 export interface SimTranscriptLine {
   direction: 'in' | 'out'
   body: string
