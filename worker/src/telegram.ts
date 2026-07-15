@@ -19,14 +19,38 @@ import { onInbound as onAutopilotInbound } from './autopilot.js'
 const TG_SEND_MIN_INTERVAL_MS = 1_200
 const TG_SEND_JITTER_MS = 800
 
-// History backfill. On connect we pull the last N messages of the most-recent
-// chats so an opened conversation shows real history instead of only the
-// messages that arrive live after connecting. Bounded + throttled so we never
-// trip Telegram's flood limits (a full sweep of every chat would get banned).
-const TG_DIALOG_LIMIT = 200
-const TG_BACKFILL_MAX_CHATS = 40
-const TG_BACKFILL_PER_CHAT = 25
-const TG_BACKFILL_THROTTLE_MS = 400
+/** Parse a non-negative integer env var, falling back to `def` when unset/invalid. */
+function envInt(name: string, def: number): number {
+  const raw = process.env[name]
+  if (raw == null || raw === '') return def
+  const n = Number.parseInt(raw, 10)
+  return Number.isFinite(n) && n >= 0 ? n : def
+}
+
+// History backfill. On connect (and reconnect) we pull the COMPLETE message
+// history of every direct/group chat into the inbox — every message and every
+// file, all the way back to the very first message — so an opened conversation
+// shows the full thread, not just what arrived live after connecting.
+//
+// A full history sweep is exactly what trips Telegram's flood limits and gets
+// userbots banned, so the whole sweep is deliberately paced: we page messages in
+// chunks of TG_BACKFILL_BATCH and sleep between every page AND between every
+// chat. Defaults are conservative; all knobs are env-overridable so an operator
+// can trade speed for safety (or vice-versa) per deployment:
+//
+//   TG_DIALOG_LIMIT             how many chats to enumerate (0 = all)
+//   TG_BACKFILL_MAX_CHATS       cap chats to backfill history for (0 = all)
+//   TG_BACKFILL_PER_CHAT        cap messages per chat (0 = to the first message)
+//   TG_BACKFILL_CHAT_THROTTLE_MS  pause between chats
+//   TG_BACKFILL_PAGE_THROTTLE_MS  pause between message pages within a chat
+const TG_DIALOG_LIMIT = envInt('TG_DIALOG_LIMIT', 500)
+const TG_BACKFILL_MAX_CHATS = envInt('TG_BACKFILL_MAX_CHATS', 0)
+const TG_BACKFILL_PER_CHAT = envInt('TG_BACKFILL_PER_CHAT', 0)
+// Telegram caps getMessages at 100 per request; pull full pages to minimise
+// the number of round-trips (fewer requests = lower flood risk per message).
+const TG_BACKFILL_BATCH = 100
+const TG_BACKFILL_THROTTLE_MS = envInt('TG_BACKFILL_CHAT_THROTTLE_MS', 900)
+const TG_BACKFILL_PAGE_THROTTLE_MS = envInt('TG_BACKFILL_PAGE_THROTTLE_MS', 700)
 
 /**
  * Extract a persistable peer record (kind + id + access_hash) from a GramJS
@@ -482,13 +506,14 @@ export class TelegramSession {
           })
           imported++
 
-          // Backfill recent message history for the most-recent chats so an
-          // opened thread shows real history. getDialogs returns newest-first,
-          // so the first N are the ones a manager is most likely to open.
+          // Backfill the COMPLETE message history of every chat so opened
+          // threads show the full conversation. getDialogs returns newest-first,
+          // so the chats a manager is most likely to open are backfilled first.
+          // TG_BACKFILL_MAX_CHATS === 0 means "no cap" (every chat).
           if (
             opts?.backfill &&
             dialog.message && // skip empty chats
-            backfilled < TG_BACKFILL_MAX_CHATS
+            (TG_BACKFILL_MAX_CHATS === 0 || backfilled < TG_BACKFILL_MAX_CHATS)
           ) {
             backfilled++
             await this.backfillDialogHistory(entity, handle, isUser, name)
@@ -509,12 +534,13 @@ export class TelegramSession {
   }
 
   /**
-   * Pull the last TG_BACKFILL_PER_CHAT messages of a single chat into the inbox
-   * so an opened conversation shows real history. Idempotent: ingestInbound
+   * Pull the COMPLETE message history of a single chat into the inbox — every
+   * message and every file, paged all the way back to the very first message
+   * (unless TG_BACKFILL_PER_CHAT sets a cap). Idempotent: ingestInbound
    * de-duplicates on providerMessageId, so re-connecting never creates dupes,
    * and countUnread:false means backfilling old chats doesn't light up unread
-   * badges. Uses only cached sender data (no per-message network calls) to keep
-   * the sweep flood-safe.
+   * badges. Uses only cached sender data (no per-message network calls) and
+   * sleeps between pages to keep the full sweep flood-safe.
    */
   private async backfillDialogHistory(
     entity: Api.User | Api.Chat | Api.Channel,
@@ -523,58 +549,87 @@ export class TelegramSession {
     contactName: string,
   ): Promise<void> {
     if (!this.client) return
+    // Page backwards through history: getMessages returns newest-first, and
+    // `offsetId` asks for messages OLDER than that id, so we walk from the most
+    // recent message to the first one, one bounded page at a time.
+    let offsetId = 0
+    let fetched = 0
     try {
-      const messages = await this.client.getMessages(entity, {
-        limit: TG_BACKFILL_PER_CHAT,
-      })
-      // getMessages returns newest-first; ingest oldest-first so the stored
-      // thread keeps natural chronological order.
-      for (const msg of [...messages].reverse()) {
-        if (!msg) continue
-        const media = classifyTgMedia(msg)
-        const text = msg.message || (media ? media.placeholder : '')
-        if (!text && !media) continue // skip service/empty messages
-        const out = Boolean(msg.out)
+      for (;;) {
+        if (!this.client || this.ingestPaused) return
+        // When a per-chat cap is set, never request more than what's left.
+        const remaining =
+          TG_BACKFILL_PER_CHAT > 0 ? TG_BACKFILL_PER_CHAT - fetched : Infinity
+        if (remaining <= 0) break
+        const pageSize = Math.min(TG_BACKFILL_BATCH, remaining)
+        const messages = await this.client.getMessages(entity, {
+          limit: pageSize,
+          ...(offsetId ? { offsetId } : {}),
+        })
+        if (!messages || messages.length === 0) break
 
-        // For groups, prefix the sender name using cached data only (msg.sender
-        // is populated by getMessages) — never await getSender() per message.
-        let body = text
-        if (!isUser && !out) {
-          const s = msg.sender as Api.User | null
-          const senderName =
-            s && 'firstName' in s
-              ? [s.firstName, s.lastName].filter(Boolean).join(' ') ||
-                (s.username ? `@${s.username}` : 'Участник')
-              : 'Участник'
-          body = `${senderName}: ${text}`
+        // Ingest oldest-first within the page so the stored thread keeps natural
+        // chronological order regardless of paging direction.
+        for (const msg of [...messages].reverse()) {
+          if (!msg) continue
+          const media = classifyTgMedia(msg)
+          const text = msg.message || (media ? media.placeholder : '')
+          if (!text && !media) continue // skip service/empty messages
+          const out = Boolean(msg.out)
+
+          // For groups, prefix the sender name using cached data only
+          // (msg.sender is populated by getMessages) — never await getSender().
+          let body = text
+          if (!isUser && !out) {
+            const s = msg.sender as Api.User | null
+            const senderName =
+              s && 'firstName' in s
+                ? [s.firstName, s.lastName].filter(Boolean).join(' ') ||
+                  (s.username ? `@${s.username}` : 'Участник')
+                : 'Участник'
+            body = `${senderName}: ${text}`
+          }
+
+          await repo.ingestInbound({
+            channelId: this.channelId,
+            managerId: this.managerId,
+            channelType: 'telegram',
+            contactName,
+            contactHandle: handle,
+            body,
+            direction: out ? 'out' : 'in',
+            author: out ? 'Вы' : undefined,
+            providerMessageId: String(msg.id),
+            createdAt: msg.date ? new Date(msg.date * 1000) : undefined,
+            countUnread: false,
+            ...(media
+              ? {
+                  mediaType: media.mediaType,
+                  mediaMime: media.mediaMime,
+                  mediaName: media.mediaName,
+                  mediaRef: { peer: handle, msgId: String(msg.id) },
+                }
+              : {}),
+          })
         }
 
-        await repo.ingestInbound({
-          channelId: this.channelId,
-          managerId: this.managerId,
-          channelType: 'telegram',
-          contactName,
-          contactHandle: handle,
-          body,
-          direction: out ? 'out' : 'in',
-          author: out ? 'Вы' : undefined,
-          providerMessageId: String(msg.id),
-          createdAt: msg.date ? new Date(msg.date * 1000) : undefined,
-          countUnread: false,
-          ...(media
-            ? {
-                mediaType: media.mediaType,
-                mediaMime: media.mediaMime,
-                mediaName: media.mediaName,
-                mediaRef: { peer: handle, msgId: String(msg.id) },
-              }
-            : {}),
-        })
+        fetched += messages.length
+        // The oldest message in this page (last, since newest-first) seeds the
+        // next page. A short page means we've reached the first message.
+        const oldest = messages[messages.length - 1]
+        if (!oldest) break
+        offsetId = oldest.id
+        if (messages.length < pageSize) break
+
+        // Pace between pages so a long history can't trip the flood limiter.
+        await new Promise((r) => setTimeout(r, TG_BACKFILL_PAGE_THROTTLE_MS))
       }
     } catch (err) {
+      // Log what we managed to import so a mid-sweep flood-wait is visible; the
+      // next reconnect resumes (ingest is idempotent, so no dupes).
       logger.warn(
-        { channelId: this.channelId, handle, err: errMessage(err) },
-        'telegram history backfill skipped',
+        { channelId: this.channelId, handle, fetched, err: errMessage(err) },
+        'telegram history backfill interrupted',
       )
     }
   }

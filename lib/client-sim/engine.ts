@@ -34,7 +34,6 @@ import { pick } from './content'
 import { computeMood, type MoodResult } from './mood'
 import { logAi } from '@/lib/data/ai-log'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
-import { getAiAssistSettings } from '@/lib/data/ai-assist'
 import type { ChannelType } from '@/lib/types'
 
 /**
@@ -166,22 +165,15 @@ async function tick(): Promise<void> {
       return
     }
 
-    // DEADLOCK GUARD: the simulator only "knocks on the door" — the AI MANAGER
-    // must be switched on to actually answer. If its master switch is off, every
-    // dialogue would sit unanswered and the old code nudged it every 5s forever
-    // (the "backlog.nudge ↔ skip.not_led" loop the operator saw). Instead we
-    // pause the active work and surface ONE clear warning explaining exactly why
-    // everything went quiet. The engine keeps ticking so it resumes instantly
-    // when the switch flips back on.
-    const aiManager = await getAiAssistSettings().catch(() => null)
-    if (!aiManager || !aiManager.enabled) {
-      noteSim(
-        'ai_manager_off',
-        'warn',
-        'ИИ-менеджер выключен (мастер-выключатель ИИ). Симулятор на паузе: клиенты не получают ответов, поэтому новые диалоги и «догон» зависших приостановлены. Включите ИИ-ассистента, чтобы симуляция ожила.',
-      )
-      return
-    }
+    // NOTE: the simulator is fully INDEPENDENT of the AI-manager master switch
+    // (the two toggles never interact). The simulator keeps spawning and driving
+    // its own client-side turns regardless of whether the AI manager is on. When
+    // the AI manager is OFF, `triggerManagerReply` simply no-ops, so sim dialogs
+    // sit unanswered until the operator turns the manager on — that is an accepted
+    // operator responsibility, not a reason to pause the simulator. The old
+    // "deadlock guard" that paused everything here has been removed; the backlog
+    // sweep's per-conversation exponential backoff (`bumpNudgeBackoff`) already
+    // prevents the runaway nudge loop that guard was working around.
 
     // Retire only dialogues the CLIENT abandoned (manager replied, client went
     // silent ≥ CLIENT_GHOST_MINUTES) plus an absolute 48h backstop. Dialogues

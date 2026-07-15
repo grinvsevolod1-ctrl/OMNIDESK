@@ -440,6 +440,123 @@ export interface TrainingSample {
   history: Array<{ role: 'client' | 'manager'; body: string }>
 }
 
+/** A messaging account the admin can train the AI on, with its dialog volume. */
+export interface TrainableAccount {
+  channelId: string
+  label: string
+  channelType: string
+  dialogCount: number
+}
+
+/**
+ * Messaging accounts (Telegram/WhatsApp/VK/MAX) with how many of their dialogs
+ * have real two-way history (both a client and a manager message) — i.e. how
+ * much material is available to learn that account's style from. Ordered by the
+ * richest accounts first. Live-chat is excluded (managed on its own page).
+ */
+export async function listTrainableAccounts(): Promise<TrainableAccount[]> {
+  const rows = await query<{
+    channel_id: string
+    name: string | null
+    detail: string | null
+    channel_type: string
+    dialog_count: string
+  }>(
+    `SELECT c.id AS channel_id,
+            c.name AS name,
+            c.detail AS detail,
+            c.type AS channel_type,
+            COUNT(DISTINCT conv.id)::text AS dialog_count
+       FROM channels c
+       JOIN conversations conv ON conv.channel_id = c.id
+       JOIN messages m ON m.conversation_id = conv.id
+                       AND m.deleted_at IS NULL AND m.body <> ''
+      WHERE c.type IN ('telegram', 'whatsapp', 'vk', 'max')
+      GROUP BY c.id, c.name, c.detail, c.type
+      HAVING COUNT(*) FILTER (WHERE m.direction = 'in')  > 0
+         AND COUNT(*) FILTER (WHERE m.direction = 'out') > 0
+      ORDER BY COUNT(DISTINCT conv.id) DESC`,
+  )
+  return rows.map((r) => {
+    const base = r.name?.trim() || r.channel_type
+    const label = r.detail?.trim() ? `${base} (${r.detail.trim()})` : base
+    return {
+      channelId: r.channel_id,
+      label,
+      channelType: r.channel_type,
+      dialogCount: Number(r.dialog_count ?? 0),
+    }
+  })
+}
+
+/** Result of harvesting one account's dialogs for training. */
+export interface AccountTrainingCorpus {
+  /** Human-readable transcripts (oldest→newest) for playbook distillation. */
+  transcripts: string[]
+  /** Client-line → manager-reply pairs to store as few-shot style lessons. */
+  exchanges: Array<{ situation: string; corrected: string }>
+}
+
+/**
+ * Harvest an account's richest two-way dialogs into (a) full transcripts for
+ * style distillation and (b) client→manager exchange pairs used as few-shot
+ * "good answer" lessons so the AI mimics this account's real voice. Only pulls
+ * dialogs that actually have back-and-forth, newest first.
+ */
+export async function sampleAccountDialogsForTraining(
+  channelId: string,
+  maxDialogs = 40,
+): Promise<AccountTrainingCorpus> {
+  const convs = await query<{ id: string }>(
+    `SELECT conv.id
+       FROM conversations conv
+       JOIN messages m ON m.conversation_id = conv.id
+                       AND m.deleted_at IS NULL AND m.body <> ''
+      WHERE conv.channel_id = $1
+      GROUP BY conv.id, conv.last_message_at
+     HAVING COUNT(*) FILTER (WHERE m.direction = 'in')  > 0
+        AND COUNT(*) FILTER (WHERE m.direction = 'out') > 0
+      ORDER BY conv.last_message_at DESC
+      LIMIT $2`,
+    [channelId, Math.max(1, Math.min(80, maxDialogs))],
+  )
+
+  const transcripts: string[] = []
+  const exchanges: Array<{ situation: string; corrected: string }> = []
+
+  for (const c of convs) {
+    const rows = await query<{ direction: 'in' | 'out'; body: string }>(
+      `SELECT direction, body FROM messages
+        WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
+        ORDER BY created_at ASC
+        LIMIT 60`,
+      [c.id],
+    )
+    if (rows.length < 2) continue
+
+    const lines = rows.map(
+      (r) => `${r.direction === 'in' ? 'Клиент' : 'Менеджер'}: ${r.body.trim()}`,
+    )
+    transcripts.push(lines.join('\n'))
+
+    // Pull client→manager adjacent pairs as style examples (cap a few per
+    // dialog so one chatty thread can't dominate the lesson set).
+    let perDialog = 0
+    for (let i = 0; i < rows.length - 1 && perDialog < 3; i++) {
+      if (rows[i].direction === 'in' && rows[i + 1].direction === 'out') {
+        const situation = rows[i].body.trim()
+        const corrected = rows[i + 1].body.trim()
+        if (situation && corrected && corrected.length <= 600) {
+          exchanges.push({ situation, corrected })
+          perDialog++
+        }
+      }
+    }
+  }
+
+  return { transcripts, exchanges }
+}
+
 export async function sampleTrainingConversations(
   limit = 8,
 ): Promise<TrainingSample[]> {

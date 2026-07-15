@@ -237,18 +237,6 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           </div>
         )}
 
-        {status && running && !status.aiManagerEnabled && (
-          <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
-            <TriangleAlert className="size-4 shrink-0" />
-            <span className="text-pretty">
-              <strong>ИИ-менеджер выключен</strong> (мастер-выключатель ИИ).
-              Симулятор на паузе: клиенты пишут, но ответить им некому, поэтому
-              новые диалоги и «догон» зависших приостановлены. Включите
-              ИИ-ассистента в основной панели — симуляция оживёт сама.
-            </span>
-          </div>
-        )}
-
         {status && !status.aiConfigured && (
           <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
             <TriangleAlert className="size-4 shrink-0" />
@@ -284,7 +272,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
         />
         <MiniStat
           icon={CalendarClock}
-          label="Диалогов в сутки"
+          label="��иалогов в сутки"
           value={status?.dialogsPerDay ?? perDay}
         />
       </div>

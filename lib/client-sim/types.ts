@@ -208,12 +208,6 @@ export interface SimStatus extends SimSettings {
   byOutcome: Record<SimOutcome, number>
   /** Whether AI Gateway generation is available. */
   aiConfigured: boolean
-  /**
-   * Whether the AI MANAGER master switch is on. When false the simulator's
-   * dialogues get no replies, so the engine pauses and surfaces this so the
-   * operator knows why everything went quiet (the #1 "deadlock" cause).
-   */
-  aiManagerEnabled: boolean
 }
 
 /** One row of sim_threads plus its persona. */
