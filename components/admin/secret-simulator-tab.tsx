@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
 import { SecretSimulatorAdopt } from '@/components/admin/secret-simulator-adopt'
+import { SecretSimulatorCampaign } from '@/components/admin/secret-simulator-campaign'
 import { SecretSimulatorLearn } from '@/components/admin/secret-simulator-learn'
 import { SecretSimulatorLogs } from '@/components/admin/secret-simulator-logs'
 import { SecretSimulatorTest } from '@/components/admin/secret-simulator-test'
@@ -276,6 +277,12 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           value={status?.dialogsPerDay ?? perDay}
         />
       </div>
+
+      {/* ---- Campaign scheduler (N dialogues over H hours) ---- */}
+      <SecretSimulatorCampaign
+        status={status}
+        onChanged={(s) => void mutateStatus(s, { revalidate: false })}
+      />
 
       {/* ---- Lifecycle state breakdown ---- */}
       {status && (
