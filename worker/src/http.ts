@@ -28,9 +28,39 @@ export function startHttpServer(): void {
     }
 
     // Stream a message's media. The panel proxies the browser request here
-    // after verifying ownership; the worker re-downloads from the provider.
+    // after verifying ownership. We serve the bytes PERSISTED in Postgres first
+    // (so media survives the contact deleting/editing the original); only when
+    // nothing was stored do we fall back to a live re-download from the provider.
     if (url.pathname === '/media' && req.method === 'GET') {
       const messageId = url.searchParams.get('messageId') ?? ''
+      const editId = url.searchParams.get('edit') ?? ''
+
+      // Historical (pre-edit) version of the media, addressed by edit id.
+      if (editId) {
+        const stored = await repo.getStoredEditMediaBytes(editId)
+        if (!stored) return json(res, 410, { error: 'media_unavailable' })
+        res.writeHead(200, {
+          'content-type': stored.mime || 'application/octet-stream',
+          'content-length': String(stored.bytes.byteLength),
+          'cache-control': 'private, max-age=31536000, immutable',
+        })
+        res.end(stored.bytes)
+        return
+      }
+
+      // Current version: prefer durably stored bytes.
+      const storedNow = await repo.getStoredMediaBytes(messageId)
+      if (storedNow) {
+        const headers: Record<string, string> = {
+          'content-type': storedNow.mime || 'application/octet-stream',
+          'content-length': String(storedNow.bytes.byteLength),
+          'cache-control': 'private, max-age=31536000, immutable',
+        }
+        res.writeHead(200, headers)
+        res.end(storedNow.bytes)
+        return
+      }
+
       const info = await repo.getMessageMedia(messageId)
       if (!info || !info.mediaType) {
         return json(res, 404, { error: 'media_not_found' })

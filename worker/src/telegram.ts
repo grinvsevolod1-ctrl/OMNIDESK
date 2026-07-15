@@ -63,6 +63,20 @@ const TG_DIALOG_FOLDERS = [0, 1] as const
 const TG_DIALOG_LIMIT_ALL = 1_000_000
 const TG_BACKFILL_THROTTLE_MS = envInt('TG_BACKFILL_CHAT_THROTTLE_MS', 900)
 const TG_BACKFILL_PAGE_THROTTLE_MS = envInt('TG_BACKFILL_PAGE_THROTTLE_MS', 700)
+// Persist media bytes into Postgres at ingest so files survive the contact
+// deleting/editing the original. Toggle off (TG_STORE_MEDIA=0) to fall back to
+// on-demand re-download only. Files larger than the cap are left on-demand so a
+// stray 2GB video can't bloat the database.
+const TG_STORE_MEDIA = (process.env.TG_STORE_MEDIA ?? '1') !== '0'
+const TG_STORE_MEDIA_BACKFILL =
+  (process.env.TG_STORE_MEDIA_BACKFILL ?? '1') !== '0'
+const MEDIA_MAX_STORE_BYTES = envInt('MEDIA_MAX_STORE_BYTES', 50 * 1024 * 1024)
+// Small pause after each stored file during history backfill so a media-heavy
+// chat can't burst downloads and trip the flood limiter.
+const TG_BACKFILL_MEDIA_THROTTLE_MS = envInt(
+  'TG_BACKFILL_MEDIA_THROTTLE_MS',
+  250,
+)
 
 /**
  * Extract a persistable peer record (kind + id + access_hash) from a GramJS
@@ -643,7 +657,7 @@ export class TelegramSession {
             body = `${senderName}: ${text}`
           }
 
-          await repo.ingestInbound({
+          const histIngest = await repo.ingestInbound({
             channelId: this.channelId,
             managerId: this.managerId,
             channelType: 'telegram',
@@ -664,6 +678,16 @@ export class TelegramSession {
                 }
               : {}),
           })
+
+          // Persist historical media bytes too (throttled to stay flood-safe).
+          if (media && TG_STORE_MEDIA_BACKFILL && histIngest.messageId) {
+            await this.persistMediaBytes(histIngest.messageId, msg)
+            if (TG_BACKFILL_MEDIA_THROTTLE_MS > 0) {
+              await new Promise((r) =>
+                setTimeout(r, TG_BACKFILL_MEDIA_THROTTLE_MS),
+              )
+            }
+          }
         }
 
         fetched += messages.length
@@ -774,6 +798,12 @@ export class TelegramSession {
             : {}),
         })
 
+        // Persist the media bytes now (from the message we already hold), so the
+        // file is ours forever even if the contact deletes/edits it later.
+        if (media) {
+          await this.persistMediaBytes(ingest.messageId, msg)
+        }
+
         // Autopilot: only auto-reply in DIRECT (user) chats — never in groups,
         // and only when a new message was actually written (not a dedup replay).
         if (isUserChat && ingest.wrote) {
@@ -834,6 +864,51 @@ export class TelegramSession {
               .catch((err) =>
                 logger.warn({ err, mid }, 'telegram mark-deleted failed'),
               )
+          }
+        }
+
+        // Edits: the contact (or we, from a linked device) edited a message.
+        // Telegram sends the FULL new message; we snapshot the prior version into
+        // history and overwrite the live row, keeping the complete before/after
+        // trail. Covers ordinary chats (UpdateEditMessage) and channels/
+        // supergroups (UpdateEditChannelMessage).
+        let editMsg: Api.Message | null = null
+        if (
+          update instanceof Api.UpdateEditMessage &&
+          update.message instanceof Api.Message
+        ) {
+          editMsg = update.message
+        } else if (
+          update instanceof Api.UpdateEditChannelMessage &&
+          update.message instanceof Api.Message
+        ) {
+          editMsg = update.message
+        }
+        if (editMsg) {
+          try {
+            const media = classifyTgMedia(editMsg)
+            const newBody =
+              editMsg.message || (media ? media.placeholder : '')
+            const result = await repo.recordMessageEditByProviderId(
+              this.channelId,
+              String(editMsg.id),
+              {
+                body: newBody,
+                mediaType: media?.mediaType ?? null,
+                mediaMime: media?.mediaMime ?? null,
+                mediaName: media?.mediaName ?? null,
+              },
+            )
+            // If the media itself changed, persist the new bytes so both the old
+            // (in history) and the new version are viewable.
+            if (result && result.mediaChanged && media) {
+              await this.persistMediaBytes(result.messageId, editMsg)
+            }
+          } catch (err) {
+            logger.warn(
+              { err, msgId: String(editMsg.id) },
+              'telegram record-edit failed',
+            )
           }
         }
       } catch (err) {
@@ -1030,6 +1105,36 @@ export class TelegramSession {
         }
         return client.getInputEntity(entity)
       }
+    }
+  }
+
+  /**
+   * Download the media bytes straight from a message we already hold (live event
+   * or backfill page) and persist them in Postgres, so the file survives the
+   * contact later deleting/editing the original. Best-effort and idempotent: it
+   * skips when storage is off, the message already has stored bytes, the file is
+   * over the size cap, or the download fails. Never throws into ingest.
+   */
+  private async persistMediaBytes(
+    messageId: string | null,
+    msg: Api.Message,
+  ): Promise<void> {
+    if (!messageId || !TG_STORE_MEDIA || !this.client) return
+    if (!msg.media) return
+    try {
+      if (!(await repo.messageNeedsMediaBytes(messageId))) return
+      const buf = (await this.client.downloadMedia(msg)) as Buffer | undefined
+      if (!buf || !buf.length) return
+      if (buf.byteLength > MEDIA_MAX_STORE_BYTES) return
+      const info = classifyTgMedia(msg)
+      await repo.storeMessageMediaBytes(
+        messageId,
+        Buffer.from(buf),
+        info?.mediaMime ?? null,
+        info?.mediaName ?? null,
+      )
+    } catch (err) {
+      logger.warn({ err, messageId }, 'telegram media persist failed')
     }
   }
 
