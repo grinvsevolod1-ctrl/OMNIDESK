@@ -58,7 +58,8 @@ export interface MaxMessage {
   body: MaxMessageBody
 }
 
-/** A webhook update. We care primarily about `message_created`. */
+/** A webhook update. We care about `message_created`, `message_edited` and
+ *  `message_removed`. */
 export interface MaxUpdate {
   update_type: string
   timestamp?: number
@@ -68,6 +69,8 @@ export interface MaxUpdate {
   user?: MaxUser
   chat_id?: number
   user_id?: number
+  /** Provider message id (mid) present on `message_removed` updates. */
+  message_id?: string
 }
 
 /** Result of POST /messages. */

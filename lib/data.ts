@@ -45,6 +45,9 @@ export * from './data/lunch'
 /* Generic inbound-webhook ingest (MAX / VK / WhatsApp) */
 export * from './data/inbound'
 
+/* Durable media + edit-history archive (media_blobs / message_edits) */
+export * from './data/media-archive'
+
 /* MAX bot channel */
 export * from './data/max'
 

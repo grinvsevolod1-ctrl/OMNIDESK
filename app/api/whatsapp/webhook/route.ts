@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'crypto'
 import {
+  getWhatsappAppConfig,
   getWhatsappWebhookSecrets,
   recordWhatsappInbound,
   resolveWhatsappAgentId,
@@ -8,6 +9,7 @@ import {
 } from '@/lib/data'
 import type { MediaType } from '@/lib/types'
 import { whatsappErrorText } from '@/lib/whatsapp-cloud'
+import { archiveWhatsappMediaSoon } from '@/lib/media-archive-fetch'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 
@@ -310,6 +312,25 @@ export async function POST(request: Request): Promise<Response> {
             })
 
           handled++
+
+          // Archive the media bytes into Postgres immediately (fire-and-forget
+          // on the long-lived Node process) so a photo/voice/document survives
+          // the contact deleting it — before anyone opens the chat.
+          const waMediaId = (parsed.mediaRef as { waMediaId?: string } | null)
+            ?.waMediaId
+          if (message && parsed.mediaType && waMediaId) {
+            void (async () => {
+              const app = await getWhatsappAppConfig()
+              if (!app) return
+              await archiveWhatsappMediaSoon({
+                messageId: message.id,
+                waMediaId,
+                token: app.accessToken,
+                mime: parsed.mediaMime,
+                name: parsed.mediaName,
+              })
+            })()
+          }
 
           // Skip the autopilot for duplicate webhook deliveries and for media
           // (the autopilot replies to text; media has no text to act on).

@@ -1,8 +1,11 @@
 import { getSession } from '@/lib/auth'
 import {
   getMessageOwner,
+  getStoredEditMediaBytes,
+  getStoredMediaBytes,
   getUrlMediaDescriptor,
   getWhatsappMediaDescriptor,
+  storeMessageMediaBytes,
 } from '@/lib/data'
 import { proxiedFetch } from '@/lib/proxy-agent'
 import { assertPublicHttpUrl } from '@/lib/ssrf-guard'
@@ -21,7 +24,7 @@ export const dynamic = 'force-dynamic'
  * provider and pipes the response straight through. Nothing binary is stored.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   const session = await getSession()
@@ -33,6 +36,23 @@ export async function GET(
   // Ownership check: the message must belong to a conversation this manager owns.
   const owner = await getMessageOwner(id, session.sub)
   if (!owner) return new Response('Not found', { status: 404 })
+
+  // Historical (pre-edit) version of the media, addressed by edit id. Ownership
+  // is already established via the message id above.
+  const editId = new URL(request.url).searchParams.get('edit')
+  if (editId) {
+    const hist = await getStoredEditMediaBytes(editId)
+    if (!hist) return new Response('Media unavailable', { status: 410 })
+    return bytesResponse(hist.bytes, hist.mime, true)
+  }
+
+  // Durable fast path: if we archived the bytes in Postgres at ingest (so the
+  // file survives the contact deleting/editing it), serve them straight from the
+  // database — no provider round-trip, and it works even after remote deletion.
+  const stored = await getStoredMediaBytes(id)
+  if (stored) {
+    return bytesResponse(stored.bytes, stored.mime, true)
+  }
 
   // WhatsApp Cloud has no worker: the panel resolves the media id and downloads
   // the bytes straight from the Graph API with the app access token, then pipes
@@ -50,18 +70,16 @@ export async function GET(
         status: upstream?.status || 502,
       })
     }
-    const headers = new Headers()
-    headers.set(
-      'content-type',
+    const mime =
       upstream.headers.get('content-type') ||
-        info.data.mime_type ||
-        desc.mime ||
-        'application/octet-stream',
-    )
-    const len = upstream.headers.get('content-length')
-    if (len) headers.set('content-length', len)
-    headers.set('cache-control', 'private, max-age=86400')
-    return new Response(upstream.body, { status: 200, headers })
+      info.data.mime_type ||
+      desc.mime ||
+      'application/octet-stream'
+    // Buffer + archive so the file survives the contact deleting it later, then
+    // serve from the buffer. Falls back to a passthrough stream on any issue.
+    const buffered = await bufferAndArchive(id, upstream, mime, null)
+    if (buffered) return bytesResponse(buffered, mime, false)
+    return passthrough(upstream, mime)
   }
 
   // VK (like MAX/live-chat) has no worker: attachments carry a direct CDN url
@@ -93,15 +111,14 @@ export async function GET(
     if (!upstream.ok || !upstream.body) {
       return new Response('Media unavailable', { status: upstream.status || 502 })
     }
-    const headers = new Headers()
-    headers.set(
-      'content-type',
-      upstream.headers.get('content-type') || desc.mime || 'application/octet-stream',
-    )
-    const len = upstream.headers.get('content-length')
-    if (len) headers.set('content-length', len)
-    headers.set('cache-control', 'private, max-age=86400')
-    return new Response(upstream.body, { status: 200, headers })
+    const mime =
+      upstream.headers.get('content-type') ||
+      desc.mime ||
+      'application/octet-stream'
+    // Buffer + archive so the file survives the contact deleting it later.
+    const buffered = await bufferAndArchive(id, upstream, mime, null)
+    if (buffered) return bytesResponse(buffered, mime, false)
+    return passthrough(upstream, mime)
   }
 
   if (!isWorkerConfigured) {
@@ -126,4 +143,57 @@ export async function GET(
   headers.set('cache-control', 'private, max-age=86400')
 
   return new Response(upstream.body, { status: 200, headers })
+}
+
+/** Serve a buffer we already hold in memory. `immutable` when it came from the
+ *  durable archive (content can never change), otherwise a normal day cache. */
+function bytesResponse(
+  bytes: Buffer,
+  mime: string | null,
+  immutable: boolean,
+): Response {
+  const headers = new Headers()
+  headers.set('content-type', mime || 'application/octet-stream')
+  headers.set('content-length', String(bytes.byteLength))
+  headers.set(
+    'cache-control',
+    immutable
+      ? 'private, max-age=31536000, immutable'
+      : 'private, max-age=86400',
+  )
+  return new Response(new Uint8Array(bytes), { status: 200, headers })
+}
+
+/** Stream an upstream response straight through (fallback when not buffering). */
+function passthrough(upstream: Response, mime: string): Response {
+  const headers = new Headers()
+  headers.set('content-type', mime)
+  const len = upstream.headers.get('content-length')
+  if (len) headers.set('content-length', len)
+  headers.set('cache-control', 'private, max-age=86400')
+  return new Response(upstream.body, { status: 200, headers })
+}
+
+/**
+ * Read an upstream media response fully into memory and archive it in Postgres
+ * (idempotent, size-capped) so the file survives the contact deleting/editing
+ * it. Returns the buffer on success, or null when the body is missing or too
+ * large (caller then streams it through without archiving). Never throws.
+ */
+async function bufferAndArchive(
+  messageId: string,
+  upstream: Response,
+  mime: string | null,
+  name: string | null,
+): Promise<Buffer | null> {
+  try {
+    const ab = await upstream.arrayBuffer()
+    const buf = Buffer.from(ab)
+    if (buf.byteLength === 0) return null
+    // Fire-and-forget archive; serving the bytes must not wait on the write.
+    void storeMessageMediaBytes(messageId, buf, mime, name).catch(() => {})
+    return buf
+  } catch {
+    return null
+  }
 }

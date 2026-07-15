@@ -2,9 +2,11 @@ import { createHash, timingSafeEqual } from 'crypto'
 import {
   getProxyForChannel,
   getVkChannelById,
+  recordMessageEditByProviderId,
   recordVkInbound,
   resolveVkAgentId,
 } from '@/lib/data'
+import { archiveVkMediaSoon } from '@/lib/media-archive-fetch'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
@@ -87,8 +89,41 @@ export async function POST(
     return text('bad_secret', 403)
   }
 
-  // 3. We only ingest new inbound messages. Other events are acknowledged so VK
-  //    stops resending, but not persisted.
+  // 3a. Edits: VK sends `message_edit` when the contact edits a message. We
+  //     snapshot the prior version into history and overwrite the live row, so
+  //     the panel keeps the full before/after trail. Media edits keep the old
+  //     blob referenced by history; the new bytes get archived on first view.
+  if (update.type === 'message_edit') {
+    const edited: VkMessage | undefined =
+      update.object?.message ??
+      (update.object && 'from_id' in update.object
+        ? (update.object as VkMessage)
+        : undefined)
+    const editProviderId =
+      edited?.conversation_message_id != null
+        ? String(edited.conversation_message_id)
+        : edited?.id != null
+          ? String(edited.id)
+          : null
+    if (edited && editProviderId) {
+      const media = parseVkAttachments(edited.attachments)
+      const body = (edited.text ?? '').trim() || media?.preview || ''
+      try {
+        await recordMessageEditByProviderId(channel.id, editProviderId, {
+          body,
+          mediaType: media?.mediaType ?? null,
+          mediaMime: media?.mediaMime ?? null,
+          mediaName: media?.mediaName ?? null,
+        })
+      } catch (err) {
+        console.error('[v0] vk webhook: record edit failed:', err)
+      }
+    }
+    return text('ok')
+  }
+
+  // 3b. We only ingest new inbound messages. Other events are acknowledged so VK
+  //     stops resending, but not persisted.
   if (update.type !== 'message_new') {
     return text('ok')
   }
@@ -129,8 +164,9 @@ export async function POST(
   // The profile lookup goes out through the account's proxy so ALL VK API
   // traffic for this community exits from the same dedicated IP.
   let contactName = `VK #${contactHandle}`
+  let proxy = null
   try {
-    const proxy = await getProxyForChannel(channel.id)
+    proxy = await getProxyForChannel(channel.id)
     const user = await getUser(channel.token, contactHandle, proxy)
     if (user.ok) contactName = vkUserName(user.data, contactHandle)
   } catch {
@@ -161,6 +197,19 @@ export async function POST(
             ? String(message.id)
             : null,
     })
+
+    // Archive the media bytes into Postgres immediately (fire-and-forget on the
+    // long-lived Node process) so a photo/voice survives the contact deleting or
+    // editing it — before anyone even opens the chat.
+    if (stored && media?.mediaRef?.url) {
+      void archiveVkMediaSoon({
+        messageId: stored.id,
+        url: media.mediaRef.url,
+        proxy,
+        mime: media.mediaMime ?? null,
+        name: media.mediaName ?? null,
+      })
+    }
 
     // Autopilot: same engine as live-chat (no ban risk, reply sent instantly).
     // Self-guards all errors so it can never break ingestion. Skipped for

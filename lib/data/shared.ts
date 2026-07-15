@@ -193,6 +193,7 @@ export function effectiveStatusSql(alias?: string): string {
  */
 export const MESSAGE_SELECT = `m.id, m.conversation_id, m.direction, m.body, m.author, m.created_at,
         m.media_type, m.media_mime, m.media_name, m.reactions, m.deleted_at, m.deleted_origin, m.status, m.error_reason,
+        m.edited_at, m.edit_count,
         rt.id AS reply_to_id, rt.author AS reply_to_author,
         rt.body AS reply_to_body, rt.media_type AS reply_to_media_type`
 export const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_message_id`
@@ -307,6 +308,8 @@ export function toMessage(r: {
   reactions?: unknown
   deleted_at?: string | Date | null
   deleted_origin?: 'self' | 'remote' | null
+  edited_at?: string | Date | null
+  edit_count?: number | null
   status?: MessageStatus | null
   error_reason?: string | null
   reply_to_id?: string | null
@@ -337,6 +340,12 @@ export function toMessage(r: {
     ...(reactions.length ? { reactions } : {}),
     ...(r.deleted_at ? { deletedAt: new Date(r.deleted_at).toISOString() } : {}),
     ...(r.deleted_origin ? { deletedOrigin: r.deleted_origin } : {}),
+    ...(r.edited_at
+      ? {
+          editedAt: new Date(r.edited_at).toISOString(),
+          editCount: Number(r.edit_count ?? 0),
+        }
+      : {}),
     ...(r.status ? { status: r.status } : {}),
     ...(r.error_reason ? { errorReason: r.error_reason } : {}),
     ...(r.reply_to_id

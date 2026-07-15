@@ -1,7 +1,9 @@
 import { createHash, timingSafeEqual } from 'crypto'
 import {
   getMaxChannelById,
+  markInboundDeletedByProviderId,
   recordMaxInbound,
+  recordMessageEditByProviderId,
   resolveMaxAgentId,
 } from '@/lib/data'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
@@ -65,8 +67,37 @@ export async function POST(
     )
   }
 
-  // We only ingest text messages. Other update types (bot_started, callbacks,
-  // edits, …) are acknowledged so MAX stops resending, but not persisted.
+  // Edits: the contact edited a message. Snapshot the prior version into history
+  // and overwrite the live row so the panel keeps the full before/after trail.
+  if (update.update_type === 'message_edited' && update.message) {
+    const mid = update.message.body?.mid
+    const text = (update.message.body?.text ?? '').trim()
+    if (mid) {
+      try {
+        await recordMessageEditByProviderId(channel.id, mid, { body: text })
+      } catch (err) {
+        console.error('[v0] max webhook: record edit failed:', err)
+      }
+    }
+    return json({ ok: true, edited: mid })
+  }
+
+  // Deletions: the contact removed a message. Soft-delete it, keeping the stored
+  // text/media so it stays fully viewable in the panel.
+  if (update.update_type === 'message_removed') {
+    const mid = update.message_id ?? update.message?.body?.mid
+    if (mid) {
+      try {
+        await markInboundDeletedByProviderId(channel.id, String(mid))
+      } catch (err) {
+        console.error('[v0] max webhook: mark deleted failed:', err)
+      }
+    }
+    return json({ ok: true, removed: mid })
+  }
+
+  // We only ingest text messages. Other update types (bot_started, callbacks, …)
+  // are acknowledged so MAX stops resending, but not persisted.
   if (update.update_type !== 'message_created' || !update.message) {
     return json({ ok: true, ignored: update.update_type })
   }

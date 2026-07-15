@@ -448,6 +448,14 @@ export interface Message {
   deletedAt?: string
   /** Who deleted the message: 'self' = operator, 'remote' = the contact. */
   deletedOrigin?: 'self' | 'remote'
+  /**
+   * Set when the message was edited (by the contact or from a linked device).
+   * The live body/media always reflect the latest version; the full before/after
+   * trail is available on demand from `/api/messages/{id}/edits`.
+   */
+  editedAt?: string
+  /** How many times the message has been edited (>= 1 when edited). */
+  editCount?: number
   /** Delivery/read status for outbound messages (undefined for inbound). */
   status?: MessageStatus
   /**
@@ -456,6 +464,21 @@ export interface Message {
    * закрыто" (WhatsApp). Shown in the inbox next to the failed marker.
    */
   errorReason?: string
+}
+
+/**
+ * One historical version of an edited message, oldest-first. `version` 1 is the
+ * original as first received; the message's live row holds the current text.
+ */
+export interface MessageEdit {
+  id: string
+  version: number
+  body: string
+  mediaType?: MediaType
+  /** Panel URL to stream this version's archived media, if it had any. */
+  mediaUrl?: string
+  /** When this version was superseded by the next edit. */
+  recordedAt: string
 }
 
 /** Compact preview of a quoted (replied-to) message. */
