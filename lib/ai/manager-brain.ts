@@ -50,6 +50,12 @@ export interface ManagerBrainInput {
   playbook: string[]
   /** Recent correction lessons (most relevant first). */
   lessons: BrainLesson[]
+  /**
+   * Strict, hand-written corrections the admin taught on specific messages.
+   * These are ALWAYS injected and take absolute priority — the AI must never
+   * repeat a mistake it was corrected on. Optional for older callers.
+   */
+  corrections?: string[]
   /** Conversation so far, oldest → newest. */
   history: BrainMessage[]
 }
@@ -105,6 +111,20 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     parts.push('', 'О КОМПАНИИ И ПРАВИЛАХ ОБЩЕНИЯ:', input.persona.trim())
   }
 
+  // Strict manual corrections come BEFORE the playbook and are marked as
+  // top-priority: these are exact mistakes the admin flagged on real messages,
+  // and the AI must obey them over any other guidance.
+  const corrections = (input.corrections ?? [])
+    .map((c) => c.trim())
+    .filter(Boolean)
+  if (corrections.length > 0) {
+    parts.push(
+      '',
+      'КРИТИЧЕСКИ ВАЖНЫЕ ПРАВКИ ОТ РУКОВОДИТЕЛЯ (высший приоритет, соблюдать всегда, никогда не повторять эти ошибки):',
+      ...corrections.slice(0, 40).map((c) => `‼️ ${c}`),
+    )
+  }
+
   if (input.playbook.length > 0) {
     parts.push(
       '',
@@ -153,7 +173,7 @@ const REFUSAL = [
   'я нейросеть',
   'я — нейросеть',
   'я виртуальный ассистент',
-  'я ассистент',
+  'я ассист��нт',
   'я программа',
   'я всего лишь',
   'я не человек',

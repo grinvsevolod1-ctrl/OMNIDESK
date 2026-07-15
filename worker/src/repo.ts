@@ -995,6 +995,48 @@ export async function listAiLessons(
 }
 
 /**
+ * Strict manual corrections rendered as always-inject rule strings (newest
+ * first). Kept in sync with lib/data/ai-assist.ts#listManualCorrectionRules so
+ * the worker's AI obeys the exact same hand-written corrections as the panel.
+ * Tolerates the table being absent (pre-migration) by returning [].
+ */
+export async function listManualCorrectionRules(
+  limit = 60,
+): Promise<string[]> {
+  try {
+    const rows = await query<{
+      context: string
+      target_role: string
+      target_message: string
+      instruction: string
+    }>(
+      `SELECT context, target_role, target_message, instruction
+         FROM ai_manual_corrections
+        ORDER BY created_at DESC
+        LIMIT $1`,
+      [Math.max(1, Math.min(200, limit))],
+    )
+    return rows.map((r) => {
+      const who =
+        r.target_role === 'client'
+          ? 'сообщение клиента'
+          : r.target_role === 'manager'
+            ? 'сообщение менеджера'
+            : 'твой ответ'
+      const quoted = (r.target_message || '').trim()
+      const ctx = (r.context || '').trim()
+      const parts: string[] = []
+      if (ctx) parts.push(`В ситуации:\n${ctx}`)
+      if (quoted) parts.push(`Разбираем ${who}: «${quoted}».`)
+      parts.push(`ПРАВИЛО: ${(r.instruction || '').trim()}`)
+      return parts.join(' ')
+    })
+  } catch {
+    return []
+  }
+}
+
+/**
  * True when the AI is effectively leading THIS conversation. Global-lead mode
  * (migration 056): the AI leads EVERY conversation while the master switch is
  * on, unless the conversation was manually paused (opt-out).

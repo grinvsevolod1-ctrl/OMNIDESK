@@ -4,20 +4,31 @@ import { revalidatePath } from 'next/cache'
 import { requireAdmin } from '@/lib/auth'
 import {
   addLesson,
+  addLessonIfNew,
+  addManualCorrection,
+  buildTrainingCorpusForConversationIds,
   countConversationsAwaitingAi,
   countLessons,
+  countManualCorrections,
   deleteLesson,
+  deleteManualCorrection,
   engageAiEverywhere,
   getAiAssistSettings,
+  getDialogMessagesForReview,
+  listAccountReviewDialogs,
+  listAccountTwoWayConversationIds,
   listBrainLessons,
   listLessons,
+  listManualCorrections,
   listTrainableAccounts,
-  sampleAccountDialogsForTraining,
   sampleTrainingConversations,
   savePlaybook,
   updateAiAssistSettings,
   type AiAssistLesson,
   type AiAssistSettings,
+  type ManualCorrection,
+  type ReviewDialog,
+  type ReviewMessage,
   type TrainableAccount,
   type TrainingSample,
 } from '@/lib/data/ai-assist'
@@ -141,6 +152,17 @@ export async function aiTrainableAccountsAction(): Promise<TrainableAccount[]> {
  * Best-effort and additive — a gateway failure never wipes existing training.
  * Returns a short summary + refreshed settings/lessons for the UI.
  */
+/**
+ * How many dialogs to fold into ONE playbook-distillation call. The whole
+ * account is processed in batches of this size so even accounts with thousands
+ * of dialogs are fully learned (each batch is a separate gateway call). Every
+ * batch's rules are accumulated and merged at the end. Env-overridable.
+ */
+const TRAIN_BATCH = Math.max(
+  5,
+  Number.parseInt(process.env.AI_TRAIN_BATCH || '40', 10) || 40,
+)
+
 export async function aiTrainOnAccountAction(input: {
   channelId: string
 }): Promise<{
@@ -154,51 +176,75 @@ export async function aiTrainOnAccountAction(input: {
   const channelId = input.channelId?.trim()
   if (!channelId) throw new Error('no_account')
 
-  const { transcripts, exchanges } =
-    await sampleAccountDialogsForTraining(channelId, 40)
-  if (transcripts.length === 0) {
+  // FULL training: every two-way dialog of the account, not a 40-dialog sample.
+  const allIds = await listAccountTwoWayConversationIds(channelId)
+  if (allIds.length === 0) {
     throw new Error('no_dialogs')
   }
 
-  // 1) Store real exchanges as style lessons (dedupe-friendly: addLesson is a
-  // plain insert, so cap how many we add per run to keep the corpus focused).
+  const settingsBefore = await getAiAssistSettings()
   let learnedExchanges = 0
-  for (const ex of exchanges.slice(0, 30)) {
-    await addLesson({
-      situation: ex.situation,
-      draft: '',
-      corrected: ex.corrected,
-      note: 'Обучение на аккаунте: реальный ответ менеджера',
-    })
-    learnedExchanges++
+  let dialogsAnalysed = 0
+  // Rules harvested from every batch, deduped as we go.
+  const ruleSet = new Set<string>()
+
+  // Process the entire account in batches so a huge history is fully covered.
+  for (let i = 0; i < allIds.length; i += TRAIN_BATCH) {
+    const batchIds = allIds.slice(i, i + TRAIN_BATCH)
+    const { transcripts, exchanges } =
+      await buildTrainingCorpusForConversationIds(batchIds)
+    if (transcripts.length === 0) continue
+    dialogsAnalysed += transcripts.length
+
+    // 1) Store this batch's real exchanges as style lessons (idempotent, so
+    // re-training the same account never duplicates the corpus).
+    for (const ex of exchanges) {
+      const inserted = await addLessonIfNew({
+        situation: ex.situation,
+        corrected: ex.corrected,
+        note: 'Обучение на аккаунте: реальный ответ менеджера',
+      })
+      if (inserted) learnedExchanges++
+    }
+
+    // 2) Distill this batch of transcripts into playbook rules and accumulate.
+    try {
+      const fromDialogs = await distillPlaybookFromDialogs(
+        transcripts,
+        settingsBefore.persona,
+      )
+      for (const r of fromDialogs) {
+        const t = r.trim()
+        if (t) ruleSet.add(t)
+      }
+    } catch {
+      // Skip this batch's distillation; its lessons are already saved above.
+    }
   }
 
-  // 2) Re-distill the playbook from the account's transcripts, merged with the
-  // existing lesson-based playbook so prior training is preserved, not replaced.
-  const settingsBefore = await getAiAssistSettings()
-  let playbook = settingsBefore.playbook
+  // 3) Merge batch rules with a fresh distillation of the (now larger) lesson
+  // corpus, then keep the strongest ~24 so the always-injected playbook stays
+  // compact. Prior training is preserved because lessons are never deleted.
+  const settingsAfterLessons = await getAiAssistSettings()
+  let playbook = settingsAfterLessons.playbook
   try {
-    const fromDialogs = await distillPlaybookFromDialogs(
-      transcripts,
-      settingsBefore.persona,
-    )
     const fromLessons = await distillPlaybook(
-      await listBrainLessons(60),
-      settingsBefore.persona,
+      await listBrainLessons(80),
+      settingsAfterLessons.persona,
     )
     const merged = Array.from(
       new Set(
-        [...fromDialogs, ...fromLessons]
+        [...ruleSet, ...fromLessons, ...playbook]
           .map((l) => l.trim())
           .filter(Boolean),
       ),
-    ).slice(0, 20)
+    ).slice(0, 24)
     if (merged.length > 0) {
       playbook = merged
       await savePlaybook(playbook)
     }
   } catch {
-    // Keep the prior playbook; the exchange lessons above are already saved.
+    // Keep the prior playbook; exchange lessons above are already saved.
   }
 
   const [settings, lessons] = await Promise.all([
@@ -209,10 +255,124 @@ export async function aiTrainOnAccountAction(input: {
   return {
     learnedExchanges,
     playbookSize: playbook.length,
-    dialogsAnalysed: transcripts.length,
+    dialogsAnalysed,
     settings,
     lessons,
   }
+}
+
+/* -------------------- Interactive per-message corrections ------------------ */
+
+/** Dialogs of an account for the review/correction UI (newest first). */
+export async function aiReviewDialogsAction(input: {
+  channelId: string
+}): Promise<ReviewDialog[]> {
+  await requireAdmin()
+  const channelId = input.channelId?.trim()
+  if (!channelId) return []
+  return listAccountReviewDialogs(channelId)
+}
+
+/** The full message list of one dialog, for selecting a message to correct. */
+export async function aiReviewMessagesAction(input: {
+  channelId: string
+  conversationId: string
+}): Promise<ReviewMessage[]> {
+  await requireAdmin()
+  const channelId = input.channelId?.trim()
+  const conversationId = input.conversationId?.trim()
+  if (!channelId || !conversationId) return []
+  return getDialogMessagesForReview(channelId, conversationId)
+}
+
+/**
+ * Save a hand-written correction on a specific message. Builds a short context
+ * window (the turns leading up to the selected message) so the AI knows exactly
+ * where the rule applies, then stores it forever in the always-injected
+ * manual-corrections store. Returns the refreshed corrections list.
+ */
+export async function aiAddCorrectionAction(input: {
+  channelId: string
+  conversationId: string
+  messageId: string
+  accountLabel: string
+  instruction: string
+}): Promise<{ corrections: ManualCorrection[]; count: number }> {
+  await requireAdmin()
+  const channelId = input.channelId?.trim()
+  const conversationId = input.conversationId?.trim()
+  const messageId = input.messageId?.trim()
+  const instruction = input.instruction?.trim()
+  if (!channelId || !conversationId || !messageId) {
+    throw new Error('bad_request')
+  }
+  if (!instruction) throw new Error('empty_instruction')
+
+  const messages = await getDialogMessagesForReview(channelId, conversationId)
+  const idx = messages.findIndex((m) => m.id === messageId)
+  if (idx === -1) throw new Error('message_not_found')
+  const target = messages[idx]
+
+  // Context = up to 6 turns ending at the selected message, speaker-labelled.
+  const windowStart = Math.max(0, idx - 5)
+  const context = messages
+    .slice(windowStart, idx + 1)
+    .map((m) => {
+      const who =
+        m.role === 'client'
+          ? 'Клиент'
+          : m.role === 'ai'
+            ? 'ИИ-менеджер'
+            : 'Менеджер'
+      return `${who}: ${m.body}`
+    })
+    .join('\n')
+
+  await addManualCorrection({
+    conversationId,
+    channelId,
+    accountLabel: input.accountLabel?.trim() || '',
+    context,
+    targetRole: target.role,
+    targetMessage: target.body,
+    instruction,
+  })
+
+  const [corrections, count] = await Promise.all([
+    listManualCorrections(200),
+    countManualCorrections(),
+  ])
+  revalidatePath(AI_PATH)
+  return { corrections, count }
+}
+
+/** All saved manual corrections (management panel). */
+export async function aiListCorrectionsAction(): Promise<{
+  corrections: ManualCorrection[]
+  count: number
+}> {
+  await requireAdmin()
+  const [corrections, count] = await Promise.all([
+    listManualCorrections(200),
+    countManualCorrections(),
+  ])
+  return { corrections, count }
+}
+
+/** Delete one manual correction. */
+export async function aiDeleteCorrectionAction(input: {
+  id: string
+}): Promise<{ corrections: ManualCorrection[]; count: number }> {
+  await requireAdmin()
+  const id = input.id?.trim()
+  if (!id) throw new Error('bad_request')
+  await deleteManualCorrection(id)
+  const [corrections, count] = await Promise.all([
+    listManualCorrections(200),
+    countManualCorrections(),
+  ])
+  revalidatePath(AI_PATH)
+  return { corrections, count }
 }
 
 /**

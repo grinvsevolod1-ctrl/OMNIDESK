@@ -48,6 +48,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { AiLogsTab } from '@/components/admin/ai-logs-tab'
+import { AiCorrectionsTab } from '@/components/admin/ai-corrections-tab'
 
 const TONE_OPTIONS = [
   { value: 'professional', label: 'Деловой' },
@@ -446,7 +447,7 @@ function TrainerTab({
       {/* Left: pick a conversation and train */}
       <Card className="flex flex-col gap-4 p-4">
         <div className="flex items-center justify-between">
-          <p className="font-medium">Тренировка на диалогах</p>
+          <p className="font-medium">Тренировка н�� диалогах</p>
           <Button
             variant="outline"
             size="sm"

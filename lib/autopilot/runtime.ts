@@ -7,6 +7,7 @@ import {
   getConversationHistoryForAi,
   isConversationAiLed,
   listBrainLessons,
+  listManualCorrectionRules,
   listConversationsAwaitingAi,
   markAiHandoffToLiquid,
 } from '../data/ai-assist'
@@ -200,8 +201,9 @@ async function runLivechatAiLead(input: {
       channelType: 'livechat',
     })
 
-    const [lessons, history] = await Promise.all([
+    const [lessons, corrections, history] = await Promise.all([
       listBrainLessons(12),
+      listManualCorrectionRules(60),
       getConversationHistoryForAi(input.conversationId, 16),
     ])
 
@@ -211,6 +213,7 @@ async function runLivechatAiLead(input: {
         tone: settings.tone,
         playbook: settings.playbook,
         lessons,
+        corrections,
         history,
       },
       log,
@@ -254,7 +257,7 @@ async function runLivechatAiLead(input: {
     })
 
     // After replying, judge whether the client is now ready to hand over their
-    // data and start working. If so, promote the lead to «Ликвид» and hand it
+    // data and start working. If so, promote the lead to «Л��квид» and hand it
     // to a human (pauses the AI + flags the inbox banner). Best-effort: never
     // let a promotion failure affect the reply we already sent.
     //

@@ -280,8 +280,9 @@ async function fireAiLead(params: {
       channelType,
     })
 
-    const [lessons, history] = await Promise.all([
+    const [lessons, corrections, history] = await Promise.all([
       repo.listAiLessons(12),
+      repo.listManualCorrectionRules(60),
       repo.getConversationHistoryForAi(conversationId, 16),
     ])
 
@@ -291,6 +292,7 @@ async function fireAiLead(params: {
         tone: config.tone,
         playbook: config.playbook,
         lessons,
+        corrections,
         history,
       },
       log,
