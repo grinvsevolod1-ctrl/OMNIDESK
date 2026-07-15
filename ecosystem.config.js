@@ -5,6 +5,17 @@
 //   pm2 start ecosystem.config.js
 //   pm2 save && pm2 startup             # persist across reboots
 //
+// IMPORTANT — updating an already-running deploy:
+//   `pm2 restart` and `pm2 reload` REUSE the process definition PM2 first saved
+//   (mode, script, args). If the app was ever started differently — e.g.
+//   `pm2 start pnpm -i max -- start` (cluster) or `pm2 start npm -- start`
+//   (which runs `next start 3000`) — a plain restart keeps that broken
+//   definition forever. Always recreate from this file after a code update:
+//     rm -rf .next && pnpm install && pnpm build
+//     pm2 delete omnidesk-panel omnidesk-worker
+//     pm2 start ecosystem.config.js
+//     pm2 save
+//
 // Both processes read the same .env (DATABASE_URL + ENCRYPTION_KEY must match).
 module.exports = {
   apps: [
@@ -14,6 +25,16 @@ module.exports = {
       args: 'start -p 3000',
       cwd: __dirname,
       instances: 1,
+      // MUST be fork, never cluster. `next start` is a self-contained HTTP
+      // server; running it under PM2 cluster mode spawns multiple workers that
+      // each hold a DIFFERENT Server Action manifest / RSC encryption context.
+      // Requests then land on a worker that didn't render the page, producing:
+      //   - "Failed to find Server Action "x""
+      //   - "Expected RSC response, got text/plain"
+      //   - "The router state header ... could not be parsed"
+      // Pinning fork mode here guarantees a single consistent instance even if
+      // PM2 previously remembered a cluster definition.
+      exec_mode: 'fork',
       autorestart: true,
       max_memory_restart: '512M',
       env: {
