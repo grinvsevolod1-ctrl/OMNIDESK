@@ -5,6 +5,7 @@ import {
   Bot,
   BrainCircuit,
   GraduationCap,
+  Highlighter,
   Loader2,
   RefreshCw,
   ScrollText,
@@ -103,6 +104,10 @@ export function AiAssistAdmin({
               </Badge>
             ) : null}
           </TabsTrigger>
+          <TabsTrigger value="corrections">
+            <Highlighter className="size-4" />
+            Правки
+          </TabsTrigger>
           <TabsTrigger value="logs">
             <ScrollText className="size-4" />
             Логи
@@ -121,6 +126,10 @@ export function AiAssistAdmin({
               setLessonCount(next.length)
             }}
           />
+        </TabsContent>
+
+        <TabsContent value="corrections" className="mt-4">
+          <AiCorrectionsTab />
         </TabsContent>
 
         <TabsContent value="logs" className="mt-4">
@@ -666,7 +675,7 @@ function TrainOnAccountCard({
           <BrainCircuit className="size-5" />
         </div>
         <div className="flex-1">
-          <p className="font-medium">Обучить ИИ на аккаунте</p>
+          <p className="font-medium">Обучить ИИ н�� аккаунте</p>
           <p className="text-sm text-muted-foreground">
             Выберите аккаунт — ИИ полностью проанализирует переписки менеджера с
             клиентами, обучится их стилю и начнёт так же вести новых клиентов:
