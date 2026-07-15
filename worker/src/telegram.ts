@@ -28,9 +28,15 @@ function envInt(name: string, def: number): number {
 }
 
 // History backfill. On connect (and reconnect) we pull the COMPLETE message
-// history of every direct/group chat into the inbox — every message and every
-// file, all the way back to the very first message — so an opened conversation
-// shows the full thread, not just what arrived live after connecting.
+// history of EVERY chat into the inbox — every message and every file, all the
+// way back to the very first message — so an opened conversation shows the full
+// thread, not just what arrived live after connecting.
+//
+// "Every chat" is meant literally: we enumerate BOTH the main folder (0) and the
+// Archived folder (1), with NO cap on how many chats are listed (the enumerator
+// pages internally until Telegram reports the end of the list). Telegram's
+// client-side "chat folders" are just saved views over these two folders, so
+// folder 0 + folder 1 together cover 100% of dialogs.
 //
 // A full history sweep is exactly what trips Telegram's flood limits and gets
 // userbots banned, so the whole sweep is deliberately paced: we page messages in
@@ -38,17 +44,23 @@ function envInt(name: string, def: number): number {
 // chat. Defaults are conservative; all knobs are env-overridable so an operator
 // can trade speed for safety (or vice-versa) per deployment:
 //
-//   TG_DIALOG_LIMIT             how many chats to enumerate (0 = all)
+//   TG_DIALOG_LIMIT             cap chats to ENUMERATE (0 = all, the default)
 //   TG_BACKFILL_MAX_CHATS       cap chats to backfill history for (0 = all)
 //   TG_BACKFILL_PER_CHAT        cap messages per chat (0 = to the first message)
 //   TG_BACKFILL_CHAT_THROTTLE_MS  pause between chats
 //   TG_BACKFILL_PAGE_THROTTLE_MS  pause between message pages within a chat
-const TG_DIALOG_LIMIT = envInt('TG_DIALOG_LIMIT', 500)
+const TG_DIALOG_LIMIT = envInt('TG_DIALOG_LIMIT', 0)
 const TG_BACKFILL_MAX_CHATS = envInt('TG_BACKFILL_MAX_CHATS', 0)
 const TG_BACKFILL_PER_CHAT = envInt('TG_BACKFILL_PER_CHAT', 0)
 // Telegram caps getMessages at 100 per request; pull full pages to minimise
 // the number of round-trips (fewer requests = lower flood risk per message).
 const TG_BACKFILL_BATCH = 100
+// Telegram's dialog folders: 0 = main inbox, 1 = Archived. We sweep both so no
+// archived conversation is ever missed.
+const TG_DIALOG_FOLDERS = [0, 1] as const
+// GramJS treats limit<=0 as "count only", so "all" is expressed as a very large
+// finite limit; the enumerator still stops as soon as the real list ends.
+const TG_DIALOG_LIMIT_ALL = 1_000_000
 const TG_BACKFILL_THROTTLE_MS = envInt('TG_BACKFILL_CHAT_THROTTLE_MS', 900)
 const TG_BACKFILL_PAGE_THROTTLE_MS = envInt('TG_BACKFILL_PAGE_THROTTLE_MS', 700)
 
@@ -447,90 +459,131 @@ export class TelegramSession {
     if (!this.client) return
     // Don't backfill history into the inbox while paused.
     if (this.ingestPaused) return
-    try {
-      const dialogs = await this.client.getDialogs({ limit: TG_DIALOG_LIMIT })
-      let imported = 0
-      // How many chats we've backfilled message history for this sweep. Bounded
-      // by TG_BACKFILL_MAX_CHATS so a huge dialog list can't trigger a flood.
-      let backfilled = 0
-      for (const dialog of dialogs) {
-        try {
-          // Skip Telegram's own service/notifications "channel" feed but keep
-          // private chats (users) and groups; skip broadcast channels.
-          const entity = dialog.entity as Api.User | Api.Chat | Api.Channel | undefined
-          if (!entity) continue
-          const isUser = entity.className === 'User'
-          const isGroup =
-            entity.className === 'Chat' ||
-            (entity.className === 'Channel' &&
-              'megagroup' in entity &&
-              Boolean(entity.megagroup))
-          // Ignore broadcast channels (one-way feeds) and deleted accounts.
-          if (!isUser && !isGroup) continue
-          if (isUser && 'bot' in entity && entity.bot) {
-            // keep bots out unless they messaged — most are noise
-            if (!dialog.message?.message) continue
-          }
 
-          const { name, handle } = dialogIdentity(dialog, entity, isUser)
-          // Public @username for a direct (user) chat, when present. Groups have
-          // no single contact username, so leave it null for them.
-          const contactUsername =
-            isUser && 'username' in entity ? (entity.username ?? null) : null
-          // Cache the peer's access_hash for durable addressing after restarts.
-          const peerRecord = peerRecordFromEntity(entity)
-          if (peerRecord) {
-            await repo
-              .saveTelegramPeer(this.channelId, handle, peerRecord)
-              .catch(() => {})
-          }
-          const lastMessage =
-            dialog.message?.message ||
-            (dialog.message ? '[non-text message]' : '[no messages yet]')
-          const lastDate = dialog.message?.date
-            ? new Date(dialog.message.date * 1000)
-            : new Date()
-          const fromMe = Boolean(dialog.message?.out)
+    // Enumeration cap: 0 (default) means "every chat", expressed to GramJS as a
+    // very large finite limit so the enumerator pages to the true end of the
+    // list instead of hitting the old 500-chat ceiling.
+    const enumLimit = TG_DIALOG_LIMIT > 0 ? TG_DIALOG_LIMIT : TG_DIALOG_LIMIT_ALL
 
-          await repo.upsertDialog({
-            channelId: this.channelId,
-            managerId: this.managerId,
-            channelType: 'telegram',
-            contactName: name,
-            contactHandle: handle,
-            contactUsername,
-            lastMessage,
-            lastMessageAt: lastDate,
-            unread: dialog.unreadCount ?? 0,
-            lastFromMe: fromMe,
-          })
-          imported++
+    let imported = 0
+    // How many chats we've backfilled message history for this sweep, shared
+    // across BOTH folders and bounded by TG_BACKFILL_MAX_CHATS (0 = no cap).
+    let backfilled = 0
+    // Peers already handled this sweep, so a dialog that somehow appears in both
+    // the main and archived passes is never imported or backfilled twice.
+    const seenPeers = new Set<string>()
 
-          // Backfill the COMPLETE message history of every chat so opened
-          // threads show the full conversation. getDialogs returns newest-first,
-          // so the chats a manager is most likely to open are backfilled first.
-          // TG_BACKFILL_MAX_CHATS === 0 means "no cap" (every chat).
-          if (
-            opts?.backfill &&
-            dialog.message && // skip empty chats
-            (TG_BACKFILL_MAX_CHATS === 0 || backfilled < TG_BACKFILL_MAX_CHATS)
-          ) {
-            backfilled++
-            await this.backfillDialogHistory(entity, handle, isUser, name)
-            // Throttle between chats to stay well under Telegram flood limits.
-            await new Promise((r) => setTimeout(r, TG_BACKFILL_THROTTLE_MS))
+    // Sweep BOTH folders (0 = main inbox, 1 = Archived) so archived
+    // conversations are pulled in exactly like active ones.
+    for (const folder of TG_DIALOG_FOLDERS) {
+      if (!this.client || this.ingestPaused) break
+      try {
+        const dialogs = await this.client.getDialogs({
+          limit: enumLimit,
+          folder,
+        })
+        for (const dialog of dialogs) {
+          try {
+            const handled = await this.importDialog(dialog, {
+              backfill: Boolean(opts?.backfill),
+              seenPeers,
+              canBackfill:
+                TG_BACKFILL_MAX_CHATS === 0 || backfilled < TG_BACKFILL_MAX_CHATS,
+            })
+            if (handled === 'skipped') continue
+            imported++
+            if (handled === 'backfilled') {
+              backfilled++
+              // Throttle between chats to stay well under Telegram flood limits.
+              await new Promise((r) => setTimeout(r, TG_BACKFILL_THROTTLE_MS))
+            }
+          } catch (err) {
+            logger.warn({ err }, 'telegram dialog import skipped')
           }
-        } catch (err) {
-          logger.warn({ err }, 'telegram dialog import skipped')
         }
+      } catch (err) {
+        logger.error({ err, folder }, 'telegram dialog sync failed for folder')
       }
-      logger.info(
-        { channelId: this.channelId, imported, backfilled },
-        'Telegram dialogs synced',
-      )
-    } catch (err) {
-      logger.error({ err }, 'telegram dialog sync failed')
     }
+
+    logger.info(
+      { channelId: this.channelId, imported, backfilled },
+      'Telegram dialogs synced (all folders)',
+    )
+  }
+
+  /**
+   * Import one dialog into the inbox and (optionally) backfill its full history.
+   * Returns what happened so the caller can keep accurate counters and pace the
+   * flood-safe throttle only when a backfill actually ran.
+   */
+  private async importDialog(
+    dialog: Awaited<ReturnType<TelegramClient['getDialogs']>>[number],
+    ctx: { backfill: boolean; canBackfill: boolean; seenPeers: Set<string> },
+  ): Promise<'skipped' | 'imported' | 'backfilled'> {
+    // Skip Telegram's own service/notifications "channel" feed but keep
+    // private chats (users) and groups; skip broadcast channels.
+    const entity = dialog.entity as Api.User | Api.Chat | Api.Channel | undefined
+    if (!entity) return 'skipped'
+    const isUser = entity.className === 'User'
+    const isGroup =
+      entity.className === 'Chat' ||
+      (entity.className === 'Channel' &&
+        'megagroup' in entity &&
+        Boolean(entity.megagroup))
+    // Ignore broadcast channels (one-way feeds) and deleted accounts.
+    if (!isUser && !isGroup) return 'skipped'
+    if (isUser && 'bot' in entity && entity.bot) {
+      // keep bots out unless they messaged — most are noise
+      if (!dialog.message?.message) return 'skipped'
+    }
+
+    const { name, handle } = dialogIdentity(dialog, entity, isUser)
+
+    // De-dupe across folder passes: a peer handled once is never redone.
+    const peerKey = String((entity as { id?: unknown }).id ?? handle)
+    if (ctx.seenPeers.has(peerKey)) return 'skipped'
+    ctx.seenPeers.add(peerKey)
+
+    // Public @username for a direct (user) chat, when present. Groups have
+    // no single contact username, so leave it null for them.
+    const contactUsername =
+      isUser && 'username' in entity ? (entity.username ?? null) : null
+    // Cache the peer's access_hash for durable addressing after restarts.
+    const peerRecord = peerRecordFromEntity(entity)
+    if (peerRecord) {
+      await repo
+        .saveTelegramPeer(this.channelId, handle, peerRecord)
+        .catch(() => {})
+    }
+    const lastMessage =
+      dialog.message?.message ||
+      (dialog.message ? '[non-text message]' : '[no messages yet]')
+    const lastDate = dialog.message?.date
+      ? new Date(dialog.message.date * 1000)
+      : new Date()
+    const fromMe = Boolean(dialog.message?.out)
+
+    await repo.upsertDialog({
+      channelId: this.channelId,
+      managerId: this.managerId,
+      channelType: 'telegram',
+      contactName: name,
+      contactHandle: handle,
+      contactUsername,
+      lastMessage,
+      lastMessageAt: lastDate,
+      unread: dialog.unreadCount ?? 0,
+      lastFromMe: fromMe,
+    })
+
+    // Backfill the COMPLETE message history so opened threads show the full
+    // conversation. TG_BACKFILL_MAX_CHATS === 0 means "no cap" (every chat).
+    if (ctx.backfill && dialog.message && ctx.canBackfill) {
+      await this.backfillDialogHistory(entity, handle, isUser, name)
+      return 'backfilled'
+    }
+    return 'imported'
   }
 
   /**
@@ -1260,7 +1313,7 @@ function classifyTgMedia(msg: Api.Message): TgMediaInfo | null {
         mediaType: 'sticker',
         mediaMime: mime ?? 'image/webp',
         mediaName: null,
-        placeholder: stickerEmoji ? `${stickerEmoji} [Стикер]` : '[Стикер]',
+        placeholder: stickerEmoji ? `${stickerEmoji} [Стикер]` : '[Сти��ер]',
       }
     }
     if (isVoice) {
