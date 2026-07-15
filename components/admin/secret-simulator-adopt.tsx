@@ -14,11 +14,13 @@ import {
   Search,
   TriangleAlert,
   UserRound,
+  X,
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
 import {
   simAdoptConversationsAction,
   simListAdoptableAction,
+  simReleaseConversationsAction,
 } from '@/app/actions/client-sim'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -98,11 +100,29 @@ export function SecretSimulatorAdopt() {
     )
   }, [rows, queryText])
 
-  const selectableIds = useMemo(
+  // Every row is now selectable in BOTH directions: un-adopted rows can be
+  // added to the simulator, adopted rows can be excluded from it.
+  const notAdoptedIds = useMemo(
     () => rows.filter((r) => !r.adopted).map((r) => r.id),
     [rows],
   )
-  const adoptedCount = rows.length - selectableIds.length
+  const adoptedIds = useMemo(
+    () => rows.filter((r) => r.adopted).map((r) => r.id),
+    [rows],
+  )
+  const adoptedCount = adoptedIds.length
+
+  // Split the current selection by what each row's action would be, so the
+  // footer can offer "continue" for new picks and "exclude" for adopted ones.
+  const adoptedSet = useMemo(() => new Set(adoptedIds), [adoptedIds])
+  const toAdopt = useMemo(
+    () => Array.from(selected).filter((id) => !adoptedSet.has(id)),
+    [selected, adoptedSet],
+  )
+  const toRelease = useMemo(
+    () => Array.from(selected).filter((id) => adoptedSet.has(id)),
+    [selected, adoptedSet],
+  )
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -114,7 +134,7 @@ export function SecretSimulatorAdopt() {
   }
 
   function toggleGroup(g: ManagerGroup) {
-    const ids = g.rows.filter((r) => !r.adopted).map((r) => r.id)
+    const ids = g.rows.map((r) => r.id)
     const allOn = ids.length > 0 && ids.every((id) => selected.has(id))
     setSelected((prev) => {
       const next = new Set(prev)
@@ -125,14 +145,14 @@ export function SecretSimulatorAdopt() {
   }
 
   function selectAll() {
-    setSelected(new Set(selectableIds))
+    setSelected(new Set([...notAdoptedIds, ...adoptedIds]))
   }
   function clearAll() {
     setSelected(new Set())
   }
 
   function save() {
-    const ids = Array.from(selected)
+    const ids = toAdopt
     if (ids.length === 0) return
     const spreadMinutes = Math.min(Math.max(Math.round(spread) || MIN_SPREAD, MIN_SPREAD), MAX_SPREAD)
     startTransition(async () => {
@@ -153,7 +173,23 @@ export function SecretSimulatorAdopt() {
     })
   }
 
-  const selCount = selected.size
+  function release() {
+    const ids = toRelease
+    if (ids.length === 0) return
+    startTransition(async () => {
+      try {
+        const res = await simReleaseConversationsAction({ conversationIds: ids })
+        toast.success(
+          `Исключено из симулятора: ${res.released} диалог(ов). ` +
+            'История переписки сохранена.',
+        )
+        clearAll()
+        void mutate()
+      } catch {
+        toast.error('Не удалось исключить диалоги из симулятора')
+      }
+    })
+  }
 
   return (
     <Card className="flex flex-col gap-4 p-5">
@@ -162,11 +198,13 @@ export function SecretSimulatorAdopt() {
           <MessagesSquare className="size-4 text-foreground" />
         </div>
         <div className="min-w-0">
-          <h3 className="font-semibold tracking-tight">Продолжить существующие диалоги</h3>
+          <h3 className="font-semibold tracking-tight">Существующие диалоги</h3>
           <p className="max-w-prose text-sm text-muted-foreground text-pretty">
             По умолчанию симулятор ведёт только новые диалоги, которые создал сам.
-            Отметьте здесь любые существующие переписки — и после сохранения он
-            подхватит их и продолжит от лица того же клиента, вразнобой по времени.
+            Отметьте любые переписки и нажмите «Продолжить» — он подхватит их от
+            лица того же клиента, вразнобой по времени. Уже подключённые можно так
+            же отметить и «Исключить» — бот перестанет их вести, а вся история
+            переписки останется на месте.
           </p>
         </div>
       </div>
@@ -205,7 +243,7 @@ export function SecretSimulatorAdopt() {
           className="text-foreground/70 underline-offset-2 hover:underline"
           onClick={selectAll}
         >
-          Выбрать все ({selectableIds.length})
+          Выбрать все ({notAdoptedIds.length + adoptedIds.length})
         </button>
         <span className="text-muted-foreground">·</span>
         <button
@@ -240,7 +278,7 @@ export function SecretSimulatorAdopt() {
       ) : (
         <div className="flex max-h-[28rem] flex-col gap-4 overflow-y-auto pr-1">
           {groups.map((g) => {
-            const groupSelectable = g.rows.filter((r) => !r.adopted)
+            const groupSelectable = g.rows
             const allOn =
               groupSelectable.length > 0 &&
               groupSelectable.every((r) => selected.has(r.id))
@@ -322,19 +360,35 @@ export function SecretSimulatorAdopt() {
             чтобы они ожили не разом, а вразнобой.
           </p>
         </div>
-        <Button
-          size="lg"
-          className="press-scale gap-2"
-          onClick={save}
-          disabled={pending || selCount === 0}
-        >
-          {pending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Check className="size-4" />
-          )}
-          Продолжить выбранные{selCount > 0 ? ` (${selCount})` : ''}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="lg"
+            variant="outline"
+            className="press-scale gap-2"
+            onClick={release}
+            disabled={pending || toRelease.length === 0}
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <X className="size-4" />
+            )}
+            Исключить{toRelease.length > 0 ? ` (${toRelease.length})` : ''}
+          </Button>
+          <Button
+            size="lg"
+            className="press-scale gap-2"
+            onClick={save}
+            disabled={pending || toAdopt.length === 0}
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Check className="size-4" />
+            )}
+            Продолжить{toAdopt.length > 0 ? ` (${toAdopt.length})` : ''}
+          </Button>
+        </div>
       </div>
     </Card>
   )
@@ -384,20 +438,18 @@ function ConversationRow({
   checked: boolean
   onToggle: () => void
 }) {
-  const disabled = row.adopted
   return (
     <button
       type="button"
-      disabled={disabled}
       onClick={onToggle}
       role="checkbox"
       aria-checked={checked}
       className={cn(
-        'flex items-center gap-2.5 px-3 py-2 text-left transition-colors',
-        disabled ? 'cursor-not-allowed bg-muted/30' : 'hover:bg-muted/50',
+        'flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-muted/50',
+        row.adopted && 'bg-primary/5',
       )}
     >
-      <CheckMark checked={checked} disabled={disabled} />
+      <CheckMark checked={checked} />
       <ChannelIcon type={row.channelType as ChannelType} className="size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">

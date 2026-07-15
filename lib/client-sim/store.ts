@@ -1199,6 +1199,30 @@ export async function adoptConversations(
   return { adopted, skipped }
 }
 
+/**
+ * Stop the simulator from driving the given conversations — the inverse of
+ * {@link adoptConversations}. We simply delete their `sim_threads` rows: the
+ * engine's due-sweep and reaction-sweep both read exclusively from that table,
+ * so once the row is gone the bot never touches the conversation again.
+ *
+ * The real conversation and ALL of its messages are left completely intact, so
+ * releasing an adopted real dialogue just hands it back to the human manager
+ * with its full history. Returns how many threads were actually removed.
+ */
+export async function releaseConversations(
+  conversationIds: string[],
+): Promise<{ released: number }> {
+  const ids = [...new Set(conversationIds)].filter(Boolean)
+  if (ids.length === 0) return { released: 0 }
+  const rows = await query<{ conversation_id: string }>(
+    `DELETE FROM sim_threads
+      WHERE conversation_id = ANY($1::uuid[])
+      RETURNING conversation_id`,
+    [ids],
+  )
+  return { released: rows.length }
+}
+
 /** Recent transcript for building LLM context (oldest→newest). */
 export interface SimTranscriptLine {
   direction: 'in' | 'out'

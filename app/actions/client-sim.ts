@@ -20,6 +20,7 @@ import {
   getSettings as getSimSettings,
   listAdoptableConversations,
   listUsableChannels,
+  releaseConversations,
   sampleRealClientLines,
   startCampaign,
   stopCampaign,
@@ -222,6 +223,28 @@ export async function simAdoptConversationsAction(input: {
   // running if the simulator is enabled, so adoption "just works".
   if (settings.enabled) startEngine()
 
+  revalidatePath(ADMIN_PATH)
+  return result
+}
+
+export interface SimReleaseResult {
+  released: number
+}
+
+/**
+ * Remove the selected conversations from the simulator — the inverse of adopt.
+ * The bot immediately stops driving them; the real conversation and its whole
+ * message history stay untouched, so an adopted real dialogue is handed straight
+ * back to its human manager.
+ */
+export async function simReleaseConversationsAction(input: {
+  conversationIds: string[]
+}): Promise<SimReleaseResult> {
+  await guard()
+  const ids = (input.conversationIds ?? []).filter(Boolean)
+  if (ids.length === 0) return { released: 0 }
+
+  const result = await releaseConversations(ids)
   revalidatePath(ADMIN_PATH)
   return result
 }
