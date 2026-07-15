@@ -3,6 +3,7 @@ import type { SimPersona } from './types'
 import { applyStyle } from './content'
 import {
   getGlobalRecentLines,
+  getGlobalRecentOpeners,
   getLearnedPointersCached,
   rememberGlobalLine,
 } from './store'
@@ -111,6 +112,18 @@ function avoidBlock(avoidLines: string[] | undefined): string {
   ].join('\n')
 }
 
+function openersBlock(openers: string[] | undefined): string {
+  if (!openers || openers.length === 0) return ''
+  // Different "people" opening messages with the same word is a glaring bot
+  // tell. Feed the swarm's recent opening words back in so this message starts
+  // differently.
+  const list = openers.slice(0, 24).map((w) => `«${w}»`).join(', ')
+  return [
+    '',
+    `НЕ НАЧИНАЙ сообщение с этих слов (их только что использовали другие): ${list}. Начни с другого слова.`,
+  ].join('\n')
+}
+
 const TONE_REGISTER: Record<string, string> = {
   polite:
     'ТОН ОБЩЕНИЯ — ВЕЖЛИВЫЙ: пиши грамотно и уважительно, на «вы». Здоровайся культурно («Здравствуйте», «Добрый день»). Ставь знаки препинания и заглавные буквы. Никакого мата и грубости, даже если раздражён — оставайся корректным.',
@@ -207,6 +220,7 @@ function systemPrompt(
   ownLines?: string[],
   moodHint?: string,
   lengthHint?: string,
+  swarmOpeners?: string[],
 ): string {
   const s = persona.style
   const tone = persona.tone ?? 'mixed'
@@ -250,6 +264,7 @@ function systemPrompt(
     referenceBlock(referenceLines),
     learnedBlock(learnedPointers),
     avoidBlock(ownLines),
+    openersBlock(swarmOpeners),
     '',
     `СЕЙЧАС: ${
       soft && behavior === 'angry'
@@ -276,6 +291,17 @@ function looksLikeRefusal(text: string): boolean {
     t.includes("i'm sorry") ||
     t.includes('as a virtual') ||
     t.includes('извините, но')
+  )
+}
+
+/** First meaningful word of a line, lowercased and stripped of punctuation. */
+function firstWord(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, '')
+      .split(/\s+/)
+      .filter(Boolean)[0] ?? ''
   )
 }
 
@@ -367,6 +393,15 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
     new Set([...getGlobalRecentLines(40), ...ownLines]),
   )
 
+  // Opening words the swarm used recently, so this message starts differently
+  // from what other "clients" just sent (and from this persona's own openers).
+  const swarmOpeners = Array.from(
+    new Set([
+      ...getGlobalRecentOpeners(30),
+      ...ownLines.map(firstWord).filter(Boolean),
+    ]),
+  )
+
   if (aiConfigured()) {
     try {
       // Pull in whatever the last "learn" run distilled (cached, cheap). Falls
@@ -396,10 +431,13 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         avoidLines,
         args.moodHint,
         lengthHint,
+        swarmOpeners,
       )
 
       // Up to three attempts: if the line echoes something this persona OR the
-      // swarm already said, retry hotter to break the loop.
+      // swarm already said (whole line OR just the opening word), retry hotter
+      // to break the loop. On the last attempt we accept whatever we have so a
+      // shared opener alone never blocks a reply entirely.
       let clean = ''
       for (let attempt = 0; attempt < 3; attempt++) {
         const { text, finishReason } = await generateText({
@@ -418,7 +456,10 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         if (finishReason === 'length') candidate = trimDanglingWord(candidate)
         if (!candidate || looksLikeRefusal(candidate)) continue
         clean = candidate
-        if (!tooSimilar(candidate, avoidLines)) break
+        const dup = tooSimilar(candidate, avoidLines)
+        const sharedOpener =
+          attempt < 2 && swarmOpeners.includes(firstWord(candidate))
+        if (!dup && !sharedOpener) break
       }
 
       if (clean && !looksLikeRefusal(clean)) {

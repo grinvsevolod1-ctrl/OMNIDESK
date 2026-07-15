@@ -194,6 +194,23 @@ export interface SimSettings {
   updatedAt: string
   /** Latest AI-learned style profile, or null if never run. */
   learnedProfile: LearnedProfile | null
+
+  /* ----------------------------- campaign ------------------------------- */
+  /**
+   * Campaign mode: a bounded burst that opens `campaignTarget` brand-new
+   * dialogues, paced to finish by `campaignEndsAt`. While active it overrides
+   * the steady `dialogsPerDay` cadence. Auto-stops when the target is reached
+   * or the window elapses.
+   */
+  campaignActive: boolean
+  /** How many new dialogues the active campaign should open in total. */
+  campaignTarget: number
+  /** ISO time the campaign window closes, or null when no campaign. */
+  campaignEndsAt: string | null
+  /** ISO time the campaign started, or null when no campaign. */
+  campaignStartedAt: string | null
+  /** `spawnedTotal` when the campaign began, so progress = spawnedTotal - baseline. */
+  campaignBaseline: number
 }
 
 /** Live snapshot for the god-panel dashboard. */

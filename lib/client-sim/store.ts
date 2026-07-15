@@ -34,6 +34,11 @@ interface SettingsRow {
   tone: SimTone
   dialogs_per_day: number
   max_concurrent: number
+  campaign_active: boolean
+  campaign_target: number
+  campaign_ends_at: string | Date | null
+  campaign_started_at: string | Date | null
+  campaign_baseline: number
 }
 
 function mapSettings(r: SettingsRow): SimSettings {
@@ -54,6 +59,15 @@ function mapSettings(r: SettingsRow): SimSettings {
     updatedAt: new Date(r.updated_at).toISOString(),
     learnedProfile: r.learned_profile ?? null,
     tone: r.tone ?? 'mixed',
+    campaignActive: r.campaign_active ?? false,
+    campaignTarget: r.campaign_target ?? 0,
+    campaignEndsAt: r.campaign_ends_at
+      ? new Date(r.campaign_ends_at).toISOString()
+      : null,
+    campaignStartedAt: r.campaign_started_at
+      ? new Date(r.campaign_started_at).toISOString()
+      : null,
+    campaignBaseline: r.campaign_baseline ?? 0,
   }
 }
 
@@ -69,6 +83,11 @@ const OPTIONAL_SETTINGS_COLS = [
   'tone',
   'dialogs_per_day',
   'max_concurrent',
+  'campaign_active',
+  'campaign_target',
+  'campaign_ends_at',
+  'campaign_started_at',
+  'campaign_baseline',
 ] as const
 
 /**
@@ -178,6 +197,11 @@ export async function getSettings(): Promise<SimSettings> {
       tone: 'mixed',
       dialogs_per_day: 20,
       max_concurrent: 100,
+      campaign_active: false,
+      campaign_target: 0,
+      campaign_ends_at: null,
+      campaign_started_at: null,
+      campaign_baseline: 0,
       ...r,
     } as SettingsRow
   }
@@ -195,7 +219,7 @@ function isUndefinedColumn(err: unknown): boolean {
   const msg = (err as { message?: string }).message ?? ''
   return (
     code === '42703' ||
-    /learned_profile|\btone\b|dialogs_per_day|max_concurrent|column .* does not exist/i.test(msg)
+    /learned_profile|\btone\b|dialogs_per_day|max_concurrent|campaign_|column .* does not exist/i.test(msg)
   )
 }
 
@@ -336,6 +360,77 @@ export async function bumpRepliesTotal(): Promise<void> {
   )
 }
 
+/* -------------------------------- campaign ------------------------------ */
+
+/** Thrown when campaign mode is used on a DB that hasn't applied migration 062. */
+export class CampaignUnavailableError extends Error {}
+
+async function assertCampaignCols(): Promise<void> {
+  const cols = await getExistingOptionalCols()
+  const needed = [
+    'campaign_active',
+    'campaign_target',
+    'campaign_ends_at',
+    'campaign_started_at',
+    'campaign_baseline',
+  ]
+  if (!needed.every((c) => cols.has(c))) {
+    throw new CampaignUnavailableError(
+      'Режим кампаний недоступен: примените миграцию 062_client_sim_campaign.sql.',
+    )
+  }
+}
+
+/**
+ * Start a campaign: open `target` brand-new dialogues, paced to finish within
+ * `hours`. Also flips the simulator on and primes the spawn slot so it can
+ * begin immediately. Baseline is the current spawned_total, so campaign
+ * progress is measured from now.
+ */
+export async function startCampaign(
+  target: number,
+  hours: number,
+): Promise<SimSettings> {
+  await assertCampaignCols()
+  const t = clampInt(target, 1, 5_000)
+  const h = Math.min(Math.max(Number(hours) || 0, 0.05), 720) // 3 min … 30 days
+  await query(
+    `UPDATE sim_settings
+        SET enabled = true,
+            started_at = now(),
+            next_spawn_at = now(),
+            campaign_active = true,
+            campaign_target = $1,
+            campaign_ends_at = now() + make_interval(secs => $2::int),
+            campaign_started_at = now(),
+            campaign_baseline = spawned_total,
+            updated_at = now()
+      WHERE id = true`,
+    [t, Math.round(h * 3600)],
+  )
+  return getSettings()
+}
+
+/**
+ * Stop the active campaign (clears the campaign flags). Leaves `enabled` as-is
+ * so the operator's steady dialogs_per_day rate resumes only if they still want
+ * the simulator running. `keepEnabled=false` also switches the simulator off.
+ */
+export async function stopCampaign(keepEnabled = true): Promise<SimSettings> {
+  await assertCampaignCols()
+  await query(
+    `UPDATE sim_settings
+        SET campaign_active = false,
+            campaign_target = 0,
+            campaign_ends_at = NULL,
+            campaign_started_at = NULL,
+            ${keepEnabled ? '' : 'enabled = false,'}
+            updated_at = now()
+      WHERE id = true`,
+  )
+  return getSettings()
+}
+
 /* ------------------- cross-thread anti-repetition memory ---------------- */
 
 /**
@@ -346,15 +441,35 @@ export async function bumpRepliesTotal(): Promise<void> {
  * reusing anything the swarm just said, so bots never get caught echoing each
  * other or firing identical replies at the same time.
  */
-const GLOBAL_LINE_MEMORY_SIZE = 80
-const g = globalThis as unknown as { __simGlobalLines?: string[] }
+const GLOBAL_LINE_MEMORY_SIZE = 160
+const GLOBAL_OPENER_MEMORY_SIZE = 60
+const g = globalThis as unknown as {
+  __simGlobalLines?: string[]
+  __simGlobalOpeners?: string[]
+}
 
 function globalLines(): string[] {
   if (!g.__simGlobalLines) g.__simGlobalLines = []
   return g.__simGlobalLines
 }
 
-/** Record a line the swarm just sent (deduped, capped). */
+function globalOpeners(): string[] {
+  if (!g.__simGlobalOpeners) g.__simGlobalOpeners = []
+  return g.__simGlobalOpeners
+}
+
+/** First meaningful word of a line, lowercased and stripped of punctuation. */
+function openerOf(line: string): string {
+  const first = line
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .split(/\s+/)
+    .filter(Boolean)[0]
+  return first ?? ''
+}
+
+/** Record a line the swarm just sent (deduped, capped) + its opening word. */
 export function rememberGlobalLine(line: string): void {
   const trimmed = line.trim()
   if (!trimmed) return
@@ -363,12 +478,30 @@ export function rememberGlobalLine(line: string): void {
   if (buf.length > GLOBAL_LINE_MEMORY_SIZE) {
     buf.splice(0, buf.length - GLOBAL_LINE_MEMORY_SIZE)
   }
+  const opener = openerOf(trimmed)
+  if (opener) {
+    const ob = globalOpeners()
+    ob.push(opener)
+    if (ob.length > GLOBAL_OPENER_MEMORY_SIZE) {
+      ob.splice(0, ob.length - GLOBAL_OPENER_MEMORY_SIZE)
+    }
+  }
 }
 
 /** The most recent `n` lines sent anywhere, newest last. */
 export function getGlobalRecentLines(n = 40): string[] {
   const buf = globalLines()
   return buf.slice(-Math.max(0, n))
+}
+
+/**
+ * The distinct opening words the swarm used recently. Injected into the prompt
+ * so a fresh message never starts with a word the crowd just used — different
+ * "people" opening identically is one of the loudest bot-farm tells.
+ */
+export function getGlobalRecentOpeners(n = 30): string[] {
+  const buf = globalOpeners().slice(-Math.max(0, n))
+  return Array.from(new Set(buf))
 }
 
 /* ------------------------------- threads -------------------------------- */

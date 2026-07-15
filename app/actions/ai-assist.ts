@@ -11,16 +11,20 @@ import {
   getAiAssistSettings,
   listBrainLessons,
   listLessons,
+  listTrainableAccounts,
+  sampleAccountDialogsForTraining,
   sampleTrainingConversations,
   savePlaybook,
   updateAiAssistSettings,
   type AiAssistLesson,
   type AiAssistSettings,
+  type TrainableAccount,
   type TrainingSample,
 } from '@/lib/data/ai-assist'
 import { kickstartAwaitingConversations } from '@/lib/autopilot/runtime'
 import {
   distillPlaybook,
+  distillPlaybookFromDialogs,
   generateManagerReply,
   isBrainConfigured,
 } from '@/lib/ai/manager-brain'
@@ -117,6 +121,98 @@ export async function aiListLessonsAction(): Promise<AiAssistLesson[]> {
 export async function aiSampleConversationsAction(): Promise<TrainingSample[]> {
   await requireAdmin()
   return sampleTrainingConversations(8)
+}
+
+/* --------------------------- Train on an account -------------------------- */
+
+/** Messaging accounts the admin can point the trainer at. */
+export async function aiTrainableAccountsAction(): Promise<TrainableAccount[]> {
+  await requireAdmin()
+  return listTrainableAccounts()
+}
+
+/**
+ * "Обучить ИИ на аккаунте": read the account's real manager↔client dialogs,
+ * learn its selling style, and fold it into the shared knowledge base:
+ *  1) store the strongest client→manager exchanges as few-shot "good answer"
+ *     lessons (so replies mimic this account's real voice), and
+ *  2) re-distill the playbook from BOTH the transcripts and the lesson corpus.
+ *
+ * Best-effort and additive — a gateway failure never wipes existing training.
+ * Returns a short summary + refreshed settings/lessons for the UI.
+ */
+export async function aiTrainOnAccountAction(input: {
+  channelId: string
+}): Promise<{
+  learnedExchanges: number
+  playbookSize: number
+  dialogsAnalysed: number
+  settings: AiAssistSettings
+  lessons: AiAssistLesson[]
+}> {
+  await requireAdmin()
+  const channelId = input.channelId?.trim()
+  if (!channelId) throw new Error('no_account')
+
+  const { transcripts, exchanges } =
+    await sampleAccountDialogsForTraining(channelId, 40)
+  if (transcripts.length === 0) {
+    throw new Error('no_dialogs')
+  }
+
+  // 1) Store real exchanges as style lessons (dedupe-friendly: addLesson is a
+  // plain insert, so cap how many we add per run to keep the corpus focused).
+  let learnedExchanges = 0
+  for (const ex of exchanges.slice(0, 30)) {
+    await addLesson({
+      situation: ex.situation,
+      draft: '',
+      corrected: ex.corrected,
+      note: 'Обучение на аккаунте: реальный ответ менеджера',
+    })
+    learnedExchanges++
+  }
+
+  // 2) Re-distill the playbook from the account's transcripts, merged with the
+  // existing lesson-based playbook so prior training is preserved, not replaced.
+  const settingsBefore = await getAiAssistSettings()
+  let playbook = settingsBefore.playbook
+  try {
+    const fromDialogs = await distillPlaybookFromDialogs(
+      transcripts,
+      settingsBefore.persona,
+    )
+    const fromLessons = await distillPlaybook(
+      await listBrainLessons(60),
+      settingsBefore.persona,
+    )
+    const merged = Array.from(
+      new Set(
+        [...fromDialogs, ...fromLessons]
+          .map((l) => l.trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 20)
+    if (merged.length > 0) {
+      playbook = merged
+      await savePlaybook(playbook)
+    }
+  } catch {
+    // Keep the prior playbook; the exchange lessons above are already saved.
+  }
+
+  const [settings, lessons] = await Promise.all([
+    getAiAssistSettings(),
+    listLessons(100),
+  ])
+  revalidatePath(AI_PATH)
+  return {
+    learnedExchanges,
+    playbookSize: playbook.length,
+    dialogsAnalysed: transcripts.length,
+    settings,
+    lessons,
+  }
 }
 
 /**

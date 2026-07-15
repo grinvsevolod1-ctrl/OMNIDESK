@@ -1,4 +1,4 @@
-import type { SimOutcome, SimThreadRow, SimTone } from './types'
+import type { SimOutcome, SimSettings, SimThreadRow, SimTone } from './types'
 import {
   chance,
   humanizeBubbles,
@@ -27,6 +27,7 @@ import {
   listUsableChannels,
   sampleRealClientLines,
   scheduleReaction,
+  stopCampaign,
   updateThread,
   type SimChannel,
 } from './store'
@@ -196,14 +197,11 @@ async function tick(): Promise<void> {
     // the auto-trigger existed, or ones where the manager call failed earlier.
     await sweepBacklog()
 
-    // Spawn cadence/timing is derived from "dialogues per day"; the number of
-    // simultaneously-live dialogues is now an INDEPENDENT operator knob
-    // (maxConcurrent, up to ~100+) rather than a function of throughput.
-    await maybeSpawn(
-      settings.channelIds,
-      settings.dialogsPerDay,
-      settings.maxConcurrent,
-    )
+    // Spawn cadence/timing is derived from "dialogues per day" — UNLESS a
+    // campaign is active, in which case spawns are paced to hit the campaign's
+    // target within its window. The number of simultaneously-live dialogues is
+    // an INDEPENDENT operator knob (maxConcurrent, up to ~100+).
+    await maybeSpawn(settings)
     await scheduleManagerReactions()
     await processDueThreads()
   } catch (err) {
@@ -222,14 +220,42 @@ async function tick(): Promise<void> {
 
 /* -------------------------------- spawning ------------------------------ */
 
-async function maybeSpawn(
-  channelIds: string[],
-  dialogsPerDay: number,
-  maxConcurrent: number,
-): Promise<void> {
-  // Average seconds between new dialogues to hit the daily target.
-  const perDay = Math.max(1, Math.floor(dialogsPerDay) || 1)
-  const avgGapSec = Math.max(20, Math.round(86_400 / perDay))
+async function maybeSpawn(settings: SimSettings): Promise<void> {
+  const channelIds = settings.channelIds
+  const maxConcurrent = settings.maxConcurrent
+
+  // Average seconds between new dialogues. Two regimes:
+  //  • CAMPAIGN active: pace the REMAINING dialogues across the REMAINING window
+  //    so we open `campaignTarget` new dialogues by `campaignEndsAt`, then stop.
+  //  • otherwise: steady "dialogues per day" cadence.
+  let avgGapSec: number
+  if (settings.campaignActive) {
+    const done = Math.max(0, settings.spawnedTotal - settings.campaignBaseline)
+    const remaining = settings.campaignTarget - done
+    const endsAt = settings.campaignEndsAt
+      ? new Date(settings.campaignEndsAt).getTime()
+      : 0
+    const windowLeftSec = Math.max(0, Math.round((endsAt - Date.now()) / 1000))
+
+    // Campaign finished — target met or window elapsed. Stop it and bail; the
+    // steady rate resumes only if the operator left dialogsPerDay running.
+    if (remaining <= 0 || windowLeftSec <= 0) {
+      await stopCampaign(true)
+      noteSim(
+        'campaign_done',
+        'info',
+        remaining <= 0
+          ? `Кампания завершена: создано ${done}/${settings.campaignTarget} диалогов.`
+          : `Кампания завершена по времени: создано ${done}/${settings.campaignTarget} диалогов за отведённый срок.`,
+      )
+      return
+    }
+    // Spread the remaining spawns evenly across the remaining window.
+    avgGapSec = Math.max(15, Math.round(windowLeftSec / remaining))
+  } else {
+    const perDay = Math.max(1, Math.floor(settings.dialogsPerDay) || 1)
+    avgGapSec = Math.max(20, Math.round(86_400 / perDay))
+  }
 
   // INDEPENDENT concurrency cap: how many dialogues may be live at once,
   // decoupled from throughput. "Live" = every non-done thread, INCLUDING the
@@ -248,15 +274,19 @@ async function maybeSpawn(
   }
 
   // Human traffic isn't metronomic. Base jitter spreads each gap across
-  // 0.45×–1.8× the average; on top of that ~15% of the time we fake a quiet
-  // stretch (2–4×) and ~6% a burst (0.25×) so arrivals cluster and gap
-  // unpredictably instead of ticking like a clock.
+  // 0.45×–1.8× the average so arrivals gap unpredictably instead of ticking
+  // like a clock — applied in BOTH regimes so even a campaign looks organic.
   let nextDelay = Math.round(avgGapSec * (0.45 + Math.random() * 1.35))
-  if (chance(0.15)) nextDelay = Math.round(nextDelay * randInt(2, 4))
-  else if (chance(0.06)) nextDelay = Math.max(15, Math.round(nextDelay * 0.25))
-  // People show up less at night: stretch gaps during 23:00–08:00 local time.
-  const hour = new Date().getHours()
-  if (hour >= 23 || hour < 8) nextDelay = Math.round(nextDelay * (1.5 + Math.random() * 2))
+  // The heavy multipliers — long quiet stretches, night slowdown — are only for
+  // the STEADY regime. A campaign has an explicit deadline, so stretching gaps
+  // could miss the target; we keep only the light jitter above for it.
+  if (!settings.campaignActive) {
+    if (chance(0.15)) nextDelay = Math.round(nextDelay * randInt(2, 4))
+    else if (chance(0.06)) nextDelay = Math.max(15, Math.round(nextDelay * 0.25))
+    // People show up less at night: stretch gaps during 23:00–08:00 local time.
+    const hour = new Date().getHours()
+    if (hour >= 23 || hour < 8) nextDelay = Math.round(nextDelay * (1.5 + Math.random() * 2))
+  }
 
   // Bail out BEFORE claiming a spawn slot if there's nowhere to spawn — a
   // claimed slot both reschedules next_spawn_at and (previously) bumped the

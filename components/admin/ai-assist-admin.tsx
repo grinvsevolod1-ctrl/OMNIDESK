@@ -1,8 +1,9 @@
 'use client'
 
-import { useCallback, useState, useTransition } from 'react'
+import { useCallback, useEffect, useState, useTransition } from 'react'
 import {
   Bot,
+  BrainCircuit,
   GraduationCap,
   Loader2,
   RefreshCw,
@@ -21,11 +22,14 @@ import {
   aiSampleConversationsAction,
   aiSaveLessonAction,
   aiSuggestReplyAction,
+  aiTrainableAccountsAction,
+  aiTrainOnAccountAction,
   aiUpdateSettingsAction,
 } from '@/app/actions/ai-assist'
 import type {
   AiAssistLesson,
   AiAssistSettings,
+  TrainableAccount,
   TrainingSample,
 } from '@/lib/data/ai-assist'
 import { Badge } from '@/components/ui/badge'
@@ -435,7 +439,10 @@ function TrainerTab({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="flex flex-col gap-4">
+      <TrainOnAccountCard onLessonsChange={onLessonsChange} />
+
+      <div className="grid gap-4 lg:grid-cols-2">
       {/* Left: pick a conversation and train */}
       <Card className="flex flex-col gap-4 p-4">
         <div className="flex items-center justify-between">
@@ -595,7 +602,119 @@ function TrainerTab({
           </div>
         )}
       </Card>
+      </div>
     </div>
+  )
+}
+
+/* -------------------------- Train on an account ------------------------- */
+
+/**
+ * Point the trainer at a real messaging account: the AI reads that account's
+ * manager↔client dialogs, learns its selling style, stores the strongest
+ * exchanges as lessons, and re-distills the playbook. This is how the operator
+ * bootstraps the AI to "talk like this account does" and push leads the same
+ * way its human managers do.
+ */
+function TrainOnAccountCard({
+  onLessonsChange,
+}: {
+  onLessonsChange: (next: AiAssistLesson[]) => void
+}) {
+  const [accounts, setAccounts] = useState<TrainableAccount[]>([])
+  const [selected, setSelected] = useState<string>('')
+  const [loading, startLoad] = useTransition()
+  const [training, startTrain] = useTransition()
+
+  useEffect(() => {
+    startLoad(async () => {
+      try {
+        const list = await aiTrainableAccountsAction()
+        setAccounts(list)
+        if (list.length > 0) setSelected(list[0].channelId)
+      } catch {
+        // silent — the card just shows an empty state
+      }
+    })
+  }, [])
+
+  const train = () => {
+    if (!selected) return
+    startTrain(async () => {
+      try {
+        const res = await aiTrainOnAccountAction({ channelId: selected })
+        onLessonsChange(res.lessons)
+        toast.success(
+          `Обучение завершено: проанализировано диалогов — ${res.dialogsAnalysed}, добавлено примеров — ${res.learnedExchanges}, правил в плейбуке — ${res.playbookSize}.`,
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : ''
+        if (msg === 'no_dialogs') {
+          toast.error('У этого аккаунта нет диалогов с двусторонней перепиской')
+        } else {
+          toast.error('Не удалось обучить ИИ на аккаунте')
+        }
+      }
+    })
+  }
+
+  return (
+    <Card className="flex flex-col gap-3 p-4">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 rounded-md bg-primary/10 p-2 text-primary">
+          <BrainCircuit className="size-5" />
+        </div>
+        <div className="flex-1">
+          <p className="font-medium">Обучить ИИ на аккаунте</p>
+          <p className="text-sm text-muted-foreground">
+            Выберите аккаунт — ИИ полностью проанализирует переписки менеджера с
+            клиентами, обучится их стилю и начнёт так же вести новых клиентов:
+            дожимать, отрабатывать возражения и доводить до передачи документов.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Select
+          value={selected}
+          onValueChange={(v) => setSelected(v ?? '')}
+          disabled={loading || training || accounts.length === 0}
+        >
+          <SelectTrigger className="w-full sm:max-w-md">
+            <SelectValue
+              placeholder={
+                loading ? 'Загрузка аккаунтов…' : 'Нет аккаунтов с диалогами'
+              }
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {accounts.map((a) => (
+              <SelectItem key={a.channelId} value={a.channelId}>
+                {a.label} · {a.dialogCount} диал.
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          className="sm:ml-auto"
+          disabled={!selected || training || loading}
+          onClick={train}
+        >
+          {training ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <GraduationCap className="size-4" />
+          )}
+          Обучить
+        </Button>
+      </div>
+
+      {training ? (
+        <p className="text-sm text-primary">
+          Анализирую переписки и обучаю ИИ… это может занять до минуты.
+        </p>
+      ) : null}
+    </Card>
   )
 }
 

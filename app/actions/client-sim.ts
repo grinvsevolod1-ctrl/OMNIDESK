@@ -15,11 +15,14 @@ import { generateReply } from '@/lib/client-sim/generate'
 import { analyzeDialogues, LearnError } from '@/lib/client-sim/learn'
 import {
   adoptConversations,
+  CampaignUnavailableError,
   countActiveThreads,
   getSettings as getSimSettings,
   listAdoptableConversations,
   listUsableChannels,
   sampleRealClientLines,
+  startCampaign,
+  stopCampaign,
   updateSettings,
   type AdoptableConversation,
   type SettingsPatch,
@@ -82,6 +85,65 @@ export async function simToggleAction(enabled: boolean): Promise<SimStatus> {
   }
   revalidatePath(ADMIN_PATH)
   return getSimStatus()
+}
+
+/* ----------------------------- campaign -------------------------------- */
+
+export type SimCampaignResult =
+  | { ok: true; status: SimStatus }
+  | { ok: false; error: string }
+
+/**
+ * Start a burst campaign: open `count` brand-new dialogues over the next
+ * `hours`, paced so they arrive spread across the window (not all at once).
+ * Turns the simulator on and starts the engine. Returns a tagged result so the
+ * UI can show a friendly message when campaign mode isn't available (migration
+ * 062 not applied) instead of a raw error.
+ */
+export async function simStartCampaignAction(input: {
+  count: number
+  hours: number
+}): Promise<SimCampaignResult> {
+  await guard()
+  try {
+    await startCampaign(input.count, input.hours)
+    startEngine()
+    revalidatePath(ADMIN_PATH)
+    return { ok: true, status: await getSimStatus() }
+  } catch (err) {
+    if (err instanceof CampaignUnavailableError) {
+      return { ok: false, error: err.message }
+    }
+    return {
+      ok: false,
+      error: `Не удалось запустить кампанию: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
+}
+
+/**
+ * Stop the active campaign. `keepEnabled` (default true) leaves the simulator
+ * running on its steady per-day rate; false switches it off entirely.
+ */
+export async function simStopCampaignAction(input?: {
+  keepEnabled?: boolean
+}): Promise<SimCampaignResult> {
+  await guard()
+  try {
+    const keepEnabled = input?.keepEnabled ?? true
+    await stopCampaign(keepEnabled)
+    if (!keepEnabled) stopEngine()
+    revalidatePath(ADMIN_PATH)
+    return { ok: true, status: await getSimStatus() }
+  } catch (err) {
+    if (err instanceof CampaignUnavailableError) {
+      return { ok: false, error: err.message }
+    }
+    return {
+      ok: false,
+      error: `Не удалось остановить кампанию: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
 }
 
 /* ----------------------------- learning -------------------------------- */
