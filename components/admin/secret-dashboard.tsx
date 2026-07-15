@@ -217,6 +217,8 @@ export function SecretDashboard({
         }}
       />
 
+      <AiBalanceBanner system={system} />
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
           label="Менеджеры"
@@ -451,6 +453,93 @@ function AiBalancePill({ system }: { system: SecretSystem }) {
       <Wallet className="size-3.5" />
       Баланс ИИ: {usd(aiBalance)}
     </span>
+  )
+}
+
+/**
+ * Prominent, always-visible balance panel. Both AIs (менеджер + симулятор) spend
+ * from the same AI Gateway key, so this is the whole system's remaining budget.
+ * Shown right under the header so it can't be missed on mobile.
+ */
+function AiBalanceBanner({ system }: { system: SecretSystem }) {
+  const { aiBalanceOk, aiBalance, aiTotalUsed, aiBalanceMessage } = system
+  const usd = (n: number) =>
+    `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  // Unavailable: no key / request failed. Neutral card with the reason.
+  if (!aiBalanceOk || aiBalance == null) {
+    return (
+      <Card className="flex items-center gap-3 border-dashed p-4">
+        <div className="flex size-10 items-center justify-center rounded-lg border border-border bg-muted/40">
+          <Wallet className="size-5 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium">Баланс ИИ недоступен</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {aiBalanceMessage ??
+              'Задайте AI_GATEWAY_API_KEY, чтобы видеть остаток средств'}
+          </p>
+        </div>
+      </Card>
+    )
+  }
+
+  const empty = aiBalance <= 0
+  const low = aiBalance < 5
+  const tone = empty
+    ? 'border-destructive/40 bg-destructive/5'
+    : low
+      ? 'border-warning/40 bg-warning/5'
+      : 'border-success/40 bg-success/5'
+  const iconTone = empty
+    ? 'text-destructive'
+    : low
+      ? 'text-warning'
+      : 'text-success'
+
+  return (
+    <Card className={cn('flex flex-wrap items-center gap-4 p-4', tone)}>
+      <div className="flex items-center gap-3">
+        <div
+          className={cn(
+            'flex size-11 items-center justify-center rounded-xl border border-border bg-background/60',
+            iconTone,
+          )}
+        >
+          <Wallet className="size-5" />
+        </div>
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">
+            Баланс ИИ (менеджер + симулятор)
+          </p>
+          <p className={cn('text-2xl font-semibold tabular-nums', iconTone)}>
+            {usd(aiBalance)}
+          </p>
+        </div>
+      </div>
+
+      {aiTotalUsed != null && (
+        <div className="ml-auto text-right">
+          <p className="text-xs font-medium text-muted-foreground">
+            Потрачено всего
+          </p>
+          <p className="text-lg font-semibold tabular-nums">
+            {usd(aiTotalUsed)}
+          </p>
+        </div>
+      )}
+
+      {empty ? (
+        <p className="w-full text-xs font-medium text-destructive">
+          Средства закончились — ИИ перестанет отвечать. Пополните баланс AI
+          Gateway.
+        </p>
+      ) : low ? (
+        <p className="w-full text-xs font-medium text-warning">
+          Низкий остаток — скоро потребуется пополнение.
+        </p>
+      ) : null}
+    </Card>
   )
 }
 

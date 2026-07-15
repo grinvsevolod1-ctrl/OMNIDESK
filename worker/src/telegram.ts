@@ -1418,7 +1418,7 @@ function classifyTgMedia(msg: Api.Message): TgMediaInfo | null {
         mediaType: 'sticker',
         mediaMime: mime ?? 'image/webp',
         mediaName: null,
-        placeholder: stickerEmoji ? `${stickerEmoji} [Стикер]` : '[Сти��ер]',
+        placeholder: stickerEmoji ? `${stickerEmoji} [Стикер]` : '[Стикер]',
       }
     }
     if (isVoice) {

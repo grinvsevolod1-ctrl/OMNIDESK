@@ -368,7 +368,7 @@ interface AccountMetrics {
 }
 
 /**
- * Метрики кабинета в USD. Пополнения и расход храня��ся в валюте кабинета
+ * Метрики кабинета в USD. Пополнения и расход хранятся в валюте кабинета
  * (`a.currency`) и приводятся к USD по текущему курсу `rates`.
  */
 function accountMetrics(a: FinanceAdAccount, rates: UsdRates): AccountMetrics {
@@ -1097,7 +1097,7 @@ function GlobalDashboard({
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Ба��ансы подключённых кабинетов */}
+      {/* Балансы подключённых кабинетов */}
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <Wallet className="size-4 text-muted-foreground" />

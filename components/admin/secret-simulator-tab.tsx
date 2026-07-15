@@ -273,7 +273,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
         />
         <MiniStat
           icon={CalendarClock}
-          label="��иалогов в сутки"
+          label="Диалогов в сутки"
           value={status?.dialogsPerDay ?? perDay}
         />
       </div>

@@ -456,7 +456,7 @@ function TrainerTab({
       {/* Left: pick a conversation and train */}
       <Card className="flex flex-col gap-4 p-4">
         <div className="flex items-center justify-between">
-          <p className="font-medium">Тренировка н�� диалогах</p>
+          <p className="font-medium">Тренировка на диалогах</p>
           <Button
             variant="outline"
             size="sm"
@@ -675,7 +675,7 @@ function TrainOnAccountCard({
           <BrainCircuit className="size-5" />
         </div>
         <div className="flex-1">
-          <p className="font-medium">Обучить ИИ н�� аккаунте</p>
+          <p className="font-medium">Обучить ИИ на аккаунте</p>
           <p className="text-sm text-muted-foreground">
             Выберите аккаунт — ИИ полностью проанализирует переписки менеджера с
             клиентами, обучится их стилю и начнёт так же вести новых клиентов:
