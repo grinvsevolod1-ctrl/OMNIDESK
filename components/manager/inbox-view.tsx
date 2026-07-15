@@ -26,6 +26,7 @@ import {
   ExternalLink,
   FileText,
   Globe,
+  History,
   Info,
   Link2,
   Loader2,
@@ -118,6 +119,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { AutopilotToggle } from '@/components/manager/autopilot-toggle'
+import { EditHistoryDialog } from '@/components/manager/edit-history-dialog'
 import {
   channelIcon,
   TelemostIcon,
@@ -1545,6 +1547,8 @@ export function InboxView({
     [activeId],
   )
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
+  // Message whose edit history is open in the dialog (null = closed).
+  const [historyMessage, setHistoryMessage] = useState<Message | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   // Conversation hand-off dialog state. `transferForId` holds the conversation
   // being handed off (null = dialog closed); the picker/note drive the submit.
@@ -3344,6 +3348,22 @@ export function InboxView({
                                         : 'text-muted-foreground',
                                   )}
                                 >
+                                  {m.editedAt ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setHistoryMessage(m)}
+                                      title="Показать историю изменений"
+                                      className={cn(
+                                        'mr-0.5 flex items-center gap-0.5 rounded px-0.5 italic underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80',
+                                        isOut
+                                          ? 'text-primary-foreground/70'
+                                          : 'text-muted-foreground',
+                                      )}
+                                    >
+                                      <History className="size-2.5" />
+                                      изменено
+                                    </button>
+                                  ) : null}
                                   {timeShort(m.createdAt)}
                                   {isOut ? <DeliveryTicks status={m.status} /> : null}
                                 </span>
@@ -3779,6 +3799,16 @@ export function InboxView({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <EditHistoryDialog
+        messageId={historyMessage?.id ?? null}
+        currentBody={historyMessage?.body ?? ''}
+        currentMediaType={historyMessage?.mediaType}
+        currentMediaUrl={historyMessage?.mediaUrl}
+        onOpenChange={(open) => {
+          if (!open) setHistoryMessage(null)
+        }}
+      />
     </div>
   )
 }
