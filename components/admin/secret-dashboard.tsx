@@ -29,6 +29,7 @@ import {
   Trash2,
   TriangleAlert,
   Users,
+  Wallet,
   Zap,
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
@@ -105,6 +106,14 @@ interface SecretSystem {
   dbMessage: string
   generatedAt: string
   gateEnabled: boolean
+  /** Remaining AI Gateway credit in USD (null when unavailable). */
+  aiBalance: number | null
+  /** Lifetime AI spend in USD (null when unavailable). */
+  aiTotalUsed: number | null
+  /** True when the balance figures are real (key present, request ok). */
+  aiBalanceOk: boolean
+  /** Why the balance is unavailable, if so. */
+  aiBalanceMessage: string | null
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -338,6 +347,7 @@ function SecretHeader({
           okText="Воркер в сети"
           badText={system.workerConfigured ? 'Воркер оффлайн' : 'Воркер не настроен'}
         />
+        <AiBalancePill system={system} />
         <Button
           variant="outline"
           size="sm"
@@ -393,6 +403,53 @@ function SystemPill({
     >
       <Icon className="size-3.5" />
       {ok ? okText : badText}
+    </span>
+  )
+}
+
+/**
+ * Live AI Gateway balance pill. Both the manager brain and the simulator bill
+ * against the same key, so this one figure is the whole system's remaining AI
+ * budget. Turns amber when funds run low and red when unavailable/empty.
+ */
+function AiBalancePill({ system }: { system: SecretSystem }) {
+  const { aiBalanceOk, aiBalance, aiTotalUsed, aiBalanceMessage } = system
+
+  if (!aiBalanceOk || aiBalance == null) {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground"
+        title={aiBalanceMessage ?? 'Баланс ИИ недоступен'}
+      >
+        <Wallet className="size-3.5" />
+        Баланс ИИ н/д
+      </span>
+    )
+  }
+
+  const low = aiBalance < 5
+  const empty = aiBalance <= 0
+  const usd = (n: number) =>
+    `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+        empty
+          ? 'border-destructive/30 bg-destructive/10 text-destructive'
+          : low
+            ? 'border-warning/30 bg-warning/10 text-warning'
+            : 'border-success/30 bg-success/10 text-success',
+      )}
+      title={
+        aiTotalUsed != null
+          ? `Остаток на ИИ (менеджер + симулятор). Потрачено всего: ${usd(aiTotalUsed)}`
+          : 'Остаток на ИИ (менеджер + симулятор)'
+      }
+    >
+      <Wallet className="size-3.5" />
+      Баланс ИИ: {usd(aiBalance)}
     </span>
   )
 }

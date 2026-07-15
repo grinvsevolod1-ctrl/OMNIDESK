@@ -9,6 +9,7 @@ import {
   type AdPlatform,
 } from '@/lib/finance'
 import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
+import { getGatewayBalance } from '@/lib/ai/gateway-balance'
 import { SecretDashboard } from '@/components/admin/secret-dashboard'
 import { SecretGate } from '@/components/admin/secret-gate'
 import type { SecretStats } from '@/components/admin/secret-dashboard'
@@ -100,6 +101,9 @@ export default async function SecretPage() {
   const workerConfigured = isWorkerConfigured
   const workerOnline = workerConfigured ? await workerHealth() : false
 
+  // Live AI Gateway balance — shared by the manager brain and the simulator.
+  const aiBalance = await getGatewayBalance()
+
   // Build a continuous 7-day window so the trend chart never shows gaps.
   const msg7dMap = new Map(msg7dRows.map((r) => [r.day, r]))
   const now = new Date()
@@ -152,6 +156,10 @@ export default async function SecretPage() {
         dbMessage: db.message,
         generatedAt: new Date().toISOString(),
         gateEnabled: isGodPasscodeConfigured(),
+        aiBalance: aiBalance.balance,
+        aiTotalUsed: aiBalance.totalUsed,
+        aiBalanceOk: aiBalance.ok,
+        aiBalanceMessage: aiBalance.message ?? null,
       }}
     />
   )
