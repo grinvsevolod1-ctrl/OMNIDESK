@@ -1,4 +1,4 @@
-import type { SimOutcome, SimState, SimThreadRow, SimTone } from './types'
+import type { SimOutcome, SimThreadRow, SimTone } from './types'
 import {
   chance,
   humanizeBubbles,

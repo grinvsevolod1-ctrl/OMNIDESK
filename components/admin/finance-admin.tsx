@@ -368,7 +368,7 @@ interface AccountMetrics {
 }
 
 /**
- * Метрики кабинета в USD. Пополнения и расход хранятся в валюте кабинета
+ * Метрики кабинета в USD. Пополнения и расход храня��ся в валюте кабинета
  * (`a.currency`) и приводятся к USD по текущему курсу `rates`.
  */
 function accountMetrics(a: FinanceAdAccount, rates: UsdRates): AccountMetrics {
@@ -1035,8 +1035,6 @@ const BLOCKED_AD_STATUSES = new Set<AdStatus>(['banned', 'no_funds'])
 function GlobalDashboard({
   resources,
   adAccounts,
-  entries,
-  vaultItems,
   leadCountByResource,
   onOpenResource,
   onCreateResource,
@@ -1099,7 +1097,7 @@ function GlobalDashboard({
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Балансы подключённых кабинетов */}
+      {/* Ба��ансы подключённых кабинетов */}
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <Wallet className="size-4 text-muted-foreground" />
@@ -1245,7 +1243,6 @@ function OverviewPanel({
   summary,
   accounts,
   entries,
-  resource,
   onGoAds,
   onGoExpenses,
 }: {
@@ -2422,7 +2419,6 @@ function SortableTh({
 
 function ExpenseRow({
   entry,
-  currency,
   isOpen,
   doneTasks,
   pending,
@@ -3173,6 +3169,9 @@ function EntryDialog({
   const [currency, setCurrency] = useState<FinanceCurrency>('USD')
 
   // Сброс значений при каждом открытии диалога под конкретную запись.
+  // Синхронизация локального состояния формы с выбранной записью — валидный
+  // сценарий, поэтому подавляем предупреждение о setState внутри эффекта.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!state) return
     if (state.mode === 'edit') {
@@ -3183,6 +3182,7 @@ function EntryDialog({
       setCurrency('USD')
     }
   }, [state])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const parsedAmount = Number.parseFloat(amount.replace(',', '.'))
   const usdPreview =

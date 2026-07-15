@@ -203,6 +203,7 @@ function NavLinks({
   }, [activeHref, nav])
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     // Hide the pill outright when the active item is inside a collapsed group —
     // otherwise it would sit at the clipped (0-height) row's stale offset.
@@ -261,6 +262,7 @@ function NavLinks({
     // Re-run when the route changes, the sidebar collapses, or a group is
     // expanded/collapsed, so the highlight re-tracks from the new state.
   }, [pathname, collapsed, nav, openGroups, activeHiddenInGroup])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   function renderLink(
     item: NavItem,
