@@ -260,9 +260,9 @@ function ReviewPane({
                 )}
               >
                 {isSim ? (
-                  <ArrowUpRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                  <ArrowDownLeft className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
                 ) : (
-                  <ArrowDownLeft className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                  <ArrowUpRight className="mt-0.5 size-3.5 shrink-0 text-primary" />
                 )}
                 <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
                   {m.body || '—'}

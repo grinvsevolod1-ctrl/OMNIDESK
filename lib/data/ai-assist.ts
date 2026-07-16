@@ -193,12 +193,14 @@ export async function getConversationHistoryForAi(
  *
  * IMPORTANT: simulated dialogs are intentionally NOT excluded here. To the AI
  * manager a simulator dialog must look exactly like a real client — same
- * participation rules, same brain, same replies. The is_simulated flag is only
- * used downstream to (a) keep fake dialogs out of analytics / the human inbox
- * and (b) stop the manager's reply from being delivered to a real external
- * channel (see deliverAutopilotReply). New dialogs are auto-enrolled at
- * creation, so the AI leads them out of the box; pre-existing dialogs stay
- * manual until an admin enrolls them. A single CROSS JOIN keeps this cheap.
+ * participation rules, same brain, same replies. Simulated dialogs are also
+ * treated as real everywhere else (inbox, status board, analytics, enrollment).
+ * The is_simulated flag is used for only two things: (a) labeling a dialog as
+ * simulated inside the secret panel, and (b) stopping the manager's reply from
+ * being delivered to a real external channel (see the dispatch guards). New
+ * dialogs are auto-enrolled at creation, so the AI leads them out of the box;
+ * pre-existing dialogs stay manual until an admin enrolls them. A single CROSS
+ * JOIN keeps this cheap.
  */
 export async function isConversationAiLed(
   conversationId: string,
@@ -264,9 +266,9 @@ function mapEnrollable(r: {
 }
 
 /**
- * Real (non-simulated) dialogs the admin can enroll the AI into, newest-active
- * first. Simulator dialogs are hard-excluded (is_simulated = false) so the AI
- * can never be pointed at a fake thread. Optional text search over contact name.
+ * Dialogs the admin can enroll the AI into, newest-active first. Optional text
+ * search over contact name. Simulated dialogs are treated as real and are
+ * eligible like any other conversation.
  */
 export async function listEnrollableConversations(
   search: string,
@@ -283,8 +285,7 @@ export async function listEnrollableConversations(
           WHERE conversation_id = c.id AND deleted_at IS NULL
           ORDER BY created_at DESC LIMIT 1
        ) m ON true
-      WHERE c.is_simulated = false
-        AND ($1 = '%%' OR c.contact_name ILIKE $1)
+      WHERE ($1 = '%%' OR c.contact_name ILIKE $1)
       ORDER BY m.created_at DESC NULLS LAST
       LIMIT $2`,
     [like, Math.max(1, Math.min(200, limit))],
@@ -306,7 +307,7 @@ export async function listAiEnrolledConversations(
           WHERE conversation_id = c.id AND deleted_at IS NULL
           ORDER BY created_at DESC LIMIT 1
        ) m ON true
-      WHERE c.ai_enrolled = true AND c.is_simulated = false
+      WHERE c.ai_enrolled = true
       ORDER BY c.ai_enrolled_at DESC NULLS LAST
       LIMIT $1`,
     [Math.max(1, Math.min(500, limit))],
@@ -315,10 +316,10 @@ export async function listAiEnrolledConversations(
 }
 
 /**
- * Enroll the AI into a dialog (strict opt-in). Stamps the enrollment time and
- * the current latest message as the cutoff, so the brain only ever acts on
- * messages from now on and never replays the old backlog / drifts off-topic.
- * Refuses to enroll a simulated dialog. Returns true when it enrolled.
+ * Enroll the AI into a dialog (opt-in). Stamps the enrollment time and the
+ * current latest message as the cutoff, so the brain only ever acts on messages
+ * from now on and never replays the old backlog / drifts off-topic. Works for
+ * any dialog, simulated or not. Returns true when it enrolled.
  */
 export async function enrollConversationAi(
   conversationId: string,
@@ -333,7 +334,7 @@ export async function enrollConversationAi(
                WHERE conversation_id = c.id AND deleted_at IS NULL
                ORDER BY created_at DESC LIMIT 1
             )
-      WHERE c.id = $1 AND c.is_simulated = false
+      WHERE c.id = $1
       RETURNING c.id`,
     [conversationId],
   )

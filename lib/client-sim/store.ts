@@ -1402,9 +1402,10 @@ export async function getSimDialogForReview(
   )
   return rows.map((r) => ({
     id: r.id,
-    // In a simulated thread the OUTBOUND message is the fake client (the
-    // simulator persona) and the INBOUND is the manager/AI answering it.
-    role: r.direction === 'out' ? 'sim' : 'manager',
+    // In a simulated thread the fake client (the simulator persona) writes as an
+    // INBOUND message ('in') — exactly like a real client — while the manager/AI
+    // answers OUTBOUND ('out'). So inbound == sim, outbound == manager.
+    role: r.direction === 'in' ? 'sim' : 'manager',
     body: r.body,
     createdAt: new Date(r.created_at).toISOString(),
   }))
