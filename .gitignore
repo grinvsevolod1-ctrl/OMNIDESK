@@ -14,6 +14,10 @@ dist/
 # Logs
 *.log
 
+# Runtime log reporter worktree (checkout of the runtime-logs branch).
+# Kept out of the code branch so it never shows as untracked / conflicts.
+.runtime-logs/
+
 # OS / editor
 .DS_Store
 

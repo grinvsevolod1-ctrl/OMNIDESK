@@ -51,7 +51,7 @@ pnpm build
 #    reuses whatever definition PM2 first saved (see the header of
 #    ecosystem.config.js), so we delete and start fresh to guarantee the correct
 #    fork mode, interpreter and injected env.
-pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads 2>/dev/null || true
+pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads omnidesk-log-reporter 2>/dev/null || true
 pm2 start ecosystem.config.js
 pm2 save
 pm2 status

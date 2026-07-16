@@ -117,5 +117,35 @@ module.exports = {
         NODE_ENV: 'production',
       },
     },
+    {
+      // Runtime log reporter: watches PM2 status + every process's error/out
+      // logs, redacts secrets, and pushes a compact report to the dedicated
+      // `runtime-logs` git branch (via a separate git worktree so it never
+      // collides with `deploy.sh`'s `git pull`). Pushes immediately on a new
+      // error/crash and periodically when the report changes. Long-lived; keeps
+      // running for the life of the deploy.
+      //
+      // NOTE: PATH/HOME are inherited from the PM2 daemon so `git` and `pm2`
+      // resolve. Pushing requires the repo's origin to have write credentials
+      // (the same token/SSH key used for deploys). If push fails it is logged
+      // and retried next cycle — the local commit is never lost.
+      name: 'omnidesk-log-reporter',
+      script: 'scripts/log-reporter.mjs',
+      cwd: __dirname,
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      max_memory_restart: '256M',
+      // Treat a start as stable only after 20s; back off on repeated early
+      // exits (e.g. transient git failures) instead of hammering.
+      min_uptime: 20000,
+      restart_delay: 10000,
+      exp_backoff_restart_delay: 1000,
+      max_restarts: 10,
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
   ],
 }
