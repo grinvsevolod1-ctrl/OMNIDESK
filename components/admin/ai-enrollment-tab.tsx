@@ -29,10 +29,14 @@ function channelLabel(type: string): string {
 }
 
 /**
- * Strict opt-in control surface: the admin explicitly picks which real dialogs
- * the AI manager is allowed to lead. There is deliberately NO "enable AI
- * everywhere" action — the AI never touches a dialog that isn't in the enrolled
- * list, and simulator dialogs can never be enrolled (the server refuses them).
+ * AI-lead control surface. New dialogs are led by the AI automatically (they
+ * are enrolled at creation), so this screen is about EXCEPTIONS:
+ *   - the left list shows every dialog the AI is currently leading, where the
+ *     admin can switch the AI off for a specific conversation;
+ *   - the right list shows dialogs the AI is NOT leading (older dialogs that
+ *     predate auto-lead, or ones switched off here) so the admin can turn it
+ *     back on.
+ * There is deliberately no "enable everywhere" / "disable everywhere" switch.
  */
 export function AiEnrollmentTab() {
   const [enrolled, setEnrolled] = useState<EnrollableConversation[]>([])
@@ -79,10 +83,10 @@ export function AiEnrollmentTab() {
     try {
       const { enrolled: next, ok } = await aiEnrollAction({ conversationId: id })
       if (!ok) {
-        toast.error('Этот диалог нельзя подключить (возможно, он симулированный)')
+        toast.error('Этот диалог нельзя подключить')
       } else {
         setEnrolled(next)
-        toast.success('ИИ подключён к диалогу')
+        toast.success('ИИ включён в диалоге')
         searchCandidates(search.trim())
       }
     } catch {
@@ -116,11 +120,13 @@ export function AiEnrollmentTab() {
           <Bot className="size-5" />
         </div>
         <div className="text-sm">
-          <p className="font-medium">ИИ отвечает только в выбранных диалогах</p>
+          <p className="font-medium">
+            ИИ автоматически ведёт все новые диалоги
+          </p>
           <p className="text-muted-foreground">
-            Подключите ИИ вручную к нужным перепискам. В остальных диалогах ИИ не
-            вмешивается и отвечает только менеджер. Симулированные диалоги
-            подключить нельзя.
+            Каждый новый диалог сразу берёт на себя ИИ — вручную включать ничего
+            не нужно. Здесь можно отключить ИИ в конкретном диалоге или, наоборот,
+            включить его в старых переписках, которые начались раньше.
           </p>
         </div>
       </Card>
@@ -152,7 +158,8 @@ export function AiEnrollmentTab() {
           <Separator />
           {enrolled.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              Пока ИИ не подключён ни к одному диалогу. Выберите диалоги справа.
+              Пока ИИ не ведёт ни одного диалога. Новые диалоги появятся здесь
+              автоматически, как только начнутся.
             </p>
           ) : (
             <div className="flex max-h-[32rem] flex-col gap-2 overflow-y-auto">
@@ -194,7 +201,7 @@ export function AiEnrollmentTab() {
 
         {/* Candidate dialogs */}
         <Card className="flex flex-col gap-3 p-4">
-          <p className="font-medium">Добавить диалог</p>
+          <p className="font-medium">Включить ИИ в старом диалоге</p>
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -243,7 +250,7 @@ export function AiEnrollmentTab() {
                     ) : (
                       <Plus className="size-4" />
                     )}
-                    Подключить
+                    Включить
                   </Button>
                 </div>
               ))}
