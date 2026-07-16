@@ -1227,17 +1227,19 @@ export async function listManualCorrectionRules(
 }
 
 /**
- * True when the AI is effectively leading THIS conversation. Global-lead mode
- * (migration 056): the AI leads EVERY conversation while the master switch is
- * on, unless the conversation was manually paused (opt-out).
+ * True when the AI is effectively leading THIS conversation. STRICT PER-DIALOG
+ * OPT-IN (migration 065) — mirror of lib/data/ai-assist.ts#isConversationAiLed
+ * so the worker and the panel agree exactly:
  *
- *   led = ai_assist_settings.enabled AND NOT conversations.ai_paused
+ *   led = ai_assist_settings.enabled AND c.ai_enrolled
+ *         AND NOT c.ai_paused AND NOT c.is_simulated
  */
 export async function isConversationAiLed(
   conversationId: string,
 ): Promise<boolean> {
   const row = await one<{ led: boolean }>(
-    `SELECT (s.enabled AND NOT c.ai_paused) AS led
+    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused
+             AND NOT c.is_simulated) AS led
        FROM conversations c
        CROSS JOIN ai_assist_settings s
       WHERE c.id = $1 AND s.id = true`,
@@ -1322,19 +1324,26 @@ export async function getConversationHistoryForAi(
 ): Promise<Array<{ role: 'client' | 'manager'; body: string }>> {
   // Include media-only turns (empty body) so the AI knows a sticker/photo/voice
   // message occurred instead of silently dropping it from the thread context.
+  //
+  // Enrollment cutoff (mirror of the panel): only feed the brain messages from
+  // the moment the dialog was enrolled onward, so enrolling a pre-existing
+  // thread never makes the AI replay old backlog or drift onto a stale topic.
   const rows = await query<{
-    direction: 'in' | 'out'
-    body: string
-    media_type: string | null
+  direction: 'in' | 'out'
+  body: string
+  media_type: string | null
   }>(
-    `SELECT direction, body, media_type
-       FROM messages
-      WHERE conversation_id = $1
-        AND deleted_at IS NULL
-        AND (body <> '' OR media_type IS NOT NULL)
-      ORDER BY created_at DESC
-      LIMIT $2`,
-    [conversationId, Math.max(1, Math.min(50, limit))],
+  `SELECT m.direction, m.body, m.media_type
+  FROM messages m
+  JOIN conversations c ON c.id = m.conversation_id
+  LEFT JOIN messages cut ON cut.id = c.ai_enrolled_from_message_id
+  WHERE m.conversation_id = $1
+  AND m.deleted_at IS NULL
+  AND (m.body <> '' OR m.media_type IS NOT NULL)
+  AND (cut.created_at IS NULL OR m.created_at >= cut.created_at)
+  ORDER BY m.created_at DESC
+  LIMIT $2`,
+  [conversationId, Math.max(1, Math.min(50, limit))],
   )
   return rows
     .reverse()

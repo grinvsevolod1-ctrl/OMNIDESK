@@ -124,7 +124,15 @@ export interface LeadAnalytics {
 export async function getLeadAnalytics(
   managerId?: string,
 ): Promise<LeadAnalytics> {
-  const scope = managerId ? 'WHERE manager_id = $1' : ''
+  // Simulated (client-simulator) conversations must NEVER appear in the normal
+  // admin analytics — they live only in the secret panel. Every query below
+  // filters them out with is_simulated = false.
+  const scope = managerId
+    ? 'WHERE manager_id = $1 AND is_simulated = false'
+    : 'WHERE is_simulated = false'
+  const cScope = managerId
+    ? 'WHERE c.manager_id = $1 AND c.is_simulated = false'
+    : 'WHERE c.is_simulated = false'
   const params = managerId ? [managerId] : []
 
   const [statusRows, reasonRows, totalRows, weekRows, byDayRows] =
@@ -137,7 +145,7 @@ export async function getLeadAnalytics(
     ),
     query<{ reason: NotLiquidReason; n: string }>(
       `SELECT status_detail AS reason, count(*)::int AS n
-         FROM conversations ${scope ? `${scope} AND` : 'WHERE'}
+         FROM conversations ${scope} AND
               status = 'not_liquid' AND status_detail IS NOT NULL
         GROUP BY status_detail`,
       params,
@@ -153,7 +161,7 @@ export async function getLeadAnalytics(
          SELECT c.id, MIN(m.created_at) AS first_at
            FROM conversations c
            JOIN messages m ON m.conversation_id = c.id
-          ${managerId ? 'WHERE c.manager_id = $1' : ''}
+          ${cScope}
           GROUP BY c.id
        ) t
        WHERE first_at >= now() - interval '7 days'`,
@@ -164,7 +172,7 @@ export async function getLeadAnalytics(
          SELECT c.id, MIN(m.created_at) AS first_at
            FROM conversations c
            JOIN messages m ON m.conversation_id = c.id
-          ${managerId ? 'WHERE c.manager_id = $1' : ''}
+          ${cScope}
           GROUP BY c.id
        ) t
        WHERE first_at >= now() - interval '6 days'

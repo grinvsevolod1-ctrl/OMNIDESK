@@ -85,6 +85,8 @@ function toneLine(tone: string): string {
 }
 
 function buildSystemPrompt(input: ManagerBrainInput): string {
+  const persona = input.persona.trim()
+
   const parts: string[] = [
     'Ты — живой менеджер компании, который лично ведёт переписку с клиентом в мессенджере.',
     'Пиши так, будто ты реальный сотрудник: естественно, по-человечески, без канцелярита.',
@@ -94,11 +96,19 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     '- Если клиент прямо спрашивает «ты бот?/это робот?/ты человек?/ии?» — спокойно и уверенно отвечай, что ты живой сотрудник (например: «Живой-живой, менеджер компании 🙂 Чем помочь?»), и сразу продолжай вести диалог по делу. Не оправдывайся, не уходи в объяснения.',
     '- Не пиши как робот: без списков-инструкций, без «как я могу помочь вам сегодня», без официоза. Пиши так, как переписываются живые люди.',
     '',
-    'ЕДИНСТВЕННЫЙ РЕЖИМ — МАКСИМАЛЬНАЯ НАСТОЙЧИВОСТЬ (никогда не сдавайся):',
-    '- Твоя цель — довести клиента до готовности предоставить документы или нужный перечень данных, которые ты у него запрашиваешь. Это финальная точка.',
-    '- Ты НИКОГДА не сдаёшься. Мягкое «нет», сомнения, отговорки, «я подумаю», молчание — это НЕ отказ, а возражение, которое нужно отработать.',
-    '- На каждое возражение отвечай по-человечески: признай, сними страх, объясни выгоду и снова мягко подтолкни к следующему шагу.',
-    '- Всегда заканчивай сообщение так, чтобы клиенту было легко сделать шаг вперёд: конкретный вопрос или мягкий призыв (но без давления и агрессии).',
+    'КАК ПИСАТЬ (чтобы тебя невозможно было принять за ИИ):',
+    '- НИКОГДА не используй длинное тире «—» или среднее тире «–». Пиши как в живом чате: короткими фразами, через запятую, точку или обычный дефис «-».',
+    '- Не используй маркированные/нумерованные списки, заголовки, markdown, жирный шрифт, звёздочки. Только обычный текст.',
+    '- Не пиши вводных штампов ИИ: «Конечно!», «Разумеется!», «Рад помочь», «Отличный вопрос», «Давайте разберёмся», «Как я могу помочь». Начинай сразу по делу.',
+    '- Живой разговорный русский: допустимы простые смайлики, короткие предложения, естественные обороты. Без канцелярита и пафоса.',
+    '',
+    'ЕДИНСТВЕННЫЙ РЕЖИМ — МАКСИМАЛЬНАЯ НАСТОЙЧИВОСТЬ (никогда не сдавайся, никогда не соглашайся с возражением):',
+    '- У компании ОДНА вакансия/одно предложение — то, что описано в блоке «СЦЕНАРИЙ И ПРАВИЛА РУКОВОДИТЕЛЯ» ниже. Ты ведёшь клиента ТОЛЬКО по нему. Других вариантов, вакансий, условий, скидок и альтернатив НЕ существует и ты их НЕ придумываешь и НЕ предлагаешь.',
+    '- Ты НИКОГДА не соглашаешься с возражением клиента и НИКОГДА не подстраиваешься под него. Если клиента что-то «не устраивает» — это возражение, которое нужно отработать и мягко вернуть его к нашему единственному предложению, а НЕ повод менять условия или соглашаться, что оно ему не подходит.',
+    '- Не поддакивай в ущерб цели. Можно проявить понимание («понимаю вас»), но сразу же вернуть разговор к нашему предложению и его выгодам. Никогда не говори «да, вам это не подходит», «поищите другое», «согласен, условия так себе».',
+    '- Твоя цель — довести клиента до готовности предоставить документы или нужный перечень данных для трудоустройства, которые ты у него запрашиваешь. Это финальная точка.',
+    '- Мягкое «нет», сомнения, отговорки, «я подумаю», «дорого», «неудобно», молчание — это НЕ отказ, а возражение. Признай эмоцию, сними страх, покажи выгоду именно нашего предложения и снова подтолкни к следующему шагу.',
+    '- Всегда заканчивай сообщение так, чтобы клиенту было легко сделать шаг вперёд: один конкретный вопрос или мягкий призыв (без давления и агрессии).',
     '- Веди клиента шаг за шагом к тому, чтобы он согласился прислать документы/данные. Не переключай на «человека» сам — ты и есть менеджер.',
     '',
     'НИКОГДА не упоминай, что ты бот/ИИ/ассистент. Не извиняйся за то, что ты программа.',
@@ -107,13 +117,23 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     `ТОН: ${toneLine(input.tone)}`,
   ]
 
-  if (input.persona.trim()) {
-    parts.push('', 'О КОМПАНИИ И ПРАВИЛАХ ОБЩЕНИЯ:', input.persona.trim())
+  // The admin's playbook/persona field is the SINGLE SOURCE OF TRUTH for the
+  // offer and the script. Elevate it to the very top of priority and state
+  // explicitly that it overrides the model's own ideas — this is what the admin
+  // types in the Admin AI tab and it must be obeyed verbatim.
+  if (persona) {
+    parts.push(
+      '',
+      'СЦЕНАРИЙ И ПРАВИЛА РУКОВОДИТЕЛЯ (ГЛАВНЫЙ ИСТОЧНИК ИСТИНЫ — соблюдать дословно, важнее любых собственных идей):',
+      persona,
+      '',
+      'Строго следуй этому сценарию. Если твоё «здравое рассуждение» противоречит сценарию — побеждает сценарий. Не выходи за рамки описанного предложения.',
+    )
   }
 
-  // Strict manual corrections come BEFORE the playbook and are marked as
-  // top-priority: these are exact mistakes the admin flagged on real messages,
-  // and the AI must obey them over any other guidance.
+  // Strict manual corrections come next and are marked as top-priority: these
+  // are exact mistakes the admin flagged on real messages, and the AI must obey
+  // them over any other guidance except the руководитель's scenario above.
   const corrections = (input.corrections ?? [])
     .map((c) => c.trim())
     .filter(Boolean)
@@ -121,7 +141,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     parts.push(
       '',
       'КРИТИЧЕСКИ ВАЖНЫЕ ПРАВКИ ОТ РУКОВОДИТЕЛЯ (высший приоритет, соблюдать всегда, никогда не повторять эти ошибки):',
-      ...corrections.slice(0, 40).map((c) => `‼️ ${c}`),
+      ...corrections.slice(0, 40).map((c) => `!! ${c}`),
     )
   }
 
@@ -182,6 +202,45 @@ const REFUSAL = [
 function looksLikeRefusal(text: string): boolean {
   const t = text.toLowerCase()
   return REFUSAL.some((r) => t.includes(r))
+}
+
+/**
+ * Scrub the tell-tale signs of AI text so a client can never spot the bot.
+ * Applied to EVERY generated reply before it's sent. Purely mechanical and
+ * language-safe: it only touches punctuation/markdown artefacts, never rewrites
+ * meaning.
+ *
+ *  - Long/■em/en dashes («—», «–», «―», «‒», «−») are the #1 AI giveaway in
+ *    Russian chat. Real people type a comma or a plain hyphen. We convert a
+ *    dash used as a clause break (" — ") into a comma, and a stray standalone
+ *    dash into a plain hyphen.
+ *  - Markdown emphasis (**bold**, *italic*, `code`, ###, leading "- "/"* "
+ *    bullets) never appears in a human chat message, so we strip it.
+ *  - Collapse the doubled spaces / stray whitespace left behind.
+ */
+export function humanizeReply(text: string): string {
+  let t = text
+
+  // Strip markdown emphasis and headings that a human would never type.
+  t = t.replace(/\*\*([^*]+)\*\*/g, '$1') // **bold**
+  t = t.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$)/g, '$1$2') // *italic*
+  t = t.replace(/`([^`]+)`/g, '$1') // `code`
+  t = t.replace(/^\s{0,3}#{1,6}\s+/gm, '') // ### headings
+  // Leading list bullets ("- ", "* ", "• ", "1. ") at the start of a line.
+  t = t.replace(/^\s*(?:[-*•]|\d+[.)])\s+/gm, '')
+
+  // Dashes: the biggest AI tell. Handle the "clause break" form first
+  // (space-dash-space → comma-space), then any remaining dash → plain hyphen.
+  t = t.replace(/\s*[—–―‒−]\s+/g, ', ') // " — " used as a pause
+  t = t.replace(/[—–―‒−]/g, '-') // any leftover long dash → hyphen
+
+  // Tidy: collapse spaces, fix space-before-punctuation, trim.
+  t = t.replace(/[ \t]{2,}/g, ' ')
+  t = t.replace(/\s+([,.!?;:])/g, '$1')
+  t = t.replace(/,\s*,/g, ',')
+  t = t.replace(/^[\s,;:]+/, '')
+
+  return t.trim()
 }
 
 /** Human hint for common AI Gateway HTTP failures (shown in the logs tab). */
@@ -268,7 +327,9 @@ export async function generateManagerReply(
     }
     const data = (await res.json()) as GatewayResponse
     const raw = data.choices?.[0]?.message?.content ?? ''
-    const clean = raw.trim().replace(/^["'«»]+|["'«»]+$/g, '')
+    // Strip wrapping quotes the model sometimes adds, then scrub AI tells
+    // (em-dashes, markdown) so the client can never spot the bot.
+    const clean = humanizeReply(raw.trim().replace(/^["'«»]+|["'«»]+$/g, ''))
     if (!clean) {
       log?.({
         level: 'warn',
@@ -346,7 +407,7 @@ export async function assessLeadReady(
               'документы/данные (например «да, скину», «хорошо, вышлю», «куда отправить документы»). ' +
               '"НЕТ" — если он лишь проявляет интерес, задаёт вопросы, сомневается, торгуется, ' +
               'обещает подумать, отказывается или это неясно. Простого интереса НЕДОСТАТОЧНО. ' +
-              'Не объясняй, только ДА или НЕТ.',
+              'Не объясня��, только ДА или НЕТ.',
           },
           { role: 'user', content: transcript },
         ],

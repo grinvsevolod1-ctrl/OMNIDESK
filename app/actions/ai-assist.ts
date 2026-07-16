@@ -7,32 +7,34 @@ import {
   addLessonIfNew,
   addManualCorrection,
   buildTrainingCorpusForConversationIds,
-  countConversationsAwaitingAi,
   countLessons,
   countManualCorrections,
   deleteLesson,
   deleteManualCorrection,
-  engageAiEverywhere,
+  enrollConversationAi,
   getAiAssistSettings,
   getDialogMessagesForReview,
   listAccountReviewDialogs,
   listAccountTwoWayConversationIds,
+  listAiEnrolledConversations,
   listBrainLessons,
+  listEnrollableConversations,
   listLessons,
   listManualCorrections,
   listTrainableAccounts,
   sampleTrainingConversations,
   savePlaybook,
+  unenrollConversationAi,
   updateAiAssistSettings,
   type AiAssistLesson,
   type AiAssistSettings,
+  type EnrollableConversation,
   type ManualCorrection,
   type ReviewDialog,
   type ReviewMessage,
   type TrainableAccount,
   type TrainingSample,
 } from '@/lib/data/ai-assist'
-import { kickstartAwaitingConversations } from '@/lib/autopilot/runtime'
 import {
   distillPlaybook,
   distillPlaybookFromDialogs,
@@ -83,43 +85,52 @@ export async function aiUpdateSettingsAction(patch: {
   return next
 }
 
+/* ----------------------- Per-dialog AI enrollment ------------------------ */
+
 /**
- * "Включить ИИ во всех диалогах". Flips the master switch on, resets every
- * conversation except «Передан» to «Отписка» with the AI un-paused, then kicks
- * off the FIRST batch of unanswered dialogues. Returns the initial waiting
- * count so the client can loop `aiKickstartBatchAction` until the backlog is
- * drained. Admin-only.
+ * Real (non-simulated) dialogs the admin can enroll the AI into. Optional
+ * text search over the contact name. Strict opt-in model: the AI only ever
+ * participates in dialogs the admin explicitly picks here. Admin-only.
  */
-export async function aiEngageAllAction(): Promise<{
-  affected: number
-  kicked: number
-  remaining: number
-}> {
+export async function aiListEnrollableAction(input?: {
+  search?: string
+}): Promise<EnrollableConversation[]> {
   await requireAdmin()
-  const { affected } = await engageAiEverywhere()
-  const { kicked, remaining } = await kickstartAwaitingConversations(15)
+  return listEnrollableConversations(input?.search ?? '')
+}
+
+/** Dialogs currently led by the AI (enrolled), newest first. Admin-only. */
+export async function aiListEnrolledAction(): Promise<EnrollableConversation[]> {
+  await requireAdmin()
+  return listAiEnrolledConversations()
+}
+
+/**
+ * Enroll the AI into one dialog. Stamps the enrollment cutoff so the AI only
+ * acts on messages from now on (never replays the old backlog / drifts
+ * off-topic). Refuses simulated dialogs. Returns the refreshed enrolled list.
+ */
+export async function aiEnrollAction(input: {
+  conversationId: string
+}): Promise<{ enrolled: EnrollableConversation[]; ok: boolean }> {
+  await requireAdmin()
+  const id = input.conversationId?.trim()
+  if (!id) throw new Error('bad_request')
+  const ok = await enrollConversationAi(id)
   revalidatePath(AI_PATH)
-  return { affected, kicked, remaining }
+  return { enrolled: await listAiEnrolledConversations(), ok }
 }
 
-/**
- * Process one more batch of dialogues awaiting an AI reply. Called repeatedly by
- * the client after `aiEngageAllAction` until `remaining` reaches 0 (or stops
- * decreasing). Kept small per call to avoid request timeouts and to pace the
- * gateway. Admin-only.
- */
-export async function aiKickstartBatchAction(): Promise<{
-  kicked: number
-  remaining: number
-}> {
+/** Remove the AI from one dialog (un-enroll). Returns the refreshed list. */
+export async function aiUnenrollAction(input: {
+  conversationId: string
+}): Promise<{ enrolled: EnrollableConversation[]; ok: boolean }> {
   await requireAdmin()
-  return kickstartAwaitingConversations(15)
-}
-
-/** Count of dialogues still waiting on an AI reply. */
-export async function aiAwaitingCountAction(): Promise<number> {
-  await requireAdmin()
-  return countConversationsAwaitingAi()
+  const id = input.conversationId?.trim()
+  if (!id) throw new Error('bad_request')
+  const ok = await unenrollConversationAi(id)
+  revalidatePath(AI_PATH)
+  return { enrolled: await listAiEnrolledConversations(), ok }
 }
 
 /** List recent training lessons. */

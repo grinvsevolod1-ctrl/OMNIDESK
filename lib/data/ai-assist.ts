@@ -151,16 +151,26 @@ export async function getConversationHistoryForAi(
 ): Promise<Array<{ role: 'client' | 'manager'; body: string }>> {
   // Include media-only turns (empty body) so the AI knows a sticker/photo/voice
   // message occurred instead of silently dropping it from the thread context.
+  //
+  // Enrollment cutoff: the AI must only ever see messages from the moment the
+  // dialog was enrolled onward. This is THE fix for "AI joined an old dialog and
+  // started talking about a different topic": when an admin enrolls a
+  // pre-existing thread we stamp ai_enrolled_from_message_id, and the brain is
+  // fed only the turns at/after that point — never the stale backlog above it.
   const rows = await query<{
     direction: 'in' | 'out'
     body: string
     media_type: MediaType | null
   }>(
-    `SELECT direction, body, media_type FROM messages
-      WHERE conversation_id = $1
-        AND deleted_at IS NULL
-        AND (body <> '' OR media_type IS NOT NULL)
-      ORDER BY created_at DESC
+    `SELECT m.direction, m.body, m.media_type
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       LEFT JOIN messages cut ON cut.id = c.ai_enrolled_from_message_id
+      WHERE m.conversation_id = $1
+        AND m.deleted_at IS NULL
+        AND (m.body <> '' OR m.media_type IS NOT NULL)
+        AND (cut.created_at IS NULL OR m.created_at >= cut.created_at)
+      ORDER BY m.created_at DESC
       LIMIT $2`,
     [conversationId, Math.max(1, Math.min(50, limit))],
   )
@@ -175,19 +185,25 @@ export async function getConversationHistoryForAi(
 }
 
 /**
- * True when the AI is effectively leading this conversation. Global-lead mode
- * (migration 056): the AI leads EVERY conversation when the master switch is
- * on, unless the conversation has been manually paused (opt-out). So:
+ * True when the AI is effectively leading this conversation. STRICT PER-DIALOG
+ * OPT-IN (migration 065, reverts the 056 "lead everything" model):
  *
- *   led = ai_assist_settings.enabled AND NOT conversations.ai_paused
+ *   led = ai_assist_settings.enabled      -- master switch ON
+ *         AND conversations.ai_enrolled    -- this dialog EXPLICITLY added
+ *         AND NOT conversations.ai_paused   -- not temporarily paused
+ *         AND NOT conversations.is_simulated -- never a simulator dialog
  *
- * A single round-trip via CROSS JOIN keeps this cheap for the schedulers.
+ * The AI now behaves like the simulator: it only ever participates in dialogs an
+ * admin has explicitly enrolled. Flipping the master switch no longer makes the
+ * AI seize existing/new dialogs, and a restart can't make it barge into an
+ * unrelated human thread. A single CROSS JOIN keeps this cheap for schedulers.
  */
 export async function isConversationAiLed(
   conversationId: string,
 ): Promise<boolean> {
   const rows = await query<{ led: boolean }>(
-    `SELECT (s.enabled AND NOT c.ai_paused) AS led
+    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused
+             AND NOT c.is_simulated) AS led
        FROM conversations c
        CROSS JOIN ai_assist_settings s
       WHERE c.id = $1 AND s.id = true`,
@@ -197,9 +213,10 @@ export async function isConversationAiLed(
 }
 
 /**
- * Manager pauses/resumes the AI for a single conversation (the per-conversation
- * opt-out of global-lead mode). Manager-scoped so a manager can only toggle
- * their own threads. Returns the new paused state, or null when not owned.
+ * Manager pauses/resumes the AI for a single ENROLLED conversation (a temporary
+ * opt-out on top of enrollment — e.g. to take over by hand for a moment without
+ * un-enrolling). Manager-scoped. Returns the new paused state, or null when not
+ * owned.
  */
 export async function setConversationAiPaused(
   conversationId: string,
@@ -214,6 +231,127 @@ export async function setConversationAiPaused(
     [conversationId, managerId, paused],
   )
   return rows[0] ? rows[0].ai_paused : null
+}
+
+/** One dialog in the AI-enrollment picker / enrolled list. */
+export interface EnrollableConversation {
+  conversationId: string
+  contactName: string
+  channelType: string
+  lastMessage: string
+  lastAt: string
+  enrolled: boolean
+}
+
+function mapEnrollable(r: {
+  id: string
+  contact_name: string
+  contact_name_hidden: boolean | null
+  channel_type: string
+  last_body: string | null
+  last_at: string | Date | null
+  ai_enrolled: boolean
+}): EnrollableConversation {
+  return {
+    conversationId: r.id,
+    contactName: r.contact_name_hidden ? 'Скрыт' : r.contact_name,
+    channelType: r.channel_type,
+    lastMessage: (r.last_body ?? '').slice(0, 120),
+    lastAt: r.last_at ? new Date(r.last_at).toISOString() : '',
+    enrolled: r.ai_enrolled,
+  }
+}
+
+/**
+ * Real (non-simulated) dialogs the admin can enroll the AI into, newest-active
+ * first. Simulator dialogs are hard-excluded (is_simulated = false) so the AI
+ * can never be pointed at a fake thread. Optional text search over contact name.
+ */
+export async function listEnrollableConversations(
+  search: string,
+  limit = 50,
+): Promise<EnrollableConversation[]> {
+  const like = `%${search.trim()}%`
+  const rows = await query<Parameters<typeof mapEnrollable>[0]>(
+    `SELECT c.id, c.contact_name, c.contact_name_hidden, c.channel_type,
+            c.ai_enrolled,
+            m.body AS last_body, m.created_at AS last_at
+       FROM conversations c
+       LEFT JOIN LATERAL (
+         SELECT body, created_at FROM messages
+          WHERE conversation_id = c.id AND deleted_at IS NULL
+          ORDER BY created_at DESC LIMIT 1
+       ) m ON true
+      WHERE c.is_simulated = false
+        AND ($1 = '%%' OR c.contact_name ILIKE $1)
+      ORDER BY m.created_at DESC NULLS LAST
+      LIMIT $2`,
+    [like, Math.max(1, Math.min(200, limit))],
+  )
+  return rows.map(mapEnrollable)
+}
+
+/** Dialogs currently enrolled (AI-led), newest enrollment first. */
+export async function listAiEnrolledConversations(
+  limit = 200,
+): Promise<EnrollableConversation[]> {
+  const rows = await query<Parameters<typeof mapEnrollable>[0]>(
+    `SELECT c.id, c.contact_name, c.contact_name_hidden, c.channel_type,
+            c.ai_enrolled,
+            m.body AS last_body, m.created_at AS last_at
+       FROM conversations c
+       LEFT JOIN LATERAL (
+         SELECT body, created_at FROM messages
+          WHERE conversation_id = c.id AND deleted_at IS NULL
+          ORDER BY created_at DESC LIMIT 1
+       ) m ON true
+      WHERE c.ai_enrolled = true AND c.is_simulated = false
+      ORDER BY c.ai_enrolled_at DESC NULLS LAST
+      LIMIT $1`,
+    [Math.max(1, Math.min(500, limit))],
+  )
+  return rows.map(mapEnrollable)
+}
+
+/**
+ * Enroll the AI into a dialog (strict opt-in). Stamps the enrollment time and
+ * the current latest message as the cutoff, so the brain only ever acts on
+ * messages from now on and never replays the old backlog / drifts off-topic.
+ * Refuses to enroll a simulated dialog. Returns true when it enrolled.
+ */
+export async function enrollConversationAi(
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations c
+        SET ai_enrolled = true,
+            ai_paused = false,
+            ai_enrolled_at = now(),
+            ai_enrolled_from_message_id = (
+              SELECT id FROM messages
+               WHERE conversation_id = c.id AND deleted_at IS NULL
+               ORDER BY created_at DESC LIMIT 1
+            )
+      WHERE c.id = $1 AND c.is_simulated = false
+      RETURNING c.id`,
+    [conversationId],
+  )
+  return rows.length > 0
+}
+
+/** Remove the AI from a dialog (un-enroll). Human fully takes back over. */
+export async function unenrollConversationAi(
+  conversationId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE conversations
+        SET ai_enrolled = false,
+            ai_handoff_pending = false
+      WHERE id = $1
+      RETURNING id`,
+    [conversationId],
+  )
+  return rows.length > 0
 }
 
 /**
@@ -241,97 +379,6 @@ export async function markAiHandoffToLiquid(
     [conversationId],
   )
   return rows.length > 0
-}
-
-/**
- * "Take over everything" operation. Flips the whole system so the AI leads
- * EVERY conversation except the ones already «Передан» (transferred — a human
- * has qualified & passed them on, so we must not touch those):
- *   1. turns the master switch ON,
- *   2. resets every non-transferred conversation to «Отписка» (unsubscribed),
- *   3. un-pauses the AI on them and clears any pending handoff flag so the AI
- *      resumes control instead of waiting on a human.
- * Returns how many conversations were affected. Idempotent — safe to re-run.
- */
-export async function engageAiEverywhere(): Promise<{ affected: number }> {
-  await query(`UPDATE ai_assist_settings SET enabled = true WHERE id = true`)
-  const rows = await query<{ id: string }>(
-    `UPDATE conversations
-        SET status = 'unsubscribed',
-            status_detail = NULL,
-            status_updated_at = now(),
-            ai_paused = false,
-            ai_handoff_pending = false
-      WHERE COALESCE(status, 'unsubscribed') <> 'transferred'
-      RETURNING id`,
-  )
-  return { affected: rows.length }
-}
-
-/** A conversation waiting on the AI, with everything needed to kickstart it. */
-export interface AwaitingConversation {
-  conversationId: string
-  managerId: string
-  channelId: string
-  text: string
-}
-
-/**
- * Conversations where the AI should speak next: not «Передан», AI not paused,
- * and the LATEST message is inbound (the client wrote and nobody answered).
- * Ordered oldest-waiting-first so the longest-ignored people get answered
- * first. Used by the "engage everywhere" kickstart to catch up the backlog of
- * old, never-answered dialogues (the normal trigger only fires on brand-new
- * inbound, so pre-existing hanging threads need this explicit sweep).
- */
-export async function listConversationsAwaitingAi(
-  limit: number,
-): Promise<AwaitingConversation[]> {
-  const rows = await query<{
-    conversation_id: string
-    manager_id: string
-    channel_id: string
-    body: string
-  }>(
-    `SELECT c.id AS conversation_id, c.manager_id, c.channel_id, m.body
-       FROM conversations c
-       JOIN LATERAL (
-         SELECT direction, body, created_at
-           FROM messages
-          WHERE conversation_id = c.id AND deleted_at IS NULL
-          ORDER BY created_at DESC
-          LIMIT 1
-       ) m ON true
-      WHERE COALESCE(c.status, 'unsubscribed') <> 'transferred'
-        AND c.ai_paused = false
-        AND m.direction = 'in'
-      ORDER BY m.created_at ASC
-      LIMIT $1`,
-    [Math.max(1, Math.min(100, limit))],
-  )
-  return rows.map((r) => ({
-    conversationId: r.conversation_id,
-    managerId: r.manager_id,
-    channelId: r.channel_id,
-    text: r.body,
-  }))
-}
-
-/** Count of conversations still waiting on an AI reply (drives progress UI). */
-export async function countConversationsAwaitingAi(): Promise<number> {
-  const rows = await query<{ n: string }>(
-    `SELECT COUNT(*)::text AS n
-       FROM conversations c
-       JOIN LATERAL (
-         SELECT direction FROM messages
-          WHERE conversation_id = c.id AND deleted_at IS NULL
-          ORDER BY created_at DESC LIMIT 1
-       ) m ON true
-      WHERE COALESCE(c.status, 'unsubscribed') <> 'transferred'
-        AND c.ai_paused = false
-        AND m.direction = 'in'`,
-  )
-  return Number(rows[0]?.n ?? 0)
 }
 
 /** A pending AI→human handoff surfaced in the manager inbox banner. */
@@ -648,14 +695,16 @@ export async function listAccountReviewDialogs(
             conv.contact_name_hidden,
             conv.last_message_at,
             COUNT(m.id)::text AS message_count,
-            (s.enabled AND NOT conv.ai_paused) AS ai_led
+            (s.enabled AND conv.ai_enrolled AND NOT conv.ai_paused
+             AND NOT conv.is_simulated) AS ai_led
        FROM conversations conv
        JOIN messages m ON m.conversation_id = conv.id
                        AND m.deleted_at IS NULL AND m.body <> ''
        CROSS JOIN ai_assist_settings s
       WHERE conv.channel_id = $1 AND s.id = true
       GROUP BY conv.id, conv.contact_name, conv.contact_name_hidden,
-               conv.last_message_at, s.enabled, conv.ai_paused
+               conv.last_message_at, s.enabled, conv.ai_enrolled,
+               conv.ai_paused, conv.is_simulated
      HAVING COUNT(*) FILTER (WHERE m.direction = 'in')  > 0
         AND COUNT(*) FILTER (WHERE m.direction = 'out') > 0
       ORDER BY conv.last_message_at DESC

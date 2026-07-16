@@ -2,13 +2,11 @@ import 'server-only'
 import { query } from '../db'
 import { addMessage, getLivechatWorkingHoursByChannelId } from '../data'
 import {
-  countConversationsAwaitingAi,
   getAiAssistSettings,
   getConversationHistoryForAi,
   isConversationAiLed,
   listBrainLessons,
   listManualCorrectionRules,
-  listConversationsAwaitingAi,
   markAiHandoffToLiquid,
 } from '../data/ai-assist'
 import {
@@ -309,40 +307,6 @@ async function runLivechatAiLead(input: {
   } finally {
     aiLeadInFlight.delete(input.conversationId)
   }
-}
-
-/**
- * Kickstart a batch of conversations that are waiting on the AI (their last
- * message is inbound). For each we replay the client's last message through the
- * SAME entry point a live inbound uses (`runLivechatAutopilot`), so the AI
- * generates a proper contextual reply. Processed sequentially and best-effort
- * so one failure can't abort the batch. Returns how many were kicked plus how
- * many still remain awaiting afterwards (for progress reporting).
- *
- * This is what lets the AI "join every existing dialogue at once" after being
- * switched on — the normal trigger only fires on fresh inbound, so old hanging
- * threads need this explicit catch-up.
- */
-export async function kickstartAwaitingConversations(
-  batchSize = 15,
-): Promise<{ kicked: number; remaining: number }> {
-  const batch = await listConversationsAwaitingAi(batchSize)
-  let kicked = 0
-  for (const c of batch) {
-    try {
-      await runLivechatAutopilot({
-        managerId: c.managerId,
-        channelId: c.channelId,
-        conversationId: c.conversationId,
-        text: c.text,
-      })
-      kicked++
-    } catch (err) {
-      console.error('[v0] kickstart failed for', c.conversationId, err)
-    }
-  }
-  const remaining = await countConversationsAwaitingAi()
-  return { kicked, remaining }
 }
 
 /**

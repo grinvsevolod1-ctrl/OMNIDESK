@@ -33,6 +33,7 @@ export async function listConversations(
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
       WHERE c.manager_id = $1
+        AND c.is_simulated = false
       ORDER BY c.last_message_at DESC`,
     [managerId],
   )
@@ -63,6 +64,7 @@ export async function listConversationsByStatus(
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
       WHERE c.manager_id = $1
+        AND c.is_simulated = false
         AND ${effectiveStatusSql('c')} = $2${reasonFilter}
       ORDER BY c.last_message_at DESC`,
     params,
