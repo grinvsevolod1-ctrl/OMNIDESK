@@ -39,10 +39,17 @@ module.exports = {
       max_memory_restart: '512M',
       env: {
         NODE_ENV: 'production',
+        // Bind to all interfaces so nginx (or a remote reverse proxy) can reach
+        // the panel. `next start` already defaults to 0.0.0.0, but some hosts
+        // default HOST to 127.0.0.1 in the environment; set it explicitly.
+        HOST: '0.0.0.0',
       },
     },
     {
       name: 'omnidesk-worker',
+      // Runs TypeScript via the worker's own tsx. Requires the worker deps to be
+      // installed first: `cd worker && pnpm install` (see header). This path is
+      // portable — do NOT hardcode a global tsx path like /usr/bin/tsx.
       script: 'node_modules/.bin/tsx',
       args: 'src/index.ts',
       cwd: __dirname + '/worker',

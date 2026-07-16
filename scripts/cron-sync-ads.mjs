@@ -10,10 +10,26 @@
 // It simply performs an authenticated local HTTP call against the running
 // panel, reusing the exact same CRON_SECRET check the route already enforces.
 
+// Load .env from the repo root so this works when launched by pm2 (which does
+// NOT pass --env-file). `dotenv` is a root dependency; the import is a no-op if
+// the vars are already present (e.g. when started with `node --env-file=.env`).
+import 'dotenv/config'
+
 const secret = process.env.CRON_SECRET
 if (!secret) {
   console.error('[cron-sync-ads] CRON_SECRET is not set; skipping run')
   process.exit(0)
+}
+// The secret is sent verbatim as an HTTP Authorization header. Header values
+// must be ISO-8859-1 / ASCII; a stray non-ASCII char (e.g. a Cyrillic letter
+// pasted into .env) would otherwise make fetch throw a cryptic
+// "Cannot convert argument to a ByteString" error. Fail with a clear message.
+if (!/^[\x20-\x7E]+$/.test(secret)) {
+  console.error(
+    '[cron-sync-ads] CRON_SECRET contains non-ASCII characters; ' +
+      'regenerate it with `openssl rand -base64 32` (ASCII only)',
+  )
+  process.exit(1)
 }
 
 // Default to the local panel; override with CRON_TARGET_URL if the panel
