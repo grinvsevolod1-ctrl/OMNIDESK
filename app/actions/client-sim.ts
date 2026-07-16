@@ -14,11 +14,17 @@ import { makePersona } from '@/lib/client-sim/content'
 import { generateReply } from '@/lib/client-sim/generate'
 import { analyzeDialogues, LearnError } from '@/lib/client-sim/learn'
 import {
+  addSimCorrection,
   adoptConversations,
   CampaignUnavailableError,
   countActiveThreads,
+  countSimCorrections,
+  deleteSimCorrection,
   getSettings as getSimSettings,
+  getSimDialogForReview,
+  invalidateSimCorrectionsCache,
   listAdoptableConversations,
+  listSimCorrections,
   listUsableChannels,
   releaseConversations,
   sampleRealClientLines,
@@ -27,6 +33,8 @@ import {
   updateSettings,
   type AdoptableConversation,
   type SettingsPatch,
+  type SimCorrection,
+  type SimReviewMessage,
 } from '@/lib/client-sim/store'
 import {
   clearAiLogs,
@@ -376,4 +384,68 @@ export async function simLogsAction(opts?: {
 export async function simClearLogsAction(): Promise<void> {
   await guard()
   await clearAiLogs('sim')
+}
+
+/* ---------------------- training / corrections -------------------------- */
+/*
+ * The secret-panel mirror of the manager's manual corrections. The admin opens
+ * one of the simulator's OWN dialogs, flags a message ("here you're wrong"),
+ * and writes what a real person would do instead. The rule is injected into
+ * every future simulator generation — completely separate from the AI manager's
+ * training corpus.
+ */
+
+/** Full transcript of a simulated dialog for the review pane (sim dialogs only). */
+export async function simDialogForReviewAction(
+  conversationId: string,
+): Promise<SimReviewMessage[]> {
+  await guard()
+  if (!conversationId) return []
+  return getSimDialogForReview(conversationId)
+}
+
+/** Save a "here you're wrong" correction on a simulator message. */
+export async function simAddCorrectionAction(input: {
+  conversationId: string | null
+  context: string
+  targetMessage: string
+  instruction: string
+}): Promise<SimCorrection> {
+  await guard()
+  const instruction = input.instruction.trim()
+  if (!instruction) {
+    throw new Error('Пустое правило: опишите, что не так и как надо.')
+  }
+  const saved = await addSimCorrection({
+    conversationId: input.conversationId,
+    context: input.context.trim(),
+    targetMessage: input.targetMessage.trim(),
+    instruction,
+  })
+  // The generator reads a cached rule set — drop it so the new rule applies now.
+  invalidateSimCorrectionsCache()
+  revalidatePath(ADMIN_PATH)
+  return saved
+}
+
+/** All simulator corrections, newest first, plus the total count. */
+export async function simListCorrectionsAction(): Promise<{
+  items: SimCorrection[]
+  total: number
+}> {
+  await guard()
+  const [items, total] = await Promise.all([
+    listSimCorrections(200),
+    countSimCorrections(),
+  ])
+  return { items, total }
+}
+
+/** Delete a simulator correction and refresh the injected rule set. */
+export async function simDeleteCorrectionAction(id: string): Promise<void> {
+  await guard()
+  if (!id) return
+  await deleteSimCorrection(id)
+  invalidateSimCorrectionsCache()
+  revalidatePath(ADMIN_PATH)
 }

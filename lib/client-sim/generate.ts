@@ -5,6 +5,7 @@ import {
   getGlobalRecentLines,
   getGlobalRecentOpeners,
   getLearnedPointersCached,
+  getSimCorrectionRulesCached,
   rememberGlobalLine,
 } from './store'
 
@@ -75,6 +76,12 @@ interface GenArgs {
    * Injected verbatim so the persona's emotional state evolves turn to turn.
    */
   moodHint?: string
+  /**
+   * Strict "here you're wrong" rules the admin flagged in the secret panel
+   * (sim_manual_corrections). Always injected, highest priority. Optional so
+   * callers that don't have them fall back to the cached loader.
+   */
+  corrections?: string[]
 }
 
 function referenceBlock(lines: string[] | undefined): string {
@@ -128,7 +135,7 @@ const TONE_REGISTER: Record<string, string> = {
   polite:
     'ТОН ОБЩЕНИЯ — ВЕЖЛИВЫЙ: пиши грамотно и уважительно, на «вы». Здоровайся культурно («Здравствуйте», «Добрый день»). Ставь знаки препинания и заглавные буквы. Никакого мата и грубости, даже если раздражён — оставайся корректным.',
   neutral:
-    'ТОН ОБЩЕНИЯ — ОБЫЧНЫЙ: пиши по-человечески и спокойно, как нормальный взрослый в переписке. Здоровайся нейтрально («Здравствуйте», «Добрый день», можно «Привет»). Лёгкая небреж��ость допустима, но без грубости и без мата.',
+    'ТОН ОБЩЕНИЯ — ОБЫЧНЫЙ: пиши по-человечески и спокойно, как нормальный взрослый в переписке. Здоровайся нейтрально («Здравствуйте», «Добрый день», можно «Привет»). Лёгкая небреж����ость допустима, но без грубости и без мата.',
   rough:
     'ТОН ОБЩЕНИЯ — РАЗВЯЗНЫЙ: пиши по-простому и панибратски («привет», «здарова», «чё», «скок»). Грубость и мат допустимы по настроению.',
   mixed:
@@ -217,6 +224,21 @@ function moodBlock(moodHint: string | undefined): string {
 }
 
 /**
+ * Admin "here you're wrong" rules from the secret panel. These are STRICT and
+ * always win over everything else in the prompt — the whole point of the
+ * feature is that a flagged mistake never repeats.
+ */
+function correctionsBlock(rules: string[] | undefined): string {
+  if (!rules || rules.length === 0) return ''
+  const lines = rules.map((r, i) => `${i + 1}. ${r}`)
+  return [
+    '',
+    'ЖЁСТКИЕ ПРАВИЛА ОТ КУРАТОРА (высший приоритет, важнее всех остальных инструкций — НИКОГДА их не нарушай, даже если это противоречит чему-то выше):',
+    ...lines,
+  ].join('\n')
+}
+
+/**
  * A one-line "what time is it now" hint (Moscow time) so greetings and any time
  * references stay believable — a real person doesn't write «доброе утро» at
  * night, and knows whether it's a weekday or weekend. Computed fresh each turn.
@@ -245,6 +267,7 @@ function systemPrompt(
   moodHint?: string,
   lengthHint?: string,
   swarmOpeners?: string[],
+  corrections?: string[],
 ): string {
   const s = persona.style
   const tone = persona.tone ?? 'mixed'
@@ -259,6 +282,7 @@ function systemPrompt(
     TONE_REGISTER[tone] ?? TONE_REGISTER.mixed,
     timeBlock(),
     moodBlock(moodHint),
+    correctionsBlock(corrections),
     '',
     'ЛОГИКА ДИАЛОГА (это важнее всего — иначе видно что это бот):',
     '- ВНИМАТЕЛЬНО прочитай последнее сообщение менеджера и ответь именно на него, по смыслу. Не пиши в пустоту.',
@@ -278,7 +302,7 @@ function systemPrompt(
       : '- пиши живо и разговорно, можешь сокращать по-своему и делать редкие опечатки — но естественно, а не одинаково в каждом сообщении.',
     s.dumbness > 0.4 ? '- иногда чего-то не догоняешь с первого раза — но переспрашивай осмысленно, целой фразой, а не одним словом.' : '',
     s.profanity > 0.5 ? '- материшься свободно, грубо, по-настоящему, когда бесит.' : s.profanity > 0.2 ? '- иногда проскакивает мат.' : polite ? '- мата нет вообще.' : '- мат редко.',
-    '- НИКОГДА не используй длинное тире «—» и среднее тире «–». Живые люди в переписке их не ста��ят, это сразу выдаёт бота. Разделяй мысли запятой, точкой, дефисом «-» или просто отправляй отдельными сообщениями.',
+    '- НИКОГДА не используй длинное тире «—» и среднее тире «–». Живые люди в переписке их не ставят, это сразу выдаёт бота. Разделяй мысли запятой, точкой, дефисом «-» или просто отправляй отдельными сообщениями.',
     '- НЕ повторяй свои прошлые фразы и обороты, каждый раз формулируй по-новому, своими словами.',
     '- НЕ начинай подряд сообщения с одного и того же слова.',
     '- НЕ здоровайся повторно, если уже начали разговор.',
@@ -435,6 +459,9 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
       // back to the caller-provided pointers if present.
       const learnedPointers =
         args.learnedPointers ?? (await getLearnedPointersCached())
+      // Strict admin corrections (cached, cheap). Always applied.
+      const corrections =
+        args.corrections ?? (await getSimCorrectionRulesCached())
       // Recent context only — keeps it cheap and snappy.
       const recent = history.slice(-12)
       const messages = recent.map((m) => ({
@@ -459,6 +486,7 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         args.moodHint,
         lengthHint,
         swarmOpeners,
+        corrections,
       )
 
       // Up to three attempts: if the line echoes something this persona OR the

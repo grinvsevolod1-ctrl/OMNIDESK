@@ -22,6 +22,7 @@ import { SecretSimulatorCampaign } from '@/components/admin/secret-simulator-cam
 import { SecretSimulatorLearn } from '@/components/admin/secret-simulator-learn'
 import { SecretSimulatorLogs } from '@/components/admin/secret-simulator-logs'
 import { SecretSimulatorTest } from '@/components/admin/secret-simulator-test'
+import { SecretSimulatorTrain } from '@/components/admin/secret-simulator-train'
 import {
   simStatusAction,
   simToggleAction,
@@ -509,6 +510,9 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
 
       {/* ---- Continue existing / real dialogues ---- */}
       <SecretSimulatorAdopt />
+
+      {/* ---- Train the simulator (flag wrong messages → strict rules) ---- */}
+      <SecretSimulatorTrain />
 
       {/* ---- Live activity log (simulator-only, god-panel isolated) ---- */}
       <SecretSimulatorLogs />
