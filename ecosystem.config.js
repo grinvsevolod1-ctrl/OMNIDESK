@@ -12,11 +12,23 @@
 //   (which runs `next start 3000`) — a plain restart keeps that broken
 //   definition forever. Always recreate from this file after a code update:
 //     rm -rf .next && pnpm install && pnpm build
-//     pm2 delete omnidesk-panel omnidesk-worker
+//     pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads
 //     pm2 start ecosystem.config.js
 //     pm2 save
 //
 // Both processes read the same .env (DATABASE_URL + ENCRYPTION_KEY must match).
+const path = require('path')
+
+// PM2 does NOT read the repo's .env by itself, and each app below runs with a
+// DIFFERENT cwd (the worker runs from ./worker), so a plain `dotenv/config`
+// inside a process would look for the wrong .env. Load the single root .env
+// here, once, and inject it into every app's `env` so all three processes get
+// an identical, complete environment regardless of their working directory.
+// This is what makes the worker (DATABASE_URL/ENCRYPTION_KEY/WORKER_SECRET) and
+// the cron (CRON_SECRET) actually see their required vars.
+const rootEnv =
+  require('dotenv').config({ path: path.join(__dirname, '.env') }).parsed || {}
+
 module.exports = {
   apps: [
     {
@@ -38,6 +50,7 @@ module.exports = {
       autorestart: true,
       max_memory_restart: '512M',
       env: {
+        ...rootEnv,
         NODE_ENV: 'production',
         // Bind to all interfaces so nginx (or a remote reverse proxy) can reach
         // the panel. `next start` already defaults to 0.0.0.0, but some hosts
@@ -47,12 +60,13 @@ module.exports = {
     },
     {
       name: 'omnidesk-worker',
-      // Runs TypeScript via the worker's own tsx. Requires the worker deps to be
-      // installed first: `cd worker && pnpm install` (see header). This path is
-      // portable — do NOT hardcode a global tsx path like /usr/bin/tsx.
-      script: '/usr/bin/tsx',
-      args: 'src/index.ts',
-      cwd: __dirname + '/worker',
+      // Runs TypeScript via the worker's OWN locally-installed tsx (installed by
+      // `cd worker && pnpm install`). We invoke it as the interpreter with an
+      // absolute path so it resolves no matter what cwd PM2 uses — do NOT
+      // hardcode a global path like /usr/bin/tsx (there is no global tsx).
+      script: path.join(__dirname, 'worker', 'src', 'index.ts'),
+      interpreter: path.join(__dirname, 'worker', 'node_modules', '.bin', 'tsx'),
+      cwd: path.join(__dirname, 'worker'),
       instances: 1,
       autorestart: true,
       max_memory_restart: '512M',
@@ -80,6 +94,7 @@ module.exports = {
       exp_backoff_restart_delay: 500,
       max_restarts: 10,
       env: {
+        ...rootEnv,
         NODE_ENV: 'production',
       },
     },
@@ -94,6 +109,7 @@ module.exports = {
       autorestart: false,
       cron_restart: '0 */6 * * *',
       env: {
+        ...rootEnv,
         NODE_ENV: 'production',
       },
     },

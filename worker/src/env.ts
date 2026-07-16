@@ -1,4 +1,24 @@
-import 'dotenv/config'
+import { existsSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { config as loadDotenv } from 'dotenv'
+
+// The worker shares ONE .env with the panel, but that file lives in the repo
+// root — not in ./worker. A bare `import 'dotenv/config'` only looks in the
+// current working directory, so a manual `cd worker && pnpm start` (or any run
+// whose cwd is ./worker) would find no .env and crash on the first required()
+// check below. Load the worker's own .env if present, then fall back to the
+// root .env. dotenv never overrides vars already in process.env, so values
+// injected by PM2 (see ecosystem.config.js) always take precedence.
+const here = dirname(fileURLToPath(import.meta.url))
+for (const candidate of [
+  resolve(here, '../.env'), // worker/.env (optional, worker-specific overrides)
+  resolve(here, '../../.env'), // repo-root .env (the shared source of truth)
+]) {
+  if (existsSync(candidate)) {
+    loadDotenv({ path: candidate })
+  }
+}
 
 /**
  * Centralised, validated environment for the worker. Fails fast on missing
