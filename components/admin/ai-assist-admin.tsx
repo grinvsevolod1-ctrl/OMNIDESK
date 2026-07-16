@@ -7,19 +7,17 @@ import {
   GraduationCap,
   Highlighter,
   Loader2,
+  MessagesSquare,
   RefreshCw,
   ScrollText,
   Send,
   Settings2,
   Sparkles,
   Trash2,
-  Zap,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   aiDeleteLessonAction,
-  aiEngageAllAction,
-  aiKickstartBatchAction,
   aiSampleConversationsAction,
   aiSaveLessonAction,
   aiSuggestReplyAction,
@@ -50,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { AiLogsTab } from '@/components/admin/ai-logs-tab'
 import { AiCorrectionsTab } from '@/components/admin/ai-corrections-tab'
+import { AiEnrollmentTab } from '@/components/admin/ai-enrollment-tab'
 
 const TONE_OPTIONS = [
   { value: 'professional', label: 'Деловой' },
@@ -95,6 +94,10 @@ export function AiAssistAdmin({
             <Settings2 className="size-4" />
             Настройки
           </TabsTrigger>
+          <TabsTrigger value="dialogs">
+            <MessagesSquare className="size-4" />
+            Диалоги
+          </TabsTrigger>
           <TabsTrigger value="trainer">
             <GraduationCap className="size-4" />
             Тренажёр
@@ -118,6 +121,10 @@ export function AiAssistAdmin({
           <SettingsTab settings={settings} onChange={patchSettings} />
         </TabsContent>
 
+        <TabsContent value="dialogs" className="mt-4">
+          <AiEnrollmentTab />
+        </TabsContent>
+
         <TabsContent value="trainer" className="mt-4">
           <TrainerTab
             lessons={lessons}
@@ -137,111 +144,6 @@ export function AiAssistAdmin({
         </TabsContent>
       </Tabs>
     </div>
-  )
-}
-
-/* ----------------------------- Engage all ------------------------------- */
-
-/**
- * One-click "включить ИИ во всех диалогах": turns the master switch on, resets
- * every conversation except «Передан» to «Отписка» with the AI un-paused, then
- * drives the AI to answer the whole backlog of unanswered dialogues by looping
- * small batches until nothing is left waiting. Requires an explicit confirm
- * because it rewrites lead statuses across the board.
- */
-function EngageAllCard() {
-  const [running, setRunning] = useState(false)
-  const [confirming, setConfirming] = useState(false)
-  const [progress, setProgress] = useState<string | null>(null)
-
-  const run = async () => {
-    setConfirming(false)
-    setRunning(true)
-    setProgress(null)
-    try {
-      const first = await aiEngageAllAction()
-      toast.success(
-        `ИИ включён во всех диалогах: сброшено статусов — ${first.affected}.`,
-      )
-      let remaining = first.remaining
-      let kickedTotal = first.kicked
-      // Bound the loop from the initial backlog so a batch of permanently
-      // failing threads can't spin forever.
-      const maxPasses = Math.min(80, Math.ceil((remaining + 15) / 15) + 4)
-      let passes = 0
-      let prevRemaining = Number.POSITIVE_INFINITY
-      while (remaining > 0 && passes < maxPasses) {
-        setProgress(`Подключаюсь к диалогам… осталось ~${remaining}`)
-        const res = await aiKickstartBatchAction()
-        kickedTotal += res.kicked
-        remaining = res.remaining
-        passes++
-        // No kicks or no forward progress → the rest can't be answered right
-        // now (e.g. AI temporarily unavailable). Stop instead of looping.
-        if (res.kicked === 0 || remaining >= prevRemaining) break
-        prevRemaining = remaining
-      }
-      setProgress(null)
-      if (remaining > 0) {
-        toast.warning(
-          `Подключено к ${kickedTotal} диалогам. Осталось ${remaining} — часть не удалось обработать (проверьте ключ/баланс AI Gateway), попробуйте ещё раз позже.`,
-        )
-      } else {
-        toast.success(`Готово: ИИ подключился ко всем диалогам (${kickedTotal}).`)
-      }
-    } catch {
-      toast.error('Не удалось включить ИИ во всех диалогах')
-    } finally {
-      setRunning(false)
-      setProgress(null)
-    }
-  }
-
-  return (
-    <Card className="flex flex-col gap-3 p-4">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 rounded-md bg-primary/10 p-2 text-primary">
-          <Zap className="size-5" />
-        </div>
-        <div className="flex-1">
-          <p className="font-medium">Включить ИИ во всех диалогах</p>
-          <p className="text-sm text-muted-foreground">
-            Переведёт все диалоги (кроме «Передан») в статус «Отписка», снимет
-            паузу ИИ и сразу начнёт отвечать на все непрочитанные переписки.
-            Действие затрагивает все диалоги — используйте осознанно.
-          </p>
-          {progress ? (
-            <p className="mt-2 text-sm text-primary">{progress}</p>
-          ) : null}
-        </div>
-      </div>
-      <div className="flex items-center justify-end gap-2">
-        {confirming ? (
-          <>
-            <Button
-              variant="ghost"
-              disabled={running}
-              onClick={() => setConfirming(false)}
-            >
-              Отмена
-            </Button>
-            <Button variant="destructive" disabled={running} onClick={run}>
-              {running ? <Loader2 className="size-4 animate-spin" /> : null}
-              Да, включить везде
-            </Button>
-          </>
-        ) : (
-          <Button disabled={running} onClick={() => setConfirming(true)}>
-            {running ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Zap className="size-4" />
-            )}
-            Включить во всех диалогах
-          </Button>
-        )}
-      </div>
-    </Card>
   )
 }
 
@@ -301,8 +203,6 @@ function SettingsTab({
           />
         </div>
       </Card>
-
-      <EngageAllCard />
 
       <Card className="flex flex-col gap-4 p-4">
         <div className="flex flex-col gap-2">

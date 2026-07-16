@@ -441,6 +441,7 @@ export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
            SELECT manager_id, unread, last_message_at,
                     ${effectiveStatusSql()} AS eff
              FROM conversations
+            WHERE is_simulated = false
          ) c
         GROUP BY manager_id`,
     ),
@@ -449,6 +450,7 @@ export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
          SELECT c.id, c.manager_id, MIN(m.created_at) AS first_at
            FROM conversations c
            JOIN messages m ON m.conversation_id = c.id
+          WHERE c.is_simulated = false
           GROUP BY c.id, c.manager_id
        ) t
        WHERE first_at >= now() - interval '7 days'
@@ -560,7 +562,9 @@ export async function listConversationsAdmin(opts?: {
   limit?: number
 }): Promise<Array<Conversation & { managerName: string | null }>> {
   const params: unknown[] = []
-  const where: string[] = []
+  // Simulator dialogs live only in the secret panel — never surface them in the
+  // normal admin conversation browser.
+  const where: string[] = ['c.is_simulated = false']
 
   const search = opts?.search?.trim()
   if (search) {
@@ -754,6 +758,7 @@ export async function getResourceLeadCounts(
             count(DISTINCT c.id)::int AS people
        FROM source_channels sc
        JOIN conversations c ON c.channel_id = sc.channel_id
+            AND c.is_simulated = false
        JOIN messages m ON m.conversation_id = c.id
             AND m.direction = 'in' ${dateFilter}
       WHERE sc.resource_id = ANY($1::uuid[])
@@ -856,6 +861,7 @@ export async function getGroupAnalytics(
       `SELECT count(DISTINCT c.id)::int AS people, count(m.id)::int AS messages
          FROM source_channels sgc
          JOIN conversations c ON c.channel_id = sgc.channel_id
+              AND c.is_simulated = false
          JOIN messages m ON m.conversation_id = c.id
               AND m.direction = 'in'
               AND m.created_at >= $2 AND m.created_at < $3
@@ -875,6 +881,7 @@ export async function getGroupAnalytics(
          FROM source_channels sgc
          JOIN channels ch ON ch.id = sgc.channel_id
          LEFT JOIN conversations c ON c.channel_id = ch.id
+              AND c.is_simulated = false
          LEFT JOIN messages m ON m.conversation_id = c.id
               AND m.direction = 'in'
               AND m.created_at >= $2 AND m.created_at < $3
@@ -889,6 +896,7 @@ export async function getGroupAnalytics(
          FROM source_channels sgc
          JOIN channels ch ON ch.id = sgc.channel_id
          JOIN conversations c ON c.channel_id = ch.id
+              AND c.is_simulated = false
          JOIN messages m ON m.conversation_id = c.id
               AND m.direction = 'in'
               AND m.created_at >= $2 AND m.created_at < $3
@@ -957,6 +965,7 @@ export async function getGroupAnalytics(
          FROM source_channels sgc
          JOIN channels ch ON ch.id = sgc.channel_id
          JOIN conversations c ON c.channel_id = ch.id
+              AND c.is_simulated = false
          JOIN messages m ON m.conversation_id = c.id
               AND m.direction = 'in'
               AND m.created_at >= $2 AND m.created_at < $3
@@ -1043,6 +1052,7 @@ export async function getManagerActivityAnalytics(
       FROM conversations c
       JOIN messages m ON m.conversation_id = c.id
      WHERE c.manager_id = $1
+       AND c.is_simulated = false
      GROUP BY c.id, c.channel_id`
 
   const [totalRows, dayRows] = await Promise.all([

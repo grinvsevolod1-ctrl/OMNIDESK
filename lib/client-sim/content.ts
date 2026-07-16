@@ -57,7 +57,7 @@ const FEMALE_FIRST = [
   'Елена', 'Татьяна', 'Людмила', 'Галина', 'Нина', 'Валентина', 'Надежда',
   'Любовь', 'Тамара', 'Раиса', 'Зоя', 'Лидия', 'Инна', 'Жанна', 'Алла',
   'Регина', 'Элина', 'Карина', 'Виктория', 'Ангелина', 'Яна', 'Снежана',
-  'Гуля', 'Земфира', 'Алсу', 'Динара', 'Аdelya', 'Люда', 'Валя', 'Галя',
+  'Гуля', 'Земфира', 'Алсу', 'Динара', 'Аделя', 'Люда', 'Валя', 'Галя',
   'Люся', 'Зина', 'Тоня', 'Маша', 'Аня', 'Оля', 'Наташка', 'Ленка', 'Танюха',
 ]
 
@@ -76,6 +76,27 @@ const MALE_LAST = [
 function femaleLast(male: string): string {
   if (male.endsWith('ий') || male.endsWith('ой')) return male.slice(0, -2) + 'ая'
   return male + 'а'
+}
+
+/**
+ * Best-effort guess of a persona's gender from a display name, so an adopted
+ * dialog's persona never contradicts the name it's pinned to (e.g. «Наталья»
+ * must be female). Checks the known first-name lists first, then falls back to
+ * typical Russian first-name endings. Returns null when undecidable (e.g. a
+ * bare @nick) so the caller can keep the randomly-rolled gender.
+ */
+export function inferGenderFromName(name: string | null | undefined): SimGender | null {
+  if (!name) return null
+  const first = name.trim().split(/\s+/)[0]?.toLowerCase()
+  if (!first) return null
+  if (FEMALE_FIRST.some((n) => n.toLowerCase() === first)) return 'female'
+  if (MALE_FIRST.some((n) => n.toLowerCase() === first)) return 'male'
+  // Ending heuristics: most female RU first names end in -а/-я (Наталья, Ольга),
+  // most male ones in a consonant/-й (Сергей, Иван). Not perfect (Никита, Илья)
+  // but the known-name lists above catch the common exceptions.
+  if (/(а|я)$/.test(first)) return 'female'
+  if (/[бвгджзйклмнпрстфхцчшщ]$/.test(first)) return 'male'
+  return null
 }
 
 // Weird telegram-nick fragments — "всякая хуйня" as requested.

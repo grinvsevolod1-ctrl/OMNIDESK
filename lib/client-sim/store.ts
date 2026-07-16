@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { query } from '@/lib/db'
-import { makePersona } from './content'
+import { inferGenderFromName, makePersona } from './content'
 import type { ChannelType } from '@/lib/types'
 import type {
   LearnedProfile,
@@ -937,11 +937,13 @@ export async function createSimConversation(
 ): Promise<string> {
   const convId = randomUUID()
   const contactUsername = persona.username ?? null
+  // is_simulated = true is what keeps this dialog OUT of the normal manager
+  // inbox and analytics (migration 065) — it lives only in the secret panel.
   await query(
     `INSERT INTO conversations
        (id, channel_id, channel_type, manager_id, contact_name, contact_handle,
-        contact_username, last_message, last_message_at, unread)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), 1)`,
+        contact_username, last_message, last_message_at, unread, is_simulated)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), 1, true)`,
     [
       convId,
       channel.id,
@@ -1006,14 +1008,16 @@ export async function getConversationRouting(
   return r ? { managerId: r.manager_id, channelId: r.channel_id } : null
 }
 
-/* ------------------- adopting real / existing dialogues ----------------- */
+/* ---------------- re-adopting the simulator's OWN dialogues -------------- */
 /*
- * By default the simulator only ever touches conversations IT created (rows in
- * sim_threads). Everything else — organic dialogues, and anything that existed
- * before an update — is invisible to the engine, so the bot never continues
- * them. "Adopting" a conversation simply registers a sim_threads row for it: the
- * engine then reads the FULL real transcript from `messages` and keeps the
- * dialogue going, in-character, on a human, randomised schedule.
+ * The simulator only ever touches conversations IT created (is_simulated = true
+ * with a row in sim_threads). Everything else — every real, organic dialogue
+ * from a genuine human — is completely invisible to the engine and can NEVER be
+ * adopted. This is a hard safety rule: the bot must never continue a real
+ * person's chat (that caused the "client said 15, bot replied 51" contradiction
+ * and other identity clashes). "Re-adopting" only re-registers a sim_threads row
+ * for a simulated dialog that lost one (e.g. its thread was closed), so the
+ * engine keeps that same fake persona going on a human, randomised schedule.
  */
 
 export interface AdoptableConversation {
@@ -1032,10 +1036,11 @@ export interface AdoptableConversation {
 }
 
 /**
- * List conversations the simulator COULD take over: any conversation routed to
- * a manager. Each row carries the owning manager's name (for the grouped table),
- * a message count, the last message + who sent it, and whether it is already
- * adopted. Ordered newest-activity first.
+ * List the simulator's OWN dialogs that could be re-adopted: only simulated
+ * conversations (is_simulated = true). Real human dialogs are excluded so the
+ * bot can never be pointed at a genuine person. Each row carries the owning
+ * manager's name, a message count, the last message + who sent it, and whether
+ * it is already adopted. Ordered newest-activity first.
  */
 export async function listAdoptableConversations(
   limit = 1000,
@@ -1074,6 +1079,7 @@ export async function listAdoptableConversations(
           LIMIT 1
        ) lm ON true
       WHERE c.manager_id IS NOT NULL
+        AND c.is_simulated = true
       ORDER BY c.last_message_at DESC NULLS LAST
       LIMIT $1`,
     [Math.max(1, limit)],
@@ -1156,7 +1162,8 @@ export async function adoptConversations(
           WHERE m.conversation_id = c.id AND m.direction = 'in'
        ) ct ON true
       WHERE c.id = ANY($1::uuid[])
-        AND c.manager_id IS NOT NULL`,
+        AND c.manager_id IS NOT NULL
+        AND c.is_simulated = true`,
     [ids],
   )
 
@@ -1175,6 +1182,11 @@ export async function adoptConversations(
     if (s.contact_name) persona.name = s.contact_name
     if (s.contact_handle) persona.handle = s.contact_handle
     persona.username = s.contact_username ?? persona.username
+    // Keep gender consistent with the pinned name so the persona never
+    // contradicts itself (e.g. «Наталья» rolled as male). Falls back to the
+    // randomly-rolled gender when the name is genderless (a bare @nick).
+    const inferred = inferGenderFromName(s.contact_name)
+    if (inferred) persona.gender = inferred
 
     const delay = minD + Math.floor(Math.random() * (maxD - minD))
     await query(
