@@ -22,6 +22,7 @@ import {
 } from '@/lib/finance'
 import { syncAdAccount } from '@/lib/ads-yandex'
 import {
+  adminReassignConversations,
   createChannel,
   deleteChannelById,
   getConversationAdmin,
@@ -508,6 +509,90 @@ export async function secretSetManagerStatusAction(
   return {
     ok: true,
     message: status === 'blocked' ? 'Менеджер заблокирован' : 'Менеджер разблокирован',
+  }
+}
+
+/* ===================================================================== */
+/*  God-mode conversation hand-off (manager → manager)                   */
+/* ===================================================================== */
+
+export interface ReassignConversation {
+  id: string
+  contactName: string
+  channelType: ChannelType
+  channelName: string | null
+  lastMessage: string
+  lastMessageAt: string
+  unread: number
+}
+
+/**
+ * Every conversation owned by a given manager, newest activity first. Powers the
+ * source-side list of the "Передача" (hand-off) tab. Admin-wide: re-checks
+ * requireAdmin and is not scoped to the caller.
+ */
+export async function secretListManagerConversationsAction(
+  managerId: string,
+): Promise<ReassignConversation[]> {
+  await requireAdmin()
+  if (!managerId) return []
+  const rows = await query<{
+    id: string
+    contact_name: string
+    channel_type: ChannelType
+    channel_name: string | null
+    last_message: string
+    last_message_at: string
+    unread: number
+  }>(
+    `SELECT c.id, c.contact_name, c.channel_type,
+            ch.name AS channel_name, c.last_message, c.last_message_at, c.unread
+       FROM conversations c
+       LEFT JOIN channels ch ON ch.id = c.channel_id
+      WHERE c.manager_id = $1
+      ORDER BY c.last_message_at DESC
+      LIMIT 500`,
+    [managerId],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    contactName: r.contact_name,
+    channelType: r.channel_type,
+    channelName: r.channel_name,
+    lastMessage: r.last_message,
+    lastMessageAt: r.last_message_at,
+    unread: r.unread,
+  }))
+}
+
+/**
+ * Move a batch of conversations to another manager. Validates the target and
+ * funnels through adminReassignConversations (audit trail + realtime notify).
+ */
+export async function secretReassignConversationsAction(input: {
+  conversationIds: string[]
+  toManagerId: string
+}): Promise<ActionResult> {
+  await requireAdmin()
+  const ids = (input.conversationIds ?? []).filter(Boolean)
+  if (ids.length === 0)
+    return { ok: false, message: 'Не выбрано ни одного диалога' }
+  if (!input.toManagerId)
+    return { ok: false, message: 'Не выбран получатель' }
+
+  const moved = await adminReassignConversations({
+    conversationIds: ids,
+    toManagerId: input.toManagerId,
+  })
+  revalidatePath(ADMIN_PATH)
+  if (moved === 0)
+    return {
+      ok: false,
+      message: 'Ничего не передано (диалоги уже у выбранного менеджера)',
+    }
+  return {
+    ok: true,
+    message: `Передано диалогов: ${moved}`,
   }
 }
 

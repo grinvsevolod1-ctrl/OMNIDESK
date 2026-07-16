@@ -584,5 +584,73 @@ export async function transferConversation(input: {
   })
 }
 
+/**
+ * Admin (God-mode) bulk hand-off: move a batch of conversations to another
+ * manager, regardless of who currently owns them. Unlike transferConversation
+ * this is NOT ownership-scoped — the secret panel operates above any single
+ * manager — but it keeps the exact same side effects per moved thread:
+ *   - conversations.manager_id is repointed (which fires the realtime trigger,
+ *     so the thread pops into the new owner's inbox live);
+ *   - reply_dismissed_at is cleared so the new owner sees it as awaiting reply;
+ *   - a conversation_transfers audit row records the previous → new owner.
+ *
+ * Threads already owned by the target, or ids that don't exist, are skipped.
+ * Returns the number of conversations actually moved.
+ */
+export async function adminReassignConversations(input: {
+  conversationIds: string[]
+  toManagerId: string
+  note?: string
+}): Promise<number> {
+  const ids = input.conversationIds.filter(Boolean)
+  if (ids.length === 0) return 0
+
+  // Target must be a real, active manager.
+  const target = await query<{ id: string }>(
+    `SELECT id FROM managers WHERE id = $1 AND status = 'active'`,
+    [input.toManagerId],
+  )
+  if (target.length === 0) return 0
+
+  const note = (input.note ?? '').slice(0, 500)
+
+  return withTransaction(async (db) => {
+    // Snapshot previous owners BEFORE the update so the audit trail is accurate,
+    // then move only the threads whose owner actually changes.
+    const moved = await db.query<{ id: string; from_id: string | null }>(
+      `WITH prev AS (
+         SELECT id, manager_id AS from_id
+           FROM conversations
+          WHERE id = ANY($1::uuid[])
+       )
+       UPDATE conversations c
+          SET manager_id = $2, reply_dismissed_at = NULL
+         FROM prev
+        WHERE c.id = prev.id
+          AND c.manager_id IS DISTINCT FROM $2
+       RETURNING c.id AS id, prev.from_id AS from_id`,
+      [ids, input.toManagerId],
+    )
+    if (moved.length === 0) return 0
+
+    // One audit row per moved thread (from previous owner → new owner).
+    // unnest(a, b) in FROM zips the two arrays positionally and preserves NULL
+    // previous owners (an unassigned thread has from_manager_id = NULL).
+    await db.query(
+      `INSERT INTO conversation_transfers
+         (conversation_id, from_manager_id, to_manager_id, note)
+       SELECT t.cid, t.fid, $3, $4
+         FROM unnest($1::uuid[], $2::uuid[]) AS t(cid, fid)`,
+      [
+        moved.map((r) => r.id),
+        moved.map((r) => r.from_id),
+        input.toManagerId,
+        note,
+      ],
+    )
+    return moved.length
+  })
+}
+
 
 /* Live chat widget — extracted to ./data/livechat */

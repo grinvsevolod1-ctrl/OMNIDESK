@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import {
   Activity,
   Antenna,
+  ArrowLeftRight,
   ArrowUpRight,
   Ban,
   Bot,
@@ -79,6 +80,7 @@ import type { Channel, Manager } from '@/lib/types'
 import { MessagesTrendChart, ChannelsTypeChart } from '@/components/admin/secret-charts'
 import { SecretConsole } from '@/components/admin/secret-console'
 import { SecretSimulatorTab } from '@/components/admin/secret-simulator-tab'
+import { SecretTransferTab } from '@/components/admin/secret-transfer-tab'
 import {
   SecretAdsTab,
   type SecretAdAccount,
@@ -272,6 +274,10 @@ export function SecretDashboard({
           <TabsTrigger value="managers" className="shrink-0">
             Менеджеры
           </TabsTrigger>
+          <TabsTrigger value="transfer" className="shrink-0 gap-1.5">
+            <ArrowLeftRight className="size-3.5" />
+            Передача
+          </TabsTrigger>
           <TabsTrigger value="channels" className="shrink-0">
             Каналы
           </TabsTrigger>
@@ -286,6 +292,9 @@ export function SecretDashboard({
         </TabsContent>
         <TabsContent value="managers" className="mt-4">
           <ManagersTab managers={managers} pending={pending} run={run} />
+        </TabsContent>
+        <TabsContent value="transfer" className="mt-4">
+          <SecretTransferTab managers={managers} />
         </TabsContent>
         <TabsContent value="channels" className="mt-4">
           <ChannelsTab
@@ -937,7 +946,7 @@ function MassImportTab({
         {/* Channels */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
-            <Label>Каналы-источники</Label>
+            <Label>Каналы-источник��</Label>
             <div className="flex items-center gap-2 text-xs">
               <button
                 type="button"
