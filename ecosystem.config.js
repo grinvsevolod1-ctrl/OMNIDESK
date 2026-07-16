@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+// PM2 loads this file as CommonJS (module.exports), so require() is mandatory
+// here and cannot be replaced with ESM import syntax.
+//
 // pm2 process config for self-hosting Omnidesk on a VPS.
 //
 //   pnpm install && pnpm build          # build the Next.js panel
