@@ -41,6 +41,21 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
+# 0b. Server Action IDs are derived using NEXT_SERVER_ACTIONS_ENCRYPTION_KEY at
+#     BUILD time. If it is unset, Next.js invents a RANDOM key on every build, so
+#     every deploy changes all action IDs and any already-open browser tab breaks
+#     with "Server Action ... was not found on the server". A fixed key keeps the
+#     IDs stable across rebuilds. Next loads .env automatically during `pnpm
+#     build`, so having it in .env is enough — we only need to guarantee it exists.
+if ! grep -qE "^\s*NEXT_SERVER_ACTIONS_ENCRYPTION_KEY\s*=\s*\S" .env; then
+  echo "❌ NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is missing from .env." >&2
+  echo "   Without it every deploy invalidates open sessions with a" >&2
+  echo "   \"Server Action was not found on the server\" error. Generate one:" >&2
+  echo "     echo \"NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=\$(openssl rand -base64 32)\" >> .env" >&2
+  echo "   Set it ONCE and never rotate it, then re-run ./deploy.sh. Aborting." >&2
+  exit 1
+fi
+
 # 1. Figure out which branch to deploy. Default to whatever is checked out so we
 #    never fail on a hardcoded branch name that doesn't exist on this machine.
 BRANCH="${DEPLOY_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
