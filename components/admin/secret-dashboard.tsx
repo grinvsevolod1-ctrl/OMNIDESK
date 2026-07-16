@@ -247,20 +247,35 @@ export function SecretDashboard({
       </div>
 
       <Tabs defaultValue="console" className="w-full">
-        <TabsList className="flex w-full flex-wrap justify-start gap-1">
-          <TabsTrigger value="console">Диалоги</TabsTrigger>
-          <TabsTrigger value="bulk" className="gap-1.5">
+        {/*
+          Single-row, horizontally-scrollable tab strip. On narrow screens the
+          7 triggers used to wrap into a ragged 3-row block; a scrollable strip
+          keeps them on one clean line (with a subtle overflow hint) and lets
+          them size naturally on desktop. `shrink-0` stops labels from being
+          squeezed; `-mx-1 px-1` gives the focus ring room at the edges.
+        */}
+        <TabsList className="no-scrollbar -mx-1 flex w-[calc(100%+0.5rem)] justify-start gap-1 overflow-x-auto px-1 md:mx-0 md:w-full md:flex-wrap">
+          <TabsTrigger value="console" className="shrink-0">
+            Диалоги
+          </TabsTrigger>
+          <TabsTrigger value="bulk" className="shrink-0 gap-1.5">
             <Zap className="size-3.5" />
             Наплыв
           </TabsTrigger>
-          <TabsTrigger value="simulator" className="gap-1.5">
+          <TabsTrigger value="simulator" className="shrink-0 gap-1.5">
             <Bot className="size-3.5" />
             Симулятор
           </TabsTrigger>
-          <TabsTrigger value="overview">Обзор</TabsTrigger>
-          <TabsTrigger value="managers">Менеджеры</TabsTrigger>
-          <TabsTrigger value="channels">Каналы</TabsTrigger>
-          <TabsTrigger value="ads" className="gap-1.5">
+          <TabsTrigger value="overview" className="shrink-0">
+            Обзор
+          </TabsTrigger>
+          <TabsTrigger value="managers" className="shrink-0">
+            Менеджеры
+          </TabsTrigger>
+          <TabsTrigger value="channels" className="shrink-0">
+            Каналы
+          </TabsTrigger>
+          <TabsTrigger value="ads" className="shrink-0 gap-1.5">
             <Target className="size-3.5" />
             Реклама
           </TabsTrigger>
