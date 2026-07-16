@@ -1,6 +1,7 @@
 import 'server-only'
 import {
   getMaxDispatchByConversationId,
+  isConversationSimulated,
   markMessageFailed,
   setMessageProviderId,
 } from './data'
@@ -23,6 +24,8 @@ export async function deliverMaxMessage(
   body: string,
 ): Promise<void> {
   try {
+    // Never push a simulator dialog's reply to the real MAX provider.
+    if (await isConversationSimulated(conversationId)) return
     const dispatch = await getMaxDispatchByConversationId(conversationId)
     if (!dispatch) return // not a MAX conversation
 

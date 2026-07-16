@@ -1,6 +1,7 @@
 import 'server-only'
 import {
   getVkDispatchByConversationId,
+  isConversationSimulated,
   markMessageFailed,
   setMessageProviderId,
 } from './data'
@@ -23,6 +24,8 @@ export async function deliverVkMessage(
   body: string,
 ): Promise<void> {
   try {
+    // Never push a simulator dialog's reply to the real VK provider.
+    if (await isConversationSimulated(conversationId)) return
     const dispatch = await getVkDispatchByConversationId(conversationId)
     if (!dispatch) return // not a VK conversation
 
@@ -56,6 +59,7 @@ export async function deliverVkMessage(
  */
 export async function setVkTyping(conversationId: string): Promise<boolean> {
   try {
+    if (await isConversationSimulated(conversationId)) return false
     const dispatch = await getVkDispatchByConversationId(conversationId)
     if (!dispatch) return false
     await setActivity(
@@ -79,6 +83,7 @@ export async function markVkConversationRead(
   conversationId: string,
 ): Promise<boolean> {
   try {
+    if (await isConversationSimulated(conversationId)) return false
     const dispatch = await getVkDispatchByConversationId(conversationId)
     if (!dispatch) return false
     await markAsRead(

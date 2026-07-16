@@ -185,25 +185,26 @@ export async function getConversationHistoryForAi(
 }
 
 /**
- * True when the AI is effectively leading this conversation. STRICT PER-DIALOG
- * OPT-IN (migration 065, reverts the 056 "lead everything" model):
+ * True when the AI is effectively leading this conversation:
  *
  *   led = ai_assist_settings.enabled      -- master switch ON
- *         AND conversations.ai_enrolled    -- this dialog EXPLICITLY added
+ *         AND conversations.ai_enrolled    -- this dialog is AI-led
  *         AND NOT conversations.ai_paused   -- not temporarily paused
- *         AND NOT conversations.is_simulated -- never a simulator dialog
  *
- * The AI now behaves like the simulator: it only ever participates in dialogs an
- * admin has explicitly enrolled. Flipping the master switch no longer makes the
- * AI seize existing/new dialogs, and a restart can't make it barge into an
- * unrelated human thread. A single CROSS JOIN keeps this cheap for schedulers.
+ * IMPORTANT: simulated dialogs are intentionally NOT excluded here. To the AI
+ * manager a simulator dialog must look exactly like a real client — same
+ * participation rules, same brain, same replies. The is_simulated flag is only
+ * used downstream to (a) keep fake dialogs out of analytics / the human inbox
+ * and (b) stop the manager's reply from being delivered to a real external
+ * channel (see deliverAutopilotReply). New dialogs are auto-enrolled at
+ * creation, so the AI leads them out of the box; pre-existing dialogs stay
+ * manual until an admin enrolls them. A single CROSS JOIN keeps this cheap.
  */
 export async function isConversationAiLed(
   conversationId: string,
 ): Promise<boolean> {
   const rows = await query<{ led: boolean }>(
-    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused
-             AND NOT c.is_simulated) AS led
+    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused) AS led
        FROM conversations c
        CROSS JOIN ai_assist_settings s
       WHERE c.id = $1 AND s.id = true`,
@@ -695,8 +696,7 @@ export async function listAccountReviewDialogs(
             conv.contact_name_hidden,
             conv.last_message_at,
             COUNT(m.id)::text AS message_count,
-            (s.enabled AND conv.ai_enrolled AND NOT conv.ai_paused
-             AND NOT conv.is_simulated) AS ai_led
+            (s.enabled AND conv.ai_enrolled AND NOT conv.ai_paused) AS ai_led
        FROM conversations conv
        JOIN messages m ON m.conversation_id = conv.id
                        AND m.deleted_at IS NULL AND m.body <> ''
@@ -704,7 +704,7 @@ export async function listAccountReviewDialogs(
       WHERE conv.channel_id = $1 AND s.id = true
       GROUP BY conv.id, conv.contact_name, conv.contact_name_hidden,
                conv.last_message_at, s.enabled, conv.ai_enrolled,
-               conv.ai_paused, conv.is_simulated
+               conv.ai_paused
      HAVING COUNT(*) FILTER (WHERE m.direction = 'in')  > 0
         AND COUNT(*) FILTER (WHERE m.direction = 'out') > 0
       ORDER BY conv.last_message_at DESC

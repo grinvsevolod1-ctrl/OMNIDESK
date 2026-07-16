@@ -1227,19 +1227,20 @@ export async function listManualCorrectionRules(
 }
 
 /**
- * True when the AI is effectively leading THIS conversation. STRICT PER-DIALOG
- * OPT-IN (migration 065) — mirror of lib/data/ai-assist.ts#isConversationAiLed
- * so the worker and the panel agree exactly:
+ * True when the AI is effectively leading THIS conversation — mirror of
+ * lib/data/ai-assist.ts#isConversationAiLed so the worker and the panel agree
+ * exactly:
  *
- *   led = ai_assist_settings.enabled AND c.ai_enrolled
- *         AND NOT c.ai_paused AND NOT c.is_simulated
+ *   led = ai_assist_settings.enabled AND c.ai_enrolled AND NOT c.ai_paused
+ *
+ * Simulated dialogs are deliberately NOT excluded: the AI must treat them like
+ * any real client. is_simulated only gates delivery + analytics downstream.
  */
 export async function isConversationAiLed(
   conversationId: string,
 ): Promise<boolean> {
   const row = await one<{ led: boolean }>(
-    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused
-             AND NOT c.is_simulated) AS led
+    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused) AS led
        FROM conversations c
        CROSS JOIN ai_assist_settings s
       WHERE c.id = $1 AND s.id = true`,
@@ -1443,7 +1444,11 @@ export async function findNoResponseConversations(maxMinutes: number): Promise<
        LEFT JOIN last_out lo ON lo.conversation_id = c.id
       WHERE (lo.created_at IS NULL OR lo.created_at < li.created_at)
         AND li.created_at < now() - '1 minute'::interval
-        AND li.created_at > now() - ($1 || ' minutes')::interval`,
+        AND li.created_at > now() - ($1 || ' minutes')::interval
+        -- Never let the worker touch simulator dialogs: they live on real
+        -- channels, so a canned auto-reply here would be sent to a real
+        -- provider. The simulator loop is driven entirely by the panel runtime.
+        AND c.is_simulated = false`,
     [String(maxMinutes)],
   )
   return rows.map((r) => ({
