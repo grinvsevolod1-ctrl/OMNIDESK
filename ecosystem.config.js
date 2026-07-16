@@ -22,7 +22,7 @@ module.exports = {
     {
       name: 'omnidesk-panel',
       script: 'node_modules/next/dist/bin/next',
-      args: 'start -p 3000',
+      args: 'start',
       cwd: __dirname,
       instances: 1,
       // MUST be fork, never cluster. `next start` is a self-contained HTTP
@@ -50,7 +50,7 @@ module.exports = {
       // Runs TypeScript via the worker's own tsx. Requires the worker deps to be
       // installed first: `cd worker && pnpm install` (see header). This path is
       // portable — do NOT hardcode a global tsx path like /usr/bin/tsx.
-      script: 'node_modules/.bin/tsx',
+      script: '/usr/bin/tsx',
       args: 'src/index.ts',
       cwd: __dirname + '/worker',
       instances: 1,
