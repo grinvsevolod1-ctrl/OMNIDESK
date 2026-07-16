@@ -16,9 +16,28 @@ cd "$APP_DIR"
 
 echo "🚀 Deploying OMNIDESK from $APP_DIR ..."
 
-# 0. Sanity: .env must exist. Migrations, the panel and the worker all read it.
+# 0. Sanity: .env must exist AND contain the vars every process needs. PM2 loads
+#    this file (via ecosystem.config.js) and injects it into the panel, worker
+#    and cron — so a missing/near-empty .env silently boots every service
+#    without DATABASE_URL/ENCRYPTION_KEY and breaks the whole stack. Fail loudly
+#    here instead. (A one-line .env created by an accidental `echo >> .env` is
+#    the exact trap this guards against.)
 if [ ! -f .env ]; then
   echo "❌ .env not found in $APP_DIR. Create it from .env.example first." >&2
+  exit 1
+fi
+
+MISSING=""
+for VAR in DATABASE_URL ENCRYPTION_KEY AUTH_SECRET WORKER_SECRET; do
+  # Require a non-empty "VAR=value" line (ignoring commented-out examples).
+  if ! grep -qE "^\s*${VAR}\s*=\s*\S" .env; then
+    MISSING="${MISSING} ${VAR}"
+  fi
+done
+if [ -n "$MISSING" ]; then
+  echo "❌ .env is missing required values:${MISSING}" >&2
+  echo "   Populate them (see .env.example) before deploying. Aborting so the" >&2
+  echo "   panel/worker are not restarted with an incomplete environment." >&2
   exit 1
 fi
 
