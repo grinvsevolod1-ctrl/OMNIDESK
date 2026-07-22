@@ -185,15 +185,26 @@ export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
  * Lead lifecycle status. A "lead" is a conversation/contact that wrote in.
  * Business model:
  *   - 'unsubscribed' (Отписок): default — everyone who ever wrote in.
+ *   - 'handoff' (Передан человеку): the AI handed the dialogue to a human, or a
+ *     manager stepped into it. Set automatically at the moment of takeover; from
+ *     here a manager manually classifies the lead.
  *   - 'liquid' (Ликвид): on-target audience matching our parameters.
  *   - 'not_liquid' (Не ликвид): off-target; a reason is stored in statusDetail.
  *   - 'transferred' (Передан): qualified and passed further down the process.
- * When no status is pinned the lead defaults to 'unsubscribed'.
+ * When no status is pinned the lead defaults to 'unsubscribed'. The «Ликвид» /
+ * «Не ликвид» / «Передан» classifications are set by a manager by hand — the AI
+ * never auto-assigns them; the most it does is move a lead to «Передан человеку».
  */
-export type LeadStatus = 'unsubscribed' | 'liquid' | 'not_liquid' | 'transferred'
+export type LeadStatus =
+  | 'unsubscribed'
+  | 'handoff'
+  | 'liquid'
+  | 'not_liquid'
+  | 'transferred'
 
 export const LEAD_STATUS_ORDER: LeadStatus[] = [
   'unsubscribed',
+  'handoff',
   'liquid',
   'not_liquid',
   'transferred',
@@ -206,6 +217,10 @@ export const LEAD_STATUS_META: Record<
   unsubscribed: {
     label: 'Отписок',
     description: 'Всего написавших людей',
+  },
+  handoff: {
+    label: 'Передан человеку',
+    description: 'ИИ передал диалог менеджеру или менеджер вступил сам',
   },
   liquid: {
     label: 'Ликвид',

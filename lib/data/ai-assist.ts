@@ -765,19 +765,21 @@ export async function saveConversationAiMemory(
 }
 
 /**
- * The AI decided this lead is ready («Ликвид») and hands it to a human. Called
- * by the AI runtimes (worker + live-chat) — UNSCOPED, no manager session. Only
- * promotes when the lead still has its default/empty status, so a manual
- * «Не ликвид»/«Передан» override is never clobbered. Also pauses the AI so the
- * human takes over cleanly, and flags a pending handoff for the inbox banner.
- * Returns true when it actually promoted (so the caller can log it once).
+ * The AI hands the dialogue to a human and moves the lead to «Передан человеку»
+ * ('handoff'). Called by the AI runtimes (worker + live-chat) — UNSCOPED, no
+ * manager session. Only promotes when the lead still has its default status, so
+ * a manual «Ликвид»/«Не ликвид»/«Передан» classification is never clobbered.
+ * The AI never assigns «Ликвид» itself — that's a manager-only decision. Also
+ * pauses the AI so the human takes over cleanly, and flags a pending handoff for
+ * the inbox banner. Returns true when it actually promoted (so the caller can
+ * log it once).
  */
-export async function markAiHandoffToLiquid(
+export async function markAiHandoffToHuman(
   conversationId: string,
 ): Promise<boolean> {
   const rows = await query<{ id: string }>(
     `UPDATE conversations
-        SET status = 'liquid',
+        SET status = 'handoff',
             status_detail = NULL,
             status_updated_at = now(),
             ai_paused = true,

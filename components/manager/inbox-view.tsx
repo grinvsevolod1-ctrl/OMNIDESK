@@ -218,6 +218,11 @@ const LEAD_STATUS_VISUAL: Record<LeadStatus, { badge: string; dot: string }> = {
     badge: 'bg-sky-500/10 text-sky-600 border-sky-500/20 dark:text-sky-400',
     dot: 'bg-sky-500',
   },
+  handoff: {
+    badge:
+      'bg-amber-500/10 text-amber-600 border-amber-500/20 dark:text-amber-400',
+    dot: 'bg-amber-500',
+  },
   liquid: {
     badge: 'bg-teal-500/10 text-teal-600 border-teal-500/20 dark:text-teal-400',
     dot: 'bg-teal-500',
@@ -1888,6 +1893,7 @@ export function InboxView({
   const statusCounts = useMemo(() => {
     const counts: Record<LeadStatus, number> = {
       unsubscribed: 0,
+      handoff: 0,
       liquid: 0,
       not_liquid: 0,
       transferred: 0,

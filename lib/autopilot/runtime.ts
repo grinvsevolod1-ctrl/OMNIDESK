@@ -8,7 +8,7 @@ import {
   isConversationAiLed,
   listBrainLessons,
   listManualCorrectionRules,
-  markAiHandoffToLiquid,
+  markAiHandoffToHuman,
   recordAiGenerationMetric,
   retrieveKnowledge,
   saveConversationAiMemory,
@@ -239,12 +239,12 @@ async function runLivechatAiLead(input: {
 
     // Escalation guard: if the client is angry, demands a human, or the dialog
     // is clearly stuck, hand off to a person instead of auto-replying. Uses the
-    // existing liquid-handoff path (pauses AI + flags the inbox banner).
+    // handoff path (status → «Передан человеку», pauses AI + flags the banner).
     const escalation = await detectEscalation(history, log, {
       model: settings.model,
     })
     if (escalation.escalate) {
-      const promoted = await markAiHandoffToLiquid(input.conversationId)
+      const promoted = await markAiHandoffToHuman(input.conversationId)
       void logAi({
         level: 'info',
         source: 'handoff',
@@ -342,9 +342,10 @@ async function runLivechatAiLead(input: {
     })()
 
     // After replying, judge whether the client is now ready to hand over their
-    // data and start working. If so, promote the lead to «Ликвид» and hand it
-    // to a human (pauses the AI + flags the inbox banner). Best-effort: never
-    // let a promotion failure affect the reply we already sent.
+    // data and start working. If so, move the lead to «Передан человеку» and
+    // hand it to a human (pauses the AI + flags the inbox banner). The «Ликвид»
+    // call is a manager decision, never automatic. Best-effort: never let a
+    // promotion failure affect the reply we already sent.
     //
     // Cost guard: the readiness check is a second gateway call on every turn, so
     // we skip it entirely until the client's own recent messages actually show
@@ -360,10 +361,10 @@ async function runLivechatAiLead(input: {
         { model: settings.model },
       )
       if (ready) {
-        const promoted = await markAiHandoffToLiquid(input.conversationId)
+        const promoted = await markAiHandoffToHuman(input.conversationId)
         if (promoted) {
           console.log(
-            'AI promoted lead to «Ликвид»:',
+            'AI handed lead to a human («Передан человеку»):',
             input.conversationId,
           )
           void logAi({
@@ -371,7 +372,7 @@ async function runLivechatAiLead(input: {
             source: 'handoff',
             event: 'promoted',
             message:
-              'ИИ передал лид человеку: статус повышен до «Ликвид», ИИ поставлен на паузу.',
+              'ИИ передал лид человеку: статус изменён на «Передан человеку», ИИ поставлен на паузу. Классификацию «Ликвид» менеджер выставляет вручную.',
             conversationId: input.conversationId,
             channelType: 'livechat',
           })

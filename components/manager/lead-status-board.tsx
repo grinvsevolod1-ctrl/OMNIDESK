@@ -40,6 +40,7 @@ import {
 
 const STATUS_ACCENT: Record<LeadStatus, { dot: string; bar: string }> = {
   unsubscribed: { dot: 'bg-sky-500', bar: 'bg-sky-500' },
+  handoff: { dot: 'bg-amber-500', bar: 'bg-amber-500' },
   liquid: { dot: 'bg-teal-500', bar: 'bg-teal-500' },
   not_liquid: { dot: 'bg-muted-foreground', bar: 'bg-muted-foreground' },
   transferred: { dot: 'bg-emerald-500', bar: 'bg-emerald-500' },

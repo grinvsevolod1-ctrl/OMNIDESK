@@ -99,6 +99,7 @@ const CONV_STATUS_LABEL: Record<string, string> = {
   liquid: 'Ликвид',
   not_liquid: 'Не ликвид',
   unsubscribed: 'Отписка',
+  handoff: 'Передан человеку',
   transferred: 'Передан',
 }
 
@@ -106,10 +107,17 @@ const CONV_STATUS_STYLE: Record<string, string> = {
   liquid: 'bg-success/15 text-success',
   not_liquid: 'bg-warning/15 text-warning',
   unsubscribed: 'bg-muted text-muted-foreground',
+  handoff: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
   transferred: 'bg-chart-2/15 text-foreground',
 }
 
-const STATUS_VALUES = ['liquid', 'not_liquid', 'unsubscribed', 'transferred']
+const STATUS_VALUES = [
+  'unsubscribed',
+  'handoff',
+  'liquid',
+  'not_liquid',
+  'transferred',
+]
 
 /** Human labels for the auto-client lifecycle (shown only inside "Детали"). */
 const SIM_STATE_LABEL: Record<string, string> = {
@@ -1143,7 +1151,7 @@ const MessageBubble = memo(function MessageBubble({
           type="button"
           onClick={() => onDelete(message.id)}
           disabled={pending}
-          aria-label="Удалить сообщение"
+          aria-label="Удалит�� сообщение"
           className="mb-1 opacity-0 transition-opacity group-hover:opacity-100"
         >
           <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />

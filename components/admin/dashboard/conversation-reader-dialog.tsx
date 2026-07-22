@@ -29,6 +29,7 @@ import { LEAD_STATUS_META, type LeadStatus } from '@/lib/types'
 
 const STATUS_DOT: Record<LeadStatus, string> = {
   unsubscribed: 'bg-sky-500',
+  handoff: 'bg-amber-500',
   liquid: 'bg-teal-500',
   not_liquid: 'bg-muted-foreground',
   transferred: 'bg-emerald-500',

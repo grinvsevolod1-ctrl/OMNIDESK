@@ -319,12 +319,13 @@ async function fireAiLead(params: {
       : ''
 
     // Escalation guard: angry client / demands a human / stuck dialog → hand off
-    // to a person via the existing liquid-handoff path instead of auto-replying.
+    // to a person via the handoff path (status → «Передан человеку») instead of
+    // auto-replying.
     const escalation = await detectEscalation(history, log, {
       model: config.model,
     })
     if (escalation.escalate) {
-      const promoted = await repo.markAiHandoffToLiquid(conversationId)
+      const promoted = await repo.markAiHandoffToHuman(conversationId)
       void repo.logAi({
         level: 'info',
         source: 'handoff',
@@ -456,9 +457,10 @@ async function fireAiLead(params: {
     })()
 
     // After replying, judge whether the client is ready to hand over their data
-    // and start working. If so, promote the lead to «Ликвид» and hand it to a
-    // human (pauses the AI + flags the panel banner). Best-effort — never let a
-    // promotion failure affect the reply we already delivered.
+    // and start working. If so, move the lead to «Передан человеку» and hand it
+    // to a human (pauses the AI + flags the panel banner). The «Ликвид» call is
+    // a manager decision, never automatic. Best-effort — never let a promotion
+    // failure affect the reply we already delivered.
     try {
       const ready = await assessLeadReady(
         [...history, { role: 'manager', body: reply }],
@@ -466,15 +468,15 @@ async function fireAiLead(params: {
         { model: config.model },
       )
       if (ready) {
-        const promoted = await repo.markAiHandoffToLiquid(conversationId)
+        const promoted = await repo.markAiHandoffToHuman(conversationId)
         if (promoted) {
-          logger.info({ channelId, conversationId }, 'ai-lead: promoted lead to «Ликвид»')
+          logger.info({ channelId, conversationId }, 'ai-lead: handed lead to a human («Передан человеку»)')
           void repo.logAi({
             level: 'info',
             source: 'handoff',
             event: 'promoted',
             message:
-              'ИИ передал лид человеку: статус повышен до «Ликвид», ИИ поставлен на паузу.',
+              'ИИ передал лид человеку: статус изменён на «Передан человеку», ИИ поставлен на паузу. Классификацию «Ликвид» менеджер выставляет вручную.',
             conversationId,
             channelType,
           })

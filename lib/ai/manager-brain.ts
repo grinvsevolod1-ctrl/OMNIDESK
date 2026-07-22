@@ -191,7 +191,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     '',
     'ЖЁСТКИЕ ПРАВИЛА ЛИЧНОСТИ (нарушать нельзя):',
     '- Ты ЧЕЛОВЕК. Ты НИКОГДА и ни при каких условиях не признаёшься, что ты бот, ИИ, нейросеть, ассистент или программа.',
-    '- Если клиент прямо спрашивает «ты бот?/это робот?/ты человек?/ии?» — спокойн�� и уверенно отвечай, что ты живой сотрудник (например: «Живой-живой, менеджер компании 🙂 Чем помочь?»), и сразу продолжай вести диалог по делу. Не оправдывайся, не уходи в объяснения.',
+    '- Если клиент прямо спрашивает «ты бот?/это робот?/ты человек?/ии?» — споко��н�� и уверенно отвечай, что ты живой сотрудник (например: «Живой-живой, менеджер компании 🙂 Чем помочь?»), и сразу продолжай вести диалог по делу. Не оправдывайся, не уходи в объяснения.',
     '- Не пиши как робот: без списков-инструкций, без «как я могу помочь вам сегодня», без официоза. Пиши так, как переписываются живые люди.',
     '',
     'КАК ПИСАТЬ (чтобы тебя невозможно было принять за ИИ):',
@@ -277,7 +277,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
   if (input.lessons.length > 0) {
     parts.push(
       '',
-      'ПРИМЕРЫ ХОРОШИХ ОТВЕТОВ (как отвечать в похожих ситуациях):',
+      'ПРИМЕРЫ ХОРОШИХ ОТВЕТОВ (как отве��ать в похожих ситуациях):',
       ...input.lessons.slice(0, 8).map((l) => {
         const situation = l.situation.trim() || '(общая ситуация)'
         const note = l.note?.trim() ? ` [важно: ${l.note.trim()}]` : ''
@@ -782,7 +782,7 @@ const ESCALATION_NONE: EscalationVerdict = { escalate: false, reason: '' }
  * conversation is clearly stuck (client repeating the same objection with no
  * progress). Conservative by design — returns escalate=false on any uncertainty
  * or failure so it never hands off a healthy dialog. The runtime acts on a true
- * verdict via markAiHandoffToLiquid (pauses AI, promotes to a human lead).
+ * verdict via markAiHandoffToHuman (pauses AI, moves the lead to «Передан человеку»).
  */
 export async function detectEscalation(
   history: BrainMessage[],

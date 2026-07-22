@@ -94,7 +94,7 @@ export type GoalMessenger = 'any' | 'telegram' | 'whatsapp'
 export type ClickMessenger = 'telegram' | 'whatsapp'
 
 function emptyStatusCounts(): Record<LeadStatus, number> {
-  return { unsubscribed: 0, liquid: 0, not_liquid: 0, transferred: 0 }
+  return { unsubscribed: 0, handoff: 0, liquid: 0, not_liquid: 0, transferred: 0 }
 }
 
 function emptyReasonCounts(): Record<NotLiquidReason, number> {
@@ -413,6 +413,7 @@ export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
       total: string
       unanswered: string
       eff_unsubscribed: string
+      eff_handoff: string
       eff_liquid: string
       eff_not_liquid: string
       eff_transferred: string
@@ -422,6 +423,7 @@ export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
               count(*)::int AS total,
               count(*) FILTER (WHERE unread > 0)::int AS unanswered,
               count(*) FILTER (WHERE eff = 'unsubscribed')::int AS eff_unsubscribed,
+              count(*) FILTER (WHERE eff = 'handoff')::int AS eff_handoff,
               count(*) FILTER (WHERE eff = 'liquid')::int AS eff_liquid,
               count(*) FILTER (WHERE eff = 'not_liquid')::int AS eff_not_liquid,
               count(*) FILTER (WHERE eff = 'transferred')::int AS eff_transferred,
@@ -469,6 +471,7 @@ export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
     const byStatus = emptyStatusCounts()
     if (c) {
       byStatus.unsubscribed = Number(c.eff_unsubscribed)
+      byStatus.handoff = Number(c.eff_handoff)
       byStatus.liquid = Number(c.eff_liquid)
       byStatus.not_liquid = Number(c.eff_not_liquid)
       byStatus.transferred = Number(c.eff_transferred)

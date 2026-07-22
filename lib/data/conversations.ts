@@ -95,6 +95,11 @@ export async function getConversation(
  * The legacy `ai_autopilot_enabled` flag is kept in sync so old readers agree.
  * Resuming also clears any pending handoff banner. Manager-scoped; returns the
  * new "AI is leading here" state, or null when the thread isn't owned.
+ *
+ * Turning the AI OFF is a manager takeover, so it also moves the lead to
+ * «Передан человеку» ('handoff') — but only while it still has its default
+ * status, so a manual «Ликвид»/«Не ликвид»/«Передан» classification is never
+ * overwritten. Turning the AI back ON never touches the status.
  */
 export async function setConversationAiAutopilot(
   conversationId: string,
@@ -105,7 +110,13 @@ export async function setConversationAiAutopilot(
     `UPDATE conversations
         SET ai_paused = $3,
             ai_autopilot_enabled = $4,
-            ai_handoff_pending = CASE WHEN $4 THEN false ELSE ai_handoff_pending END
+            ai_handoff_pending = CASE WHEN $4 THEN false ELSE ai_handoff_pending END,
+            status = CASE
+              WHEN NOT $4 AND COALESCE(status, 'unsubscribed') = 'unsubscribed'
+              THEN 'handoff' ELSE status END,
+            status_updated_at = CASE
+              WHEN NOT $4 AND COALESCE(status, 'unsubscribed') = 'unsubscribed'
+              THEN now() ELSE status_updated_at END
       WHERE id = $1 AND manager_id = $2
       RETURNING ai_paused`,
     [conversationId, managerId, !enabled, enabled],
@@ -268,11 +279,22 @@ export async function addMessage(input: {
     // for this conversation (global-lead opt-out) in the same UPDATE. AI-authored
     // rows keep it running. The legacy `ai_autopilot_enabled` flag is cleared too
     // so both old and new readers agree.
+    //
+    // A manager stepping in also moves the lead to «Передан человеку» ('handoff')
+    // — but ONLY while it still has its default status, so a manual «Ликвид» /
+    // «Не ликвид» / «Передан» classification is never clobbered. AI-authored rows
+    // never touch the status. This mirrors the AI's own handoff and keeps the
+    // «Ликвид» decision manager-only.
+    const humanTakeover = !input.byAi
+      ? `, ai_paused = true, ai_autopilot_enabled = false,
+         status = CASE WHEN COALESCE(status, 'unsubscribed') = 'unsubscribed'
+                       THEN 'handoff' ELSE status END,
+         status_updated_at = CASE WHEN COALESCE(status, 'unsubscribed') = 'unsubscribed'
+                                  THEN now() ELSE status_updated_at END`
+      : ''
     await db.query(
       `UPDATE conversations
-          SET last_message = $2, last_message_at = now(), unread = 0${
-            input.byAi ? '' : ', ai_paused = true, ai_autopilot_enabled = false'
-          }
+          SET last_message = $2, last_message_at = now(), unread = 0${humanTakeover}
         WHERE id = $1`,
       [input.conversationId, input.preview ?? input.body],
     )

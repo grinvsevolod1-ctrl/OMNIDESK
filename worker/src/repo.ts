@@ -1315,17 +1315,19 @@ export async function isConversationAiLed(
 }
 
 /**
- * The AI decided this lead is ready («Ликвид») and hands it to a human. Only
- * promotes when the lead still has its default status, pauses the AI so the
- * human takes over, and flags a pending handoff for the panel banner. Returns
- * true when it actually promoted (mirror of the panel's markAiHandoffToLiquid).
+ * The AI hands the dialogue to a human and moves the lead to «Передан человеку»
+ * ('handoff'). Only promotes when the lead still has its default status, pauses
+ * the AI so the human takes over, and flags a pending handoff for the panel
+ * banner. The AI never assigns «Ликвид» itself — that stays a manager-only
+ * decision. Returns true when it actually promoted (mirror of the panel's
+ * markAiHandoffToHuman).
  */
-export async function markAiHandoffToLiquid(
+export async function markAiHandoffToHuman(
   conversationId: string,
 ): Promise<boolean> {
   const rows = await query<{ id: string }>(
     `UPDATE conversations
-        SET status = 'liquid',
+        SET status = 'handoff',
             status_detail = NULL,
             status_updated_at = now(),
             ai_paused = true,

@@ -131,6 +131,7 @@ const CONV_STATUS_LABEL: Record<string, string> = {
   liquid: 'Ликвид',
   not_liquid: 'Не ликвид',
   unsubscribed: 'Отписка',
+  handoff: 'Передан человеку',
   transferred: 'Передан',
 }
 
@@ -138,6 +139,7 @@ const CONV_STATUS_STYLE: Record<string, string> = {
   liquid: 'bg-success/15 text-success',
   not_liquid: 'bg-warning/15 text-warning',
   unsubscribed: 'bg-muted text-muted-foreground',
+  handoff: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
   transferred: 'bg-chart-2/15 text-foreground',
 }
 
@@ -942,7 +944,7 @@ function MassImportTab({
             <ToggleTile
               active={withMessage}
               onClick={() => setWithMessage((v) => !v)}
-              title="С первым сообщением"
+              title="С первы�� сообщением"
               description="Добавить входящее сообщение от клиента"
             />
             <ToggleTile
