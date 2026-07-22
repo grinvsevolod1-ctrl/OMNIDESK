@@ -516,20 +516,22 @@ export function SecretConsole({
             />
           </div>
           <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                className="relative h-9 w-9 shrink-0"
-                aria-label="Фильтры"
-              >
-                <Filter className="size-4" />
-                {activeFilterCount > 0 && (
-                  <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground tabular-nums">
-                    {activeFilterCount}
-                  </span>
-                )}
-              </Button>
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="relative h-9 w-9 shrink-0"
+                  aria-label="Фильтры"
+                />
+              }
+            >
+              <Filter className="size-4" />
+              {activeFilterCount > 0 && (
+                <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground tabular-nums">
+                  {activeFilterCount}
+                </span>
+              )}
             </PopoverTrigger>
             <PopoverContent align="end" className="w-64 space-y-3">
               <div className="flex items-center justify-between">
@@ -970,10 +972,12 @@ function ThreadHeader({
 
       {/* Everything else tucked away to keep the header calm. */}
       <Popover>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="icon" className="size-9 shrink-0" aria-label="Действия и детали">
-            <MoreHorizontal className="size-4" />
-          </Button>
+        <PopoverTrigger
+          render={
+            <Button variant="outline" size="icon" className="size-9 shrink-0" aria-label="Действия и детали" />
+          }
+        >
+          <MoreHorizontal className="size-4" />
         </PopoverTrigger>
         <PopoverContent align="end" className="w-64 space-y-3">
           <div className="grid gap-1.5">
