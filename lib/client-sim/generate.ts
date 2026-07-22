@@ -111,10 +111,10 @@ function avoidBlock(avoidLines: string[] | undefined): string {
   // Show recently-used lines (this persona's own + what other "clients" just
   // sent) so the model actively avoids reusing the same openings/words — the
   // #1 tell of a bot farm.
-  const list = avoidLines.slice(-14).map((l) => `- ${l}`).join('\n')
+  const list = avoidLines.slice(-22).map((l) => `- ${l}`).join('\n')
   return [
     '',
-    'ЭТИ ФРАЗЫ УЖЕ ЗВУЧАЛИ НЕДАВНО (НЕ повторяй их и похожие обороты/слова, скажи совершенно иначе, по-своему):',
+    'ЭТИ ФРАЗ�� УЖЕ ЗВУЧАЛИ НЕДАВНО (НЕ повторяй их и похожие обороты/слова, скажи совершенно иначе, по-своему):',
     list,
   ].join('\n')
 }
@@ -135,7 +135,7 @@ const TONE_REGISTER: Record<string, string> = {
   polite:
     'ТОН ОБЩЕНИЯ — ВЕЖЛИВЫЙ: пиши грамотно и уважительно, на «вы». Здоровайся культурно («Здравствуйте», «Добрый день»). Ставь знаки препинания и заглавные буквы. Никакого мата и грубости, даже если раздражён — оставайся корректным.',
   neutral:
-    'ТОН ОБЩЕНИЯ — ��БЫЧНЫЙ: пиши по-человечески и спокойно, как нормальный взрослый в переписке. Здоровайся нейтрально («Здравствуйте», «Добрый день», можно «Привет»). Лёгкая небреж����ость допустима, но без грубости и без мата.',
+    'ТОН ОБЩЕНИЯ — ����БЫЧНЫЙ: пиши по-человечески и спокойно, как нормальный взрослый в переписке. Здоровайся нейтрально («Здравствуйте», «Добрый день», можно «Привет»). Лёгкая небреж����ость допустима, но без грубости и без мата.',
   rough:
     'ТОН ОБЩЕНИЯ — РАЗВЯЗНЫЙ: пиши по-простому и панибратски («привет», «здарова», «чё», «скок»). Грубость и мат допустимы по настроению.',
   mixed:
@@ -283,7 +283,23 @@ function correctionsBlock(rules: string[] | undefined): string {
   const lines = rules.map((r, i) => `${i + 1}. ${r}`)
   return [
     '',
-    'ЖЁСТКИЕ ПРАВИЛА ОТ КУРАТОРА (высший приоритет, важнее всех остальных инструкций — НИКОГДА их не нарушай, даже если это противоречит чему-то выше):',
+    'ЖЁСТКИЕ ПРАВИЛА ОТ КУРАТОРА (высший приоритет, важнее ВСЕХ остальных инструкций — НИКОГДА их не нарушай, даже если это противоречит чему-то выше). Перечитай их перед каждым ответом и проверь, что твоя реплика им не противоречит:',
+    ...lines,
+  ].join('\n')
+}
+
+/**
+ * A SHORT restatement of the curator's rules placed at the very END of the
+ * prompt. LLMs weight the tail of the prompt most heavily (recency), so
+ * repeating the rules here is the single most effective fix for "the model
+ * forgets the lessons I gave it". No-op when there are no rules.
+ */
+function correctionsReminder(rules: string[] | undefined): string {
+  if (!rules || rules.length === 0) return ''
+  const lines = rules.map((r, i) => `${i + 1}. ${r}`)
+  return [
+    '',
+    'И ГЛАВНОЕ — не забудь ПРАВИЛА КУРАТОРА, они важнее всего остального:',
     ...lines,
   ].join('\n')
 }
@@ -375,6 +391,7 @@ function systemPrompt(
         ? 'Тебя настораживает это предложение, оно кажется подозрительным. Вырази сомнение и недовольство сдержанно и вежливо, без грубости и мата.'
         : BEHAVIOR_HINT[behavior]
     }`,
+    correctionsReminder(corrections),
     '',
     'Ответь ТОЛЬКО текстом сообщения, без кавычек, без пояснений, без префиксов.',
   ]
@@ -444,9 +461,9 @@ function tooSimilar(line: string, ownLines: string[]): boolean {
     if (p === n) return true
     if (isShort && p.split(' ').filter(Boolean).length <= 3) {
       // treat near-identical short lines (same word set) as duplicates
-      if (similarity(line, prev) >= 0.5) return true
+      if (similarity(line, prev) >= 0.4) return true
     }
-    return similarity(line, prev) >= 0.6
+    return similarity(line, prev) >= 0.5
   })
 }
 
