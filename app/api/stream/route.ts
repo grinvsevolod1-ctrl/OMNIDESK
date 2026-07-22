@@ -65,26 +65,41 @@ export async function GET(request: Request): Promise<Response> {
         const since = new Date(lastEventId)
         if (!Number.isNaN(since.getTime())) {
           try {
-            const missed = await getMessagesSince(managerId, since)
-            for (const m of missed) {
-              send(
-                'update',
-                {
-                  type: 'message',
-                  managerId,
-                  conversationId: m.conversationId,
-                  channelId: m.channelId,
-                  contactHandle: m.contactHandle,
-                  id: m.id,
-                  direction: m.direction,
-                  body: m.body,
-                  author: m.author,
-                  createdAt: m.createdAt,
-                  status: m.status,
-                  replay: true,
-                },
-                m.createdAt,
-              )
+            const { messages: missed, truncated } = await getMessagesSince(
+              managerId,
+              since,
+            )
+            if (truncated) {
+              // The client missed more messages than we replay. Replaying a
+              // partial set would leave the inbox silently out of sync, so
+              // instead tell it to pull fresh server data in full. No `id` is
+              // sent so this doesn't advance Last-Event-ID.
+              send('update', {
+                type: 'conversation',
+                managerId,
+                event: 'resync',
+              })
+            } else {
+              for (const m of missed) {
+                send(
+                  'update',
+                  {
+                    type: 'message',
+                    managerId,
+                    conversationId: m.conversationId,
+                    channelId: m.channelId,
+                    contactHandle: m.contactHandle,
+                    id: m.id,
+                    direction: m.direction,
+                    body: m.body,
+                    author: m.author,
+                    createdAt: m.createdAt,
+                    status: m.status,
+                    replay: true,
+                  },
+                  m.createdAt,
+                )
+              }
             }
           } catch (err) {
             console.error('[stream] gap-recovery backfill failed:', err)

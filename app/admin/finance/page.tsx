@@ -10,13 +10,18 @@ export const dynamic = 'force-dynamic'
 
 export default async function AdminFinancePage() {
   await requireAdmin()
-  const [data, rates] = await Promise.all([getFinanceData(), getUsdRates()])
+  // Курс USD не зависит от финансовых данных — запускаем его сразу, чтобы он
+  // выполнялся параллельно и с getFinanceData, и с последующим подсчётом лидов.
+  const ratesPromise = getUsdRates()
+  const data = await getFinanceData()
 
   // Реальные лиды по каждому источнику: обращения из привязанных каналов
-  // (единая логика с «Обзором»), а не выдуманные числа из кабинетов.
-  const resourceLeads = await getResourceLeadCounts(
-    data.resources.map((r) => r.id),
-  )
+  // (единая логика с «Обзором»), а не выдуманные числа из кабинетов. Зависит от
+  // data.resources, поэтому считается после finance — но параллельно с курсом.
+  const [rates, resourceLeads] = await Promise.all([
+    ratesPromise,
+    getResourceLeadCounts(data.resources.map((r) => r.id)),
+  ])
 
   return (
     <div className="flex flex-col gap-6">

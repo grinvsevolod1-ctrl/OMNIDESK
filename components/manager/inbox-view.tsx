@@ -1709,6 +1709,18 @@ export function InboxView({
 
   // Realtime: refresh on worker updates and track connection state.
   useEffect(() => {
+    // Coalesce bursts of realtime events into a single server refetch.
+    // router.refresh() re-runs the entire server component tree (re-querying
+    // all conversations + messages), so calling it once per event caused a
+    // refresh storm whenever several conversations were active at once.
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = () => {
+      if (refreshTimer) return
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null
+        router.refresh()
+      }, 400)
+    }
     const es = new EventSource('/api/stream')
     es.addEventListener('ready', () => setSyncState('live'))
     es.onopen = () => setSyncState('live')
@@ -1774,8 +1786,8 @@ export function InboxView({
         return
       }
       // Everything else (new inbound message, conversation/channel changes):
-      // pull fresh server data.
-      router.refresh()
+      // pull fresh server data (debounced to avoid a refresh storm).
+      scheduleRefresh()
     })
     // Ephemeral "visitor is typing" pings (with a live draft preview). Kept in
     // local state only — never persisted, never trigger a refetch.
@@ -1857,6 +1869,7 @@ export function InboxView({
     return () => {
       es.close()
       clearInterval(sweep)
+      if (refreshTimer) clearTimeout(refreshTimer)
     }
   }, [router])
 
@@ -3766,7 +3779,7 @@ export function InboxView({
             </div>
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-foreground">
-                Заметка для коллеги (необязательно)
+                Заметка для коллеги (необя��ательно)
               </span>
               <Textarea
                 value={transferNote}

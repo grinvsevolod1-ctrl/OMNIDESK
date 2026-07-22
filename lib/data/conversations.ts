@@ -166,29 +166,44 @@ export async function listMessages(
  * ordered oldest-first. Used by the SSE route to replay events a browser
  * missed while it was disconnected (gap recovery via Last-Event-ID).
  */
+const GAP_RECOVERY_LIMIT = 500
+
 export async function getMessagesSince(
   managerId: string,
   since: Date,
-): Promise<
-  Array<Message & { contactHandle: string; channelId: string }>
-> {
+): Promise<{
+  messages: Array<Message & { contactHandle: string; channelId: string }>
+  /**
+   * True when more than GAP_RECOVERY_LIMIT messages were missed. The caller
+   * must NOT trust `messages` as complete in that case and should force a full
+   * client resync instead of replaying a partial (lossy) set.
+   */
+  truncated: boolean
+}> {
   const rows = await query<
     MessageRow & { channel_id: string; contact_handle: string }
   >(
+    // Fetch one extra row so we can detect (rather than silently swallow) the
+    // case where the client missed more than the replay limit.
     `SELECT ${MESSAGE_SELECT}, c.channel_id, c.contact_handle
      FROM messages m
      JOIN conversations c ON c.id = m.conversation_id
      ${MESSAGE_REPLY_JOIN}
      WHERE c.manager_id = $1 AND m.created_at > $2
      ORDER BY m.created_at ASC
-     LIMIT 500`,
-    [managerId, since.toISOString()],
+     LIMIT $3`,
+    [managerId, since.toISOString(), GAP_RECOVERY_LIMIT + 1],
   )
-  return rows.map((r) => ({
-    ...toMessage(r),
-    channelId: r.channel_id,
-    contactHandle: r.contact_handle,
-  }))
+  const truncated = rows.length > GAP_RECOVERY_LIMIT
+  const capped = truncated ? rows.slice(0, GAP_RECOVERY_LIMIT) : rows
+  return {
+    messages: capped.map((r) => ({
+      ...toMessage(r),
+      channelId: r.channel_id,
+      contactHandle: r.contact_handle,
+    })),
+    truncated,
+  }
 }
 
 /**
@@ -220,46 +235,55 @@ export async function addMessage(input: {
    */
   byAi?: boolean
 }): Promise<Message | null> {
-  const owns = await query<{ id: string }>(
-    'SELECT id FROM conversations WHERE id = $1 AND manager_id = $2',
-    [input.conversationId, input.managerId],
-  )
-  if (owns.length === 0) return null
+  // Run the insert + conversation update atomically so a crash between the two
+  // can never leave a persisted message whose conversation preview / ai_paused
+  // state was never updated (a visible desync of the list and AI-lead state).
+  // Ownership is folded into the INSERT (INSERT ... SELECT ... WHERE manager_id)
+  // so we neither insert into someone else's conversation nor pay an extra
+  // round-trip for the check.
+  return withTransaction(async (db) => {
+    const rows = await db.query<{ id: string }>(
+      `INSERT INTO messages
+         (conversation_id, direction, body, author, media_type, media_mime, media_name, media_ref, reply_to_message_id, status)
+       SELECT c.id, 'out', $2, $3, $4, $5, $6, $7, $8, 'sent'
+         FROM conversations c
+        WHERE c.id = $1 AND c.manager_id = $9
+       RETURNING id`,
+      [
+        input.conversationId,
+        input.body,
+        input.author,
+        input.mediaType ?? null,
+        input.mediaMime ?? null,
+        input.mediaName ?? null,
+        input.mediaRef ? JSON.stringify(input.mediaRef) : null,
+        input.replyToMessageId ?? null,
+        input.managerId,
+      ],
+    )
+    // No row inserted => the conversation doesn't belong to this manager.
+    if (rows.length === 0) return null
 
-  const rows = await query<{ id: string; created_at: string | Date }>(
-    `INSERT INTO messages
-       (conversation_id, direction, body, author, media_type, media_mime, media_name, media_ref, reply_to_message_id, status)
-     VALUES ($1, 'out', $2, $3, $4, $5, $6, $7, $8, 'sent') RETURNING id, created_at`,
-    [
-      input.conversationId,
-      input.body,
-      input.author,
-      input.mediaType ?? null,
-      input.mediaMime ?? null,
-      input.mediaName ?? null,
-      input.mediaRef ? JSON.stringify(input.mediaRef) : null,
-      input.replyToMessageId ?? null,
-    ],
-  )
-  // A human outbound message hands the thread back from the AI: pause AI-lead
-  // for this conversation (global-lead opt-out) in the same UPDATE. AI-authored
-  // rows keep it running. The legacy `ai_autopilot_enabled` flag is cleared too
-  // so both old and new readers agree.
-  await query(
-    `UPDATE conversations
-        SET last_message = $2, last_message_at = now(), unread = 0${
-          input.byAi ? '' : ', ai_paused = true, ai_autopilot_enabled = false'
-        }
-      WHERE id = $1`,
-    [input.conversationId, input.preview ?? input.body],
-  )
-  // Re-read through the standard select so the returned message carries the
-  // hydrated reply preview (author/body of the quoted message).
-  const full = await query<MessageRow>(
-    `SELECT ${MESSAGE_SELECT} FROM messages m ${MESSAGE_REPLY_JOIN} WHERE m.id = $1`,
-    [rows[0].id],
-  )
-  return full[0] ? toMessage(full[0]) : null
+    // A human outbound message hands the thread back from the AI: pause AI-lead
+    // for this conversation (global-lead opt-out) in the same UPDATE. AI-authored
+    // rows keep it running. The legacy `ai_autopilot_enabled` flag is cleared too
+    // so both old and new readers agree.
+    await db.query(
+      `UPDATE conversations
+          SET last_message = $2, last_message_at = now(), unread = 0${
+            input.byAi ? '' : ', ai_paused = true, ai_autopilot_enabled = false'
+          }
+        WHERE id = $1`,
+      [input.conversationId, input.preview ?? input.body],
+    )
+    // Re-read through the standard select so the returned message carries the
+    // hydrated reply preview (author/body of the quoted message).
+    const full = await db.query<MessageRow>(
+      `SELECT ${MESSAGE_SELECT} FROM messages m ${MESSAGE_REPLY_JOIN} WHERE m.id = $1`,
+      [rows[0].id],
+    )
+    return full[0] ? toMessage(full[0]) : null
+  })
 }
 
 /**

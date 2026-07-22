@@ -178,10 +178,22 @@ export function SecretDashboard({
 
   // Live refresh: re-run the RSC every 20s so metrics/tables stay current
   // without any client-side fetching. Pausable to avoid churn while typing.
+  // Skipped while the tab is hidden so a backgrounded dashboard doesn't keep
+  // hammering the server (each refresh re-runs the whole RSC + its DB queries);
+  // we refresh once immediately when the tab becomes visible again.
   useEffect(() => {
     if (!autoRefresh) return
-    const id = setInterval(() => router.refresh(), 20_000)
-    return () => clearInterval(id)
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') router.refresh()
+    }, 20_000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') router.refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [autoRefresh, router])
 
   function run(action: () => Promise<ActionResult>, onDone?: () => void) {

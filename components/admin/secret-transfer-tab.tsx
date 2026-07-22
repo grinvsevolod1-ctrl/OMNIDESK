@@ -83,16 +83,23 @@ export function SecretTransferTab({ managers }: { managers: Manager[] }) {
     return (id: string) => map.get(id) ?? '—'
   }, [managers])
 
-  // Load the source manager's dialogs whenever the source changes.
-  useEffect(() => {
-    if (!fromId) {
-      setConversations([])
-      setSelected(new Set())
-      return
-    }
-    let active = true
-    setLoadingList(true)
+  // Reset the list/selection the moment the source manager changes. Doing this
+  // during render (React's "adjust state when a prop changes" pattern) instead
+  // of inside the effect avoids the cascading-render caused by synchronous
+  // setState in an effect body.
+  const [trackedFrom, setTrackedFrom] = useState(fromId)
+  if (fromId !== trackedFrom) {
+    setTrackedFrom(fromId)
     setSelected(new Set())
+    setConversations([])
+    setLoadingList(Boolean(fromId))
+  }
+
+  // Load the source manager's dialogs whenever the source changes. The effect
+  // now only performs the async fetch; all synchronous resets happen above.
+  useEffect(() => {
+    if (!fromId) return
+    let active = true
     secretListManagerConversationsAction(fromId)
       .then((rows) => {
         if (active) setConversations(rows)

@@ -90,22 +90,46 @@ async function resolveUniqueUsername(base: string): Promise<string> {
 }
 
 /**
+ * Short-lived in-process cache for auth-state lookups. getManagerAuthState runs
+ * on EVERY authenticated request (getSession), so an un-cached query is a heavy,
+ * high-frequency load on the pool. A tiny TTL keeps the security guarantee
+ * essentially intact: blocking/password changes take effect within the TTL
+ * (and we also invalidate explicitly the moment session_version is bumped).
+ */
+type AuthState = { status: ManagerStatus; sessionVersion: number }
+const AUTH_STATE_TTL_MS = 5_000
+const authStateCache = new Map<string, { value: AuthState | null; expires: number }>()
+
+/** Drop a manager's cached auth state so the next request re-reads the DB. */
+export function invalidateManagerAuthState(id: string): void {
+  authStateCache.delete(id)
+}
+
+/**
  * Lightweight auth-state lookup used on every authenticated request to validate
  * a manager's session against the live DB (blocked status + session version).
- * Returns null when the manager no longer exists.
+ * Returns null when the manager no longer exists. Results are cached for a few
+ * seconds; see invalidateManagerAuthState for immediate revocation.
  */
 export async function getManagerAuthState(
   id: string,
-): Promise<{ status: ManagerStatus; sessionVersion: number } | null> {
+): Promise<AuthState | null> {
+  const now = Date.now()
+  const cached = authStateCache.get(id)
+  if (cached && cached.expires > now) return cached.value
+
   const rows = await query<{
     status: ManagerStatus
     session_version: number
   }>('SELECT status, session_version FROM managers WHERE id = $1 LIMIT 1', [id])
-  if (!rows[0]) return null
-  return {
-    status: rows[0].status,
-    sessionVersion: rows[0].session_version ?? 0,
-  }
+  const value: AuthState | null = rows[0]
+    ? {
+        status: rows[0].status,
+        sessionVersion: rows[0].session_version ?? 0,
+      }
+    : null
+  authStateCache.set(id, { value, expires: now + AUTH_STATE_TTL_MS })
+  return value
 }
 
 export async function getManagerById(id: string): Promise<Manager | null> {
@@ -161,6 +185,8 @@ export async function updateManagerStatus(
       WHERE id = $1`,
     [id, status],
   )
+  // Revoke any cached auth state immediately so blocking takes effect now.
+  invalidateManagerAuthState(id)
 }
 
 export async function updateManagerPassword(
@@ -174,6 +200,8 @@ export async function updateManagerPassword(
     'UPDATE managers SET password_hash = $2, session_version = session_version + 1 WHERE id = $1',
     [id, passwordHash],
   )
+  // A password change bumps session_version; drop cache so it applies at once.
+  invalidateManagerAuthState(id)
 }
 
 export async function deleteManager(id: string): Promise<void> {
@@ -211,5 +239,7 @@ export async function deleteManager(id: string): Promise<void> {
   // Finally remove the manager. Their own conversations cascade away; live-chat
   // channels they owned have manager_id set to NULL by the FK.
   await query('DELETE FROM managers WHERE id = $1', [id])
+  // Drop cached auth state so the deleted manager is logged out immediately.
+  invalidateManagerAuthState(id)
 }
 

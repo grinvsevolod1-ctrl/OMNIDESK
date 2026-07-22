@@ -57,11 +57,20 @@ function createPool(): Pool {
         '(see .env.example) and run `pnpm db:migrate`.',
     )
   }
+  // Pool size must accommodate concurrent managers, the realtime listener,
+  // webhook handlers and the worker. 10 is far too small once several
+  // managers are online (getSession hits the DB on every request), so default
+  // to 20 and allow tuning per deployment via PGPOOL_MAX. connectionTimeoutMillis
+  // makes callers fail fast with a clear error instead of hanging forever when
+  // the pool is exhausted.
+  const maxRaw = Number.parseInt(process.env.PGPOOL_MAX || '', 10)
+  const max = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 20
   const pool = new Pool({
     connectionString,
     ssl: resolveSslConfig(connectionString),
-    max: 10,
+    max,
     idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
   })
   pool.on('error', (err) => {
     console.error('[db] Unexpected PostgreSQL pool error:', err.message)
