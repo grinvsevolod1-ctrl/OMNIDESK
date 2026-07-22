@@ -23,10 +23,10 @@ CREATE TABLE IF NOT EXISTS ai_knowledge (
 );
 
 -- Approximate nearest-neighbour index (cosine distance) for fast retrieval.
--- ivfflat needs ANALYZE after data loads to pick good lists; fine for our size.
+-- HNSW needs no training and works well from an empty table onward, which fits
+-- an incrementally-edited knowledge base better than ivfflat.
 CREATE INDEX IF NOT EXISTS ai_knowledge_embedding_idx
-  ON ai_knowledge USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 100);
+  ON ai_knowledge USING hnsw (embedding vector_cosine_ops);
 
 CREATE INDEX IF NOT EXISTS ai_knowledge_enabled_idx
   ON ai_knowledge (enabled) WHERE enabled = true;

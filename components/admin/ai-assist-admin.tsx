@@ -25,6 +25,7 @@ import {
   aiListKnowledgeAction,
   aiModelStatsAction,
   aiSampleConversationsAction,
+  aiScoreSummaryAction,
   aiSaveKnowledgeAction,
   aiSaveLessonAction,
   aiSuggestReplyAction,
@@ -37,6 +38,7 @@ import type {
   AiAssistSettings,
   AiModelStat,
   KnowledgeEntry,
+  ManagerScoreSummary,
   TrainableAccount,
   TrainingSample,
 } from '@/lib/data/ai-assist'
@@ -368,6 +370,8 @@ function SettingsTab({
 
       <ModelStatsCard />
 
+      <ManagerScoreCard />
+
       <KnowledgeBaseCard />
 
       {settings.playbook.length > 0 ? (
@@ -602,6 +606,120 @@ function ModelStatsCard() {
             </tbody>
           </table>
         </div>
+      )}
+    </Card>
+  )
+}
+
+/* --------------------------- Manager scoring ---------------------------- */
+
+/** Colour a 0..100 score into a semantic tone. */
+function scoreTone(score: number): string {
+  if (score >= 75) return 'text-primary'
+  if (score >= 50) return 'text-foreground'
+  return 'text-destructive'
+}
+
+/**
+ * Self-play scorecards: after each simulated dialogue ends, a coach model grades
+ * how the AI manager handled it and (on misses) feeds a lesson back to the brain.
+ * This card surfaces the running average and recent verdicts so the operator can
+ * see the AI actually improving over time.
+ */
+function ManagerScoreCard() {
+  const [data, setData] = useState<ManagerScoreSummary | null>(null)
+  const [loading, startLoad] = useTransition()
+
+  const load = useCallback(() => {
+    startLoad(async () => {
+      try {
+        setData(await aiScoreSummaryAction())
+      } catch {
+        /* silent — card just stays empty */
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  return (
+    <Card className="flex flex-col gap-3 p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <GaugeCircle className="size-4 text-primary" />
+          <p className="font-medium">Оценка работы ИИ-менеджера</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+          {loading ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="size-4" />
+          )}
+          Обновить
+        </Button>
+      </div>
+
+      <p className="text-sm text-muted-foreground">
+        Тренажёр сам оценивает, как ИИ отработал диалог, и на промахах добавляет
+        себе уроки. Средний балл показывает, как ИИ учится со временем.
+      </p>
+
+      {!data || data.count === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          Пока нет оценок. Они появятся после завершённых диалогов в тренажёре.
+        </p>
+      ) : (
+        <>
+          <div className="flex items-baseline gap-2">
+            <span
+              className={`text-3xl font-semibold tabular-nums ${scoreTone(
+                data.avgScore,
+              )}`}
+            >
+              {data.avgScore}
+            </span>
+            <span className="text-sm text-muted-foreground">
+              / 100 средний балл · {data.count} диалог(ов) за 30 дней
+            </span>
+          </div>
+
+          <ul className="flex flex-col gap-2">
+            {data.recent.map((r) => (
+              <li
+                key={r.conversationId}
+                className="rounded-lg border border-border p-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span
+                    className={`text-lg font-semibold tabular-nums ${scoreTone(
+                      r.score,
+                    )}`}
+                  >
+                    {r.score}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                    {r.summary || r.outcome}
+                  </span>
+                </div>
+                {r.weaknesses.length > 0 ? (
+                  <ul className="mt-2 flex flex-col gap-1">
+                    {r.weaknesses.slice(0, 3).map((w, i) => (
+                      <li
+                        key={i}
+                        className="flex gap-1.5 text-xs text-muted-foreground"
+                      >
+                        <span className="text-destructive">−</span>
+                        <span>{w}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </Card>
   )
