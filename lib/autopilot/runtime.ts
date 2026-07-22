@@ -8,6 +8,7 @@ import {
   listBrainLessons,
   listManualCorrectionRules,
   markAiHandoffToLiquid,
+  recordAiGenerationMetric,
 } from '../data/ai-assist'
 import {
   assessLeadReady,
@@ -135,7 +136,7 @@ async function runLivechatAiLead(input: {
 }): Promise<boolean> {
   // Diagnostics sink for this conversation — everything lands in the panel
   // "Логи" tab tagged to this thread/channel.
-  const log: BrainLog = (e) =>
+  const log: BrainLog = (e) => {
     void logAi({
       level: e.level,
       source: 'brain',
@@ -145,6 +146,28 @@ async function runLivechatAiLead(input: {
       channelType: 'livechat',
       meta: e.meta ?? null,
     })
+    // Persist durable A/B metrics on the brain's per-call metric event.
+    if (e.event === 'gateway.metrics' && e.meta) {
+      const m = e.meta as Record<string, unknown>
+      void recordAiGenerationMetric({
+        model: String(m.model ?? ''),
+        runtime: 'livechat',
+        purpose: (m.purpose as 'reply' | 'assess') ?? 'reply',
+        outcome:
+          (m.outcome as
+            | 'ok'
+            | 'empty'
+            | 'refused'
+            | 'http_error'
+            | 'exception') ?? 'ok',
+        latencyMs: typeof m.latencyMs === 'number' ? m.latencyMs : null,
+        promptTokens: typeof m.promptTokens === 'number' ? m.promptTokens : null,
+        completionTokens:
+          typeof m.completionTokens === 'number' ? m.completionTokens : null,
+        conversationId: input.conversationId,
+      })
+    }
+  }
 
   // Single-flight per conversation: if a reply is already being generated for
   // this thread, treat this inbound as handled so we never double-answer.
@@ -215,6 +238,11 @@ async function runLivechatAiLead(input: {
         history,
       },
       log,
+      {
+        model: settings.model,
+        temperature: settings.temperature,
+        maxTokens: settings.maxTokens,
+      },
     )
     if (!reply) {
       void logAi({
@@ -270,6 +298,7 @@ async function runLivechatAiLead(input: {
       const ready = await assessLeadReady(
         [...history, { role: 'manager', body: reply }],
         log,
+        { model: settings.model },
       )
       if (ready) {
         const promoted = await markAiHandoffToLiquid(input.conversationId)

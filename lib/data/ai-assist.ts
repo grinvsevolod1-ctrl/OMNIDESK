@@ -30,6 +30,12 @@ export interface AiAssistSettings {
   tone: string
   persona: string
   playbook: string[]
+  /** Manager-brain model id (empty → code default 'openai/gpt-4.1'). */
+  model: string
+  /** Sampling temperature 0..2. */
+  temperature: number
+  /** Max completion tokens per reply. */
+  maxTokens: number
   updatedAt: string
 }
 
@@ -47,6 +53,9 @@ interface SettingsRow {
   tone: string
   persona: string
   playbook: string[] | null
+  model: string | null
+  temperature: number | string | null
+  max_tokens: number | string | null
   updated_at: string | Date
 }
 
@@ -65,6 +74,9 @@ function mapSettings(r: SettingsRow): AiAssistSettings {
     tone: r.tone ?? 'professional',
     persona: r.persona ?? '',
     playbook: Array.isArray(r.playbook) ? r.playbook : [],
+    model: r.model ?? '',
+    temperature: r.temperature == null ? 0.7 : Number(r.temperature),
+    maxTokens: r.max_tokens == null ? 400 : Number(r.max_tokens),
     updatedAt: new Date(r.updated_at).toISOString(),
   }
 }
@@ -85,29 +97,38 @@ export async function getAiAssistSettings(): Promise<AiAssistSettings> {
   const rows = await query<SettingsRow>(
     `INSERT INTO ai_assist_settings (id) VALUES (true)
        ON CONFLICT (id) DO UPDATE SET id = true
-     RETURNING enabled, tone, persona, playbook, updated_at`,
+     RETURNING enabled, tone, persona, playbook, model, temperature, max_tokens, updated_at`,
   )
   return mapSettings(rows[0])
 }
 
-/** Update the shared config (tone / persona / master switch). */
+/** Update the shared config (tone / persona / master switch / model tuning). */
 export async function updateAiAssistSettings(patch: {
   enabled?: boolean
   tone?: string
   persona?: string
+  model?: string
+  temperature?: number
+  maxTokens?: number
 }): Promise<AiAssistSettings> {
   const rows = await query<SettingsRow>(
     `UPDATE ai_assist_settings SET
-        enabled = COALESCE($1, enabled),
-        tone    = COALESCE($2, tone),
-        persona = COALESCE($3, persona),
+        enabled     = COALESCE($1, enabled),
+        tone        = COALESCE($2, tone),
+        persona     = COALESCE($3, persona),
+        model       = COALESCE($4, model),
+        temperature = COALESCE($5, temperature),
+        max_tokens  = COALESCE($6, max_tokens),
         updated_at = now()
       WHERE id = true
-      RETURNING enabled, tone, persona, playbook, updated_at`,
+      RETURNING enabled, tone, persona, playbook, model, temperature, max_tokens, updated_at`,
     [
       patch.enabled ?? null,
       patch.tone ?? null,
       patch.persona ?? null,
+      patch.model ?? null,
+      patch.temperature ?? null,
+      patch.maxTokens ?? null,
     ],
   )
   if (rows.length === 0) {
@@ -126,6 +147,88 @@ export async function savePlaybook(playbook: string[]): Promise<void> {
       WHERE id = true`,
     [JSON.stringify(playbook)],
   )
+}
+
+/** One manager-brain generation metric (durable A/B analytics). */
+export interface AiGenerationMetricInput {
+  model: string
+  runtime: 'livechat' | 'worker' | 'trainer'
+  purpose: 'reply' | 'assess'
+  outcome: 'ok' | 'empty' | 'refused' | 'http_error' | 'exception'
+  latencyMs?: number | null
+  promptTokens?: number | null
+  completionTokens?: number | null
+  conversationId?: string | null
+}
+
+/**
+ * Record one generation metric. Best-effort: never throws into the caller (a
+ * metrics write must never break a reply), and tolerates the table being absent
+ * pre-migration.
+ */
+export async function recordAiGenerationMetric(
+  m: AiGenerationMetricInput,
+): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO ai_generation_metrics
+         (model, runtime, purpose, outcome, latency_ms, prompt_tokens, completion_tokens, conversation_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        m.model || '',
+        m.runtime,
+        m.purpose,
+        m.outcome,
+        m.latencyMs ?? null,
+        m.promptTokens ?? null,
+        m.completionTokens ?? null,
+        m.conversationId ?? null,
+      ],
+    )
+  } catch {
+    /* metrics are non-critical — swallow (e.g. pre-migration) */
+  }
+}
+
+/** Per-model aggregate stats over the last N days (drives the A/B panel). */
+export interface AiModelStat {
+  model: string
+  total: number
+  okRate: number
+  avgLatencyMs: number
+  avgCompletionTokens: number
+}
+
+export async function getAiModelStats(days = 7): Promise<AiModelStat[]> {
+  const rows = await query<{
+    model: string
+    total: string
+    ok: string
+    avg_latency: string | null
+    avg_tokens: string | null
+  }>(
+    `SELECT model,
+            count(*)::text AS total,
+            count(*) FILTER (WHERE outcome = 'ok')::text AS ok,
+            avg(latency_ms) FILTER (WHERE outcome = 'ok') AS avg_latency,
+            avg(completion_tokens) FILTER (WHERE outcome = 'ok') AS avg_tokens
+       FROM ai_generation_metrics
+      WHERE created_at >= now() - ($1 || ' days')::interval
+      GROUP BY model
+      ORDER BY count(*) DESC`,
+    [String(Math.max(1, Math.min(90, days)))],
+  )
+  return rows.map((r) => {
+    const total = Number(r.total) || 0
+    const ok = Number(r.ok) || 0
+    return {
+      model: r.model || '(default)',
+      total,
+      okRate: total > 0 ? ok / total : 0,
+      avgLatencyMs: Math.round(Number(r.avg_latency ?? 0)),
+      avgCompletionTokens: Math.round(Number(r.avg_tokens ?? 0)),
+    }
+  })
 }
 
 /** Most recent lessons (newest first). */

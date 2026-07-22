@@ -215,7 +215,7 @@ async function fireAiLead(params: {
     params
 
   // Diagnostics sink → shared ai_logs table → panel "Логи" tab.
-  const log: BrainLog = (e) =>
+  const log: BrainLog = (e) => {
     void repo.logAi({
       level: e.level,
       source: 'brain',
@@ -225,6 +225,27 @@ async function fireAiLead(params: {
       channelType,
       meta: e.meta ?? null,
     })
+    // Durable A/B metrics on the brain's per-call metric event.
+    if (e.event === 'gateway.metrics' && e.meta) {
+      const m = e.meta as Record<string, unknown>
+      void repo.recordAiGenerationMetric({
+        model: String(m.model ?? ''),
+        purpose: (m.purpose as 'reply' | 'assess') ?? 'reply',
+        outcome:
+          (m.outcome as
+            | 'ok'
+            | 'empty'
+            | 'refused'
+            | 'http_error'
+            | 'exception') ?? 'ok',
+        latencyMs: typeof m.latencyMs === 'number' ? m.latencyMs : null,
+        promptTokens: typeof m.promptTokens === 'number' ? m.promptTokens : null,
+        completionTokens:
+          typeof m.completionTokens === 'number' ? m.completionTokens : null,
+        conversationId,
+      })
+    }
+  }
 
   // Single-flight per conversation: if a reply is already being generated for
   // this thread, treat this inbound as handled (the in-flight generation will
@@ -296,6 +317,11 @@ async function fireAiLead(params: {
         history,
       },
       log,
+      {
+        model: config.model,
+        temperature: config.temperature,
+        maxTokens: config.maxTokens,
+      },
     )
     if (!reply) {
       void repo.logAi({
@@ -378,6 +404,7 @@ async function fireAiLead(params: {
       const ready = await assessLeadReady(
         [...history, { role: 'manager', body: reply }],
         log,
+        { model: config.model },
       )
       if (ready) {
         const promoted = await repo.markAiHandoffToLiquid(conversationId)

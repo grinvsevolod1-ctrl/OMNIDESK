@@ -63,8 +63,38 @@ export interface ManagerBrainInput {
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/chat/completions'
 
 // gpt-4.1 gives the most coherent, context-aware replies to real clients — the
-// priority for customer-facing messages. Override with MANAGER_AI_MODEL.
+// priority for customer-facing messages. Override with MANAGER_AI_MODEL, or at
+// runtime via BrainConfig.model (admin panel setting) which takes precedence.
 const MODEL = process.env.MANAGER_AI_MODEL || 'openai/gpt-4.1'
+const DEFAULT_TEMPERATURE = 0.7
+const DEFAULT_MAX_TOKENS = 400
+
+/**
+ * Optional per-call model configuration, resolved by the CALLER from the admin
+ * settings (keeps this module dependency-free — it never reads the DB itself).
+ * Any field left undefined/empty falls back to the built-in defaults, so old
+ * callers that pass nothing behave exactly as before.
+ */
+export interface BrainConfig {
+  model?: string | null
+  temperature?: number | null
+  maxTokens?: number | null
+}
+
+function resolveModel(config?: BrainConfig): string {
+  const m = config?.model?.trim()
+  return m || MODEL
+}
+
+/** Structured metric emitted once per gateway call via the BrainLog sink. */
+export interface BrainMetric {
+  purpose: 'reply' | 'assess'
+  model: string
+  outcome: 'ok' | 'empty' | 'refused' | 'http_error' | 'exception'
+  latencyMs: number
+  promptTokens?: number
+  completionTokens?: number
+}
 
 /** Reply generation is only possible when the gateway key is present. */
 export function isBrainConfigured(): boolean {
@@ -106,7 +136,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     '- У компании ОДНА вакансия/одно предложение — то, что описано в блоке «СЦЕНАРИЙ И ПРАВИЛА РУКОВОДИТЕЛЯ» ниже. Ты ведёшь клиента ТОЛЬКО по нему. Других вариантов, вакансий, условий, скидок и альтернатив НЕ существует и ты их НЕ придумываешь и НЕ предлагаешь.',
     '- Ты НИКОГДА не соглашаешься с возражением клиента и НИКОГДА не подстраиваешься под него. Если клиента что-то «не устраивает» — это возражение, которое нужно отработать и мягко вернуть его к нашему единственному предложению, а НЕ повод менять условия или соглашаться, что оно ему не подходит.',
     '- Не поддакивай в ущерб цели. Можно проявить понимание («понимаю вас»), но сразу же вернуть разговор к нашему предложению и его выгодам. Никогда не говори «да, вам это не подходит», «поищите другое», «согласен, условия так себе».',
-    '- Твоя цель — довести клиента до готовности предоставить документы или нужный перечень данных для трудоустройства, которые ты у него запрашиваешь. Это финальная точка.',
+    '- Твоя цель — довести клиента до готовности предоставить документы или нужный перечень данных для трудоустройства, которые ты у него запрашиваешь. Это финальная т��чка.',
     '- Мягкое «нет», сомнения, отговорки, «я подумаю», «дорого», «неудобно», молчание — это НЕ отказ, а возражение. Признай эмоцию, сними страх, покажи выгоду именно нашего предложения и снова подтолкни к следующему шагу.',
     '- Всегда заканчивай сообщение так, чтобы клиенту было легко сделать шаг вперёд: один конкретный вопрос или мягкий призыв (без давления и агрессии).',
     '- Веди клиента шаг за шагом к тому, чтобы он согласился прислать документы/данные. Не переключай на «человека» сам — ты и есть менеджер.',
@@ -173,6 +203,10 @@ interface GatewayChoice {
 }
 interface GatewayResponse {
   choices?: GatewayChoice[]
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+  }
 }
 
 const REFUSAL = [
@@ -263,6 +297,7 @@ function gatewayStatusHint(status: number): string {
 export async function generateManagerReply(
   input: ManagerBrainInput,
   log?: BrainLog,
+  config?: BrainConfig,
 ): Promise<string | null> {
   const key = process.env.AI_GATEWAY_API_KEY
   if (!key) {
@@ -272,6 +307,37 @@ export async function generateManagerReply(
       message: 'Нет ключа AI_GATEWAY_API_KEY — ответ не сгенерирован.',
     })
     return null
+  }
+
+  const model = resolveModel(config)
+  const temperature =
+    typeof config?.temperature === 'number'
+      ? config.temperature
+      : DEFAULT_TEMPERATURE
+  const maxTokens =
+    typeof config?.maxTokens === 'number' ? config.maxTokens : DEFAULT_MAX_TOKENS
+  const startedAt = Date.now()
+  // Emit one structured metric per call (durable A/B analytics live downstream
+  // in whatever the runtime's BrainLog writer does with a 'gateway.metrics'
+  // event). Kept internal so every return path reports exactly once.
+  const emitMetric = (
+    outcome: BrainMetric['outcome'],
+    usage?: GatewayResponse['usage'],
+  ) => {
+    const metric: BrainMetric = {
+      purpose: 'reply',
+      model,
+      outcome,
+      latencyMs: Date.now() - startedAt,
+      promptTokens: usage?.prompt_tokens,
+      completionTokens: usage?.completion_tokens,
+    }
+    log?.({
+      level: 'debug',
+      event: 'gateway.metrics',
+      message: `metric ${outcome} ${metric.latencyMs}ms ${model}`,
+      meta: metric as unknown as Record<string, unknown>,
+    })
   }
 
   // Only recent turns — keeps it cheap and focused.
@@ -297,8 +363,8 @@ export async function generateManagerReply(
   log?.({
     level: 'debug',
     event: 'gateway.request',
-    message: `Генерирую ответ (${MODEL}), реплик в контексте: ${recent.length}.`,
-    meta: { model: MODEL, turns: recent.length },
+    message: `Генерирую ответ (${model}), реплик в контексте: ${recent.length}.`,
+    meta: { model, turns: recent.length },
   })
 
   try {
@@ -309,10 +375,10 @@ export async function generateManagerReply(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         messages,
-        temperature: 0.7,
-        max_tokens: 400,
+        temperature,
+        max_tokens: maxTokens,
       }),
     })
     if (!res.ok) {
@@ -323,6 +389,7 @@ export async function generateManagerReply(
         message: `AI Gateway вернул HTTP ${res.status}${gatewayStatusHint(res.status)}`,
         meta: { status: res.status },
       })
+      emitMetric('http_error')
       return null
     }
     const data = (await res.json()) as GatewayResponse
@@ -336,6 +403,7 @@ export async function generateManagerReply(
         event: 'reply.empty',
         message: 'Модель вернула пустой ответ — ничего не отправлено.',
       })
+      emitMetric('empty', data.usage)
       return null
     }
     if (looksLikeRefusal(clean)) {
@@ -344,6 +412,7 @@ export async function generateManagerReply(
         event: 'reply.refused',
         message: `Ответ отброшен (похож на отказ/«я ИИ»): "${clean.slice(0, 160)}"`,
       })
+      emitMetric('refused', data.usage)
       return null
     }
     log?.({
@@ -351,6 +420,7 @@ export async function generateManagerReply(
       event: 'reply.generated',
       message: clean,
     })
+    emitMetric('ok', data.usage)
     return clean
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -360,6 +430,7 @@ export async function generateManagerReply(
       event: 'gateway.exception',
       message: `Сбой запроса к AI Gateway: ${msg}`,
     })
+    emitMetric('exception')
     return null
   }
 }
@@ -375,6 +446,7 @@ export async function generateManagerReply(
 export async function assessLeadReady(
   history: BrainMessage[],
   log?: BrainLog,
+  config?: BrainConfig,
 ): Promise<boolean> {
   const key = process.env.AI_GATEWAY_API_KEY
   if (!key) return false
@@ -382,6 +454,7 @@ export async function assessLeadReady(
   const recent = history.slice(-16)
   if (recent.filter((m) => m.role === 'client').length === 0) return false
 
+  const model = resolveModel(config)
   const transcript = recent
     .map((m) => `${m.role === 'client' ? 'Клиент' : 'Менеджер'}: ${m.body}`)
     .join('\n')
@@ -394,7 +467,7 @@ export async function assessLeadReady(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         messages: [
           {
             role: 'system',

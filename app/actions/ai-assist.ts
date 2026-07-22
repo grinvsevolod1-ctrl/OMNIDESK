@@ -13,6 +13,7 @@ import {
   deleteManualCorrection,
   enrollConversationAi,
   getAiAssistSettings,
+  getAiModelStats,
   getDialogMessagesForReview,
   listAccountReviewDialogs,
   listAccountTwoWayConversationIds,
@@ -28,6 +29,7 @@ import {
   updateAiAssistSettings,
   type AiAssistLesson,
   type AiAssistSettings,
+  type AiModelStat,
   type EnrollableConversation,
   type ManualCorrection,
   type ReviewDialog,
@@ -73,16 +75,34 @@ export async function aiSettingsAction(): Promise<{
   return { settings, configured: isBrainConfigured(), lessonCount }
 }
 
-/** Update tone / persona / master switch. */
+/** Update tone / persona / master switch / model tuning. */
 export async function aiUpdateSettingsAction(patch: {
   enabled?: boolean
   tone?: string
   persona?: string
+  model?: string
+  temperature?: number
+  maxTokens?: number
 }): Promise<AiAssistSettings> {
   await requireAdmin()
-  const next = await updateAiAssistSettings(patch)
+  // Clamp tuning to the same bounds the DB constraints enforce, so a bad UI
+  // value fails soft instead of throwing a constraint error.
+  const clamped: typeof patch = { ...patch }
+  if (typeof clamped.temperature === 'number') {
+    clamped.temperature = Math.max(0, Math.min(2, clamped.temperature))
+  }
+  if (typeof clamped.maxTokens === 'number') {
+    clamped.maxTokens = Math.max(50, Math.min(4000, Math.round(clamped.maxTokens)))
+  }
+  const next = await updateAiAssistSettings(clamped)
   revalidatePath(AI_PATH)
   return next
+}
+
+/** Per-model generation stats over the last N days (A/B dashboard). */
+export async function aiModelStatsAction(days = 7): Promise<AiModelStat[]> {
+  await requireAdmin()
+  return getAiModelStats(days)
 }
 
 /* ----------------------- Per-dialog AI enrollment ------------------------ */
@@ -398,13 +418,21 @@ export async function aiSuggestReplyAction(input: {
     getAiAssistSettings(),
     listBrainLessons(12),
   ])
-  return generateManagerReply({
-    persona: settings.persona,
-    tone: settings.tone,
-    playbook: settings.playbook,
-    lessons,
-    history: input.history,
-  })
+  return generateManagerReply(
+    {
+      persona: settings.persona,
+      tone: settings.tone,
+      playbook: settings.playbook,
+      lessons,
+      history: input.history,
+    },
+    undefined,
+    {
+      model: settings.model,
+      temperature: settings.temperature,
+      maxTokens: settings.maxTokens,
+    },
+  )
 }
 
 /**

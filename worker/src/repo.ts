@@ -1143,6 +1143,10 @@ export interface AiAssistConfig {
   tone: string
   persona: string
   playbook: string[]
+  /** Manager-brain model id (empty → brain's built-in default). */
+  model: string
+  temperature: number
+  maxTokens: number
 }
 
 /** One correction lesson in the shape the pure brain expects. */
@@ -1154,20 +1158,80 @@ export interface AiAssistLessonLite {
 
 /** Read the singleton AI-assist settings. Missing row → disabled defaults. */
 export async function getAiAssistConfig(): Promise<AiAssistConfig> {
+  // Tolerate the model-config columns being absent (pre-069 migration): select
+  // them defensively so an older DB still yields a valid config.
   const row = await one<{
     enabled: boolean
     tone: string
     persona: string
     playbook: unknown
+    model: string | null
+    temperature: number | string | null
+    max_tokens: number | string | null
   }>(
-    `SELECT enabled, tone, persona, playbook
+    `SELECT enabled, tone, persona, playbook,
+            COALESCE(model, '')      AS model,
+            COALESCE(temperature, 0.7) AS temperature,
+            COALESCE(max_tokens, 400)  AS max_tokens
        FROM ai_assist_settings WHERE id = true`,
+  ).catch(async () =>
+    // Fallback for pre-migration schema without the new columns.
+    one<{
+      enabled: boolean
+      tone: string
+      persona: string
+      playbook: unknown
+      model: null
+      temperature: null
+      max_tokens: null
+    }>(
+      `SELECT enabled, tone, persona, playbook,
+              NULL AS model, NULL AS temperature, NULL AS max_tokens
+         FROM ai_assist_settings WHERE id = true`,
+    ),
   )
   return {
     enabled: !!row?.enabled,
     tone: row?.tone ?? 'professional',
     persona: row?.persona ?? '',
     playbook: Array.isArray(row?.playbook) ? (row!.playbook as string[]) : [],
+    model: row?.model ?? '',
+    temperature: row?.temperature == null ? 0.7 : Number(row!.temperature),
+    maxTokens: row?.max_tokens == null ? 400 : Number(row!.max_tokens),
+  }
+}
+
+/**
+ * Record one manager-brain generation metric (durable A/B analytics). Mirrors
+ * lib/data/ai-assist.ts#recordAiGenerationMetric so worker + panel write the
+ * same table. Best-effort: swallows errors (incl. pre-migration absence).
+ */
+export async function recordAiGenerationMetric(m: {
+  model: string
+  purpose: 'reply' | 'assess'
+  outcome: 'ok' | 'empty' | 'refused' | 'http_error' | 'exception'
+  latencyMs?: number | null
+  promptTokens?: number | null
+  completionTokens?: number | null
+  conversationId?: string | null
+}): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO ai_generation_metrics
+         (model, runtime, purpose, outcome, latency_ms, prompt_tokens, completion_tokens, conversation_id)
+       VALUES ($1, 'worker', $2, $3, $4, $5, $6, $7)`,
+      [
+        m.model || '',
+        m.purpose,
+        m.outcome,
+        m.latencyMs ?? null,
+        m.promptTokens ?? null,
+        m.completionTokens ?? null,
+        m.conversationId ?? null,
+      ],
+    )
+  } catch {
+    /* metrics are non-critical */
   }
 }
 
