@@ -90,6 +90,12 @@ NEXT_DIST_DIR=.next.new pnpm build
 [ -d .next ] && mv .next .next.old
 mv .next.new .next
 rm -rf .next.old
+# `next build` auto-edits the git-tracked tsconfig.json / next-env.d.ts to add
+# the active distDir's type globs (".next.new/types"). After the swap the real
+# types live in ".next/types" — which the committed files already reference — so
+# restore them to keep the working tree clean; otherwise the next deploy's
+# `git checkout` / `git pull --ff-only` would fail on local modifications.
+git checkout -- tsconfig.json next-env.d.ts 2>/dev/null || true
 
 # 6. Recreate the PM2 processes from ecosystem.config.js. A plain `pm2 restart`
 #    reuses whatever definition PM2 first saved (see the header of
