@@ -127,9 +127,8 @@ export async function getLeadAnalytics(
   // Simulator-created conversations are real leads and are counted here just
   // like any other. Only manager scoping is applied.
   const scope = managerId ? 'WHERE manager_id = $1' : ''
-  const cScope = managerId ? 'WHERE c.manager_id = $1' : ''
-  // "Не ликвид" breakdown always needs its own WHERE; prepend the manager
-  // filter when present.
+  // "Не ликвид" breakdown and the first-message-time windows always need their
+  // own WHERE; prepend the manager filter when present.
   const reasonScope = managerId ? 'WHERE manager_id = $1 AND' : 'WHERE'
   const params = managerId ? [managerId] : []
 
@@ -154,28 +153,20 @@ export async function getLeadAnalytics(
          FROM conversations ${scope}`,
       params,
     ),
+    // Reads the denormalized conversations.first_message_at (maintained by a
+    // trigger) instead of aggregating the messages table on every load.
     query<{ n: string }>(
-      `SELECT count(*)::int AS n FROM (
-         SELECT c.id, MIN(m.created_at) AS first_at
-           FROM conversations c
-           JOIN messages m ON m.conversation_id = c.id
-          ${cScope}
-          GROUP BY c.id
-       ) t
-       WHERE first_at >= now() - interval '7 days'`,
+      `SELECT count(*)::int AS n
+         FROM conversations
+         ${reasonScope} first_message_at >= now() - interval '7 days'`,
       params,
     ),
     query<{ d: string | Date; n: string }>(
-      `SELECT date_trunc('day', first_at) AS d, count(*)::int AS n FROM (
-         SELECT c.id, MIN(m.created_at) AS first_at
-           FROM conversations c
-           JOIN messages m ON m.conversation_id = c.id
-          ${cScope}
-          GROUP BY c.id
-       ) t
-       WHERE first_at >= now() - interval '6 days'
-       GROUP BY 1
-       ORDER BY 1`,
+      `SELECT date_trunc('day', first_message_at) AS d, count(*)::int AS n
+         FROM conversations
+         ${reasonScope} first_message_at >= now() - interval '6 days'
+        GROUP BY 1
+        ORDER BY 1`,
       params,
     ),
   ])
@@ -442,15 +433,13 @@ export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
          ) c
         GROUP BY manager_id`,
     ),
+    // Uses the denormalized first_message_at column (trigger-maintained)
+    // instead of a full JOIN+MIN aggregation over the messages table.
     query<{ manager_id: string; n: string }>(
-      `SELECT manager_id, count(*)::int AS n FROM (
-         SELECT c.id, c.manager_id, MIN(m.created_at) AS first_at
-           FROM conversations c
-           JOIN messages m ON m.conversation_id = c.id
-          GROUP BY c.id, c.manager_id
-       ) t
-       WHERE first_at >= now() - interval '7 days'
-       GROUP BY manager_id`,
+      `SELECT manager_id, count(*)::int AS n
+         FROM conversations
+        WHERE first_message_at >= now() - interval '7 days'
+        GROUP BY manager_id`,
     ),
     query<{ manager_id: string; n: string }>(
       `SELECT ch.manager_id, count(*)::int AS n
