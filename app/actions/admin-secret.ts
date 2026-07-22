@@ -31,6 +31,12 @@ import {
   recordAdminAction,
   updateManagerStatus,
 } from '@/lib/data'
+import {
+  getThreadSimInfoOne,
+  getThreadsSimInfo,
+  setThreadPaused,
+  type ThreadSimInfo,
+} from '@/lib/client-sim/store'
 import type { SessionUser } from '@/lib/types'
 import type {
   ChannelType,
@@ -649,17 +655,30 @@ export async function secretReassignConversationsAction(input: {
 
 export type ConversationWithManager = Conversation & { managerName: string | null }
 
+/**
+ * God-console-only view model: a conversation plus the simulator's involvement
+ * in it. `sim` is null for ordinary (non-simulated) conversations. This type is
+ * deliberately local to the god console — the shared `Conversation`/data layer
+ * is never widened, so nothing about the simulator can leak into the manager
+ * inbox or the regular admin surface.
+ */
+export type ConversationWithSim = ConversationWithManager & {
+  sim: ThreadSimInfo | null
+}
+
 /** Live-searchable list of every conversation (admin-wide, no manager scope). */
 export async function secretListConversationsAction(opts?: {
   search?: string
   channelType?: string
-}): Promise<ConversationWithManager[]> {
+}): Promise<ConversationWithSim[]> {
   await requireAdmin()
   const channelType =
     opts?.channelType && opts.channelType !== 'all'
       ? (opts.channelType as ChannelType)
       : undefined
-  return listConversationsAdmin({ search: opts?.search, channelType })
+  const list = await listConversationsAdmin({ search: opts?.search, channelType })
+  const simInfo = await getThreadsSimInfo(list.map((c) => c.id))
+  return list.map((c) => ({ ...c, sim: simInfo.get(c.id) ?? null }))
 }
 
 export interface ThreadResult {
@@ -667,6 +686,8 @@ export interface ThreadResult {
   message?: string
   conversation: ConversationWithManager | null
   messages: Message[]
+  /** Simulator involvement for this conversation (null when not simulated). */
+  sim: ThreadSimInfo | null
 }
 
 /** Full transcript + metadata for one conversation (admin-wide). */
@@ -675,16 +696,23 @@ export async function secretFetchThreadAction(
 ): Promise<ThreadResult> {
   await requireAdmin()
   if (!conversationId)
-    return { ok: false, message: 'Не указан диалог', conversation: null, messages: [] }
+    return { ok: false, message: 'Не указан диалог', conversation: null, messages: [], sim: null }
   const conversation = await getConversationAdmin(conversationId)
   if (!conversation)
-    return { ok: false, message: 'Диалог не найден', conversation: null, messages: [] }
+    return { ok: false, message: 'Диалог не найден', conversation: null, messages: [], sim: null }
   const messages = await listMessagesAdmin(conversationId)
-  return { ok: true, conversation, messages }
+  const sim = await getThreadSimInfoOne(conversationId)
+  return { ok: true, conversation, messages, sim }
 }
 
 export interface SendResult extends ActionResult {
   createdMessage: Message | null
+  /**
+   * True when this manual message caused the simulator to detach from THIS
+   * dialogue (it was actively driving it and is now paused). Lets the console
+   * surface a one-off "you've stepped in" toast without a refetch.
+   */
+  simDetached?: boolean
 }
 
 /**
@@ -722,10 +750,24 @@ export async function secretSendAsClientAction(input: {
     [input.conversationId, body],
   )
 
+  // Human takeover: if the simulator was actively driving this dialogue, detach
+  // it from THIS conversation only (mirrors how a manager sending a real reply
+  // pauses the AI on their side). Every other simulated thread keeps running.
+  // Re-enable later via secretSetThreadSimAction — the engine then re-reads the
+  // whole transcript, including these manual lines, and continues in persona.
+  let simDetached = false
+  const prevSim = await getThreadSimInfoOne(input.conversationId)
+  if (prevSim?.active && !prevSim.paused) {
+    simDetached = await setThreadPaused(input.conversationId, true)
+  }
+
   revalidatePath(ADMIN_PATH)
   return {
     ok: true,
-    message: 'Отправлено от имени клиента',
+    message: simDetached
+      ? 'Отправлено. Симулятор отключён от этого диалога'
+      : 'Отправлено от имени клиента',
+    simDetached,
     createdMessage: {
       id: rows[0].id,
       conversationId: input.conversationId,
@@ -734,6 +776,41 @@ export async function secretSendAsClientAction(input: {
       author,
       createdAt: new Date(rows[0].created_at).toISOString(),
     },
+  }
+}
+
+/**
+ * God-console control to detach / re-attach the simulator for ONE dialogue.
+ *
+ *   enabled = false → operator takes over: simulator stops driving this thread.
+ *   enabled = true  → hand it back: on the next tick the engine re-reads the
+ *                     full transcript (including the operator's manual client
+ *                     lines) and continues in the same persona.
+ *
+ * Every other simulated dialogue is unaffected. No-op-safe on a pre-073 DB.
+ */
+export async function secretSetThreadSimAction(input: {
+  conversationId: string
+  enabled: boolean
+}): Promise<ActionResult> {
+  const admin = await requireAdmin()
+  if (!input.conversationId) return { ok: false, message: 'Не указан диалог' }
+  const changed = await setThreadPaused(input.conversationId, !input.enabled)
+  if (!changed) {
+    return {
+      ok: false,
+      message: 'Для этого диалога нет активного управления',
+    }
+  }
+  audit(admin, input.enabled ? 'sim_thread_resume' : 'sim_thread_pause', {
+    targetId: input.conversationId,
+  })
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: input.enabled
+      ? 'Симулятор снова ведёт диалог и учтёт ваши сообщения'
+      : 'Вы управляете диалогом — симулятор отключён',
   }
 }
 
@@ -886,7 +963,7 @@ export async function secretSetAdOverrideAction(
   }
 }
 
-/** Снять корректировку — метрика снова показывает данные Яндекса как есть. */
+/** Снять корректировку — метрика снова пок��зывает данные Яндекса как есть. */
 export async function secretClearAdOverrideAction(
   accountId: string,
   metric: string,

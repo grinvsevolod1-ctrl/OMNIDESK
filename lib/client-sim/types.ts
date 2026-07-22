@@ -248,4 +248,10 @@ export interface SimThreadRow {
   outcome: SimOutcome | null
   /** How many times the backlog sweep has poked the manager without progress. */
   nudgeAttempts: number
+  /**
+   * Operator has stepped into THIS dialogue from the god console, so the
+   * simulator is detached from it (the scheduler skips it) until re-enabled.
+   * Other threads are unaffected. Defaults to false on legacy rows.
+   */
+  paused: boolean
 }

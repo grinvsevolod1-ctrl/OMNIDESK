@@ -217,7 +217,7 @@ async function tick(): Promise<void> {
       level: 'error',
       source: 'sim',
       event: 'tick.error',
-      message: `Ошибка цикла симулятора: ${msg}`,
+      message: `Ошиб��а цикла симулятора: ${msg}`,
     })
   } finally {
     h.ticking = false
@@ -617,6 +617,11 @@ async function sweepBacklog(): Promise<void> {
  */
 async function runThreadTurn(thread: SimThreadRow): Promise<void> {
   const { persona, conversationId } = thread
+
+  // Race guard: if an operator stepped into this dialogue (paused it) between
+  // the scheduler claiming it and now, back off immediately so we never post a
+  // simulated line into a dialogue the human has taken over.
+  if (thread.paused) return
 
   // A thread that was parked (said "later", was asleep, or had vanished) and is
   // now due again = the client is coming BACK to the conversation.

@@ -172,6 +172,37 @@ async function hasThreadRealismCols(): Promise<boolean> {
 }
 
 /**
+ * Whether migration 073's `paused` column exists on `sim_threads`. Probed the
+ * same graceful way as the other optional columns so per-conversation pause
+ * (operator stepping into a single dialogue) works once 073 is applied and
+ * silently no-ops before then, without ever issuing a query for a missing
+ * column. Cached with the same short TTL.
+ */
+let threadPauseColCache: { present: boolean; expires: number } | null = null
+
+async function hasThreadPauseCol(): Promise<boolean> {
+  if (threadPauseColCache && threadPauseColCache.expires > Date.now()) {
+    return threadPauseColCache.present
+  }
+  let present = false
+  try {
+    const rows = await query<{ n: string }>(
+      `SELECT count(*)::text AS n
+         FROM pg_attribute a
+        WHERE a.attrelid = to_regclass('sim_threads')
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND a.attname = 'paused'`,
+    )
+    present = Number(rows[0]?.n ?? 0) > 0
+  } catch {
+    present = false
+  }
+  threadPauseColCache = { present, expires: Date.now() + OPTIONAL_COLS_TTL_MS }
+  return present
+}
+
+/**
  * Read the singleton settings row, creating it if missing. Selects only the
  * optional columns that actually exist (probed at runtime) and fills defaults
  * for the rest — so it works on any DB regardless of which migrations have run,
@@ -516,6 +547,7 @@ interface ThreadRow {
   next_run_at: string | Date | null
   outcome?: SimOutcome | null
   nudge_attempts?: number | null
+  paused?: boolean | null
 }
 
 function mapThread(r: ThreadRow): SimThreadRow {
@@ -529,6 +561,7 @@ function mapThread(r: ThreadRow): SimThreadRow {
     nextRunAt: r.next_run_at ? new Date(r.next_run_at).toISOString() : null,
     outcome: r.outcome ?? null,
     nudgeAttempts: r.nudge_attempts ?? 0,
+    paused: r.paused ?? false,
   }
 }
 
@@ -664,6 +697,11 @@ export async function threadsByOutcome(): Promise<Record<SimOutcome, number>> {
  * tick won't grab the same rows.
  */
 export async function claimDueThreads(limit: number): Promise<SimThreadRow[]> {
+  // Skip dialogues an operator has stepped into (paused) so the simulator stays
+  // detached from just those threads. No-op filter on a pre-073 DB.
+  const hasPause = await hasThreadPauseCol()
+  const pauseClause = hasPause ? 'AND paused = false' : ''
+  const pauseRet = hasPause ? ', paused' : ''
   const rows = await query<ThreadRow>(
     `UPDATE sim_threads t
         SET next_run_at = now() + interval '2 minutes', updated_at = now()
@@ -672,11 +710,12 @@ export async function claimDueThreads(limit: number): Promise<SimThreadRow[]> {
          WHERE state <> 'done'
            AND next_run_at IS NOT NULL
            AND next_run_at <= now()
+           ${pauseClause}
          ORDER BY next_run_at ASC
          LIMIT $1
          FOR UPDATE SKIP LOCKED
       )
-      RETURNING conversation_id, channel_id, persona, state, turns, last_seen_out, next_run_at`,
+      RETURNING conversation_id, channel_id, persona, state, turns, last_seen_out, next_run_at${pauseRet}`,
     [Math.max(1, limit)],
   )
   return rows.map(mapThread)
@@ -697,11 +736,15 @@ export interface PendingManagerReply {
 export async function findThreadsAwaitingReaction(
   limit: number,
 ): Promise<PendingManagerReply[]> {
+  // Don't react in dialogues an operator has taken over (paused). No-op on pre-073 DB.
+  const hasPause = await hasThreadPauseCol()
+  const pauseClause = hasPause ? 'AND t.paused = false' : ''
+  const pauseSel = hasPause ? ', t.paused' : ''
   const rows = await query<
     ThreadRow & { m_id: string; m_body: string }
   >(
     `SELECT t.conversation_id, t.channel_id, t.persona, t.state, t.turns,
-            t.last_seen_out, t.next_run_at,
+            t.last_seen_out, t.next_run_at${pauseSel},
             m.id AS m_id, m.body AS m_body
        FROM sim_threads t
        JOIN LATERAL (
@@ -714,6 +757,7 @@ export async function findThreadsAwaitingReaction(
        ) m ON true
       WHERE t.state IN ('opening', 'chatting', 'ignoring')
         AND (t.last_seen_out IS NULL OR m.id <> t.last_seen_out)
+        ${pauseClause}
       ORDER BY t.updated_at ASC
       LIMIT $1`,
     [Math.max(1, limit)],
@@ -751,6 +795,8 @@ export async function findConversationsAwaitingManager(
   const backoffClause = (await hasThreadRealismCols())
     ? 'AND (t.nudge_next_at IS NULL OR t.nudge_next_at <= now())'
     : ''
+  // Skip dialogues the operator has taken over (paused). No-op on pre-073 DB.
+  const pauseClause = (await hasThreadPauseCol()) ? 'AND t.paused = false' : ''
   const rows = await query<{ conversation_id: string; body: string }>(
     `SELECT t.conversation_id, m.body
        FROM sim_threads t
@@ -765,6 +811,7 @@ export async function findConversationsAwaitingManager(
         AND m.direction = 'in'
         AND m.created_at < now() - make_interval(secs => $2::int)
         ${backoffClause}
+        ${pauseClause}
       ORDER BY t.updated_at ASC
       LIMIT $1`,
     [Math.max(1, limit), Math.max(0, Math.floor(staleSeconds))],
@@ -834,6 +881,102 @@ export async function touchThread(conversationId: string): Promise<void> {
     `UPDATE sim_threads SET updated_at = now() WHERE conversation_id = $1`,
     [conversationId],
   )
+}
+
+/**
+ * Per-conversation pause switch used when an operator steps into a single
+ * simulated dialogue from the god console.
+ *
+ *   paused = true  → detach the simulator from THIS dialogue only. The
+ *                    scheduler/reaction/backlog sweeps skip it; every other
+ *                    live thread keeps running untouched.
+ *   paused = false → re-attach. We re-arm next_run_at = now() so on the next
+ *                    tick the engine re-reads the WHOLE transcript (including
+ *                    the operator's manual client-side lines) and continues in
+ *                    the same persona — no explicit re-analysis step needed.
+ *
+ * No-op (returns false) on a DB that hasn't applied migration 073 yet.
+ * Returns true when a row was actually updated.
+ */
+export async function setThreadPaused(
+  conversationId: string,
+  paused: boolean,
+): Promise<boolean> {
+  if (!(await hasThreadPauseCol())) return false
+  const setClause = paused
+    ? `paused = true, paused_at = now(), updated_at = now()`
+    : `paused = false, paused_at = NULL, next_run_at = now(), updated_at = now()`
+  const rows = await query<{ conversation_id: string }>(
+    `UPDATE sim_threads
+        SET ${setClause}
+      WHERE conversation_id = $1
+        AND state <> 'done'
+      RETURNING conversation_id`,
+    [conversationId],
+  )
+  return rows.length > 0
+}
+
+/** Lightweight simulator-involvement snapshot for one conversation. */
+export interface ThreadSimInfo {
+  /** A live (non-done) simulator thread drives this conversation. */
+  active: boolean
+  /** Operator has stepped in, so the simulator is detached from this one. */
+  paused: boolean
+  state: SimState
+  /** Persona display name, when available. */
+  personaName: string | null
+}
+
+function readPersonaName(persona: unknown): string | null {
+  if (persona && typeof persona === 'object' && 'name' in persona) {
+    const n = (persona as { name?: unknown }).name
+    if (typeof n === 'string' && n.trim()) return n
+  }
+  return null
+}
+
+/**
+ * Bulk-fetch simulator involvement for a set of conversations, for the god
+ * console list. Returns a Map keyed by conversationId; conversations with no
+ * sim thread simply won't have an entry (caller treats them as "not simulated").
+ * Safe on a pre-073 DB — the `paused` column degrades to false.
+ */
+export async function getThreadsSimInfo(
+  conversationIds: string[],
+): Promise<Map<string, ThreadSimInfo>> {
+  const out = new Map<string, ThreadSimInfo>()
+  if (conversationIds.length === 0) return out
+  const hasPause = await hasThreadPauseCol()
+  const pausedSel = hasPause ? 'paused' : 'false AS paused'
+  const rows = await query<{
+    conversation_id: string
+    state: SimState
+    paused: boolean
+    persona: unknown
+  }>(
+    `SELECT conversation_id, state, ${pausedSel}, persona
+       FROM sim_threads
+      WHERE conversation_id = ANY($1)`,
+    [conversationIds],
+  )
+  for (const r of rows) {
+    out.set(r.conversation_id, {
+      active: r.state !== 'done',
+      paused: r.paused ?? false,
+      state: r.state,
+      personaName: readPersonaName(r.persona),
+    })
+  }
+  return out
+}
+
+/** Single-conversation variant of {@link getThreadsSimInfo}. */
+export async function getThreadSimInfoOne(
+  conversationId: string,
+): Promise<ThreadSimInfo | null> {
+  const map = await getThreadsSimInfo([conversationId])
+  return map.get(conversationId) ?? null
 }
 
 /** Mark that we've seen a manager message and schedule a delayed reaction. */
@@ -1351,7 +1494,7 @@ export async function listSimCorrectionRules(limit = 60): Promise<string[]> {
     const ctx = r.context.trim()
     const parts: string[] = []
     if (ctx) parts.push(`В ситуации:\n${ctx}`)
-    if (quoted) parts.push(`Разбираем твоё сообщение: «${quoted}».`)
+    if (quoted) parts.push(`��азбираем твоё сообщение: «${quoted}».`)
     parts.push(`Правило: ${r.instruction.trim()}`)
     return parts.join('\n')
   })
