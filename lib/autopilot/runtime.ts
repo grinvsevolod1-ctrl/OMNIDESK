@@ -10,6 +10,7 @@ import {
   listManualCorrectionRules,
   markAiHandoffToLiquid,
   recordAiGenerationMetric,
+  retrieveKnowledge,
   saveConversationAiMemory,
 } from '../data/ai-assist'
 import {
@@ -226,12 +227,15 @@ async function runLivechatAiLead(input: {
       channelType: 'livechat',
     })
 
-    const [lessons, corrections, history, memory] = await Promise.all([
-      listBrainLessons(12),
-      listManualCorrectionRules(60),
-      getConversationHistoryForAi(input.conversationId, 16),
-      getConversationAiMemory(input.conversationId),
-    ])
+    const [lessons, corrections, history, memory, knowledge] =
+      await Promise.all([
+        listBrainLessons(12),
+        listManualCorrectionRules(60),
+        getConversationHistoryForAi(input.conversationId, 16),
+        getConversationAiMemory(input.conversationId),
+        // RAG: retrieve facts relevant to what the client just asked.
+        retrieveKnowledge(input.text, 4),
+      ])
 
     // Escalation guard: if the client is angry, demands a human, or the dialog
     // is clearly stuck, hand off to a person instead of auto-replying. Uses the
@@ -262,6 +266,7 @@ async function runLivechatAiLead(input: {
         lessons,
         corrections,
         memory: memory.summary,
+        knowledge,
         history,
       },
       log,

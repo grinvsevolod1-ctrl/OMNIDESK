@@ -310,6 +310,14 @@ async function fireAiLead(params: {
       repo.getConversationAiMemory(conversationId),
     ])
 
+    // RAG: retrieve facts relevant to the client's latest message. Derived from
+    // history so it works regardless of how the inbound text was passed in.
+    const lastClientMsg =
+      [...history].reverse().find((m) => m.role === 'client')?.body ?? ''
+    const knowledge = lastClientMsg
+      ? await repo.retrieveKnowledge(lastClientMsg, 4)
+      : ''
+
     // Escalation guard: angry client / demands a human / stuck dialog → hand off
     // to a person via the existing liquid-handoff path instead of auto-replying.
     const escalation = await detectEscalation(history, log, {
@@ -338,6 +346,7 @@ async function fireAiLead(params: {
         lessons,
         corrections,
         memory: memory.summary,
+        knowledge,
         history,
       },
       log,

@@ -9,6 +9,7 @@ import {
   buildTrainingCorpusForConversationIds,
   countLessons,
   countManualCorrections,
+  deleteKnowledge,
   deleteLesson,
   deleteManualCorrection,
   enrollConversationAi,
@@ -20,6 +21,7 @@ import {
   listAiEnrolledConversations,
   listBrainLessons,
   listEnrollableConversations,
+  listKnowledge,
   listLessons,
   listManualCorrections,
   listTrainableAccounts,
@@ -27,10 +29,12 @@ import {
   savePlaybook,
   unenrollConversationAi,
   updateAiAssistSettings,
+  upsertKnowledge,
   type AiAssistLesson,
   type AiAssistSettings,
   type AiModelStat,
   type EnrollableConversation,
+  type KnowledgeEntry,
   type ManualCorrection,
   type ReviewDialog,
   type ReviewMessage,
@@ -103,6 +107,45 @@ export async function aiUpdateSettingsAction(patch: {
 export async function aiModelStatsAction(days = 7): Promise<AiModelStat[]> {
   await requireAdmin()
   return getAiModelStats(days)
+}
+
+/* --------------------------- RAG knowledge base ------------------------- */
+
+/** List all knowledge entries for the admin management view. Admin-only. */
+export async function aiListKnowledgeAction(): Promise<KnowledgeEntry[]> {
+  await requireAdmin()
+  return listKnowledge()
+}
+
+/**
+ * Create or update a knowledge entry (embedding is computed server-side). The
+ * content is required; a blank content is rejected so we never store an empty
+ * chunk. Admin-only.
+ */
+export async function aiSaveKnowledgeAction(input: {
+  id?: string
+  title: string
+  content: string
+  enabled?: boolean
+}): Promise<KnowledgeEntry> {
+  await requireAdmin()
+  const content = input.content.trim()
+  if (!content) throw new Error('Содержание не может быть пустым.')
+  const entry = await upsertKnowledge({
+    id: input.id,
+    title: input.title.trim(),
+    content,
+    enabled: input.enabled,
+  })
+  revalidatePath(AI_PATH)
+  return entry
+}
+
+/** Delete a knowledge entry. Admin-only. */
+export async function aiDeleteKnowledgeAction(id: string): Promise<void> {
+  await requireAdmin()
+  await deleteKnowledge(id)
+  revalidatePath(AI_PATH)
 }
 
 /* ----------------------- Per-dialog AI enrollment ------------------------ */

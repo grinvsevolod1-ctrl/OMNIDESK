@@ -1,5 +1,6 @@
 import { query, one } from './db.js'
 import { decrypt, encrypt } from './crypto.js'
+import { embedText, toVectorLiteral } from '../../lib/ai/manager-brain.js'
 
 export type SessionStatus =
   | 'idle'
@@ -1336,6 +1337,37 @@ export async function markAiHandoffToLiquid(
     [conversationId],
   )
   return rows.length > 0
+}
+
+/**
+ * RAG retrieval for the worker: embed the query, find the nearest enabled
+ * knowledge chunks, and return them as a compact block for the brain. Mirrors
+ * lib/data/ai-assist.ts#retrieveKnowledge. Best-effort — returns '' on any
+ * failure (no key, no embedding, no matches, pre-migration).
+ */
+export async function retrieveKnowledge(
+  queryText: string,
+  topK = 4,
+): Promise<string> {
+  try {
+    const embedding = await embedText(queryText)
+    if (!embedding) return ''
+    const rows = await query<{ title: string; content: string; dist: number }>(
+      `SELECT title, content, (embedding <=> $1::vector) AS dist
+         FROM ai_knowledge
+        WHERE enabled = true AND embedding IS NOT NULL
+        ORDER BY embedding <=> $1::vector
+        LIMIT $2`,
+      [toVectorLiteral(embedding), Math.max(1, Math.min(10, topK))],
+    )
+    const relevant = rows.filter((r) => Number(r.dist) < 0.55)
+    if (relevant.length === 0) return ''
+    return relevant
+      .map((r) => (r.title ? `• ${r.title}: ${r.content}` : `• ${r.content}`))
+      .join('\n')
+  } catch {
+    return ''
+  }
 }
 
 /** Read durable manager-brain memory for a conversation. Best-effort. */
