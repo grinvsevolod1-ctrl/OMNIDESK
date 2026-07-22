@@ -467,6 +467,48 @@ export async function unenrollConversationAi(
  * human takes over cleanly, and flags a pending handoff for the inbox banner.
  * Returns true when it actually promoted (so the caller can log it once).
  */
+/** Read the durable manager-brain memory for a conversation ('' if none). */
+export async function getConversationAiMemory(
+  conversationId: string,
+): Promise<{ summary: string; turnsSeen: number }> {
+  try {
+    const rows = await query<{ summary: string; turns_seen: number }>(
+      `SELECT summary, turns_seen
+         FROM conversation_ai_memory WHERE conversation_id = $1`,
+      [conversationId],
+    )
+    if (rows.length === 0) return { summary: '', turnsSeen: 0 }
+    return {
+      summary: rows[0].summary ?? '',
+      turnsSeen: Number(rows[0].turns_seen) || 0,
+    }
+  } catch {
+    // Pre-migration or transient error — behave as "no memory yet".
+    return { summary: '', turnsSeen: 0 }
+  }
+}
+
+/** Upsert the durable manager-brain memory for a conversation. Best-effort. */
+export async function saveConversationAiMemory(
+  conversationId: string,
+  summary: string,
+  turnsSeen: number,
+): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO conversation_ai_memory (conversation_id, summary, turns_seen, updated_at)
+         VALUES ($1, $2, $3, now())
+       ON CONFLICT (conversation_id)
+         DO UPDATE SET summary = EXCLUDED.summary,
+                       turns_seen = EXCLUDED.turns_seen,
+                       updated_at = now()`,
+      [conversationId, summary, turnsSeen],
+    )
+  } catch {
+    /* memory is a non-critical enhancement — swallow */
+  }
+}
+
 export async function markAiHandoffToLiquid(
   conversationId: string,
 ): Promise<boolean> {

@@ -3,17 +3,21 @@ import { query } from '../db'
 import { addMessage, getLivechatWorkingHoursByChannelId } from '../data'
 import {
   getAiAssistSettings,
+  getConversationAiMemory,
   getConversationHistoryForAi,
   isConversationAiLed,
   listBrainLessons,
   listManualCorrectionRules,
   markAiHandoffToLiquid,
   recordAiGenerationMetric,
+  saveConversationAiMemory,
 } from '../data/ai-assist'
 import {
   assessLeadReady,
   type BrainLog,
   type BrainMessage,
+  detectEscalation,
+  extractClientMemory,
   generateManagerReply,
   isBrainConfigured,
 } from '../ai/manager-brain'
@@ -222,11 +226,33 @@ async function runLivechatAiLead(input: {
       channelType: 'livechat',
     })
 
-    const [lessons, corrections, history] = await Promise.all([
+    const [lessons, corrections, history, memory] = await Promise.all([
       listBrainLessons(12),
       listManualCorrectionRules(60),
       getConversationHistoryForAi(input.conversationId, 16),
+      getConversationAiMemory(input.conversationId),
     ])
+
+    // Escalation guard: if the client is angry, demands a human, or the dialog
+    // is clearly stuck, hand off to a person instead of auto-replying. Uses the
+    // existing liquid-handoff path (pauses AI + flags the inbox banner).
+    const escalation = await detectEscalation(history, log, {
+      model: settings.model,
+    })
+    if (escalation.escalate) {
+      const promoted = await markAiHandoffToLiquid(input.conversationId)
+      void logAi({
+        level: 'info',
+        source: 'handoff',
+        event: 'escalated',
+        message: promoted
+          ? `ИИ передал диалог человеку (эскалация): ${escalation.reason || 'причина не указана'}.`
+          : `Эскалация (${escalation.reason || '—'}), но статус уже задан вручную — ИИ просто замолкает.`,
+        conversationId: input.conversationId,
+        channelType: 'livechat',
+      })
+      return true
+    }
 
     const reply = await generateManagerReply(
       {
@@ -235,6 +261,7 @@ async function runLivechatAiLead(input: {
         playbook: settings.playbook,
         lessons,
         corrections,
+        memory: memory.summary,
         history,
       },
       log,
@@ -242,6 +269,7 @@ async function runLivechatAiLead(input: {
         model: settings.model,
         temperature: settings.temperature,
         maxTokens: settings.maxTokens,
+        selfCritique: true,
       },
     )
     if (!reply) {
@@ -281,6 +309,32 @@ async function runLivechatAiLead(input: {
       conversationId: input.conversationId,
       channelType: 'livechat',
     })
+
+    // Refresh durable client memory in the background (best-effort, fire and
+    // forget — must never delay or fail the reply we already sent).
+    void (async () => {
+      try {
+        const nextHistory = [
+          ...history,
+          { role: 'manager' as const, body: reply },
+        ]
+        const summary = await extractClientMemory(
+          nextHistory,
+          memory.summary,
+          log,
+          { model: settings.model },
+        )
+        if (summary !== null) {
+          await saveConversationAiMemory(
+            input.conversationId,
+            summary,
+            nextHistory.filter((m) => m.role === 'client').length,
+          )
+        }
+      } catch (err) {
+        console.error('[v0] autopilot(livechat) memory update failed:', err)
+      }
+    })()
 
     // After replying, judge whether the client is now ready to hand over their
     // data and start working. If so, promote the lead to «Ликвид» and hand it

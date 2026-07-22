@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, useTransition } from 'react'
 import {
   Bot,
   BrainCircuit,
+  GaugeCircle,
   GraduationCap,
   Highlighter,
   Loader2,
@@ -18,6 +19,7 @@ import {
 import { toast } from 'sonner'
 import {
   aiDeleteLessonAction,
+  aiModelStatsAction,
   aiSampleConversationsAction,
   aiSaveLessonAction,
   aiSuggestReplyAction,
@@ -28,9 +30,11 @@ import {
 import type {
   AiAssistLesson,
   AiAssistSettings,
+  AiModelStat,
   TrainableAccount,
   TrainingSample,
 } from '@/lib/data/ai-assist'
+import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -55,6 +59,19 @@ const TONE_OPTIONS = [
   { value: 'friendly', label: 'Дружелюбный' },
   { value: 'concise', label: 'Краткий' },
   { value: 'persuasive', label: 'Убедительный' },
+]
+
+// Sentinel for "use the code default model" (Select can't hold an empty value).
+const DEFAULT_MODEL_VALUE = '__default__'
+
+// Curated manager-brain models available through the Vercel AI Gateway. The
+// operator can A/B these; leaving "По умолчанию" uses the code default.
+const MODEL_OPTIONS = [
+  { value: DEFAULT_MODEL_VALUE, label: 'По умолчанию (gpt-4.1)' },
+  { value: 'openai/gpt-4.1', label: 'OpenAI · GPT-4.1' },
+  { value: 'openai/gpt-4.1-mini', label: 'OpenAI · GPT-4.1 mini (быстрее/дешевле)' },
+  { value: 'openai/gpt-4o', label: 'OpenAI · GPT-4o' },
+  { value: 'anthropic/claude-sonnet-4', label: 'Anthropic · Claude Sonnet 4' },
 ]
 
 interface Props {
@@ -158,12 +175,17 @@ function SettingsTab({
 }) {
   const [persona, setPersona] = useState(settings.persona)
   const [tone, setTone] = useState(settings.tone)
+  const [temperature, setTemperature] = useState(String(settings.temperature))
+  const [maxTokens, setMaxTokens] = useState(String(settings.maxTokens))
   const [pending, startTransition] = useTransition()
 
   const save = (patch: {
     enabled?: boolean
     tone?: string
     persona?: string
+    model?: string
+    temperature?: number
+    maxTokens?: number
   }) => {
     startTransition(async () => {
       try {
@@ -171,6 +193,8 @@ function SettingsTab({
         onChange(next)
         setPersona(next.persona)
         setTone(next.tone)
+        setTemperature(String(next.temperature))
+        setMaxTokens(String(next.maxTokens))
         toast.success('Сохранено')
       } catch {
         toast.error('Не удалось сохранить')
@@ -179,6 +203,9 @@ function SettingsTab({
   }
 
   const dirty = persona !== settings.persona || tone !== settings.tone
+  const tuningDirty =
+    temperature !== String(settings.temperature) ||
+    maxTokens !== String(settings.maxTokens)
 
   return (
     <div className="flex flex-col gap-4">
@@ -248,6 +275,93 @@ function SettingsTab({
         </div>
       </Card>
 
+      <Card className="flex flex-col gap-4 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-md bg-primary/10 p-2 text-primary">
+            <GaugeCircle className="size-5" />
+          </div>
+          <div>
+            <p className="font-medium">Модель и тонкая настройка</p>
+            <p className="text-sm text-muted-foreground">
+              Управляет только «мозгом менеджера» (ответы реальным клиентам).
+              Симулятор клиентов настраивается отдельно и не затрагивается.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="flex flex-col gap-2 sm:col-span-3">
+            <Label htmlFor="ai-model">Модель</Label>
+            <Select
+              value={settings.model || DEFAULT_MODEL_VALUE}
+              onValueChange={(v) =>
+                save({ model: !v || v === DEFAULT_MODEL_VALUE ? '' : v })
+              }
+            >
+              <SelectTrigger id="ai-model" className="w-full sm:w-96">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MODEL_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="ai-temp">Температура (0–2)</Label>
+            <Input
+              id="ai-temp"
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              value={temperature}
+              onChange={(e) => setTemperature(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Ниже — предсказуемее, выше — разнообразнее.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="ai-maxtok">Лимит токенов (50–4000)</Label>
+            <Input
+              id="ai-maxtok"
+              type="number"
+              min={50}
+              max={4000}
+              step={50}
+              value={maxTokens}
+              onChange={(e) => setMaxTokens(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Максимальная длина одного ответа.
+            </p>
+          </div>
+
+          <div className="flex items-end justify-end">
+            <Button
+              disabled={!tuningDirty || pending}
+              onClick={() =>
+                save({
+                  temperature: Number(temperature),
+                  maxTokens: Number(maxTokens),
+                })
+              }
+            >
+              {pending ? <Loader2 className="size-4 animate-spin" /> : null}
+              Сохранить
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      <ModelStatsCard />
+
       {settings.playbook.length > 0 ? (
         <Card className="flex flex-col gap-2 p-4">
           <div className="flex items-center gap-2">
@@ -262,6 +376,84 @@ function SettingsTab({
         </Card>
       ) : null}
     </div>
+  )
+}
+
+/* ----------------------------- Model A/B stats -------------------------- */
+
+/**
+ * Per-model generation stats (last 7 days) sourced from ai_generation_metrics.
+ * Lets the operator compare models on success rate / latency / verbosity before
+ * committing one as the manager-brain model above.
+ */
+function ModelStatsCard() {
+  const [stats, setStats] = useState<AiModelStat[]>([])
+  const [loading, startLoad] = useTransition()
+
+  const load = useCallback(() => {
+    startLoad(async () => {
+      try {
+        setStats(await aiModelStatsAction(7))
+      } catch {
+        /* silent — card just stays empty */
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  return (
+    <Card className="flex flex-col gap-3 p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Sparkles className="size-4 text-primary" />
+          <p className="font-medium">Сравнение моделей (7 дней)</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+          {loading ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="size-4" />
+          )}
+          Обновить
+        </Button>
+      </div>
+
+      {stats.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          Пока нет данных. Метрики появятся после первых ответов ИИ клиентам.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-muted-foreground">
+                <th className="py-2 pr-4 font-medium">Модель</th>
+                <th className="py-2 pr-4 font-medium">Всего</th>
+                <th className="py-2 pr-4 font-medium">Успешно</th>
+                <th className="py-2 pr-4 font-medium">Ср. задержка</th>
+                <th className="py-2 font-medium">Ср. токенов</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.map((s) => (
+                <tr key={s.model} className="border-b border-border/50">
+                  <td className="py-2 pr-4 font-mono text-xs">{s.model}</td>
+                  <td className="py-2 pr-4 tabular-nums">{s.total}</td>
+                  <td className="py-2 pr-4 tabular-nums">
+                    {Math.round(s.okRate * 100)}%
+                  </td>
+                  <td className="py-2 pr-4 tabular-nums">{s.avgLatencyMs} мс</td>
+                  <td className="py-2 tabular-nums">{s.avgCompletionTokens}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   )
 }
 

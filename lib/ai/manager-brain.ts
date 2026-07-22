@@ -56,6 +56,13 @@ export interface ManagerBrainInput {
    * repeat a mistake it was corrected on. Optional for older callers.
    */
   corrections?: string[]
+  /**
+   * Durable memory about THIS client (name, city, budget, objections,
+   * agreements, next step) distilled by extractClientMemory and stored per
+   * conversation. Injected verbatim so the AI keeps context on long dialogs
+   * without replaying the whole transcript. Optional for older callers.
+   */
+  memory?: string
   /** Conversation so far, oldest → newest. */
   history: BrainMessage[]
 }
@@ -79,6 +86,12 @@ export interface BrainConfig {
   model?: string | null
   temperature?: number | null
   maxTokens?: number | null
+  /**
+   * When true, run one extra self-critique pass over the draft reply and
+   * silently repair it if it contradicts the scenario/known facts, leaks an
+   * AI tell, or breaks tone. Costs one more gateway call; off by default.
+   */
+  selfCritique?: boolean | null
 }
 
 function resolveModel(config?: BrainConfig): string {
@@ -158,6 +171,18 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
       persona,
       '',
       'Строго следуй этому сценарию. Если твоё «здравое рассуждение» противоречит сценарию — побеждает сценарий. Не выходи за рамки описанного предложения.',
+    )
+  }
+
+  // Durable memory about this specific client. Placed high (right after the
+  // scenario) so the AI treats known facts as ground truth: it must not re-ask
+  // what the client already told it, and must respect prior agreements.
+  const memory = input.memory?.trim()
+  if (memory) {
+    parts.push(
+      '',
+      'ПАМЯТЬ О КЛИЕНТЕ (то, что уже известно из переписки — НЕ переспрашивай это, учитывай при ответе):',
+      memory,
     )
   }
 
@@ -282,11 +307,71 @@ function gatewayStatusHint(status: number): string {
   if (status === 401 || status === 403)
     return ' — ключ AI Gateway недействителен или не имеет доступа (проверьте AI_GATEWAY_API_KEY).'
   if (status === 402)
-    return ' — на аккаунте AI Gateway закончились средства/кредиты (пополните баланс).'
+    return ' — на аккаунте AI Gateway закончили��ь средства/кредиты (пополните баланс).'
   if (status === 429)
     return ' — превышен лимит запросов (rate limit), попробуйте позже.'
   if (status >= 500) return ' — временная ошибка на стороне AI Gateway.'
   return ''
+}
+
+/**
+ * One self-critique pass: ask the model to fix the draft only if it breaks the
+ * scenario, contradicts known facts, leaks an AI tell, or breaks tone —
+ * otherwise return it unchanged. Best-effort: returns the original draft on any
+ * failure so it can never make a reply worse or block sending.
+ */
+async function refineReply(
+  draft: string,
+  systemPrompt: string,
+  key: string,
+  model: string,
+  log?: BrainLog,
+): Promise<string> {
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты редактор-контролёр. Ниже — инструкция менеджера и черновик его ответа клиенту. ' +
+              'Проверь черновик на: (1) противоречие сценарию/правилам, (2) противоречие уже ' +
+              'известным фактам о клиенте, (3) признаки ИИ (длинное тире, списки, markdown, штампы ' +
+              '«Конечно!», «Рад помочь»), (4) нарушение тона или излишнюю длину. Если всё хорошо — ' +
+              'верни черновик БЕЗ ИЗМЕНЕНИЙ. Если есть проблема — верни исправленный вариант одним ' +
+              'сообщением, живым разговорным русским. Ничего не поясняй, верни только текст ответа.',
+          },
+          {
+            role: 'user',
+            content: `ИНСТРУКЦИЯ МЕНЕДЖЕРА:\n${systemPrompt}\n\nЧЕРНОВИК ОТВЕТА:\n${draft}`,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 400,
+      }),
+    })
+    if (!res.ok) return draft
+    const data = (await res.json()) as GatewayResponse
+    const raw = data.choices?.[0]?.message?.content ?? ''
+    const refined = humanizeReply(raw.trim().replace(/^["'«»]+|["'«»]+$/g, ''))
+    if (!refined || looksLikeRefusal(refined)) return draft
+    if (refined !== draft) {
+      log?.({
+        level: 'debug',
+        event: 'reply.refined',
+        message: 'Само-критика скорректировала ответ.',
+      })
+    }
+    return refined
+  } catch {
+    return draft
+  }
 }
 
 /**
@@ -342,8 +427,9 @@ export async function generateManagerReply(
 
   // Only recent turns — keeps it cheap and focused.
   const recent = input.history.slice(-16)
+  const systemPrompt = buildSystemPrompt(input)
   const messages: Array<{ role: string; content: string }> = [
-    { role: 'system', content: buildSystemPrompt(input) },
+    { role: 'system', content: systemPrompt },
   ]
   for (const m of recent) {
     messages.push({
@@ -415,13 +501,19 @@ export async function generateManagerReply(
       emitMetric('refused', data.usage)
       return null
     }
+    // Optional self-critique pass: silently repairs a draft that breaks the
+    // scenario/facts/tone or leaks an AI tell. Never worsens or blocks it.
+    let finalReply = clean
+    if (config?.selfCritique) {
+      finalReply = await refineReply(clean, systemPrompt, key, model, log)
+    }
     log?.({
       level: 'info',
       event: 'reply.generated',
-      message: clean,
+      message: finalReply,
     })
     emitMetric('ok', data.usage)
-    return clean
+    return finalReply
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn('[manager-brain] generation failed:', msg)
@@ -525,6 +617,177 @@ export async function assessLeadReady(
       err instanceof Error ? err.message : String(err),
     )
     return false
+  }
+}
+
+/**
+ * Rebuild the durable per-client memory from the transcript. Produces a short,
+ * factual summary (name, city, budget, objections, agreements, next step) that
+ * the runtime persists to conversation_ai_memory and feeds back via
+ * ManagerBrainInput.memory. `prevMemory` is the last summary so the model can
+ * merge rather than start over. Returns null on any failure (runtime keeps the
+ * previous memory). Dependency-free: model is caller-provided via BrainConfig.
+ */
+export async function extractClientMemory(
+  history: BrainMessage[],
+  prevMemory: string,
+  log?: BrainLog,
+  config?: BrainConfig,
+): Promise<string | null> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  if (!key) return null
+  const recent = history.slice(-24)
+  if (recent.length === 0) return null
+
+  const transcript = recent
+    .map((m) => `${m.role === 'client' ? 'Клиент' : 'Менеджер'}: ${m.body}`)
+    .join('\n')
+  const model = resolveModel(config)
+
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты ведёшь короткую фактическую карточку клиента по переписке. Верни компактную ' +
+              'сводку (не более 8 строк) ТОЛЬКО из фактов, которые клиент реально сообщил: имя, ' +
+              'город/регион, возраст, занятость, бюджет/зарплатные ожидания, график, возражения и ' +
+              'сомнения, о чём договорились, какой следующий шаг. Пиши по-русски, по одному факту ' +
+              'в строке, кратко, без воды и без выдумок. Если фактов нет — верни пустую строку. ' +
+              'Обнови и объедини с уже известным, не теряя ранее зафиксированное.',
+          },
+          {
+            role: 'user',
+            content:
+              (prevMemory.trim()
+                ? `Уже известно:\n${prevMemory.trim()}\n\n`
+                : '') + `Переписка:\n${transcript}`,
+          },
+        ],
+        temperature: 0.2,
+        max_tokens: 300,
+      }),
+    })
+    if (!res.ok) {
+      log?.({
+        level: 'warn',
+        event: 'memory.http_error',
+        message: `Обновление памяти клиента: HTTP ${res.status}${gatewayStatusHint(res.status)}`,
+        meta: { status: res.status },
+      })
+      return null
+    }
+    const data = (await res.json()) as GatewayResponse
+    const summary = (data.choices?.[0]?.message?.content ?? '').trim()
+    log?.({
+      level: 'debug',
+      event: 'memory.updated',
+      message: summary ? `Память клиента обновлена (${summary.length} симв.)` : 'Память клиента пуста.',
+    })
+    return summary
+  } catch (err) {
+    console.warn(
+      '[manager-brain] memory extraction failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return null
+  }
+}
+
+/** Verdict from the escalation detector. */
+export interface EscalationVerdict {
+  escalate: boolean
+  reason: string
+}
+
+const ESCALATION_NONE: EscalationVerdict = { escalate: false, reason: '' }
+
+/**
+ * Detect when the bot should hand off to a human: the client is angry/insulting,
+ * explicitly demands a real person/operator, threatens to leave/complain, or the
+ * conversation is clearly stuck (client repeating the same objection with no
+ * progress). Conservative by design — returns escalate=false on any uncertainty
+ * or failure so it never hands off a healthy dialog. The runtime acts on a true
+ * verdict via markAiHandoffToLiquid (pauses AI, promotes to a human lead).
+ */
+export async function detectEscalation(
+  history: BrainMessage[],
+  log?: BrainLog,
+  config?: BrainConfig,
+): Promise<EscalationVerdict> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  if (!key) return ESCALATION_NONE
+  const recent = history.slice(-12)
+  // Need at least a couple of client turns to judge a stuck/angry pattern.
+  if (recent.filter((m) => m.role === 'client').length < 2) return ESCALATION_NONE
+
+  const transcript = recent
+    .map((m) => `${m.role === 'client' ? 'Клиент' : 'Менеджер'}: ${m.body}`)
+    .join('\n')
+  const model = resolveModel(config)
+
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты решаешь, нужно ли передать диалог живому сотруднику. Ответь СТРОГО в формате ' +
+              '"ДА: причина" или "НЕТ". Отвечай ДА только если: клиент откровенно зол, оскорбляет, ' +
+              'угрожает жалобой/уходом; либо прямо и настойчиво требует живого человека/оператора/' +
+              'руководителя; либо диалог зашёл в тупик (клиент несколько раз повторяет одно и то же ' +
+              'возражение без всякого прогресса). Во всех остальных случаях — обычный интерес, ' +
+              'вопросы, торг, сомнения, «подумаю» — отвечай НЕТ. Причина — 3-6 слов по-русски.',
+          },
+          { role: 'user', content: transcript },
+        ],
+        temperature: 0,
+        max_tokens: 24,
+      }),
+    })
+    if (!res.ok) {
+      log?.({
+        level: 'warn',
+        event: 'escalation.http_error',
+        message: `Детектор эскалации: HTTP ${res.status}${gatewayStatusHint(res.status)}`,
+        meta: { status: res.status },
+      })
+      return ESCALATION_NONE
+    }
+    const data = (await res.json()) as GatewayResponse
+    const raw = (data.choices?.[0]?.message?.content ?? '').trim()
+    const escalate = /^\s*да\b/i.test(raw)
+    const reason = escalate ? raw.replace(/^\s*да\s*[:\-—]?\s*/i, '').trim() : ''
+    log?.({
+      level: escalate ? 'info' : 'debug',
+      event: 'escalation.assessed',
+      message: escalate
+        ? `Нужна передача человеку: ${reason || 'причина не указана'}`
+        : 'Эскалация не требуется — продолжаем вести диалог.',
+      meta: { escalate, reason },
+    })
+    return { escalate, reason }
+  } catch (err) {
+    console.warn(
+      '[manager-brain] escalation detection failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return ESCALATION_NONE
   }
 }
 

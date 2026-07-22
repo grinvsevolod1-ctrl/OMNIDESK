@@ -36,6 +36,8 @@ import { isOffHoursFor, type WorkingHoursLike } from '../../lib/offhours.js'
 import {
   assessLeadReady,
   type BrainLog,
+  detectEscalation,
+  extractClientMemory,
   generateManagerReply,
 } from '../../lib/ai/manager-brain.js'
 import { logger } from './logger.js'
@@ -301,11 +303,32 @@ async function fireAiLead(params: {
       channelType,
     })
 
-    const [lessons, corrections, history] = await Promise.all([
+    const [lessons, corrections, history, memory] = await Promise.all([
       repo.listAiLessons(12),
       repo.listManualCorrectionRules(60),
       repo.getConversationHistoryForAi(conversationId, 16),
+      repo.getConversationAiMemory(conversationId),
     ])
+
+    // Escalation guard: angry client / demands a human / stuck dialog → hand off
+    // to a person via the existing liquid-handoff path instead of auto-replying.
+    const escalation = await detectEscalation(history, log, {
+      model: config.model,
+    })
+    if (escalation.escalate) {
+      const promoted = await repo.markAiHandoffToLiquid(conversationId)
+      void repo.logAi({
+        level: 'info',
+        source: 'handoff',
+        event: 'escalated',
+        message: promoted
+          ? `ИИ передал диалог человеку (эскалация): ${escalation.reason || 'причина не указана'}.`
+          : `Эскалация (${escalation.reason || '—'}), но статус уже задан вручную — ИИ просто замолкает.`,
+        conversationId,
+        channelType,
+      })
+      return true
+    }
 
     const reply = await generateManagerReply(
       {
@@ -314,6 +337,7 @@ async function fireAiLead(params: {
         playbook: config.playbook,
         lessons,
         corrections,
+        memory: memory.summary,
         history,
       },
       log,
@@ -321,6 +345,7 @@ async function fireAiLead(params: {
         model: config.model,
         temperature: config.temperature,
         maxTokens: config.maxTokens,
+        selfCritique: true,
       },
     )
     if (!reply) {
@@ -395,6 +420,31 @@ async function fireAiLead(params: {
       conversationId,
       channelType,
     })
+
+    // Refresh durable client memory (best-effort, fire and forget).
+    void (async () => {
+      try {
+        const nextHistory = [
+          ...history,
+          { role: 'manager' as const, body: reply },
+        ]
+        const summary = await extractClientMemory(
+          nextHistory,
+          memory.summary,
+          log,
+          { model: config.model },
+        )
+        if (summary !== null) {
+          await repo.saveConversationAiMemory(
+            conversationId,
+            summary,
+            nextHistory.filter((m) => m.role === 'client').length,
+          )
+        }
+      } catch (err) {
+        logger.error({ err, conversationId }, 'ai-lead: memory update failed')
+      }
+    })()
 
     // After replying, judge whether the client is ready to hand over their data
     // and start working. If so, promote the lead to «Ликвид» and hand it to a

@@ -1338,6 +1338,44 @@ export async function markAiHandoffToLiquid(
   return rows.length > 0
 }
 
+/** Read durable manager-brain memory for a conversation. Best-effort. */
+export async function getConversationAiMemory(
+  conversationId: string,
+): Promise<{ summary: string; turnsSeen: number }> {
+  try {
+    const row = await one<{ summary: string; turns_seen: number }>(
+      `SELECT summary, turns_seen
+         FROM conversation_ai_memory WHERE conversation_id = $1`,
+      [conversationId],
+    )
+    if (!row) return { summary: '', turnsSeen: 0 }
+    return { summary: row.summary ?? '', turnsSeen: Number(row.turns_seen) || 0 }
+  } catch {
+    return { summary: '', turnsSeen: 0 }
+  }
+}
+
+/** Upsert durable manager-brain memory for a conversation. Best-effort. */
+export async function saveConversationAiMemory(
+  conversationId: string,
+  summary: string,
+  turnsSeen: number,
+): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO conversation_ai_memory (conversation_id, summary, turns_seen, updated_at)
+         VALUES ($1, $2, $3, now())
+       ON CONFLICT (conversation_id)
+         DO UPDATE SET summary = EXCLUDED.summary,
+                       turns_seen = EXCLUDED.turns_seen,
+                       updated_at = now()`,
+      [conversationId, summary, turnsSeen],
+    )
+  } catch {
+    /* memory is a non-critical enhancement */
+  }
+}
+
 /**
  * Append one AI activity-log entry to the SHARED `ai_logs` table (migration
  * 058), so messenger/worker AI events show up in the panel "Логи" tab alongside
