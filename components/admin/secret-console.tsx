@@ -43,6 +43,7 @@ import {
   secretFetchThreadAction,
   secretListConversationsAction,
   secretSendAsClientAction,
+  secretSendClientMediaAction,
   secretSetContactBlockedAction,
   secretSetConversationStatusAction,
   secretSetThreadSimAction,
@@ -434,6 +435,35 @@ export function SecretConsole({
     [selectedId, loadList],
   )
 
+  // Send a file AS THE CLIENT. Mirrors sendAsClient but ships bytes via
+  // FormData; the current textarea text (if any) rides along as the caption.
+  const sendClientMedia = useCallback(
+    (file: File, caption: string, onDone: () => void) => {
+      if (!selectedId) return
+      const fd = new FormData()
+      fd.append('file', file)
+      if (caption.trim()) fd.append('caption', caption.trim())
+      startTransition(async () => {
+        const res = await secretSendClientMediaAction(selectedId, fd)
+        if (res.ok && res.createdMessage) {
+          const created = res.createdMessage
+          setMessages((prev) =>
+            prev.some((m) => m.id === created.id) ? prev : [...prev, created],
+          )
+          onDone()
+          toast.success(res.message)
+          if (res.simDetached) {
+            setThreadSim((s) => (s ? { ...s, paused: true } : s))
+          }
+          void loadList({ silent: true })
+        } else {
+          toast.error(res.message)
+        }
+      })
+    },
+    [selectedId, loadList],
+  )
+
   const act = useCallback(
     (fn: () => Promise<{ ok: boolean; message: string }>, onOk?: () => void) => {
       startTransition(async () => {
@@ -745,6 +775,7 @@ export function SecretConsole({
               simDriving={simDriving}
               onIntervene={() => setSim(false)}
               onSend={sendAsClient}
+              onSendMedia={sendClientMedia}
             />
           </>
         )}
@@ -1218,18 +1249,31 @@ function Composer({
   simDriving,
   onIntervene,
   onSend,
+  onSendMedia,
 }: {
   contactName: string
   pending: boolean
   simDriving: boolean
   onIntervene: () => void
   onSend: (body: string, onDone: () => void) => void
+  onSendMedia: (file: File, caption: string, onDone: () => void) => void
 }) {
   const [body, setBody] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   function submit() {
     if (!body.trim() || pending) return
     onSend(body, () => setBody(''))
+  }
+
+  // Attach a file "from the client": the current textarea text rides along as
+  // the caption, then both are cleared. The input is reset so the same file can
+  // be picked again.
+  function onFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || pending) return
+    onSendMedia(file, body, () => setBody(''))
   }
 
   return (
@@ -1251,6 +1295,25 @@ function Composer({
         <span className="font-medium text-foreground">{contactName}</span>
       </div>
       <div className="flex items-end gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
+          onChange={onFilePicked}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="size-11 shrink-0"
+          disabled={pending}
+          onClick={() => fileInputRef.current?.click()}
+          aria-label="Прикрепить файл от имени клиента"
+          title="Прикрепить файл"
+        >
+          <Paperclip className="size-4" />
+        </Button>
         <Textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}

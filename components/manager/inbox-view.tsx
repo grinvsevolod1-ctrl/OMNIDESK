@@ -929,6 +929,7 @@ const MEDIA_PLACEHOLDERS = new Set([
   '[Аудио]',
   '[Стикер]',
   '[Файл]',
+  '[Документ]',
 ])
 
 /** True when `body` is just a synthetic media placeholder (so we hide it). */
@@ -3259,7 +3260,7 @@ export function InboxView({
                               ? 'Вы удалили это сообщение'
                               : m.deletedOrigin === 'remote'
                                 ? 'Удалено собеседником'
-                                : 'Сообщение удалено'
+                                : 'Сообщение уда��ено'
                             : null
                           // Stickers render even without a URL (optimistic
                           // outgoing ones fall back to their emoji).
