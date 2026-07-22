@@ -5,6 +5,7 @@ import {
   getStoredMediaBytes,
   getUrlMediaDescriptor,
   getWhatsappMediaDescriptor,
+  MEDIA_MAX_STORE_BYTES,
   storeMessageMediaBytes,
 } from '@/lib/data'
 import { proxiedFetch } from '@/lib/proxy-agent'
@@ -186,12 +187,26 @@ async function bufferAndArchive(
   mime: string | null,
   name: string | null,
 ): Promise<Buffer | null> {
+  // Size guard: storeMessageMediaBytes rejects anything over MEDIA_MAX_STORE_BYTES
+  // anyway, and providers allow very large files (Telegram up to ~2GB). Reading
+  // the whole body into memory unconditionally could OOM the panel process, so
+  // when the upstream advertises a content-length above the cap we DON'T buffer —
+  // the caller then streams the bytes straight through without archiving.
+  const declaredLen = Number(upstream.headers.get('content-length'))
+  if (Number.isFinite(declaredLen) && declaredLen > MEDIA_MAX_STORE_BYTES) {
+    return null
+  }
   try {
     const ab = await upstream.arrayBuffer()
     const buf = Buffer.from(ab)
     if (buf.byteLength === 0) return null
-    // Fire-and-forget archive; serving the bytes must not wait on the write.
-    void storeMessageMediaBytes(messageId, buf, mime, name).catch(() => {})
+    // Only archive when within the cap. If the real size turns out larger (no
+    // content-length was declared up front), we still serve the buffer we've
+    // already read — we can't re-stream a consumed body — but skip the DB write.
+    if (buf.byteLength <= MEDIA_MAX_STORE_BYTES) {
+      // Fire-and-forget archive; serving the bytes must not wait on the write.
+      void storeMessageMediaBytes(messageId, buf, mime, name).catch(() => {})
+    }
     return buf
   } catch {
     return null
