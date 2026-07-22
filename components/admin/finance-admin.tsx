@@ -769,7 +769,11 @@ export function FinanceAdmin({
         </p>
       ) : null}
 
-      <Tabs value={subTab} onValueChange={(v) => setSubTab(v as SubTab)}>
+      <Tabs
+        value={subTab}
+        onValueChange={(v) => setSubTab(v as SubTab)}
+        className="flex-col"
+      >
         <TabsList className="grid h-auto w-full grid-cols-2 gap-2 bg-transparent p-0 sm:grid-cols-4">
           <SourceTabCard
             value="overview"
@@ -1224,7 +1228,7 @@ function GlobalDashboard({
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Кабинетов: {s.activeAccounts}/{s.totalAccounts}
+                  Каб��нетов: {s.activeAccounts}/{s.totalAccounts}
                 </p>
               </button>
             ))}
@@ -2199,7 +2203,7 @@ function ExpensesPanel({
           ) : (
             <Card className="overflow-hidden p-0">
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full min-w-[720px] text-sm">
                   <thead>
                     <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                       <th className="w-8 px-3 py-2.5" />
@@ -3228,7 +3232,7 @@ function EntryDialog({
                 id="entry-vendor"
                 name="vendor"
                 defaultValue={editing?.vendor ?? ''}
-                placeholder="Кому платим"
+                placeholder="��ому платим"
               />
             </div>
             <div className="grid grid-cols-[1fr_auto] gap-3">
