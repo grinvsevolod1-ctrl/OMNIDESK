@@ -217,7 +217,7 @@ async function tick(): Promise<void> {
       level: 'error',
       source: 'sim',
       event: 'tick.error',
-      message: `Ошиб��а цикла симулятора: ${msg}`,
+      message: `Ошибка цикла симулятора: ${msg}`,
     })
   } finally {
     h.ticking = false

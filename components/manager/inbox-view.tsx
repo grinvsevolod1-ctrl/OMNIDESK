@@ -3260,7 +3260,7 @@ export function InboxView({
                               ? 'Вы удалили это сообщение'
                               : m.deletedOrigin === 'remote'
                                 ? 'Удалено собеседником'
-                                : 'Сообщение уда��ено'
+                                : 'Сообщение удалено'
                             : null
                           // Stickers render even without a URL (optimistic
                           // outgoing ones fall back to their emoji).
@@ -3786,7 +3786,7 @@ export function InboxView({
             </div>
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-foreground">
-                Заметка для коллеги (необя��ательно)
+                Заметка для коллеги (необязательно)
               </span>
               <Textarea
                 value={transferNote}

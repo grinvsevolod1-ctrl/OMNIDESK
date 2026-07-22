@@ -1494,7 +1494,7 @@ export async function listSimCorrectionRules(limit = 60): Promise<string[]> {
     const ctx = r.context.trim()
     const parts: string[] = []
     if (ctx) parts.push(`В ситуации:\n${ctx}`)
-    if (quoted) parts.push(`��азбираем твоё сообщение: «${quoted}».`)
+    if (quoted) parts.push(`Разбираем твоё сообщение: «${quoted}».`)
     parts.push(`Правило: ${r.instruction.trim()}`)
     return parts.join('\n')
   })

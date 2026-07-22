@@ -1200,7 +1200,7 @@ const MessageBubble = memo(function MessageBubble({
           type="button"
           onClick={() => onDelete(message.id)}
           disabled={pending}
-          aria-label="Удалит�� сообщение"
+          aria-label="Удалить сообщение"
           className="mb-1 opacity-0 transition-opacity group-hover:opacity-100"
         >
           <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />

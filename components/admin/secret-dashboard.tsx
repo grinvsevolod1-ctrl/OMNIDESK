@@ -944,7 +944,7 @@ function MassImportTab({
             <ToggleTile
               active={withMessage}
               onClick={() => setWithMessage((v) => !v)}
-              title="С первы�� сообщением"
+              title="С первым сообщением"
               description="Добавить входящее сообщение от клиента"
             />
             <ToggleTile
@@ -960,7 +960,7 @@ function MassImportTab({
         {/* Channels */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
-            <Label>Каналы-источник��</Label>
+            <Label>Каналы-источники</Label>
             <div className="flex items-center gap-2 text-xs">
               <button
                 type="button"

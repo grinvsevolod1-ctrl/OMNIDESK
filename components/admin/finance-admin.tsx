@@ -1033,7 +1033,7 @@ interface SourceRow {
   totalAccounts: number
 }
 
-/** Статусы, при которых кабине�� считаем заблокированным/проблемным. */
+/** Статусы, при которых кабинет считаем заблокированным/проблемным. */
 const BLOCKED_AD_STATUSES = new Set<AdStatus>(['banned', 'no_funds'])
 
 function GlobalDashboard({
@@ -1228,7 +1228,7 @@ function GlobalDashboard({
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Каб��нетов: {s.activeAccounts}/{s.totalAccounts}
+                  Кабинетов: {s.activeAccounts}/{s.totalAccounts}
                 </p>
               </button>
             ))}
@@ -2661,7 +2661,7 @@ function ResourceDialog({
         >
           <DialogHeader>
             <DialogTitle>
-              {editing ? 'Изменить источник лидов' : 'Новы�� источник лидов'}
+              {editing ? 'Изменить источник лидов' : 'Новый источник лидов'}
             </DialogTitle>
             <DialogDescription>
               Источник лидов — это площадка (например, site.com), внутри которой
@@ -2800,7 +2800,7 @@ function AdAccountDialog({
         >
           <DialogHeader>
             <DialogTitle>
-              {editing ? 'Изменить кабинет' : 'Нов��й рекламный кабинет'}
+              {editing ? 'Изменить кабинет' : 'Новый рекламный кабинет'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -3232,7 +3232,7 @@ function EntryDialog({
                 id="entry-vendor"
                 name="vendor"
                 defaultValue={editing?.vendor ?? ''}
-                placeholder="��ому платим"
+                placeholder="Кому платим"
               />
             </div>
             <div className="grid grid-cols-[1fr_auto] gap-3">
@@ -3887,7 +3887,7 @@ function VaultCard({
                 'Логин и пароль',
               )
             }
-            title="Скопировать логин и п��роль (через таб)"
+            title="Скопировать логин и пароль (через таб)"
           >
             <ClipboardCopy className="size-3.5" /> Логин+пароль
           </Button>
@@ -4185,7 +4185,7 @@ function VaultDialog({
               {fields.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   IP, порт, PIN, ключ восстановления, номер карты, seed-фраза —
-                  что угодно. Отметьте «секрет», чтобы значение скры��алось.
+                  что угодно. Отметьте «секрет», чтобы значение скрывалось.
                 </p>
               ) : (
                 <div className="flex flex-col gap-2">
