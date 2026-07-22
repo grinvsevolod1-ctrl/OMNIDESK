@@ -77,9 +77,19 @@ pnpm install --frozen-lockfile
 echo "🗄  Applying database migrations ..."
 node --env-file=.env scripts/migrate.mjs up
 
-# 5. Rebuild the panel from a clean .next to avoid stale Server Action manifests.
-rm -rf .next
-pnpm build
+# 5. Rebuild the panel into a THROWAWAY directory, then swap it in atomically.
+#    Deleting the live .next before building (the old approach) left the directory
+#    missing for the whole ~10s build, so the still-running panel under PM2
+#    crash-looped with "Could not find a production build" until the rebuild
+#    finished. Building into .next.new keeps the old build serving until the very
+#    last moment; the final `mv` is an atomic rename on the same filesystem.
+#    NEXT_DIST_DIR is honoured by next.config.mjs (defaults to .next otherwise).
+rm -rf .next.new .next.old
+NEXT_DIST_DIR=.next.new pnpm build
+# Swap: retire the current build and promote the freshly built one.
+[ -d .next ] && mv .next .next.old
+mv .next.new .next
+rm -rf .next.old
 
 # 6. Recreate the PM2 processes from ecosystem.config.js. A plain `pm2 restart`
 #    reuses whatever definition PM2 first saved (see the header of
