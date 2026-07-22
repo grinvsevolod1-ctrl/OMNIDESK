@@ -847,14 +847,22 @@ export async function secretSendClientMediaAction(
 
   const mime = file.type || 'application/octet-stream'
   const kind = clientMediaKind(mime)
-  // Match real ingest exactly: photos/videos/audio arrive with NO file name
-  // (providers don't send one), only documents carry their original filename.
-  // Keeping this identical means a manager can't infer anything from a stray
-  // name on an image.
-  const name = kind.type === 'document' ? file.name || null : null
+  // Optional delivery style for video: 'video_note' renders as a Telegram/VK-style
+  // round "кружочек" on the manager side (same media_type real ingest uses). Any
+  // non-video value or absence keeps the natural type from clientMediaKind.
+  const sendAs = (formData.get('sendAs') as string | null) ?? ''
+  const asVideoNote = sendAs === 'video_note' && kind.type === 'video'
+  const mediaType: Extract<MediaType, 'image' | 'video' | 'video_note' | 'audio' | 'document'> =
+    asVideoNote ? 'video_note' : kind.type
+  const placeholder = asVideoNote ? '[Видеосообщение]' : kind.placeholder
+  // Match real ingest exactly: photos/videos/audio (incl. video notes) arrive with
+  // NO file name (providers don't send one), only documents carry their original
+  // filename. Keeping this identical means a manager can't infer anything from a
+  // stray name on an image or circle video.
+  const name = mediaType === 'document' ? file.name || null : null
   // No-caption media uses the same bracketed placeholder real ingest does; the
   // manager UI hides it behind the media bubble. A caption shows as normal text.
-  const body = caption || kind.placeholder
+  const body = caption || placeholder
   const author = conv[0].contact_name || 'Клиент'
   const bytes = Buffer.from(await file.arrayBuffer())
 
@@ -863,7 +871,7 @@ export async function secretSendClientMediaAction(
        (id, conversation_id, direction, body, author, media_type, media_mime, media_name)
      VALUES ($1, $2, 'in', $3, $4, $5, $6, $7)
      RETURNING id, created_at`,
-    [randomUUID(), conversationId, body, author, kind.type, mime, name],
+    [randomUUID(), conversationId, body, author, mediaType, mime, name],
   )
   const messageId = rows[0].id
 
@@ -904,7 +912,7 @@ export async function secretSendClientMediaAction(
       body,
       author,
       createdAt: new Date(rows[0].created_at).toISOString(),
-      mediaType: kind.type,
+      mediaType,
       mediaMime: mime,
       ...(name ? { mediaName: name } : {}),
       mediaUrl: `/api/media/${messageId}`,

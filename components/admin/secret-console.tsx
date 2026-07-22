@@ -15,6 +15,7 @@ import {
   Ban,
   Bot,
   CheckCheck,
+  Circle,
   Filter,
   Hand,
   Info,
@@ -33,6 +34,7 @@ import {
   ShieldCheck,
   Trash2,
   UserRound,
+  Video,
   X,
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
@@ -94,6 +96,15 @@ const TYPE_LABEL: Record<string, string> = {
   vk: 'VK',
   max: 'MAX',
   livechat: 'Онлайн-чат',
+}
+
+/** God-console attachment chip labels (admin-only preview of what was sent). */
+const MEDIA_CHIP_LABEL: Record<string, string> = {
+  image: 'Фото',
+  video: 'Видео',
+  video_note: 'Кружочек',
+  audio: 'Аудио',
+  document: 'Документ',
 }
 
 const CONV_STATUS_LABEL: Record<string, string> = {
@@ -437,12 +448,19 @@ export function SecretConsole({
 
   // Send a file AS THE CLIENT. Mirrors sendAsClient but ships bytes via
   // FormData; the current textarea text (if any) rides along as the caption.
+  // `sendAs` lets a video be delivered as a round Telegram/VK-style "кружочек".
   const sendClientMedia = useCallback(
-    (file: File, caption: string, onDone: () => void) => {
+    (
+      file: File,
+      caption: string,
+      onDone: () => void,
+      sendAs?: 'video' | 'video_note',
+    ) => {
       if (!selectedId) return
       const fd = new FormData()
       fd.append('file', file)
       if (caption.trim()) fd.append('caption', caption.trim())
+      if (sendAs) fd.append('sendAs', sendAs)
       startTransition(async () => {
         const res = await secretSendClientMediaAction(selectedId, fd)
         if (res.ok && res.createdMessage) {
@@ -1216,8 +1234,12 @@ const MessageBubble = memo(function MessageBubble({
                   mine ? 'text-primary-foreground/80' : 'text-muted-foreground',
                 )}
               >
-                <Paperclip className="size-3" />
-                {message.mediaName ?? 'Вложение'}
+                {message.mediaType === 'video_note' ? (
+                  <Circle className="size-3" />
+                ) : (
+                  <Paperclip className="size-3" />
+                )}
+                {message.mediaName ?? MEDIA_CHIP_LABEL[message.mediaType] ?? 'Вложение'}
               </span>
             )}
             <p className="whitespace-pre-wrap break-words leading-relaxed">
@@ -1256,10 +1278,18 @@ function Composer({
   simDriving: boolean
   onIntervene: () => void
   onSend: (body: string, onDone: () => void) => void
-  onSendMedia: (file: File, caption: string, onDone: () => void) => void
+  onSendMedia: (
+    file: File,
+    caption: string,
+    onDone: () => void,
+    sendAs?: 'video' | 'video_note',
+  ) => void
 }) {
   const [body, setBody] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // When a video is picked we ask HOW to deliver it (обычное видео / кружочек)
+  // before sending; this holds the pending video until the choice is made.
+  const [pendingVideo, setPendingVideo] = useState<File | null>(null)
 
   function submit() {
     if (!body.trim() || pending) return
@@ -1268,12 +1298,24 @@ function Composer({
 
   // Attach a file "from the client": the current textarea text rides along as
   // the caption, then both are cleared. The input is reset so the same file can
-  // be picked again.
+  // be picked again. Videos pause for a delivery-style choice (video vs круг).
   function onFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file || pending) return
+    if (file.type.startsWith('video/')) {
+      setPendingVideo(file)
+      return
+    }
     onSendMedia(file, body, () => setBody(''))
+  }
+
+  // Deliver the buffered video with the chosen style, then reset the prompt.
+  function sendPendingVideo(sendAs: 'video' | 'video_note') {
+    const file = pendingVideo
+    if (!file) return
+    setPendingVideo(null)
+    onSendMedia(file, body, () => setBody(''), sendAs)
   }
 
   return (
@@ -1332,6 +1374,51 @@ function Composer({
           Отправить
         </Button>
       </div>
+
+      <Dialog
+        open={pendingVideo !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingVideo(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Как отправить видео?</DialogTitle>
+            <DialogDescription>
+              Кружочек будет доставлен менеджеру как видеосообщение — обрезанный
+              круг, как в Telegram и ВК.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => sendPendingVideo('video')}
+              className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-4 text-center transition-colors hover:border-primary hover:bg-accent"
+            >
+              <span className="flex size-12 items-center justify-center rounded-md bg-muted">
+                <Video className="size-6 text-foreground" />
+              </span>
+              <span className="text-sm font-medium">Видео</span>
+              <span className="text-xs text-muted-foreground">
+                Обычный прямоугольный ролик
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => sendPendingVideo('video_note')}
+              className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-4 text-center transition-colors hover:border-primary hover:bg-accent"
+            >
+              <span className="flex size-12 items-center justify-center rounded-full bg-muted">
+                <Circle className="size-6 text-foreground" />
+              </span>
+              <span className="text-sm font-medium">Кружочек</span>
+              <span className="text-xs text-muted-foreground">
+                Видеосообщение в круге
+              </span>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
