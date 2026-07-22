@@ -28,8 +28,10 @@ import {
   getConversationAdmin,
   listConversationsAdmin,
   listMessagesAdmin,
+  recordAdminAction,
   updateManagerStatus,
 } from '@/lib/data'
+import type { SessionUser } from '@/lib/types'
 import type {
   ChannelType,
   Conversation,
@@ -49,6 +51,21 @@ import type {
  */
 
 const ADMIN_PATH = '/wijegniwjgwjog'
+
+/** Record a privileged God-panel action to the audit trail (best-effort). */
+function audit(
+  admin: SessionUser,
+  action: string,
+  opts?: { targetId?: string | null; summary?: string; detail?: Record<string, unknown> },
+): void {
+  void recordAdminAction({
+    actor: { id: admin.sub, name: admin.name || admin.email },
+    action,
+    targetId: opts?.targetId ?? null,
+    summary: opts?.summary,
+    detail: opts?.detail,
+  })
+}
 
 export interface ActionResult {
   ok: boolean
@@ -157,9 +174,10 @@ export async function secretCreateChannelAction(input: {
 export async function secretDeleteChannelAction(
   id: string,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  const admin = await requireAdmin()
   if (!id) return { ok: false, message: 'Не указан канал' }
   await deleteChannelById(id)
+  audit(admin, 'channel.delete', { targetId: id })
   revalidatePath(ADMIN_PATH)
   return { ok: true, message: 'Канал удалён' }
 }
@@ -256,9 +274,10 @@ export async function secretCreateConversationAction(input: {
 export async function secretDeleteConversationAction(
   id: string,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  const admin = await requireAdmin()
   if (!id) return { ok: false, message: 'Не указан диалог' }
   await query('DELETE FROM conversations WHERE id = $1', [id])
+  audit(admin, 'conversation.delete', { targetId: id })
   revalidatePath(ADMIN_PATH)
   return { ok: true, message: 'Диалог удалён' }
 }
@@ -354,7 +373,7 @@ export async function secretBulkCreateConversationsAction(input: {
   withMessage: boolean
   markUnread: boolean
 }): Promise<BulkResult> {
-  await requireAdmin()
+  const admin = await requireAdmin()
 
   const count = Math.min(Math.max(Math.floor(input.count) || 0, 1), 100)
   const spreadHours = Math.min(Math.max(input.spreadHours || 24, 0), 24 * 90)
@@ -416,6 +435,15 @@ export async function secretBulkCreateConversationsAction(input: {
     created++
   }
 
+  audit(admin, 'conversation.bulk_create', {
+    summary: `Создано диалогов: ${created}`,
+    detail: {
+      created,
+      requested: count,
+      channelIds: input.channelIds ?? null,
+      spreadHours,
+    },
+  })
   revalidatePath(ADMIN_PATH)
   return {
     ok: true,
@@ -432,12 +460,16 @@ export async function secretBulkCreateConversationsAction(input: {
 export async function secretSetNamesHiddenAction(
   hidden: boolean,
 ): Promise<BulkResult> {
-  await requireAdmin()
+  const admin = await requireAdmin()
   const rows = await query<{ id: string }>(
     `UPDATE conversations SET contact_name_hidden = $1 RETURNING id`,
     [hidden],
   )
   const affected = rows.length
+  audit(admin, hidden ? 'conversation.names_hide' : 'conversation.names_show', {
+    summary: `${hidden ? 'Скрыты' : 'Восстановлены'} имена в ${affected} диалогах`,
+    detail: { affected },
+  })
   revalidatePath(ADMIN_PATH)
   return {
     ok: true,
@@ -501,10 +533,14 @@ export async function secretSetManagerStatusAction(
   id: string,
   status: string,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  const admin = await requireAdmin()
   if (!id || (status !== 'active' && status !== 'blocked'))
     return { ok: false, message: 'Некорректный статус менеджера' }
   await updateManagerStatus(id, status as ManagerStatus)
+  audit(admin, status === 'blocked' ? 'manager.block' : 'manager.unblock', {
+    targetId: id,
+    detail: { status },
+  })
   revalidatePath(ADMIN_PATH)
   return {
     ok: true,
@@ -573,7 +609,7 @@ export async function secretReassignConversationsAction(input: {
   conversationIds: string[]
   toManagerId: string
 }): Promise<ActionResult> {
-  await requireAdmin()
+  const admin = await requireAdmin()
   const ids = (input.conversationIds ?? []).filter(Boolean)
   if (ids.length === 0)
     return { ok: false, message: 'Не выбрано ни одного диалога' }
@@ -583,6 +619,11 @@ export async function secretReassignConversationsAction(input: {
   const moved = await adminReassignConversations({
     conversationIds: ids,
     toManagerId: input.toManagerId,
+  })
+  audit(admin, 'conversation.reassign', {
+    targetId: input.toManagerId,
+    summary: `Передано диалогов: ${moved}`,
+    detail: { toManagerId: input.toManagerId, conversationIds: ids, moved },
   })
   revalidatePath(ADMIN_PATH)
   if (moved === 0)

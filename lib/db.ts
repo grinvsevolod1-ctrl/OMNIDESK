@@ -85,6 +85,27 @@ export function getPool(): Pool {
   return globalForDb.__pgPool
 }
 
+/**
+ * Live pool utilisation snapshot for health checks / metrics logging.
+ * - total: open connections, - idle: free connections,
+ * - waiting: callers queued for a connection (a persistently high value means
+ *   the pool is the bottleneck — raise PGPOOL_MAX). max is the configured cap.
+ */
+export function getPoolStats(): {
+  total: number
+  idle: number
+  waiting: number
+  max: number
+} {
+  const pool = getPool()
+  return {
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
+    max: (pool.options as { max?: number }).max ?? 0,
+  }
+}
+
 export interface DbExecutor {
   query<T extends QueryResultRow = QueryResultRow>(
     text: string,
