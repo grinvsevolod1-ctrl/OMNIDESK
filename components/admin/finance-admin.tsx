@@ -486,7 +486,7 @@ function SourceTabCard({
       value={value}
       className={cn(
         'flex h-auto flex-col items-start gap-2 rounded-xl border p-3 text-left transition-colors sm:p-4',
-        'data-[state=active]:border-primary data-[state=active]:bg-primary/5 data-[state=active]:shadow-none',
+        'data-active:border-primary data-active:bg-primary/5 data-active:shadow-none',
         active
           ? 'border-primary bg-primary/5'
           : 'border-border bg-card hover:bg-muted/50',
@@ -774,7 +774,7 @@ export function FinanceAdmin({
         onValueChange={(v) => setSubTab(v as SubTab)}
         className="flex-col"
       >
-        <TabsList className="grid h-auto w-full grid-cols-2 gap-2 bg-transparent p-0 sm:grid-cols-4">
+        <TabsList className="grid !h-auto w-full grid-cols-2 gap-2 bg-transparent p-0 sm:grid-cols-4">
           <SourceTabCard
             value="overview"
             active={subTab === 'overview'}
@@ -1033,7 +1033,7 @@ interface SourceRow {
   totalAccounts: number
 }
 
-/** Статусы, при которых кабинет считаем заблокированным/проблемным. */
+/** Статусы, при которых кабине�� считаем заблокированным/проблемным. */
 const BLOCKED_AD_STATUSES = new Set<AdStatus>(['banned', 'no_funds'])
 
 function GlobalDashboard({
@@ -2661,7 +2661,7 @@ function ResourceDialog({
         >
           <DialogHeader>
             <DialogTitle>
-              {editing ? 'Изменить источник лидов' : 'Новый источник лидов'}
+              {editing ? 'Изменить источник лидов' : 'Новы�� источник лидов'}
             </DialogTitle>
             <DialogDescription>
               Источник лидов — это площадка (например, site.com), внутри которой
@@ -2800,7 +2800,7 @@ function AdAccountDialog({
         >
           <DialogHeader>
             <DialogTitle>
-              {editing ? 'Изменить кабинет' : 'Новый рекламный кабинет'}
+              {editing ? 'Изменить кабинет' : 'Нов��й рекламный кабинет'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -3887,7 +3887,7 @@ function VaultCard({
                 'Логин и пароль',
               )
             }
-            title="Скопировать логин и пароль (через таб)"
+            title="Скопировать логин и п��роль (через таб)"
           >
             <ClipboardCopy className="size-3.5" /> Логин+пароль
           </Button>
@@ -4185,7 +4185,7 @@ function VaultDialog({
               {fields.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   IP, порт, PIN, ключ восстановления, номер карты, seed-фраза —
-                  что угодно. Отметьте «секрет», чтобы значение скрывалось.
+                  что угодно. Отметьте «секрет», чтобы значение скры��алось.
                 </p>
               ) : (
                 <div className="flex flex-col gap-2">

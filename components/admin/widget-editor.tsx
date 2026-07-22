@@ -297,7 +297,7 @@ function EditorTabs({
 }) {
   return (
     <Tabs defaultValue="appearance" className="gap-4">
-      <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-muted/60">
+      <TabsList className="flex !h-auto w-full flex-wrap justify-start gap-1 bg-muted/60">
         <TabsTrigger value="appearance" className="flex-none gap-1.5 px-2.5">
           <Palette className="size-3.5" />
           Вид
