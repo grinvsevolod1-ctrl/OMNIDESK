@@ -176,7 +176,13 @@ export function AiLogsTab() {
               )}
             </Button>
 
-            <Button variant="ghost" size="sm" onClick={clearLog}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearLog}
+              aria-label="Очистить лог"
+              title="Очистить лог"
+            >
               <Trash2 className="size-4" />
             </Button>
           </div>
@@ -284,22 +290,7 @@ function DiagnosticsBanner({ diag }: { diag: AiDiagnostics | null }) {
   )
 }
 
-function StatusChip({
-  ok,
-  label,
-  neutralWhenOff,
-}: {
-  ok: boolean
-  label: string
-  neutralWhenOff?: boolean
-}) {
-  if (!ok && neutralWhenOff) {
-    return (
-      <Badge variant="outline" className="gap-1 text-muted-foreground">
-        {label}: выкл
-      </Badge>
-    )
-  }
+function StatusChip({ ok, label }: { ok: boolean; label: string }) {
   return (
     <Badge
       variant="outline"

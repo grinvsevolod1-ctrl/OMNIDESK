@@ -83,7 +83,7 @@ export function AiEnrollmentTab() {
     try {
       const { enrolled: next, ok } = await aiEnrollAction({ conversationId: id })
       if (!ok) {
-        toast.error('Этот диалог нельзя подключить')
+        toast.error('Диалог не найден — обновите список и попробуйте снова')
       } else {
         setEnrolled(next)
         toast.success('ИИ включён в диалоге')

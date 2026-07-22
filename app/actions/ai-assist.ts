@@ -14,7 +14,6 @@ import {
   deleteManualCorrection,
   enrollConversationAi,
   getAiAssistSettings,
-  getAiModelStats,
   getDialogMessagesForReview,
   listAccountReviewDialogs,
   listAccountTwoWayConversationIds,
@@ -32,7 +31,6 @@ import {
   upsertKnowledge,
   type AiAssistLesson,
   type AiAssistSettings,
-  type AiModelStat,
   type EnrollableConversation,
   type KnowledgeEntry,
   type ManualCorrection,
@@ -111,12 +109,6 @@ export async function aiUpdateSettingsAction(patch: {
   const next = await updateAiAssistSettings(clamped)
   revalidatePath(AI_PATH)
   return next
-}
-
-/** Per-model generation stats over the last N days (A/B dashboard). */
-export async function aiModelStatsAction(days = 7): Promise<AiModelStat[]> {
-  await requireAdmin()
-  return getAiModelStats(days)
 }
 
 /* --------------------------- RAG knowledge base ------------------------- */
