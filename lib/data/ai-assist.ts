@@ -374,11 +374,18 @@ export async function addAutoLesson(input: {
   }
 }
 
-/** Most recent lessons (newest first). */
+/**
+ * Most recent lessons for the ADMIN management UI (newest first). Auto-authored
+ * lessons (source='auto') are deliberately excluded here: they are produced by
+ * an internal, non-manager training path and must never surface in the normal
+ * admin panel. They still power replies via `listBrainLessons`, which is
+ * unfiltered — so learning happens invisibly, without exposing its origin.
+ */
 export async function listLessons(limit = 50): Promise<AiAssistLesson[]> {
   const rows = await query<LessonRow>(
     `SELECT id, situation, draft, corrected, note, created_at
        FROM ai_assist_lessons
+      WHERE source IS DISTINCT FROM 'auto'
       ORDER BY created_at DESC
       LIMIT $1`,
     [Math.max(1, Math.min(200, limit))],
@@ -415,7 +422,16 @@ export async function getConversationHistoryForAi(
       WHERE m.conversation_id = $1
         AND m.deleted_at IS NULL
         AND (m.body <> '' OR m.media_type IS NOT NULL)
-        AND (cut.created_at IS NULL OR m.created_at >= cut.created_at)
+        -- Enrollment cutoff, robust to a deleted cutoff message: prefer the
+        -- stamped message's timestamp, but fall back to ai_enrolled_at when
+        -- that message was later deleted (cut.created_at becomes NULL) so the
+        -- AI never silently regains the whole stale backlog. Only fully
+        -- fails open when the dialog was never enrolled from a message.
+        AND (
+          c.ai_enrolled_from_message_id IS NULL
+          OR COALESCE(cut.created_at, c.ai_enrolled_at) IS NULL
+          OR m.created_at >= COALESCE(cut.created_at, c.ai_enrolled_at)
+        )
       ORDER BY m.created_at DESC
       LIMIT $2`,
     [conversationId, Math.max(1, Math.min(50, limit))],
@@ -882,8 +898,12 @@ export async function deleteLesson(id: string): Promise<void> {
 }
 
 export async function countLessons(): Promise<number> {
+  // Match listLessons: count only admin-visible lessons, never auto ones, so
+  // the tab badge can't leak internal training volume.
   const rows = await query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM ai_assist_lessons`,
+    `SELECT count(*)::text AS n
+       FROM ai_assist_lessons
+      WHERE source IS DISTINCT FROM 'auto'`,
   )
   return Number(rows[0]?.n ?? 0)
 }

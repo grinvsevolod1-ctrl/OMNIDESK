@@ -16,7 +16,6 @@ import {
   getAiAssistSettings,
   getAiModelStats,
   getDialogMessagesForReview,
-  getManagerScoreSummary,
   listAccountReviewDialogs,
   listAccountTwoWayConversationIds,
   listAiEnrolledConversations,
@@ -36,7 +35,6 @@ import {
   type AiModelStat,
   type EnrollableConversation,
   type KnowledgeEntry,
-  type ManagerScoreSummary,
   type ManualCorrection,
   type ReviewDialog,
   type ReviewMessage,
@@ -66,6 +64,16 @@ import {
  */
 
 const AI_PATH = '/admin/ai'
+
+/**
+ * Corpus sizes for the lesson/playbook operations. Named so each limit's intent
+ * is explicit (they differ on purpose): the admin list shows more, while the
+ * always-injected playbook is distilled from a tighter, higher-signal window.
+ */
+const LESSON_LIST_LIMIT = 100 // admin-visible lessons returned to the UI
+const PLAYBOOK_DISTILL_FROM_ACCOUNT = 80 // lessons folded in when training on an account
+const PLAYBOOK_DISTILL_FROM_LESSON = 60 // lessons folded in after one manual lesson
+const SUGGEST_LESSON_CONTEXT = 12 // lessons used to suggest a trainer reply
 
 /** Current shared settings + a small dashboard snapshot. */
 export async function aiSettingsAction(): Promise<{
@@ -109,15 +117,6 @@ export async function aiUpdateSettingsAction(patch: {
 export async function aiModelStatsAction(days = 7): Promise<AiModelStat[]> {
   await requireAdmin()
   return getAiModelStats(days)
-}
-
-/**
- * Manager self-play scorecards: recent grades + running average produced when
- * simulated dialogues end. Powers the "как ИИ отрабатывает" dashboard card.
- */
-export async function aiScoreSummaryAction(): Promise<ManagerScoreSummary> {
-  await requireAdmin()
-  return getManagerScoreSummary(20)
 }
 
 /* --------------------------- RAG knowledge base ------------------------- */
@@ -210,7 +209,7 @@ export async function aiUnenrollAction(input: {
 /** List recent training lessons. */
 export async function aiListLessonsAction(): Promise<AiAssistLesson[]> {
   await requireAdmin()
-  return listLessons(100)
+  return listLessons(LESSON_LIST_LIMIT)
 }
 
 /** Sample real conversations to practise on. */
@@ -238,14 +237,28 @@ export async function aiTrainableAccountsAction(): Promise<TrainableAccount[]> {
  * Returns a short summary + refreshed settings/lessons for the UI.
  */
 /**
- * How many dialogs to fold into ONE playbook-distillation call. The whole
- * account is processed in batches of this size so even accounts with thousands
- * of dialogs are fully learned (each batch is a separate gateway call). Every
- * batch's rules are accumulated and merged at the end. Env-overridable.
+ * How many dialogs to fold into ONE playbook-distillation call. The account is
+ * processed in batches of this size (each batch is a separate gateway call);
+ * every batch's rules are accumulated and merged at the end. Env-overridable.
  */
 const TRAIN_BATCH = Math.max(
   5,
   Number.parseInt(process.env.AI_TRAIN_BATCH || '40', 10) || 40,
+)
+
+/**
+ * Hard upper bound on dialogs processed in a single training run. A server
+ * action runs inside a bounded serverless time budget, so training on an
+ * account with thousands of dialogs must NOT try to process them all in one
+ * request (it would time out and lose everything). We take the most recent
+ * `TRAIN_MAX_DIALOGS` (ids come newest-first) — the freshest, most relevant
+ * material — and report honestly how many of the total were analysed. Running
+ * the action again continues to enrich the corpus (lessons are additive and
+ * deduped). Env-overridable for larger deployments/plans.
+ */
+const TRAIN_MAX_DIALOGS = Math.max(
+  TRAIN_BATCH,
+  Number.parseInt(process.env.AI_TRAIN_MAX_DIALOGS || '200', 10) || 200,
 )
 
 export async function aiTrainOnAccountAction(input: {
@@ -254,6 +267,7 @@ export async function aiTrainOnAccountAction(input: {
   learnedExchanges: number
   playbookSize: number
   dialogsAnalysed: number
+  totalDialogs: number
   settings: AiAssistSettings
   lessons: AiAssistLesson[]
 }> {
@@ -261,11 +275,16 @@ export async function aiTrainOnAccountAction(input: {
   const channelId = input.channelId?.trim()
   if (!channelId) throw new Error('no_account')
 
-  // FULL training: every two-way dialog of the account, not a 40-dialog sample.
+  // Read the account's two-way dialogs (newest-first) and cap the workload to
+  // the most recent TRAIN_MAX_DIALOGS so the run always fits the serverless
+  // time budget. `totalDialogs` is reported so the UI can be honest about how
+  // much of the account was covered in this pass.
   const allIds = await listAccountTwoWayConversationIds(channelId)
-  if (allIds.length === 0) {
+  const totalDialogs = allIds.length
+  if (totalDialogs === 0) {
     throw new Error('no_dialogs')
   }
+  const ids = allIds.slice(0, TRAIN_MAX_DIALOGS)
 
   const settingsBefore = await getAiAssistSettings()
   let learnedExchanges = 0
@@ -273,9 +292,9 @@ export async function aiTrainOnAccountAction(input: {
   // Rules harvested from every batch, deduped as we go.
   const ruleSet = new Set<string>()
 
-  // Process the entire account in batches so a huge history is fully covered.
-  for (let i = 0; i < allIds.length; i += TRAIN_BATCH) {
-    const batchIds = allIds.slice(i, i + TRAIN_BATCH)
+  // Process the capped set in batches to keep each gateway call bounded.
+  for (let i = 0; i < ids.length; i += TRAIN_BATCH) {
+    const batchIds = ids.slice(i, i + TRAIN_BATCH)
     const { transcripts, exchanges } =
       await buildTrainingCorpusForConversationIds(batchIds)
     if (transcripts.length === 0) continue
@@ -314,7 +333,7 @@ export async function aiTrainOnAccountAction(input: {
   let playbook = settingsAfterLessons.playbook
   try {
     const fromLessons = await distillPlaybook(
-      await listBrainLessons(80),
+      await listBrainLessons(PLAYBOOK_DISTILL_FROM_ACCOUNT),
       settingsAfterLessons.persona,
     )
     const merged = Array.from(
@@ -334,13 +353,14 @@ export async function aiTrainOnAccountAction(input: {
 
   const [settings, lessons] = await Promise.all([
     getAiAssistSettings(),
-    listLessons(100),
+    listLessons(LESSON_LIST_LIMIT),
   ])
   revalidatePath(AI_PATH)
   return {
     learnedExchanges,
     playbookSize: playbook.length,
     dialogsAnalysed,
+    totalDialogs,
     settings,
     lessons,
   }
@@ -470,7 +490,7 @@ export async function aiSuggestReplyAction(input: {
   await requireAdmin()
   const [settings, lessons] = await Promise.all([
     getAiAssistSettings(),
-    listBrainLessons(12),
+    listBrainLessons(SUGGEST_LESSON_CONTEXT),
   ])
   return generateManagerReply(
     {
@@ -515,7 +535,7 @@ export async function aiSaveLessonAction(input: {
   // must not lose the lesson we just saved).
   try {
     const settings = await getAiAssistSettings()
-    const brainLessons = await listBrainLessons(60)
+    const brainLessons = await listBrainLessons(PLAYBOOK_DISTILL_FROM_LESSON)
     const playbook = await distillPlaybook(brainLessons, settings.persona)
     await savePlaybook(playbook)
   } catch {
@@ -524,7 +544,7 @@ export async function aiSaveLessonAction(input: {
 
   const [settings, lessons] = await Promise.all([
     getAiAssistSettings(),
-    listLessons(100),
+    listLessons(LESSON_LIST_LIMIT),
   ])
   revalidatePath(AI_PATH)
   return { settings, lessons }
