@@ -125,7 +125,7 @@ async function getExistingOptionalCols(): Promise<Set<string>> {
   } catch (err) {
     // If even the probe fails, assume the safe base schema (no optional cols).
     console.log(
-      '[v0][client-sim] optional-column probe failed, assuming base schema:',
+      '[client-sim] optional-column probe failed, assuming base schema:',
       err instanceof Error ? err.message : String(err),
     )
   }
@@ -1454,7 +1454,7 @@ export async function sampleRealClientLines(
     lines = rows.map((r) => r.body.replace(/\s+/g, ' ').trim()).filter(Boolean)
   } catch (err) {
     console.log(
-      '[v0][client-sim] reference sampling failed:',
+      '[client-sim] reference sampling failed:',
       err instanceof Error ? err.message : String(err),
     )
   }

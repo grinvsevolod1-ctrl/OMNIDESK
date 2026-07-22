@@ -10,6 +10,7 @@ import { archiveVkMediaSoon } from '@/lib/media-archive-fetch'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
+import { log } from '@/lib/server-log'
 import {
   getUser,
   parseVkAttachments,
@@ -116,7 +117,11 @@ export async function POST(
           mediaName: media?.mediaName ?? null,
         })
       } catch (err) {
-        console.error('[v0] vk webhook: record edit failed:', err)
+        log.error('vk.webhook', 'edit_apply_failed', {
+          err,
+          channelId: channel.id,
+          providerId: editProviderId,
+        })
       }
     }
     return text('ok')
@@ -226,7 +231,22 @@ export async function POST(
 
     return text('ok')
   } catch (err) {
-    console.error('[v0] vk webhook: recordVkInbound failed:', err)
+    // Dead-letter: we ack "ok" so VK doesn't retry-storm us on a transient DB
+    // error, which means THIS inbound message is dropped. Log it as a
+    // dead_letter with full context so it can be grepped/replayed from pm2 logs
+    // instead of vanishing silently.
+    log.error('vk.webhook', 'inbound_dropped', {
+      err,
+      deadLetter: true,
+      channelId: channel.id,
+      contactHandle,
+      providerMessageId:
+        message.conversation_message_id != null
+          ? String(message.conversation_message_id)
+          : message.id != null
+            ? String(message.id)
+            : null,
+    })
     // Reply "ok" anyway so VK doesn't retry-storm us on a transient DB error.
     return text('ok')
   }

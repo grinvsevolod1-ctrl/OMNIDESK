@@ -723,7 +723,7 @@ function AccountRow({
       } catch (err) {
         // A thrown server action (e.g. network/DB error) would otherwise leave
         // the dialog stuck with no feedback — surface it explicitly instead.
-        console.error('[v0] delete channel failed:', err)
+        console.error('delete channel failed:', err)
         toast.error('Не удалось удалить аккаунт. Попробуйте ещё раз.')
       } finally {
         setConfirmOpen(false)

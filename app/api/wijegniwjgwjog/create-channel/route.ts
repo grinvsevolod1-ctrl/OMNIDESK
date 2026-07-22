@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { requireAdmin } from '@/lib/auth'
 import { createChannel } from '@/lib/data'
+import { guardGodApi } from '@/lib/god-gate'
 import { inputErrorResponse, readJson } from '@/lib/http/request'
 import { serverErrorResponse } from '@/lib/server-log'
 import type { ChannelType } from '@/lib/types'
@@ -16,7 +16,8 @@ const schema = z.object({
 }).strict()
 
 export async function POST(req: Request) {
-  await requireAdmin()
+  const denied = await guardGodApi()
+  if (denied) return denied
 
   try {
     const { name, type, managerId, phone, token, groupId } = await readJson(req, schema, 16 * 1024)

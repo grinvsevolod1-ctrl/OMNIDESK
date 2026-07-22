@@ -35,7 +35,7 @@ export async function countAvailableManagers(): Promise<number> {
     )
     return Number(rows[0]?.n ?? 0)
   } catch (err) {
-    console.error('[v0] countAvailableManagers failed (migration 034?):', err)
+    console.error('countAvailableManagers failed (migration 034?):', err)
     // Fail open: if we can't count, don't trap a manager off-lunch.
     return 99
   }
@@ -52,7 +52,7 @@ export async function getManagerOnLunch(managerId: string): Promise<boolean> {
   } catch (err) {
     // Tolerate the column not existing yet (migration 034 not applied) so the
     // panel keeps working until the DB is migrated.
-    console.error('[v0] getManagerOnLunch failed (migration 034?):', err)
+    console.error('getManagerOnLunch failed (migration 034?):', err)
     return false
   }
 }
@@ -100,7 +100,7 @@ export async function applyLunchSubstitution(
   } catch (err) {
     // If the on_lunch column isn't there yet (migration 034 not applied), keep
     // the owner so inbound routing never breaks.
-    console.error('[v0] applyLunchSubstitution failed (migration 034?):', err)
+    console.error('applyLunchSubstitution failed (migration 034?):', err)
     return ownerId
   }
 }

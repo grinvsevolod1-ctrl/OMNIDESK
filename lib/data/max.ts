@@ -45,7 +45,7 @@ function toMaxChannel(r: ChannelRow): MaxChannel | null {
     token = decrypt(config.token)
     webhookSecret = decrypt(config.webhookSecret)
   } catch (err) {
-    console.error('[v0] toMaxChannel: failed to decrypt secrets:', err)
+    console.error('toMaxChannel: failed to decrypt secrets:', err)
     return null
   }
   return {

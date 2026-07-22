@@ -254,7 +254,7 @@ export async function downloadMedia(
       proxy,
     )
   } catch (err) {
-    console.error('[v0] downloadMedia: fetch failed:', err)
+    console.error('downloadMedia: fetch failed:', err)
     return null
   }
 }

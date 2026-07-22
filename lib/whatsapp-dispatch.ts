@@ -45,7 +45,7 @@ export async function deliverWhatsappMessage(
       dispatch.proxy,
     )
     if (!res.ok) {
-      console.error('[v0] deliverWhatsappMessage: send failed:', res.error)
+      console.error('deliverWhatsappMessage: send failed:', res.error)
       await markMessageFailed(messageId, res.error).catch(() => {})
       return true
     }
@@ -55,7 +55,7 @@ export async function deliverWhatsappMessage(
     }
     return true
   } catch (err) {
-    console.error('[v0] deliverWhatsappMessage: unexpected error:', err)
+    console.error('deliverWhatsappMessage: unexpected error:', err)
     await markMessageFailed(
       messageId,
       err instanceof Error ? err.message : 'Ошибка отправки в WhatsApp.',
@@ -90,7 +90,7 @@ export async function markWhatsappConversationRead(
     )
     return true
   } catch (err) {
-    console.error('[v0] markWhatsappConversationRead: unexpected error:', err)
+    console.error('markWhatsappConversationRead: unexpected error:', err)
     return true
   }
 }

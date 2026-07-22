@@ -39,7 +39,7 @@ export default async function InboxPage() {
   try {
     aiMasterEnabled = (await getAiAssistSettings()).enabled
   } catch (err) {
-    console.error('[v0] inbox: AI settings unavailable:', err)
+    console.error('inbox: AI settings unavailable:', err)
   }
 
   // Personal accounts whose session is degraded/paused — surfaced as a banner in
@@ -76,7 +76,7 @@ export default async function InboxPage() {
   try {
     autopilot = await getAutopilotStatusAction()
   } catch (err) {
-    console.error('[v0] inbox: autopilot status unavailable:', err)
+    console.error('inbox: autopilot status unavailable:', err)
   }
 
   return (

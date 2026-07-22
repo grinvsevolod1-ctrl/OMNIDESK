@@ -28,6 +28,7 @@ dist/
 __v0_runtime_loader.js
 __v0_devtools.tsx
 __v0_jsx-dev-runtime.ts
-backup/*.sql
-backup/*.sql.gz
-backup/.env.backup
+# Server/ops backups — NEVER commit. Contains pm2 dumps (which serialize the
+# full process env, including DATABASE_URL and secrets), SSL private keys, and
+# raw DB dumps. Keep the whole directory out of the repo.
+backup/

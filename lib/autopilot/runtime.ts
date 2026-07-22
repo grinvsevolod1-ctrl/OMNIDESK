@@ -121,7 +121,7 @@ export async function runLivechatAutopilot(input: {
 
     await sendAutoReply(input.managerId, input.conversationId, replyText, rule)
   } catch (err) {
-    console.error('[v0] autopilot(livechat) failed:', err)
+    console.error('autopilot(livechat) failed:', err)
   }
 }
 
@@ -337,7 +337,7 @@ async function runLivechatAiLead(input: {
           )
         }
       } catch (err) {
-        console.error('[v0] autopilot(livechat) memory update failed:', err)
+        console.error('autopilot(livechat) memory update failed:', err)
       }
     })()
 
@@ -363,7 +363,7 @@ async function runLivechatAiLead(input: {
         const promoted = await markAiHandoffToLiquid(input.conversationId)
         if (promoted) {
           console.log(
-            '[v0] AI promoted lead to «Ликвид»:',
+            'AI promoted lead to «Ликвид»:',
             input.conversationId,
           )
           void logAi({
@@ -378,11 +378,11 @@ async function runLivechatAiLead(input: {
         }
       }
     } catch (err) {
-      console.error('[v0] autopilot(livechat) readiness check failed:', err)
+      console.error('autopilot(livechat) readiness check failed:', err)
     }
     return true
   } catch (err) {
-    console.error('[v0] autopilot(livechat) AI-lead failed:', err)
+    console.error('autopilot(livechat) AI-lead failed:', err)
     void logAi({
       level: 'error',
       source: 'ai-lead',

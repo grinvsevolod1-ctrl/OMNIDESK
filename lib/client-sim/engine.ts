@@ -212,7 +212,7 @@ async function tick(): Promise<void> {
     await processDueThreads()
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.log('[v0][client-sim] tick error:', msg)
+    console.log('[client-sim] tick error:', msg)
     void logAi({
       level: 'error',
       source: 'sim',
@@ -355,7 +355,7 @@ async function maybeSpawn(settings: SimSettings): Promise<void> {
     nextRunAt: null, // now waiting on the manager
   })
   console.log(
-    `[v0][client-sim] spawned ${persona.channelType} thread (${persona.name}) on channel ${channel.id}`,
+    `[client-sim] spawned ${persona.channelType} thread (${persona.name}) on channel ${channel.id}`,
   )
   // Real work happened — allow skip notices to fire again next time a standing
   // condition appears.
@@ -417,7 +417,7 @@ async function processDueThreads(): Promise<void> {
       await runThreadTurn(thread)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.log('[v0][client-sim] thread turn error:', msg)
+      console.log('[client-sim] thread turn error:', msg)
       void logAi({
         level: 'error',
         source: 'sim',
@@ -499,7 +499,7 @@ async function scoreFinishedDialog(
     })
   } catch (err) {
     console.log(
-      '[v0][client-sim] scoring failed:',
+      '[client-sim] scoring failed:',
       err instanceof Error ? err.message : String(err),
     )
   }
@@ -567,7 +567,7 @@ async function deliverFollowupBubbles(
     }
   } catch (err) {
     console.log(
-      '[v0][client-sim] follow-up bubble delivery failed:',
+      '[client-sim] follow-up bubble delivery failed:',
       err instanceof Error ? err.message : String(err),
     )
   } finally {

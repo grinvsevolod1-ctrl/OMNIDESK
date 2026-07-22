@@ -59,7 +59,7 @@ export async function analyzeDialogues(): Promise<LearnedProfile> {
       // A single failed batch shouldn't sink the whole learn run — skip it and
       // keep going; the reduce step still has the rest of the corpus.
       console.log(
-        '[v0][client-sim] learn batch failed, skipping:',
+        '[client-sim] learn batch failed, skipping:',
         err instanceof Error ? err.message : String(err),
       )
     }

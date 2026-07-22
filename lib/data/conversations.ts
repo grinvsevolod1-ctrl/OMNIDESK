@@ -521,7 +521,7 @@ export async function isConversationSimulated(
     // Unknown conversation → not simulated (nothing to protect).
     return rows.length > 0 ? Boolean(rows[0].is_simulated) : false
   } catch (err) {
-    console.error('[v0] isConversationSimulated: guard query failed:', err)
+    console.error('isConversationSimulated: guard query failed:', err)
     return true
   }
 }

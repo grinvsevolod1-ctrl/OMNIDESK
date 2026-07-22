@@ -80,7 +80,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     channel = await getLivechatChannelByApiKey(apiKey)
   } catch (err) {
-    console.error('[v0] ingest: getLivechatChannelByApiKey threw (DB error?):', err)
+    console.error('ingest: getLivechatChannelByApiKey threw (DB error?):', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!channel) {
@@ -122,7 +122,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     existingRef = await getLivechatConversationRef(channel.id, handle)
   } catch (err) {
-    console.error('[v0] ingest: getLivechatConversationRef threw:', err)
+    console.error('ingest: getLivechatConversationRef threw:', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!existingRef) {
@@ -138,7 +138,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     agentId = await resolveLivechatAgentId(channel)
   } catch (err) {
-    console.error('[v0] ingest: resolveLivechatAgentId threw (DB error?):', err)
+    console.error('ingest: resolveLivechatAgentId threw (DB error?):', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!agentId) {
@@ -215,7 +215,7 @@ export async function POST(request: Request): Promise<Response> {
       cors,
     )
   } catch (err) {
-    console.error('[v0] ingest: recordLivechatInbound failed:', err)
+    console.error('ingest: recordLivechatInbound failed:', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
 }

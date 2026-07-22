@@ -58,7 +58,7 @@ function toVkChannel(r: ChannelRow): VkChannel | null {
     token = decrypt(config.token)
     webhookSecret = decrypt(config.webhookSecret)
   } catch (err) {
-    console.error('[v0] toVkChannel: failed to decrypt secrets:', err)
+    console.error('toVkChannel: failed to decrypt secrets:', err)
     return null
   }
   return {

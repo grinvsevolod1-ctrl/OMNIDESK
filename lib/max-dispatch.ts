@@ -36,7 +36,7 @@ export async function deliverMaxMessage(
       dispatch.proxy,
     )
     if (!res.ok) {
-      console.error('[v0] deliverMaxMessage: MAX send failed:', res.error)
+      console.error('deliverMaxMessage: MAX send failed:', res.error)
       await markMessageFailed(messageId, res.error).catch(() => {})
       return
     }
@@ -44,7 +44,7 @@ export async function deliverMaxMessage(
       await setMessageProviderId(messageId, res.data.mid).catch(() => {})
     }
   } catch (err) {
-    console.error('[v0] deliverMaxMessage: unexpected error:', err)
+    console.error('deliverMaxMessage: unexpected error:', err)
     await markMessageFailed(
       messageId,
       err instanceof Error ? err.message : 'Ошибка отправки в MAX.',

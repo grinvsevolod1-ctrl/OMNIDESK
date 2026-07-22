@@ -297,7 +297,7 @@ export async function recordLivechatInbound(input: {
       )
       visitorNo = seq[0]?.next_no ?? null
     } catch (err) {
-      console.error('[v0] recordLivechatInbound: visitor seq unavailable:', err)
+      console.error('recordLivechatInbound: visitor seq unavailable:', err)
     }
     const firstMeta = { ...cleanMeta, firstSeen: now, lastSeen: now }
     const created = await query<{ id: string }>(
@@ -365,7 +365,7 @@ export async function recordLivechatPendingLead(input: {
       ],
     )
   } catch (err) {
-    console.error('[v0] recordLivechatPendingLead failed (migration 037?):', err)
+    console.error('recordLivechatPendingLead failed (migration 037?):', err)
   }
 }
 

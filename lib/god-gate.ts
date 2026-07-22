@@ -2,6 +2,7 @@ import 'server-only'
 import { createHash, timingSafeEqual } from 'crypto'
 import { jwtVerify, SignJWT } from 'jose'
 import { cookies } from 'next/headers'
+import { requireAdmin } from './auth'
 import { getAuthSecret } from './session'
 
 /**
@@ -82,6 +83,30 @@ export async function isGodUnlocked(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Guard for the god-console JSON/SSE API routes (`/api/wijegniwjgwjog/*`).
+ *
+ * These endpoints back the same panel as the `/wijegniwjgwjog` page, so they
+ * MUST enforce the same two factors — otherwise a logged-in admin could hit the
+ * raw API and bypass the passcode the page requires. `requireAdmin()` handles
+ * the first factor (and redirects a non-admin), then we require the unlock
+ * cookie exactly like the page does. When no passcode is configured this
+ * fails-open in lockstep with `isGodUnlocked()`.
+ *
+ * Returns a 403 `Response` to short-circuit the handler, or `null` when access
+ * is granted:
+ *
+ *   const denied = await guardGodApi()
+ *   if (denied) return denied
+ */
+export async function guardGodApi(): Promise<Response | null> {
+  await requireAdmin()
+  if (!(await isGodUnlocked())) {
+    return Response.json({ ok: false, error: 'locked' }, { status: 403 })
+  }
+  return null
 }
 
 export const godCookieOptions = {

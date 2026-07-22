@@ -49,7 +49,7 @@ export async function getTelemostConfig(): Promise<TelemostConfig | null> {
       enabled: v.enabled ?? true,
     }
   } catch (err) {
-    console.error('[v0] getTelemostConfig: decrypt failed:', err)
+    console.error('getTelemostConfig: decrypt failed:', err)
     return null
   }
 }
@@ -147,7 +147,7 @@ export async function recordTelemostMeeting(input: {
     )
   } catch (err) {
     // History table missing (pre-042) — never fail the actual meeting creation.
-    console.error('[v0] recordTelemostMeeting skipped:', err)
+    console.error('recordTelemostMeeting skipped:', err)
   }
 }
 
@@ -183,7 +183,7 @@ export async function listTelemostMeetings(
       createdAt: r.created_at,
     }))
   } catch (err) {
-    console.error('[v0] listTelemostMeetings failed:', err)
+    console.error('listTelemostMeetings failed:', err)
     return []
   }
 }

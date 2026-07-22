@@ -1,8 +1,9 @@
-import { requireAdmin } from '@/lib/auth'
 import { query } from '@/lib/db'
+import { guardGodApi } from '@/lib/god-gate'
 
 export async function GET() {
-  await requireAdmin()
+  const denied = await guardGodApi()
+  if (denied) return denied
   const result = await query(`
     SELECT 
       c.id, 

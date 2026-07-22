@@ -93,7 +93,7 @@ export async function ensureLock(): Promise<boolean> {
     return h.held
   } catch (err) {
     console.log(
-      '[v0][client-sim] lock acquire failed:',
+      '[client-sim] lock acquire failed:',
       err instanceof Error ? err.message : String(err),
     )
     resetClient(h)

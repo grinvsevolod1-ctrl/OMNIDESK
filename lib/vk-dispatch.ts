@@ -36,7 +36,7 @@ export async function deliverVkMessage(
       dispatch.proxy,
     )
     if (!res.ok) {
-      console.error('[v0] deliverVkMessage: VK send failed:', res.error)
+      console.error('deliverVkMessage: VK send failed:', res.error)
       await markMessageFailed(messageId, res.error).catch(() => {})
       return
     }
@@ -44,7 +44,7 @@ export async function deliverVkMessage(
       await setMessageProviderId(messageId, res.data.messageId).catch(() => {})
     }
   } catch (err) {
-    console.error('[v0] deliverVkMessage: unexpected error:', err)
+    console.error('deliverVkMessage: unexpected error:', err)
     await markMessageFailed(
       messageId,
       err instanceof Error ? err.message : 'Ошибка отправки в VK.',
@@ -69,7 +69,7 @@ export async function setVkTyping(conversationId: string): Promise<boolean> {
     )
     return true
   } catch (err) {
-    console.error('[v0] setVkTyping: unexpected error:', err)
+    console.error('setVkTyping: unexpected error:', err)
     return true
   }
 }
@@ -93,7 +93,7 @@ export async function markVkConversationRead(
     )
     return true
   } catch (err) {
-    console.error('[v0] markVkConversationRead: unexpected error:', err)
+    console.error('markVkConversationRead: unexpected error:', err)
     return true
   }
 }

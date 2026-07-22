@@ -88,7 +88,7 @@ export async function getWhatsappAppConfig(): Promise<WhatsappAppConfig | null> 
       wabaId: v.wabaId ?? null,
     }
   } catch (err) {
-    console.error('[v0] getWhatsappAppConfig: decrypt failed:', err)
+    console.error('getWhatsappAppConfig: decrypt failed:', err)
     return null
   }
 }
@@ -109,7 +109,7 @@ export async function getWhatsappWebhookSecrets(): Promise<{
   try {
     appSecret = v.appSecret ? decrypt(v.appSecret) : null
   } catch (err) {
-    console.error('[v0] getWhatsappWebhookSecrets: decrypt failed:', err)
+    console.error('getWhatsappWebhookSecrets: decrypt failed:', err)
   }
   return { verifyToken: v.verifyToken ?? null, appSecret }
 }

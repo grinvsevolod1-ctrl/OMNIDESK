@@ -9,6 +9,7 @@ import {
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
+import { log } from '@/lib/server-log'
 import { maxUserName, type MaxUpdate } from '@/lib/max'
 
 export const runtime = 'nodejs'
@@ -76,7 +77,11 @@ export async function POST(
       try {
         await recordMessageEditByProviderId(channel.id, mid, { body: text })
       } catch (err) {
-        console.error('[v0] max webhook: record edit failed:', err)
+        log.error('max.webhook', 'edit_apply_failed', {
+          err,
+          channelId: channel.id,
+          providerId: mid,
+        })
       }
     }
     return json({ ok: true, edited: mid })
@@ -90,7 +95,11 @@ export async function POST(
       try {
         await markInboundDeletedByProviderId(channel.id, String(mid))
       } catch (err) {
-        console.error('[v0] max webhook: mark deleted failed:', err)
+        log.error('max.webhook', 'delete_apply_failed', {
+          err,
+          channelId: channel.id,
+          providerId: String(mid),
+        })
       }
     }
     return json({ ok: true, removed: mid })
@@ -153,7 +162,17 @@ export async function POST(
 
     return json({ ok: true, conversationId })
   } catch (err) {
-    console.error('[v0] max webhook: recordMaxInbound failed:', err)
+    // Dead-letter: unlike a successful ingest, we return 500 so MAX retries the
+    // delivery (its retry window is more forgiving than VK's). Still log it as a
+    // dead_letter with full context so a message that never succeeds across
+    // retries is greppable/replayable from pm2 logs rather than lost silently.
+    log.error('max.webhook', 'inbound_dropped', {
+      err,
+      deadLetter: true,
+      channelId: channel.id,
+      contactHandle,
+      providerMessageId: message.body?.mid ?? null,
+    })
     return json({ ok: false, error: 'server_error' }, 500)
   }
 }

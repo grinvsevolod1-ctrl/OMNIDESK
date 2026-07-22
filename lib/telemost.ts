@@ -46,7 +46,7 @@ async function resolveTelemost(): Promise<{
   try {
     cfg = await getTelemostConfig()
   } catch (err) {
-    console.error('[v0] resolveTelemost: config read failed:', err)
+    console.error('resolveTelemost: config read failed:', err)
   }
   if (cfg?.token && cfg.enabled) {
     return { token: cfg.token, waitingRoomLevel: cfg.waitingRoomLevel }
@@ -101,7 +101,7 @@ export async function createTelemostMeeting(opts?: {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
-      console.error('[v0] telemost create failed:', res.status, detail)
+      console.error('telemost create failed:', res.status, detail)
       if (res.status === 401 || res.status === 403) {
         return {
           ok: false,
@@ -127,7 +127,7 @@ export async function createTelemostMeeting(opts?: {
       meeting: { id: data.id ?? '', joinUrl: data.join_url },
     }
   } catch (err) {
-    console.error('[v0] telemost request error:', err)
+    console.error('telemost request error:', err)
     return {
       ok: false,
       message: 'Ошибка соединения с Яндекс Телемост. Попробуйте ещё раз.',

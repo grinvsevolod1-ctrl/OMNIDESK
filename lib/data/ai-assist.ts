@@ -288,7 +288,7 @@ export async function saveManagerScorecard(input: {
       ],
     )
   } catch (err) {
-    console.error('[v0] saveManagerScorecard failed:', err)
+    console.error('saveManagerScorecard failed:', err)
   }
 }
 
@@ -370,7 +370,7 @@ export async function addAutoLesson(input: {
       [input.situation, input.corrected, input.note],
     )
   } catch (err) {
-    console.error('[v0] addAutoLesson failed:', err)
+    console.error('addAutoLesson failed:', err)
   }
 }
 

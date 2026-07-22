@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { requireAdmin } from '@/lib/auth'
 import { query } from '@/lib/db'
+import { guardGodApi } from '@/lib/god-gate'
 import { inputErrorResponse, readJson } from '@/lib/http/request'
 import { serverErrorResponse } from '@/lib/server-log'
 
@@ -13,7 +13,8 @@ const schema = z.object({
 }).strict()
 
 export async function POST(req: Request) {
-  await requireAdmin()
+  const denied = await guardGodApi()
+  if (denied) return denied
 
   try {
     const { channelId, contactName, contactHandle, message } = await readJson(req, schema, 16 * 1024)

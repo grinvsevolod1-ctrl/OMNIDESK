@@ -1,4 +1,4 @@
-import { requireAdmin } from '@/lib/auth'
+import { guardGodApi } from '@/lib/god-gate'
 import { type RealtimeEvent, subscribeRealtime } from '@/lib/realtime'
 
 export const runtime = 'nodejs'
@@ -11,13 +11,16 @@ export const dynamic = 'force-dynamic'
  * manager), this relays EVERY conversation/message/channel event across all
  * managers, so the god console can show live activity for the whole system and
  * reflect a manager's replies to impersonated-client messages the instant they
- * are sent. Guarded by requireAdmin — a non-admin never reaches the stream.
+ * are sent. Guarded by guardGodApi — admin session AND the god passcode unlock
+ * (same two factors as the page); a non-admin or locked session never reaches
+ * the stream.
  *
  * Ephemeral typing/presence pings are dropped here; the console only cares
  * about persisted message/conversation/channel changes.
  */
 export async function GET(request: Request): Promise<Response> {
-  await requireAdmin()
+  const denied = await guardGodApi()
+  if (denied) return denied
 
   const encoder = new TextEncoder()
   let heartbeat: ReturnType<typeof setInterval> | null = null

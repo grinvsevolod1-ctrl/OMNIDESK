@@ -67,7 +67,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     channel = await getLivechatChannelByApiKey(apiKey)
   } catch (err) {
-    console.error('[v0] push/subscribe: getLivechatChannelByApiKey threw:', err)
+    console.error('push/subscribe: getLivechatChannelByApiKey threw:', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!channel) {
@@ -101,7 +101,7 @@ export async function POST(request: Request): Promise<Response> {
       request.headers.get('user-agent'),
     )
   } catch (err) {
-    console.error('[v0] push/subscribe: saveVisitorSubscription failed:', err)
+    console.error('push/subscribe: saveVisitorSubscription failed:', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
 

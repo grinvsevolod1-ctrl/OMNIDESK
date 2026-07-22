@@ -255,7 +255,7 @@ export async function getProxyDescriptorById(
     if (r.password_enc) password = decrypt(r.password_enc)
   } catch (err) {
     console.error(
-      '[v0] getProxyDescriptorById: failed to decrypt credentials:',
+      'getProxyDescriptorById: failed to decrypt credentials:',
       err,
     )
   }
