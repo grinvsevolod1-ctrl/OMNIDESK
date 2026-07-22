@@ -135,7 +135,7 @@ const TONE_REGISTER: Record<string, string> = {
   polite:
     'ТОН ОБЩЕНИЯ — ВЕЖЛИВЫЙ: пиши грамотно и уважительно, на «вы». Здоровайся культурно («Здравствуйте», «Добрый день»). Ставь знаки препинания и заглавные буквы. Никакого мата и грубости, даже если раздражён — оставайся корректным.',
   neutral:
-    'ТОН ОБЩЕНИЯ — ОБЫЧНЫЙ: пиши по-человечески и спокойно, как нормальный взрослый в переписке. Здоровайся нейтрально («Здравствуйте», «Добрый день», можно «Привет»). Лёгкая небреж����ость допустима, но без грубости и без мата.',
+    'ТОН ОБЩЕНИЯ — ��БЫЧНЫЙ: пиши по-человечески и спокойно, как нормальный взрослый в переписке. Здоровайся нейтрально («Здравствуйте», «Добрый день», можно «Привет»). Лёгкая небреж����ость допустима, но без грубости и без мата.',
   rough:
     'ТОН ОБЩЕНИЯ — РАЗВЯЗНЫЙ: пиши по-простому и панибратски («привет», «здарова», «чё», «скок»). Грубость и мат допустимы по настроению.',
   mixed:
@@ -223,6 +223,56 @@ function moodBlock(moodHint: string | undefined): string {
   ].join('\n')
 }
 
+/** Coarse stage of the scenario arc, derived from how many turns the client has taken. */
+type ArcStage = 'probe' | 'weigh' | 'decide'
+
+function arcStageFor(clientTurns: number): ArcStage {
+  if (clientTurns <= 2) return 'probe'
+  if (clientTurns <= 6) return 'weigh'
+  return 'decide'
+}
+
+const ARC_STAGE_HINT: Record<ArcStage, string> = {
+  probe:
+    'СТАДИЯ: РАЗВЕДКА. Ты только прощупываешь: что за работа, сколько платят, что делать. Задавай конкретные вопросы по своей цели, пока не темни своё решение.',
+  weigh:
+    'СТАДИЯ: ВЗВЕШИВАНИЕ. Ты уже получил часть ответов — теперь сомневаешься, прикидываешь, торгуешься, ищешь подвох. Ссылайся на то, что уже сказал менеджер, и дави в сторону своей цели, а не начинай сначала.',
+  decide:
+    'СТАДИЯ: РЕШЕНИЕ. Разговор идёт давно — пора двигаться к развязке в согласии со своей целью: либо склоняешься к согласию (если тебя убедили и это не развод), либо окончательно отказываешься/срываешься (если почуял кидок или надоело). Не топчись на месте.',
+}
+
+/**
+ * The scenario ARC block: reminds the client of their private goal and where
+ * they are in the arc, so the dialogue moves forward (probe → weigh → decide)
+ * instead of looping. No-op for legacy personas that have no goal.
+ */
+function arcBlock(goal: string | undefined, clientTurns: number): string {
+  if (!goal) return ''
+  const stage = arcStageFor(clientTurns)
+  return [
+    '',
+    `ТВОЯ СКРЫТАЯ ЦЕЛЬ В ЭТОМ РАЗГОВОРЕ (не озвучивай её прямо, но веди себя ради неё): ${goal}`,
+    ARC_STAGE_HINT[stage],
+  ].join('\n')
+}
+
+/**
+ * Text-only multimodality: real people on messengers refer to photos, voice
+ * notes and docs constantly. The simulator stays text-only, so instead of
+ * sending real files the client NATURALLY mentions/reacts to media in words
+ * ("скинул фото паспорта", "голосовуху не могу щас слушать"). Injected as a
+ * light, occasional nudge so it feels human without every message doing it.
+ */
+function mediaBlock(channelType: string): string {
+  const voice = channelType === 'livechat' ? '' : ', иногда голосовые'
+  return [
+    '',
+    'ПРО ВЛОЖЕНИЯ (ты в обычном мессенджере, но файлы прикреплять не умеешь — только текст): если по ходу разговора это уместно, ЕСТЕСТВЕННО упомяни медиа словами, как живой человек — например «скинул фото паспорта в лс», «щас пришлю скрин», «не могу голосовое сейчас слушать, я на работе», «а можешь фоткой показать?». Не делай этого в каждом сообщении и не описывай несуществующие картинки — только короткое живое упоминание там, где это к месту' +
+      voice +
+      '.',
+  ].join('\n')
+}
+
 /**
  * Admin "here you're wrong" rules from the secret panel. These are STRICT and
  * always win over everything else in the prompt — the whole point of the
@@ -268,6 +318,7 @@ function systemPrompt(
   lengthHint?: string,
   swarmOpeners?: string[],
   corrections?: string[],
+  clientTurns = 0,
 ): string {
   const s = persona.style
   const tone = persona.tone ?? 'mixed'
@@ -282,10 +333,12 @@ function systemPrompt(
     TONE_REGISTER[tone] ?? TONE_REGISTER.mixed,
     timeBlock(),
     moodBlock(moodHint),
+    arcBlock(persona.goal, clientTurns),
+    mediaBlock(persona.channelType),
     correctionsBlock(corrections),
     '',
     'ЛОГИКА ДИАЛОГА (это важнее всего — иначе видно что это бот):',
-    '- ВНИМАТЕЛЬНО прочитай последнее сообщение менеджера и ответь именно на него, по смыслу. Не пиши в пустоту.',
+    '- ВНИМАТЕЛЬНО прочитай последнее сообщение менеджера и ответь и��енно на него, по смыслу. Не пиши в пустоту.',
     '- Веди разговор осмысленно и с памятью: помни, о чём уже договорились и что спрашивал, двигай диалог дальше, а не топчись на месте.',
     '- Если менеджер ответил на твой вопрос — среагируй на ответ (уточни, согласись, засомневайся), а не задавай тот же вопрос снова.',
     '- НЕ противоречь сам себе: помни всё, что уже сказал о себе (возраст, пол, город, работу, семью, договорённости) и не выдавай позже другие цифры или факты. Если менеджер спросил твой возраст и ты его назвал — держись этой же цифры до конца.',
@@ -477,6 +530,8 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
       // and never get truncated mid-word at a fixed limit.
       const { hint: lengthHint, maxTokens } = rollLength(persona)
 
+      // How many turns THIS client has already taken — drives the arc stage.
+      const clientTurns = history.filter((m) => m.role === 'client').length
       const system = systemPrompt(
         persona,
         behavior,
@@ -487,6 +542,7 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         lengthHint,
         swarmOpeners,
         corrections,
+        clientTurns,
       )
 
       // Up to three attempts: if the line echoes something this persona OR the

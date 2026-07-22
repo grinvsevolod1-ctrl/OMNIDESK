@@ -16,6 +16,7 @@ import {
   getAiAssistSettings,
   getAiModelStats,
   getDialogMessagesForReview,
+  getManagerScoreSummary,
   listAccountReviewDialogs,
   listAccountTwoWayConversationIds,
   listAiEnrolledConversations,
@@ -35,6 +36,7 @@ import {
   type AiModelStat,
   type EnrollableConversation,
   type KnowledgeEntry,
+  type ManagerScoreSummary,
   type ManualCorrection,
   type ReviewDialog,
   type ReviewMessage,
@@ -107,6 +109,15 @@ export async function aiUpdateSettingsAction(patch: {
 export async function aiModelStatsAction(days = 7): Promise<AiModelStat[]> {
   await requireAdmin()
   return getAiModelStats(days)
+}
+
+/**
+ * Manager self-play scorecards: recent grades + running average produced when
+ * simulated dialogues end. Powers the "как ИИ отрабатывает" dashboard card.
+ */
+export async function aiScoreSummaryAction(): Promise<ManagerScoreSummary> {
+  await requireAdmin()
+  return getManagerScoreSummary(20)
 }
 
 /* --------------------------- RAG knowledge base ------------------------- */

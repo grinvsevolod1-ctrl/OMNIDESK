@@ -390,6 +390,29 @@ function rollTraits(seed: string): string[] {
   return Array.from(set)
 }
 
+/**
+ * The private agenda each simulated client carries into the chat. This is what
+ * turns a reactive chatter into a scenario with an ARC: the client is trying to
+ * REACH this outcome, so across the dialogue they push forward (probe → weigh →
+ * decide) instead of endlessly circling. Rolled once at spawn.
+ */
+const GOALS = [
+  'понять, сколько реально можно заработать, и согласиться — но только если это не развод',
+  'выяснить все детали и подводные камни, а потом решить; на предоплату идти очень не хочет',
+  'по-быстрому узнать суть и деньги, времени вникать нет — либо сразу заходит, либо сливается',
+  'вытрясти максимум информации из менеджера и уйти, ничего не заплатив',
+  'проверить, не мошенники ли это, поймать на противоречиях и, если разведут, послать',
+  'реально нужны деньги срочно, готов почти на всё — но боится, что кинут на предоплате',
+  'сравнить с другим вариантом, который уже нашёл, и выбрать где выгоднее',
+  'вроде интересно, но постоянно сомневается и тянет с решением, легко спугнуть',
+  'хочет работать честно и официально, насторожится от любой серой схемы',
+  'настроен поторговаться и выбить условия получше, прежде чем на что-то соглашаться',
+]
+
+function rollGoal(): string {
+  return pick(GOALS)
+}
+
 function rollStyle(aggression: number, tone: SimTone): SimStyle {
   // aggression 0..100 raises profanity + terseness baselines.
   const a = Math.max(0, Math.min(100, aggression)) / 100
@@ -528,6 +551,7 @@ export function makePersona(
     backstory: makeBackstory(),
     quirks: rollQuirks(),
     traits: rollTraits(temper),
+    goal: rollGoal(),
   }
 }
 
@@ -858,7 +882,7 @@ const CURIOUS = [
   'сколько часов в день пахать',
   'а обучение есть или сразу в бой',
   'аванс дадите или потом',
-  'а что за компания вообще',
+  'а что за ко��пания вообще',
   'договор будет',
   'а можно совмещать с основной',
   'сколько людей уже у вас работает',

@@ -35,6 +35,12 @@ import { pick } from './content'
 import { computeMood, type MoodResult } from './mood'
 import { logAi } from '@/lib/data/ai-log'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { scoreManagerDialog } from '@/lib/ai/manager-brain'
+import {
+  addAutoLesson,
+  getAiAssistSettings,
+  saveManagerScorecard,
+} from '@/lib/data/ai-assist'
 import type { ChannelType } from '@/lib/types'
 
 /**
@@ -433,6 +439,72 @@ async function processDueThreads(): Promise<void> {
  * as a normal outbound message, which the simulator's next tick picks up to
  * continue the dialogue. Fully self-guarded so it can never break a tick.
  */
+/**
+ * Self-play scoring loop: when a simulated dialogue ends, grade how the AI
+ * MANAGER handled it and, if the coach flagged a concrete miss, feed that back
+ * to the brain as an auto-derived lesson. Fully self-guarded (fire-and-forget)
+ * so it can never break a tick, and uses the manager's configured model so the
+ * score reflects the model actually in production. Runs asynchronously — the
+ * dialogue is already marked done before this starts.
+ */
+async function scoreFinishedDialog(
+  conversationId: string,
+  personaName: string,
+  channelType: ChannelType,
+  outcome: SimOutcome,
+): Promise<void> {
+  try {
+    const lines = await getTranscript(conversationId, 60)
+    // in = the simulated client, out = the AI manager (see getTranscript docs).
+    const history = lines.map((l) => ({
+      role: (l.direction === 'in' ? 'client' : 'manager') as
+        | 'client'
+        | 'manager',
+      body: l.body,
+    }))
+    const settings = await getAiAssistSettings()
+    const card = await scoreManagerDialog(history, outcome, undefined, {
+      model: settings.model,
+    })
+    if (!card) return
+
+    await saveManagerScorecard({
+      conversationId,
+      score: card.score,
+      outcome,
+      strengths: card.strengths,
+      weaknesses: card.weaknesses,
+      summary: card.summary,
+      turns: history.length,
+    })
+
+    // Close the loop: turn the top weakness into a reusable brain lesson.
+    if (card.lesson) {
+      await addAutoLesson({
+        situation: card.lesson.situation,
+        corrected: card.lesson.corrected,
+        note: `Авто-урок из тренажёра (оценка ${card.score}/100).`,
+      })
+    }
+
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: 'score.saved',
+      message: `Оценка работы менеджера по диалогу «${personaName}»: ${card.score}/100${
+        card.lesson ? ' — добавлен авто-урок для ИИ.' : '.'
+      }`,
+      conversationId,
+      channelType,
+    })
+  } catch (err) {
+    console.log(
+      '[v0][client-sim] scoring failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+}
+
 async function triggerManagerReply(
   conversationId: string,
   text: string,
@@ -708,6 +780,13 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
       conversationId,
       channelType: persona.channelType,
     })
+    // Self-play loop: grade the manager's handling and learn from misses.
+    void scoreFinishedDialog(
+      conversationId,
+      persona.name,
+      persona.channelType,
+      plan.outcome,
+    )
   } else {
     // Normal reply: wait on the manager again, unless we're poking an absent
     // manager (nudge) — then schedule another poke later.

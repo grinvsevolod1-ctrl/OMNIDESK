@@ -132,6 +132,14 @@ export interface SimPersona {
    * `temper` label (which is kept for backward compat + template picks).
    */
   traits?: string[]
+  /**
+   * The concrete outcome this client is really after in the chat (their private
+   * agenda), e.g. «понять реальный заработок и решиться, если это не развод»
+   * or «вытрясти все детали и уйти, ничего не заплатив». Drives the scenario
+   * ARC: the client pushes toward this goal and advances stage to stage instead
+   * of looping. Rolled once at spawn. Optional for legacy rows (no arc then).
+   */
+  goal?: string
 }
 
 /**

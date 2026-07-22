@@ -235,6 +235,145 @@ export async function getAiModelStats(days = 7): Promise<AiModelStat[]> {
   })
 }
 
+/* --------------------- Manager scoring (self-play) ---------------------- */
+
+export interface ManagerScorecardRow {
+  conversationId: string
+  score: number
+  outcome: string
+  strengths: string[]
+  weaknesses: string[]
+  summary: string
+  turns: number
+  createdAt: string
+}
+
+/** Aggregate view for the scoring dashboard. */
+export interface ManagerScoreSummary {
+  avgScore: number
+  count: number
+  recent: ManagerScorecardRow[]
+}
+
+/**
+ * Persist a manager scorecard (upsert by conversation). Best-effort: swallows
+ * errors so scoring can never break the sim engine that calls it.
+ */
+export async function saveManagerScorecard(input: {
+  conversationId: string
+  score: number
+  outcome: string
+  strengths: string[]
+  weaknesses: string[]
+  summary: string
+  turns: number
+}): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO manager_scorecards
+         (conversation_id, score, outcome, strengths, weaknesses, summary, turns, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+       ON CONFLICT (conversation_id) DO UPDATE SET
+         score = EXCLUDED.score, outcome = EXCLUDED.outcome,
+         strengths = EXCLUDED.strengths, weaknesses = EXCLUDED.weaknesses,
+         summary = EXCLUDED.summary, turns = EXCLUDED.turns, updated_at = now()`,
+      [
+        input.conversationId,
+        Math.max(0, Math.min(100, Math.round(input.score))),
+        input.outcome,
+        input.strengths.join('\n'),
+        input.weaknesses.join('\n'),
+        input.summary,
+        input.turns,
+      ],
+    )
+  } catch (err) {
+    console.error('[v0] saveManagerScorecard failed:', err)
+  }
+}
+
+/** Recent scorecards + running average for the panel dashboard. */
+export async function getManagerScoreSummary(
+  limit = 20,
+): Promise<ManagerScoreSummary> {
+  try {
+    const [agg] = await query<{ avg: string | null; cnt: string }>(
+      `SELECT avg(score) AS avg, count(*)::text AS cnt
+         FROM manager_scorecards
+        WHERE created_at >= now() - interval '30 days'`,
+    )
+    const recent = await query<{
+      conversation_id: string
+      score: number
+      outcome: string
+      strengths: string
+      weaknesses: string
+      summary: string
+      turns: number
+      created_at: string | Date
+    }>(
+      `SELECT conversation_id, score, outcome, strengths, weaknesses,
+              summary, turns, created_at
+         FROM manager_scorecards
+        ORDER BY created_at DESC
+        LIMIT $1`,
+      [Math.max(1, Math.min(100, limit))],
+    )
+    return {
+      avgScore: Math.round(Number(agg?.avg ?? 0)),
+      count: Number(agg?.cnt ?? 0) || 0,
+      recent: recent.map((r) => ({
+        conversationId: r.conversation_id,
+        score: Number(r.score) || 0,
+        outcome: r.outcome ?? '',
+        strengths: (r.strengths ?? '').split('\n').filter(Boolean),
+        weaknesses: (r.weaknesses ?? '').split('\n').filter(Boolean),
+        summary: r.summary ?? '',
+        turns: Number(r.turns) || 0,
+        createdAt: new Date(r.created_at).toISOString(),
+      })),
+    }
+  } catch {
+    return { avgScore: 0, count: 0, recent: [] }
+  }
+}
+
+/**
+ * Add an auto-derived lesson from the self-play scoring loop. Deduplicates on
+ * the situation text so the same weakness doesn't pile up identical lessons.
+ * Best-effort. Tagged source='auto' so the panel can distinguish it.
+ */
+export async function addAutoLesson(input: {
+  situation: string
+  corrected: string
+  note: string
+}): Promise<void> {
+  try {
+    const existing = await query<{ id: string }>(
+      `SELECT id FROM ai_assist_lessons
+        WHERE source = 'auto' AND lower(situation) = lower($1)
+        LIMIT 1`,
+      [input.situation],
+    )
+    if (existing.length > 0) {
+      await query(
+        `UPDATE ai_assist_lessons
+            SET corrected = $2, note = $3, created_at = now()
+          WHERE id = $1`,
+        [existing[0].id, input.corrected, input.note],
+      )
+      return
+    }
+    await query(
+      `INSERT INTO ai_assist_lessons (situation, draft, corrected, note, source)
+       VALUES ($1, '', $2, $3, 'auto')`,
+      [input.situation, input.corrected, input.note],
+    )
+  } catch (err) {
+    console.error('[v0] addAutoLesson failed:', err)
+  }
+}
+
 /** Most recent lessons (newest first). */
 export async function listLessons(limit = 50): Promise<AiAssistLesson[]> {
   const rows = await query<LessonRow>(
