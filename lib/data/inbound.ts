@@ -4,7 +4,7 @@
  * conversation and appends the message.
  * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
  */
-import { withTransaction, type DbExecutor } from '../db'
+import { withTransaction } from '../db'
 import type { ChannelType, MediaType, Message } from '../types'
 import {
   MESSAGE_REPLY_JOIN,

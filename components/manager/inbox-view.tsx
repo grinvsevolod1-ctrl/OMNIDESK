@@ -13,7 +13,6 @@ import {
   useTransition,
 } from 'react'
 import { useRouter } from 'next/navigation'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import useSWR from 'swr'
 import {
   AlertCircle,
@@ -122,6 +121,7 @@ import {
 } from '@/components/ui/popover'
 import { AutopilotToggle } from '@/components/manager/autopilot-toggle'
 import { EditHistoryDialog } from '@/components/manager/edit-history-dialog'
+import { VirtualList } from '@/components/manager/virtual-list'
 import {
   channelIcon,
   TelemostIcon,
@@ -557,7 +557,7 @@ function PresenceBadge({
       className={cn('inline-flex items-center gap-1.5 text-[11px] font-medium', v.text, className)}
       role="status"
       aria-live="polite"
-      title="Активность посетителя на сайте в реальном времени"
+      title="Активность посетителя на сайте в ��еальном времени"
     >
       <PresenceDot state={state} />
       {v.label}
@@ -2388,24 +2388,6 @@ export function InboxView({
     localMessages,
   ])
 
-  // --- Conversation-list virtualization -------------------------------------
-  // The sidebar can hold hundreds/thousands of threads; rendering every row
-  // (each with an avatar, presence dot and a full Radix context menu) makes
-  // scrolling janky and inflates the DOM. We virtualize the list so only the
-  // rows near the viewport are mounted. Row heights vary slightly (badges,
-  // "печатает…", source chip), so we use dynamic measurement via
-  // measureElement rather than a fixed size; estimateSize is just the starting
-  // guess. The context menu still works because each measured row renders its
-  // full markup — we only skip off-screen rows.
-  const convScrollRef = useRef<HTMLDivElement>(null)
-  const convVirtualizer = useVirtualizer({
-    count: filtered.length,
-    getScrollElement: () => convScrollRef.current,
-    estimateSize: () => 76,
-    overscan: 8,
-    getItemKey: (index) => filtered[index]?.id ?? index,
-  })
-
   // When the channel-type filter changes, drop any selected sources that no
   // longer belong to a visible type, so stale selections can't hide everything.
   useEffect(() => {
@@ -2669,7 +2651,7 @@ export function InboxView({
 
   // Opening a thread the AI handed off («Ликвид») acknowledges it. The banner
   // and list highlight already exclude the active thread, so it clears visually
-  // the instant it's opened — here we only clear the SERVER flag so it doesn't
+  // the instant it's opened �� here we only clear the SERVER flag so it doesn't
   // return on refresh. A ref guard keeps this to one call per opened handoff.
   useEffect(() => {
     if (!activeId) return
@@ -3168,33 +3150,22 @@ export function InboxView({
           </div>
         </div>
 
-        {/* List (virtualized — only near-viewport rows are mounted) */}
-        <div
-          ref={convScrollRef}
-          className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5"
-        >
-          {filtered.length === 0 ? (
+        {/* List (virtualized — only near-viewport rows are mounted; see VirtualList) */}
+        {filtered.length === 0 ? (
+          <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
             <p className="px-4 py-10 text-center text-sm text-muted-foreground">
               {conversations.length === 0
                 ? 'Пока нет диалогов.'
                 : 'Ничего не найдено по фильтрам.'}
             </p>
-          ) : (
-            <div
-              className="relative w-full"
-              style={{ height: convVirtualizer.getTotalSize() }}
-            >
-              {convVirtualizer.getVirtualItems().map((vitem) => {
-                const c = filtered[vitem.index]
-                if (!c) return null
-                return (
-                  <div
-                    key={vitem.key}
-                    data-index={vitem.index}
-                    ref={convVirtualizer.measureElement}
-                    className="absolute left-0 top-0 w-full"
-                    style={{ transform: `translateY(${vitem.start}px)` }}
-                  >
+          </div>
+        ) : (
+          <VirtualList
+            items={filtered}
+            getItemKey={(c) => c.id}
+            estimateSize={76}
+            className="scrollbar-thin min-h-0 flex-1 px-1.5 py-1.5"
+            renderItem={(c) => (
               <ContextMenu key={c.id}>
                 <ContextMenuTrigger
                   render={
@@ -3362,12 +3333,9 @@ export function InboxView({
                     ) : null}
                   </ContextMenuContent>
                 </ContextMenu>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
+            )}
+          />
+        )}
       </div>
 
       {/* ------------------------------------------------------------------ */}

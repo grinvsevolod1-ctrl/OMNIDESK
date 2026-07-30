@@ -39,7 +39,6 @@ export async function initErrorReporter(): Promise<void> {
       tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE || 0),
     })
     sentry = mod
-    // eslint-disable-next-line no-console
     console.log(
       JSON.stringify({
         t: new Date().toISOString(),
@@ -50,7 +49,6 @@ export async function initErrorReporter(): Promise<void> {
     )
   } catch (err) {
     // Package not installed or init failed — degrade to logs-only.
-    // eslint-disable-next-line no-console
     console.warn(
       '[error-reporter] Sentry configured but could not initialise:',
       err instanceof Error ? err.message : String(err),

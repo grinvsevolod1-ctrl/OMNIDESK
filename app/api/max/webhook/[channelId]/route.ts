@@ -27,7 +27,7 @@ function secretMatches(a: string, b: string): boolean {
 /**
  * Inbound webhook for a MAX bot channel.
  *
- * MAX (botapi.max.ru) POSTs every subscribed update here. We authenticate with
+ * MAX (platform-api2.max.ru) POSTs every subscribed update here. We authenticate with
  * the per-channel secret echoed in the `X-Max-Bot-Api-Secret` header (set when
  * we registered the subscription), persist `message_created` events into the
  * inbox via recordMaxInbound (which fires the realtime NOTIFY), then run the

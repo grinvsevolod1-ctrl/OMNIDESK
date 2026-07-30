@@ -5,8 +5,16 @@ import { proxiedFetch, type ProxyDescriptor } from './proxy-agent'
  * MAX Bot API client (https://dev.max.ru/docs-api).
  *
  * MAX exposes only a Bot API (no personal-account API). A bot is created via
- * @MasterBot, which issues a token. All requests go to https://botapi.max.ru
- * with the token passed as the `access_token` query parameter.
+ * @MasterBot, which issues a token. All requests go to
+ * https://platform-api2.max.ru with the token passed in the `Authorization`
+ * header as a RAW string (no `Bearer ` prefix — adding it causes a 401).
+ *
+ * NOTE (2026 API change): the old `https://botapi.max.ru` domain and the
+ * `?access_token=` query-parameter auth are no longer supported — MAX now
+ * rejects them with 401 "verify.token". We therefore target platform-api2 and
+ * send the token via the Authorization header. The deployed host must also
+ * trust the Russian Ministry of Digital Development (Минцифры) root
+ * certificate, otherwise TLS to platform-api2.max.ru fails.
  *
  * Integration model in this app mirrors live-chat (NOT the Telegram/WhatsApp
  * worker): inbound arrives via a webhook registered with POST /subscriptions,
@@ -15,7 +23,7 @@ import { proxiedFetch, type ProxyDescriptor } from './proxy-agent'
  * messaged it first.
  */
 
-const MAX_API_BASE = process.env.MAX_API_BASE || 'https://botapi.max.ru'
+const MAX_API_BASE = process.env.MAX_API_BASE || 'https://platform-api2.max.ru'
 
 /** A MAX user/bot identity as returned by /me and embedded in events. */
 export interface MaxUser {
@@ -85,9 +93,12 @@ export type MaxResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; status?: number }
 
-function tokenUrl(path: string, token: string, params?: Record<string, string>) {
+/** Build an API URL. The token is NOT placed in the query string anymore — it
+ *  travels in the Authorization header (see `request`). Only genuine query
+ *  params (e.g. the `url` on DELETE /subscriptions, `user_id` on /messages) go
+ *  here. */
+function apiUrl(path: string, params?: Record<string, string>) {
   const url = new URL(path, MAX_API_BASE)
-  url.searchParams.set('access_token', token)
   if (params) {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
   }
@@ -119,6 +130,7 @@ export function maxErrorText(
 
 async function request<T>(
   url: string,
+  token: string,
   init: RequestInit,
   proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<T>> {
@@ -127,7 +139,12 @@ async function request<T>(
       url,
       {
         ...init,
-        headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+        headers: {
+          'content-type': 'application/json',
+          // MAX auth: raw token, NO "Bearer " prefix (Bearer → 401).
+          Authorization: token,
+          ...(init.headers ?? {}),
+        },
         // Always go to the network; never cache bot API calls.
         cache: 'no-store',
       },
@@ -171,7 +188,7 @@ export async function getMe(
   token: string,
   proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<MaxBotInfo>> {
-  return request<MaxBotInfo>(tokenUrl('/me', token), { method: 'GET' }, proxy)
+  return request<MaxBotInfo>(apiUrl('/me'), token, { method: 'GET' }, proxy)
 }
 
 /**
@@ -187,7 +204,8 @@ export async function subscribeWebhook(
   proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ success?: boolean }>> {
   return request(
-    tokenUrl('/subscriptions', token),
+    apiUrl('/subscriptions'),
+    token,
     {
       method: 'POST',
       body: JSON.stringify({ url, secret, update_types: updateTypes }),
@@ -203,7 +221,8 @@ export async function unsubscribeWebhook(
   proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ success?: boolean }>> {
   return request(
-    tokenUrl('/subscriptions', token, { url }),
+    apiUrl('/subscriptions', { url }),
+    token,
     { method: 'DELETE' },
     proxy,
   )
@@ -221,7 +240,8 @@ export async function sendMessage(
   proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ mid: string | null }>> {
   const res = await request<MaxSendResult>(
-    tokenUrl('/messages', token, { user_id: String(userId) }),
+    apiUrl('/messages', { user_id: String(userId) }),
+    token,
     {
       method: 'POST',
       body: JSON.stringify({ text }),
