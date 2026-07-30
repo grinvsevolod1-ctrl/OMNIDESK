@@ -65,6 +65,13 @@ export interface SimStyle {
   dumbness: number
   /** 0..1 — chance of dropping an emoji/"))))" at the end. */
   emojiRate: number
+  /**
+   * Which "laugh/emoji" register this persona is consistent in. Real people
+   * rarely mix bracket-laughs «)))» with picture emoji at random — they lean one
+   * way. Locking it per-persona removes that tell. Optional for legacy rows
+   * (treated as 'mixed' when absent, i.e. the old behaviour).
+   */
+  emojiStyle?: 'brackets' | 'emoji' | 'mixed'
 }
 
 /**

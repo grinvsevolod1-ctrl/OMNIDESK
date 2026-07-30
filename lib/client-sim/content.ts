@@ -379,7 +379,7 @@ const MOTIVATIONS = [
   'откладывает на первый взнос по ипотеке', 'надо отдать долг другу',
   'потерял работу из-за закрытия фирмы', 'хочет сменить сферу, пробует новое',
   'скучно дома, хочет чем-то заняться и подзаработать', 'коплю на учёбу ребёнку',
-  'нужно на ремонт машины после аварии', 'просто ��видел объявление, стало любопытно',
+  'нужно на ремонт машины после аварии', 'просто ����видел объявление, стало любопытно',
   'хочет доказать себе, что может зарабатывать сам', 'копит на переезд в другой город',
 ]
 
@@ -404,7 +404,7 @@ const LIFE_DETAILS = [
   'машина в кредит', 'работает по 12 часов', 'только переехал в город',
   'подрабатывал курьером раньше', 'уже кидали на такой работе',
   'сестра посоветовала', 'сидит на больничном', 'скоро отпуск',
-  'копит на ремонт', 'нет высшего образования', 'служил в армии',
+  'копит на ремонт', 'нет высшего образования', 'служил в арми��',
   'трое детей, младший грудной', 'ухаживает за пожилой мамой', 'снимает с другом квартиру',
   'платит два кредита сразу', 'недавно похоронил отца', 'живёт в общаге',
   'дочка-студентка на платном', 'взял микрозайм, теперь жалеет', 'аллергия на кошек',
@@ -474,6 +474,20 @@ function rollGoal(): string {
   return pick(GOALS)
 }
 
+/**
+ * Lock this persona into ONE laugh/emoji register so it stays consistent across
+ * the whole dialog (real people don't randomly alternate «)))» and 😂). The
+ * `bracketBias` shifts the odds toward text-brackets — higher for older/formal
+ * tones where picture emoji feel out of character.
+ */
+function rollEmojiStyle(bracketBias: number): 'brackets' | 'emoji' | 'mixed' {
+  const r = Math.random()
+  const b = Math.max(0, Math.min(1, bracketBias))
+  if (r < 0.45 + b * 0.25) return 'brackets'
+  if (r < 0.85) return 'emoji'
+  return 'mixed'
+}
+
 function rollStyle(aggression: number, tone: SimTone): SimStyle {
   // aggression 0..100 raises profanity + terseness baselines.
   const a = Math.max(0, Math.min(100, aggression)) / 100
@@ -489,6 +503,7 @@ function rollStyle(aggression: number, tone: SimTone): SimStyle {
         terseness: 0.2 + Math.random() * 0.3,
         dumbness: Math.random() * 0.3,
         emojiRate: chance(0.3) ? Math.random() * 0.15 : 0,
+        emojiStyle: rollEmojiStyle(0.6),
       }
     case 'neutral':
       // Everyday conversational: a little sloppy, but never rude.
@@ -500,6 +515,7 @@ function rollStyle(aggression: number, tone: SimTone): SimStyle {
         terseness: 0.3 + Math.random() * 0.4,
         dumbness: Math.random() * 0.5,
         emojiRate: chance(0.45) ? Math.random() * 0.25 : 0,
+        emojiStyle: rollEmojiStyle(0.35),
       }
     case 'rough':
       // Slangy/panibratski, punctuation-light, swears scale with aggression.
@@ -511,6 +527,7 @@ function rollStyle(aggression: number, tone: SimTone): SimStyle {
         terseness: Math.min(1, 0.4 + a * 0.4 + Math.random() * 0.3),
         dumbness: Math.random() * 0.7,
         emojiRate: chance(0.5) ? Math.random() * 0.3 : 0,
+        emojiStyle: rollEmojiStyle(0.4),
       }
     default:
       // 'mixed' — the original wide random spread.
@@ -522,6 +539,7 @@ function rollStyle(aggression: number, tone: SimTone): SimStyle {
         terseness: Math.min(1, 0.3 + a * 0.4 + Math.random() * 0.4),
         dumbness: Math.random() * 0.7,
         emojiRate: chance(0.5) ? Math.random() * 0.3 : 0,
+        emojiStyle: rollEmojiStyle(0.4),
       }
   }
 }
@@ -655,11 +673,26 @@ function typoWord(word: string): string {
   return word
 }
 
-const EMOJIS = [
-  '))', ')))', '))))', '))))))', '(', '((', ')', '))))))))',
+// Bracket-laughs / sad brackets — the RU-chat "текстовая улыбка".
+const EMOJI_BRACKETS = ['))', ')))', '))))', '))))))', '(', '((', ')', '))))))))']
+// Picture emoji.
+const EMOJI_PICTURES = [
   '🙂', '👍', '😂', '🤝', '💰', '🔥', '😏', '🤔', '😄', '🙃', '😅', '👀',
   '🤷', '😉', '💵', '✌️', '🫡', '😐', '🥱', '😤', '🤨', '😬', '👌', '💪',
 ]
+const EMOJIS = [...EMOJI_BRACKETS, ...EMOJI_PICTURES]
+
+/** Pick an emoji token from the pool this persona is consistent in. */
+function pickEmoji(style: SimStyle): string {
+  switch (style.emojiStyle) {
+    case 'brackets':
+      return pick(EMOJI_BRACKETS)
+    case 'emoji':
+      return pick(EMOJI_PICTURES)
+    default:
+      return pick(EMOJIS) // legacy 'mixed' rows keep the old random behaviour
+  }
+}
 
 /** Apply a persona's writing fingerprint to a clean sentence. */
 /**
@@ -781,16 +814,17 @@ export function applyStyle(text: string, style: SimStyle): string {
   if (style.lowercase) out = out.toLowerCase()
 
   if (style.emojiRate > 0 && chance(style.emojiRate)) {
-    out = out + (chance(0.5) ? ' ' : '') + pick(EMOJIS)
+    out = out + (chance(0.5) ? ' ' : '') + pickEmoji(style)
   }
 
   return out.slice(0, 500)
 }
 
 /* ========================================================================= */
-/*  Human "sбои" — typos-with-correction, autocorrect, strays, duplicates    */
-/*  Applied at DELIVERY time (per bubble) so they read as separate messages, */
-/*  exactly how a real person fixes themselves in chat.                      */
+/*  Human "sбои" — accidental early sends and double-tap duplicates only.     */
+/*  Applied at DELIVERY time (per bubble) so they read as separate messages.  */
+/*  NB: self-corrections («*слово», autocorrect+fix) were removed — they were */
+/*  a bot tell. See humanizeBubbles below.                                    */
 /* ========================================================================= */
 
 /** Emojis people actually fire as a standalone reaction to a message. */
@@ -897,12 +931,12 @@ const CURIOUS = [
   'а это точно не кидалово',
   'скинте подробности',
   'а сколько в день выходит примерно',
-  'платите на карту или как',
+  'платите на кар��у или как',
   'а возраст важен',
   'сколько часов в день пахать',
   'а обучение есть или сразу в бой',
   'аванс дадите или потом',
-  'а что за компания вообще',
+  '�� что за компания вообще',
   'договор будет',
   'а можно совмещать с основной',
   'сколько людей уже у вас работает',
