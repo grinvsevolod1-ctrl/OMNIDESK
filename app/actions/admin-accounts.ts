@@ -199,15 +199,16 @@ export async function adminConnectMaxAction(
   if (proxyError) return { ok: false, message: proxyError }
   const proxy = await getProxyDescriptorById(proxyId as string)
 
-  // 1. Validate the token through the account's proxy.
-  const me = await getMe(token, proxy)
+  // 1. Validate the token — strip any accidental whitespace/newlines from
+  // copy-paste before sending, then call /me to confirm it's real.
+  const cleanToken = token.replace(/[\r\n\t]/g, '').trim()
+  const me = await getMe(cleanToken, proxy)
   if (!me.ok) {
     return {
       ok: false,
-      message:
-        me.status === 401
-          ? 'Токен недействителен. Проверьте его в @MasterBot и попробуйте снова.'
-          : `Не удалось проверить токен MAX: ${me.error}`,
+      // Always show the real error from MAX (status + message) so it's clear
+      // whether it's a bad token, a network issue, or something else entirely.
+      message: `Ошибка MAX API (${me.status ?? 'нет ответа'}): ${me.error}`,
     }
   }
 
@@ -228,7 +229,7 @@ export async function adminConnectMaxAction(
     sessionStatus: 'online',
     proxyId,
     config: {
-      token: encrypt(token),
+      token: encrypt(cleanToken),
       webhookSecret: encrypt(webhookSecret),
       botUserId: me.data.user_id,
       username: me.data.username ?? null,
