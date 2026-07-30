@@ -6,15 +6,16 @@ import { proxiedFetch, type ProxyDescriptor } from './proxy-agent'
  *
  * MAX exposes only a Bot API (no personal-account API). A bot is created via
  * @MasterBot, which issues a token. All requests go to
- * https://platform-api2.max.ru with the token passed in the `Authorization`
- * header as a RAW string (no `Bearer ` prefix — adding it causes a 401).
+ * https://botapi.max.ru with the token passed in the `Authorization` header as
+ * a RAW string (no `Bearer ` prefix — adding it causes a 401).
  *
- * NOTE (2026 API change): the old `https://botapi.max.ru` domain and the
- * `?access_token=` query-parameter auth are no longer supported — MAX now
- * rejects them with 401 "verify.token". We therefore target platform-api2 and
- * send the token via the Authorization header. The deployed host must also
- * trust the Russian Ministry of Digital Development (Минцифры) root
- * certificate, otherwise TLS to platform-api2.max.ru fails.
+ * NOTE (domain choice): `botapi.max.ru` is the canonical Bot API host and is
+ * reachable with a normally-trusted TLS chain. The alternative
+ * `platform-api2.max.ru` host presents a certificate signed by the Russian
+ * Минцифры root, which most hosts (incl. Vercel) do NOT trust — connecting
+ * there fails at the TLS handshake and surfaces as a bare "fetch failed" before
+ * any HTTP status. So we target botapi.max.ru. Override with `MAX_API_BASE`
+ * only if you deploy on a host that trusts the Минцифры root.
  *
  * Integration model in this app mirrors live-chat (NOT the Telegram/WhatsApp
  * worker): inbound arrives via a webhook registered with POST /subscriptions,
@@ -23,7 +24,7 @@ import { proxiedFetch, type ProxyDescriptor } from './proxy-agent'
  * messaged it first.
  */
 
-const MAX_API_BASE = process.env.MAX_API_BASE || 'https://platform-api2.max.ru'
+const MAX_API_BASE = process.env.MAX_API_BASE || 'https://botapi.max.ru'
 
 /** A MAX user/bot identity as returned by /me and embedded in events. */
 export interface MaxUser {
@@ -173,9 +174,15 @@ async function request<T>(
     }
     return { ok: true, data: (parsed ?? {}) as T }
   } catch (err) {
+    // A thrown error here is a transport failure (DNS/TLS/connection) — the
+    // request never got an HTTP status back. The most common cause with MAX is
+    // pointing MAX_API_BASE at platform-api2.max.ru, whose Минцифры-signed cert
+    // isn't trusted, which fetch reports as a bare "fetch failed". Make that
+    // actionable instead of showing it as if the token were bad.
+    const raw = err instanceof Error ? err.message : 'network error'
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'network error',
+      error: `Не удалось соединиться с MAX API (${MAX_API_BASE}): ${raw}. Проверьте доступность домена и TLS-сертификат — по умолчанию используйте botapi.max.ru.`,
     }
   }
 }

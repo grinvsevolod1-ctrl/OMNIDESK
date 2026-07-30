@@ -23,7 +23,7 @@ import {
 export interface MaxChannel {
   id: string
   managerId: string | null
-  /** Decrypted MAX bot token (Authorization header for platform-api2.max.ru). */
+  /** Decrypted MAX bot token (Authorization header for botapi.max.ru). */
   token: string
   /** Decrypted webhook secret, validated against X-Max-Bot-Api-Secret. */
   webhookSecret: string

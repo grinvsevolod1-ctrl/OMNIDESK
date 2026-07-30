@@ -4,7 +4,7 @@ import { headers } from 'next/headers'
 /**
  * Resolve the app's public base URL (scheme + host, no trailing slash) for use
  * in server actions / route handlers that need an absolute, externally
- * reachable URL — e.g. registering a MAX webhook with platform-api2.max.ru.
+ * reachable URL — e.g. registering a MAX webhook with botapi.max.ru.
  *
  * Resolution order:
  *   1. APP_URL / NEXT_PUBLIC_APP_URL env var (explicit override — best for prod
