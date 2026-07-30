@@ -54,11 +54,26 @@ export async function checkLoginBan(keys: string[]): Promise<LoginBanStatus> {
   }
 }
 
+// Throttle for the opportunistic prune below: at most once per window across
+// the process, so recording a strike stays a single cheap write in the common
+// case.
+const OPPORTUNISTIC_PRUNE_MS = 10 * 60_000
+let lastOpportunisticPrune = 0
+
 /**
  * Record a strike against a key and (re)arm its ban with escalating backoff.
  * Called when the in-memory limiter trips. Best-effort; swallows errors.
  */
 export async function recordLoginBan(key: string): Promise<void> {
+  // Self-healing housekeeping: drop expired rows opportunistically (throttled)
+  // right where new rows are created, so the table is cleaned even if the cron
+  // job that also prunes (retry-dead-letters) is ever disabled or renamed.
+  // Fire-and-forget so it never delays arming the ban.
+  const now = Date.now()
+  if (now - lastOpportunisticPrune > OPPORTUNISTIC_PRUNE_MS) {
+    lastOpportunisticPrune = now
+    void pruneLoginBans()
+  }
   try {
     // Upsert: increment strikes, then set blocked_until from the strike count.
     // The duration is chosen in SQL so the strike count and window stay

@@ -76,11 +76,10 @@ export async function GET(
       info.data.mime_type ||
       desc.mime ||
       'application/octet-stream'
-    // Buffer + archive so the file survives the contact deleting it later, then
-    // serve from the buffer. Falls back to a passthrough stream on any issue.
-    const buffered = await bufferAndArchive(id, upstream, mime, null)
-    if (buffered) return bytesResponse(buffered, mime, false)
-    return passthrough(upstream, mime)
+    // Stream to the browser while archiving a bounded copy in the background so
+    // the file survives the contact deleting it later (never buffers an oversized
+    // file into memory — see serveAndArchive).
+    return serveAndArchive(id, upstream, mime, null)
   }
 
   // VK (like MAX/live-chat) has no worker: attachments carry a direct CDN url
@@ -116,10 +115,9 @@ export async function GET(
       upstream.headers.get('content-type') ||
       desc.mime ||
       'application/octet-stream'
-    // Buffer + archive so the file survives the contact deleting it later.
-    const buffered = await bufferAndArchive(id, upstream, mime, null)
-    if (buffered) return bytesResponse(buffered, mime, false)
-    return passthrough(upstream, mime)
+    // Stream to the browser while archiving a bounded copy in the background so
+    // the file survives the contact deleting it later.
+    return serveAndArchive(id, upstream, mime, null)
   }
 
   if (!isWorkerConfigured) {
@@ -165,50 +163,78 @@ function bytesResponse(
   return new Response(new Uint8Array(bytes), { status: 200, headers })
 }
 
-/** Stream an upstream response straight through (fallback when not buffering). */
-function passthrough(upstream: Response, mime: string): Response {
+/**
+ * Stream an upstream media response straight to the browser while archiving a
+ * SIZE-BOUNDED copy in Postgres in the background, so the file survives the
+ * contact deleting/editing it.
+ *
+ * The body is `tee()`d into two independent streams: one is returned to the
+ * client untouched, the other is read by `archiveBounded` which stops (and
+ * skips the DB write) the moment it exceeds MEDIA_MAX_STORE_BYTES. This never
+ * reads a whole file into memory — the previous `arrayBuffer()` approach could
+ * OOM the panel when a provider omitted content-length on a multi-hundred-MB /
+ * multi-GB file (Telegram allows ~2GB). Serving is never blocked on the write.
+ */
+function serveAndArchive(
+  messageId: string,
+  upstream: Response,
+  mime: string,
+  name: string | null,
+): Response {
+  const body = upstream.body
+  if (!body) return new Response('Media unavailable', { status: 502 })
+
   const headers = new Headers()
   headers.set('content-type', mime)
-  const len = upstream.headers.get('content-length')
-  if (len) headers.set('content-length', len)
+  const declaredLen = Number(upstream.headers.get('content-length'))
+  const hasLen = Number.isFinite(declaredLen) && declaredLen > 0
+  if (hasLen) headers.set('content-length', String(declaredLen))
   headers.set('cache-control', 'private, max-age=86400')
-  return new Response(upstream.body, { status: 200, headers })
+
+  // When the provider already advertises a size over the cap, don't bother
+  // teeing/archiving — just stream the original body straight through.
+  if (hasLen && declaredLen > MEDIA_MAX_STORE_BYTES) {
+    return new Response(body, { status: 200, headers })
+  }
+
+  const [clientStream, archiveStream] = body.tee()
+  void archiveBounded(messageId, archiveStream, mime, name)
+  return new Response(clientStream, { status: 200, headers })
 }
 
 /**
- * Read an upstream media response fully into memory and archive it in Postgres
- * (idempotent, size-capped) so the file survives the contact deleting/editing
- * it. Returns the buffer on success, or null when the body is missing or too
- * large (caller then streams it through without archiving). Never throws.
+ * Drain a tee'd media stream into memory ONLY up to MEDIA_MAX_STORE_BYTES, then
+ * archive it. If the stream exceeds the cap it cancels its branch and skips the
+ * write (the client branch keeps streaming unaffected). Fire-and-forget: never
+ * throws into the request path.
  */
-async function bufferAndArchive(
+async function archiveBounded(
   messageId: string,
-  upstream: Response,
+  stream: ReadableStream<Uint8Array>,
   mime: string | null,
   name: string | null,
-): Promise<Buffer | null> {
-  // Size guard: storeMessageMediaBytes rejects anything over MEDIA_MAX_STORE_BYTES
-  // anyway, and providers allow very large files (Telegram up to ~2GB). Reading
-  // the whole body into memory unconditionally could OOM the panel process, so
-  // when the upstream advertises a content-length above the cap we DON'T buffer —
-  // the caller then streams the bytes straight through without archiving.
-  const declaredLen = Number(upstream.headers.get('content-length'))
-  if (Number.isFinite(declaredLen) && declaredLen > MEDIA_MAX_STORE_BYTES) {
-    return null
-  }
+): Promise<void> {
+  const reader = stream.getReader()
+  const chunks: Buffer[] = []
+  let total = 0
   try {
-    const ab = await upstream.arrayBuffer()
-    const buf = Buffer.from(ab)
-    if (buf.byteLength === 0) return null
-    // Only archive when within the cap. If the real size turns out larger (no
-    // content-length was declared up front), we still serve the buffer we've
-    // already read — we can't re-stream a consumed body — but skip the DB write.
-    if (buf.byteLength <= MEDIA_MAX_STORE_BYTES) {
-      // Fire-and-forget archive; serving the bytes must not wait on the write.
-      void storeMessageMediaBytes(messageId, buf, mime, name).catch(() => {})
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > MEDIA_MAX_STORE_BYTES) {
+        // Too large to archive: release this branch so the tee stops buffering
+        // for it. The client branch is independent and keeps streaming.
+        await reader.cancel().catch(() => {})
+        return
+      }
+      chunks.push(Buffer.from(value))
     }
-    return buf
+    if (total === 0) return
+    const buf = Buffer.concat(chunks, total)
+    await storeMessageMediaBytes(messageId, buf, mime, name).catch(() => {})
   } catch {
-    return null
+    await reader.cancel().catch(() => {})
   }
 }

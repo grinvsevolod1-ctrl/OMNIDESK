@@ -25,6 +25,15 @@ import {
 
 /* -------------------------- Conversations --------------------------- */
 
+/**
+ * Hard cap on how many conversations a single listing returns. The inbox shows
+ * the most-recently-active threads first and prepends new ones live over SSE, so
+ * capping the initial load bounds memory + payload for a manager who has
+ * accumulated thousands of historical conversations. Older threads remain in the
+ * DB and are reachable via search/analytics.
+ */
+const CONVERSATION_LIST_LIMIT = 500
+
 export async function listConversations(
   managerId: string,
 ): Promise<Conversation[]> {
@@ -33,8 +42,9 @@ export async function listConversations(
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
       WHERE c.manager_id = $1
-      ORDER BY c.last_message_at DESC`,
-    [managerId],
+      ORDER BY c.last_message_at DESC
+      LIMIT $2`,
+    [managerId, CONVERSATION_LIST_LIMIT],
   )
   return rows.map((r) => ({
     ...toConversation(r),
@@ -58,13 +68,16 @@ export async function listConversationsByStatus(
     params.push(reason)
     reasonFilter = ` AND c.status_detail = $3`
   }
+  params.push(CONVERSATION_LIST_LIMIT)
+  const limitParam = `$${params.length}`
   const rows = await query<ConversationRow & { channel_name: string | null }>(
     `SELECT c.*, ch.name AS channel_name
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
       WHERE c.manager_id = $1
         AND ${effectiveStatusSql('c')} = $2${reasonFilter}
-      ORDER BY c.last_message_at DESC`,
+      ORDER BY c.last_message_at DESC
+      LIMIT ${limitParam}`,
     params,
   )
   return rows.map((r) => ({
@@ -156,6 +169,17 @@ export async function markConversationRead(
   }
 }
 
+/**
+ * Cap on how many messages a single thread hydrates with. A very long
+ * conversation would otherwise ship its entire history to the browser on every
+ * inbox load (and the page eagerly hydrates several threads at once). The inbox
+ * virtualizes the list and prepends new messages live over SSE, so loading the
+ * most-recent slice is what a manager actually needs; older history stays in the
+ * DB. Fetched newest-first with a LIMIT, then reversed back to chronological
+ * (oldest-first) order for rendering.
+ */
+const MESSAGE_HISTORY_LIMIT = 300
+
 export async function listMessages(
   conversationId: string,
   managerId: string,
@@ -166,10 +190,12 @@ export async function listMessages(
      JOIN conversations c ON c.id = m.conversation_id
      ${MESSAGE_REPLY_JOIN}
      WHERE m.conversation_id = $1 AND c.manager_id = $2
-     ORDER BY m.created_at ASC`,
-    [conversationId, managerId],
+     ORDER BY m.created_at DESC
+     LIMIT $3`,
+    [conversationId, managerId, MESSAGE_HISTORY_LIMIT],
   )
-  return rows.map(toMessage)
+  // Re-order to chronological (oldest-first) for the transcript view.
+  return rows.reverse().map(toMessage)
 }
 
 /**

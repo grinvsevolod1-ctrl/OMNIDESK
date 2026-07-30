@@ -112,6 +112,11 @@ function scheduleReconnect(h: Hub): void {
 async function connect(h: Hub): Promise<void> {
   if (h.client || h.connecting) return
   if (!process.env.DATABASE_URL) return
+  // Guard against a reconnect timer firing after the last subscriber left:
+  // without this we could open a LISTEN connection that nobody would ever
+  // tear down (teardown only runs on unsubscribe), leaking it until the next
+  // event. If there are no subscribers, there is nothing to fan out to.
+  if (h.subscribers.size === 0) return
   h.connecting = true
 
   const connectionString = process.env.DATABASE_URL

@@ -386,14 +386,18 @@ export async function listVisitorMessages(
     author: string
     created_at: string | Date
   }>(
+    // Fetch the most RECENT 200 (DESC + LIMIT), not the oldest: a long-running
+    // visitor thread must hydrate the widget with the latest messages, not the
+    // first 200 ever sent. Reversed to chronological order below.
     `SELECT m.id, m.conversation_id, m.direction, m.body, m.author, m.created_at
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
       WHERE c.channel_id = $1 AND c.contact_handle = $2
-      ORDER BY m.created_at ASC
+      ORDER BY m.created_at DESC
       LIMIT 200`,
     [channelId, contactHandle],
   )
+  rows.reverse()
   return rows.map((r) => ({
     id: r.id,
     conversationId: r.conversation_id,

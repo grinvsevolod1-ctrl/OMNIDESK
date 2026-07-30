@@ -5,6 +5,7 @@ import {
   recordMessageEditByProviderId,
   recordVkInbound,
   resolveVkAgentId,
+  updateVkContactName,
 } from '@/lib/data'
 import { archiveVkMediaSoon } from '@/lib/media-archive-fetch'
 import { deadLetterInbound } from '@/lib/webhook-replay'
@@ -176,18 +177,21 @@ async function handlePost(
     return text('ok')
   }
 
-  // Resolve a human name for the contact (best-effort; falls back to "VK #id").
-  // The profile lookup goes out through the account's proxy so ALL VK API
-  // traffic for this community exits from the same dedicated IP.
-  let contactName = `VK #${contactHandle}`
+  // Resolve the channel's proxy once — needed for media archival AND the
+  // background profile-name lookup, so all VK API traffic for this community
+  // exits from the same dedicated IP.
   let proxy = null
   try {
     proxy = await getProxyForChannel(channel.id)
-    const user = await getUser(channel.token, contactHandle, proxy)
-    if (user.ok) contactName = vkUserName(user.data, contactHandle)
   } catch {
-    // keep the fallback name
+    // proxy is optional; continue without it
   }
+
+  // Ingest with a fast fallback name. The human-readable VK profile name is
+  // resolved in the BACKGROUND (see below), NOT here: the profile lookup is a
+  // network round-trip through the proxy that can be slow or time out, and VK
+  // retry-storms any delivery we don't answer with "ok" within a few seconds.
+  const contactName = `VK #${contactHandle}`
 
   try {
     const {
@@ -225,6 +229,30 @@ async function handlePost(
         mime: media.mediaMime ?? null,
         name: media.mediaName ?? null,
       })
+    }
+
+    // Resolve the human-readable VK profile name OFF the critical path and patch
+    // the conversation once it arrives (the UPDATE fires the realtime trigger,
+    // so the inbox name refreshes live). Fire-and-forget on the long-lived Node
+    // process; best-effort so a slow/failed lookup keeps the "VK #id" fallback
+    // and never delays our "ok". Skipped for duplicate deliveries (stored null).
+    if (stored) {
+      void (async () => {
+        try {
+          const user = await getUser(channel.token, contactHandle, proxy)
+          if (!user.ok) return
+          const resolved = vkUserName(user.data, contactHandle)
+          if (resolved && resolved !== contactName) {
+            await updateVkContactName({
+              channelId: channel.id,
+              contactHandle,
+              contactName: resolved,
+            })
+          }
+        } catch {
+          /* keep the fallback name */
+        }
+      })()
     }
 
     // Autopilot: same engine as live-chat (no ban risk, reply sent instantly).

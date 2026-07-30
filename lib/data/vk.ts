@@ -99,6 +99,28 @@ export async function resolveVkAgentId(
   return resolveLivechatAgentId(channel)
 }
 
+/**
+ * Patch the contact name of the most-recent conversation for a VK handle.
+ * Called off the webhook critical path once the VK profile name has been
+ * resolved in the background, so a slow profile lookup never delays our "ok"
+ * to VK. The UPDATE fires the conversation realtime trigger, so the inbox name
+ * refreshes live. No-op when the name is unchanged.
+ */
+export async function updateVkContactName(input: {
+  channelId: string
+  contactHandle: string
+  contactName: string
+}): Promise<void> {
+  await query(
+    `UPDATE conversations
+        SET contact_name = $3
+      WHERE channel_id = $1
+        AND contact_handle = $2
+        AND contact_name IS DISTINCT FROM $3`,
+    [input.channelId, input.contactHandle, input.contactName],
+  )
+}
+
 /** Back-compat thin wrapper: record an inbound VK message. */
 export async function recordVkInbound(input: {
   channelId: string
