@@ -200,6 +200,57 @@ export async function listMessages(
 }
 
 /**
+ * Batch loader for the inbox: the most-recent MESSAGE_HISTORY_LIMIT messages for
+ * EACH of the given conversations, resolved in a SINGLE round-trip.
+ *
+ * The inbox page hydrates transcripts for every visible thread at once. Doing
+ * that as one `listMessages` call per conversation is a classic N+1 — hundreds
+ * of serial queries on a busy panel. Here a window function ranks each
+ * conversation's messages newest-first and we keep only the top slice per
+ * partition, so Postgres returns all threads' recent history in one shot.
+ *
+ * Manager-scoped via the join (ids that aren't the caller's are silently
+ * dropped). Returns a map keyed by conversation id; each list is chronological
+ * (oldest-first) to match `listMessages`. Conversations with no messages are
+ * simply absent from the map.
+ */
+export async function listMessagesForConversations(
+  conversationIds: string[],
+  managerId: string,
+): Promise<Record<string, Message[]>> {
+  const byId: Record<string, Message[]> = {}
+  if (conversationIds.length === 0) return byId
+
+  const rows = await query<MessageRow & { rn: number }>(
+    `SELECT id, conversation_id, direction, body, author, created_at,
+            media_type, media_mime, media_name, reactions, deleted_at,
+            deleted_origin, status, error_reason, edited_at, edit_count,
+            reply_to_id, reply_to_author, reply_to_body, reply_to_media_type
+       FROM (
+         SELECT ${MESSAGE_SELECT},
+                ROW_NUMBER() OVER (
+                  PARTITION BY m.conversation_id ORDER BY m.created_at DESC
+                ) AS rn
+           FROM messages m
+           JOIN conversations c ON c.id = m.conversation_id
+           ${MESSAGE_REPLY_JOIN}
+          WHERE c.manager_id = $1 AND m.conversation_id = ANY($2)
+       ) ranked
+      WHERE rn <= $3
+      ORDER BY conversation_id ASC, created_at ASC`,
+    [managerId, conversationIds, MESSAGE_HISTORY_LIMIT],
+  )
+
+  // Rows already arrive grouped by conversation and oldest-first, so a single
+  // pass builds the per-thread transcripts without any extra sorting.
+  for (const row of rows) {
+    const list = byId[row.conversation_id] ?? (byId[row.conversation_id] = [])
+    list.push(toMessage(row))
+  }
+  return byId
+}
+
+/**
  * Load an older page of a thread's history: the most recent messages created
  * strictly BEFORE `before` (an ISO timestamp — normally the oldest message the
  * client currently holds). Powers the inbox "load older messages" control for

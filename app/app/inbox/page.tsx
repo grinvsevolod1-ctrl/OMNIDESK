@@ -7,7 +7,7 @@ import { requireManager } from '@/lib/auth'
 import {
   listChannels,
   listConversations,
-  listMessages,
+  listMessagesForConversations,
   listQuickReplies,
   listTransferTargets,
 } from '@/lib/data'
@@ -62,12 +62,17 @@ export default async function InboxPage() {
       lastError: c.lastError,
     }))
 
-  const messagesByConversation: Record<string, Message[]> = {}
-  await Promise.all(
-    conversations.map(async (c) => {
-      messagesByConversation[c.id] = await listMessages(c.id, session.sub)
-    }),
+  // Recent transcript for every visible thread in ONE query (window-function
+  // batch) instead of a per-conversation N+1. Threads with no messages are
+  // absent from the map, so default them to an empty list for the client.
+  const batched = await listMessagesForConversations(
+    conversations.map((c) => c.id),
+    session.sub,
   )
+  const messagesByConversation: Record<string, Message[]> = {}
+  for (const c of conversations) {
+    messagesByConversation[c.id] = batched[c.id] ?? []
+  }
 
   // Autopilot status for the inbox toolbar toggle. Wrapped in try/catch with
   // safe defaults: if migration 030 (autopilot tables) hasn't been applied yet,

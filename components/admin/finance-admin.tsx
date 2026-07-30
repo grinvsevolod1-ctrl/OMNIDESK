@@ -136,10 +136,21 @@ import {
   useRates,
   type ResourceAdSummary,
 } from '@/components/admin/finance/finance-utils'
-import {
-  VaultPanel,
-  VaultDialog,
-} from '@/components/admin/finance/vault-panel'
+// The Vault lives behind its own tab and pulls a ~1k-line subtree (panel +
+// editor dialog). Load it on demand so the default Finance view (overview/ads/
+// expenses) doesn't ship the Vault code in its initial chunk.
+const VaultPanel = dynamic(
+  () => import('@/components/admin/finance/vault-panel').then((m) => m.VaultPanel),
+  {
+    loading: () => (
+      <div className="p-6 text-sm text-muted-foreground">Загрузка сейфа…</div>
+    ),
+  },
+)
+const VaultDialog = dynamic(
+  () =>
+    import('@/components/admin/finance/vault-panel').then((m) => m.VaultDialog),
+)
 
 /* ================================================================== */
 /* Meta, formatters and aggregation live in ./finance/finance-utils    */
@@ -2609,7 +2620,7 @@ function AdAccountDialog({
                       placeholder="agency-client-login"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Для агентских аккаунтов — логин управляемого клиента.
+                      Для агентских аккаунтов — логин управляемого к��иента.
                     </p>
                   </div>
                   <div className="space-y-2">

@@ -7,7 +7,7 @@ import {
   createChannel,
   deleteChannelById,
   getLivechatGlobalDefaults,
-  getManagerById,
+  countExistingManagers,
   saveLivechatGlobalDefaults,
   updateLivechatAppearance,
   updateLivechatPool,
@@ -55,12 +55,11 @@ export async function createLivechatAction(
   if (managerIds.length === 0) {
     return { ok: false, message: 'Choose at least one manager for the queue.' }
   }
-  // Validate every manager in the pool exists.
-  for (const id of managerIds) {
-    const manager = await getManagerById(id)
-    if (!manager) {
-      return { ok: false, message: 'One of the selected managers was not found.' }
-    }
+  // Validate every manager in the pool exists — one batched count, not an
+  // existence query per id.
+  const uniqueIds = [...new Set(managerIds)]
+  if ((await countExistingManagers(uniqueIds)) !== uniqueIds.length) {
+    return { ok: false, message: 'One of the selected managers was not found.' }
   }
 
   const apiKey = `lc_${randomUUID().replace(/-/g, '')}`
@@ -93,11 +92,8 @@ export async function updateLivechatPoolAction(
   if (unique.length === 0) {
     return { ok: false, message: 'Choose at least one manager for the queue.' }
   }
-  for (const id of unique) {
-    const manager = await getManagerById(id)
-    if (!manager) {
-      return { ok: false, message: 'One of the selected managers was not found.' }
-    }
+  if ((await countExistingManagers(unique)) !== unique.length) {
+    return { ok: false, message: 'One of the selected managers was not found.' }
   }
   await updateLivechatPool(channelId, unique)
   revalidatePath('/admin/livechat')

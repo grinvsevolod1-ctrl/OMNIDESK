@@ -145,6 +145,22 @@ export async function getManagerById(id: string): Promise<Manager | null> {
   return rows[0] ? toManager(rows[0]) : null
 }
 
+/**
+ * How many of the given ids correspond to real managers, in ONE query. Lets
+ * callers validate a whole pool of manager ids (e.g. a live-chat round-robin
+ * queue) without a getManagerById-per-id N+1: compare the returned count to the
+ * number of distinct ids passed in.
+ */
+export async function countExistingManagers(ids: string[]): Promise<number> {
+  const unique = [...new Set(ids)].filter(Boolean)
+  if (unique.length === 0) return 0
+  const rows = await query<{ n: string }>(
+    `SELECT COUNT(*)::int AS n FROM managers WHERE id = ANY($1::uuid[])`,
+    [unique],
+  )
+  return Number(rows[0]?.n ?? 0)
+}
+
 export async function listManagers(): Promise<Manager[]> {
   // Exclude the env-backed administrator: it is not a real manager and must
   // never appear in the managers pool (assignment, transfer, blocking, etc.).

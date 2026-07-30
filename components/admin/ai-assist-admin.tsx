@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState, useTransition } from 'react'
+import dynamic from 'next/dynamic'
 import {
   BookOpen,
   Bot,
@@ -56,9 +57,28 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { AiLogsTab } from '@/components/admin/ai-logs-tab'
-import { AiCorrectionsTab } from '@/components/admin/ai-corrections-tab'
-import { AiEnrollmentTab } from '@/components/admin/ai-enrollment-tab'
+// Secondary tabs (enrollment / corrections / logs) each pull their own subtree
+// and are hidden behind a tab click. Load them on demand so the default
+// Settings/Training view doesn't bundle them into its initial chunk.
+const tabLoading = () => (
+  <div className="p-6 text-sm text-muted-foreground">Загрузка…</div>
+)
+const AiEnrollmentTab = dynamic(
+  () =>
+    import('@/components/admin/ai-enrollment-tab').then((m) => m.AiEnrollmentTab),
+  { loading: tabLoading },
+)
+const AiCorrectionsTab = dynamic(
+  () =>
+    import('@/components/admin/ai-corrections-tab').then(
+      (m) => m.AiCorrectionsTab,
+    ),
+  { loading: tabLoading },
+)
+const AiLogsTab = dynamic(
+  () => import('@/components/admin/ai-logs-tab').then((m) => m.AiLogsTab),
+  { loading: tabLoading },
+)
 
 const TONE_OPTIONS = [
   { value: 'professional', label: 'Деловой' },

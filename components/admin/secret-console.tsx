@@ -14,7 +14,6 @@ import {
   ArrowLeft,
   Ban,
   Bot,
-  CheckCheck,
   Circle,
   Filter,
   Hand,
@@ -39,7 +38,6 @@ import {
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
 import {
-  secretCreateConversationAction,
   secretDeleteConversationAction,
   secretDeleteMessageAction,
   secretFetchThreadAction,
@@ -50,7 +48,6 @@ import {
   secretSetConversationStatusAction,
   secretSetThreadSimAction,
   secretSetUnreadAction,
-  secretUpdateConversationAction,
   type ConversationWithManager,
   type ConversationWithSim,
 } from '@/app/actions/admin-secret'
@@ -61,7 +58,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -84,128 +80,26 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import type { Channel, Manager, Message } from '@/lib/types'
-
-/** Simulator-involvement shape, derived from the god-console view model. */
-type SimInfo = ConversationWithSim['sim']
-
-/* ------------------------------- Labels ------------------------------- */
-
-const TYPE_LABEL: Record<string, string> = {
-  telegram: 'Telegram',
-  whatsapp: 'WhatsApp',
-  vk: 'VK',
-  max: 'MAX',
-  livechat: 'Онлайн-чат',
-}
-
-/** God-console attachment chip labels (admin-only preview of what was sent). */
-const MEDIA_CHIP_LABEL: Record<string, string> = {
-  image: 'Фото',
-  video: 'Видео',
-  video_note: 'Кружочек',
-  audio: 'Аудио',
-  document: 'Документ',
-}
-
-const CONV_STATUS_LABEL: Record<string, string> = {
-  liquid: 'Ликвид',
-  not_liquid: 'Не ликвид',
-  unsubscribed: 'Отписка',
-  handoff: 'Передан человеку',
-  transferred: 'Передан',
-}
-
-const CONV_STATUS_STYLE: Record<string, string> = {
-  liquid: 'bg-success/15 text-success',
-  not_liquid: 'bg-warning/15 text-warning',
-  unsubscribed: 'bg-muted text-muted-foreground',
-  handoff: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-  transferred: 'bg-chart-2/15 text-foreground',
-}
-
-const STATUS_VALUES = [
-  'unsubscribed',
-  'handoff',
-  'liquid',
-  'not_liquid',
-  'transferred',
-]
-
-/** Human labels for the auto-client lifecycle (shown only inside "Детали"). */
-const SIM_STATE_LABEL: Record<string, string> = {
-  opening: 'открывает диалог',
-  chatting: 'активная переписка',
-  ignoring: 'притих',
-  later: 'ответит позже',
-  sleeping: 'спит',
-  vanished: 'пропал',
-  done: 'завершён',
-}
-
-/** List-level involvement filter. */
-type SimFilter = 'all' | 'driving' | 'paused' | 'plain'
-/** Thread-level direction filter. */
-type DirFilter = 'all' | 'in' | 'out'
-
-/* ------------------------------ Helpers ------------------------------- */
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return '?'
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-}
-
-function fmtTime(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-}
-
-function fmtDay(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function isComposing(e: React.KeyboardEvent): boolean {
-  // Don't submit while a CJK IME is composing (Safari reports keyCode 229).
-  return e.nativeEvent.isComposing || (e as unknown as { keyCode: number }).keyCode === 229
-}
-
-/** Split `text` on `query` (case-insensitive) and wrap matches in <mark>. */
-function highlight(text: string, query: string): React.ReactNode {
-  const q = query.trim()
-  if (!q) return text
-  const parts: React.ReactNode[] = []
-  const lower = text.toLowerCase()
-  const needle = q.toLowerCase()
-  let i = 0
-  let key = 0
-  while (i < text.length) {
-    const at = lower.indexOf(needle, i)
-    if (at === -1) {
-      parts.push(text.slice(i))
-      break
-    }
-    if (at > i) parts.push(text.slice(i, at))
-    parts.push(
-      <mark
-        key={key++}
-        className="rounded-sm bg-warning/40 px-0.5 text-inherit"
-      >
-        {text.slice(at, at + needle.length)}
-      </mark>,
-    )
-    i = at + needle.length
-  }
-  return parts
-}
+import {
+  CONV_STATUS_LABEL,
+  CONV_STATUS_STYLE,
+  fmtDay,
+  fmtTime,
+  highlight,
+  initials,
+  isComposing,
+  MEDIA_CHIP_LABEL,
+  SIM_STATE_LABEL,
+  STATUS_VALUES,
+  TYPE_LABEL,
+  type DirFilter,
+  type SimFilter,
+  type SimInfo,
+} from '@/components/admin/secret-console/utils'
+import {
+  CreateConversationDialog,
+  EditConversationDialog,
+} from '@/components/admin/secret-console/dialogs'
 
 /* ============================ Root component =========================== */
 
@@ -1423,207 +1317,3 @@ function Composer({
   )
 }
 
-/* --------------------------- Create dialog ---------------------------- */
-
-function CreateConversationDialog({
-  open,
-  onOpenChange,
-  channels,
-  pending,
-  onCreated,
-}: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
-  channels: Channel[]
-  pending: boolean
-  onCreated: (id: string | null) => void
-}) {
-  const [form, setForm] = useState({
-    channelId: '',
-    contactName: '',
-    contactHandle: '',
-    message: '',
-  })
-  const [, startTransition] = useTransition()
-
-  function submit() {
-    startTransition(async () => {
-      const res = await secretCreateConversationAction(form)
-      if (res.ok) {
-        toast.success(res.message)
-        setForm({ channelId: '', contactName: '', contactHandle: '', message: '' })
-        onCreated(null)
-      } else {
-        toast.error(res.message)
-      }
-    })
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Новый диалог</DialogTitle>
-          <DialogDescription>
-            Создайте переписку от имени клиента. Диалог привяжется к каналу и его
-            менеджеру-владельцу и появится в его входящих.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <div className="grid gap-1.5">
-            <Label>Канал</Label>
-            <Select
-              value={form.channelId}
-              onValueChange={(v) => setForm({ ...form, channelId: v ?? '' })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Выберите канал" />
-              </SelectTrigger>
-              <SelectContent>
-                {channels.map((ch) => (
-                  <SelectItem key={ch.id} value={ch.id}>
-                    {ch.name} · {TYPE_LABEL[ch.type] ?? ch.type}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1.5">
-              <Label>Имя клиента</Label>
-              <Input
-                value={form.contactName}
-                onChange={(e) => setForm({ ...form, contactName: e.target.value })}
-                placeholder="Иван Петров"
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label>Хэндл</Label>
-              <Input
-                value={form.contactHandle}
-                onChange={(e) => setForm({ ...form, contactHandle: e.target.value })}
-                placeholder="@user / +7…"
-              />
-            </div>
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Первое сообщение от клиента</Label>
-            <Textarea
-              value={form.message}
-              onChange={(e) => setForm({ ...form, message: e.target.value })}
-              placeholder="Необязательно"
-              className="resize-none"
-            />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Отмена
-          </Button>
-          <Button disabled={pending} onClick={submit} className="gap-1.5">
-            {pending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            Создать
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/* ---------------------------- Edit dialog ----------------------------- */
-
-function EditConversationDialog({
-  open,
-  onOpenChange,
-  conversation,
-  managers,
-  pending,
-  onSaved,
-}: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
-  conversation: ConversationWithManager
-  managers: Manager[]
-  pending: boolean
-  onSaved: () => void
-}) {
-  const [form, setForm] = useState({
-    contactName: conversation.contactName,
-    contactHandle: conversation.contactHandle,
-    managerId: conversation.managerId,
-  })
-  const [, startTransition] = useTransition()
-
-  function submit() {
-    startTransition(async () => {
-      const res = await secretUpdateConversationAction({
-        id: conversation.id,
-        contactName: form.contactName,
-        contactHandle: form.contactHandle,
-        managerId: form.managerId,
-      })
-      if (res.ok) {
-        toast.success(res.message)
-        onSaved()
-      } else {
-        toast.error(res.message)
-      }
-    })
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Изменить диалог</DialogTitle>
-          <DialogDescription>
-            Отредактируйте данные клиента или переназначьте диалог другому менеджеру.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <div className="grid gap-1.5">
-            <Label>Имя клиента</Label>
-            <Input
-              value={form.contactName}
-              onChange={(e) => setForm({ ...form, contactName: e.target.value })}
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Хэндл</Label>
-            <Input
-              value={form.contactHandle}
-              onChange={(e) => setForm({ ...form, contactHandle: e.target.value })}
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Менеджер</Label>
-            <Select
-              value={form.managerId}
-              onValueChange={(v) => setForm({ ...form, managerId: v ?? form.managerId })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Менеджер" />
-              </SelectTrigger>
-              <SelectContent>
-                {managers.map((m) => (
-                  <SelectItem key={m.id} value={m.id}>
-                    {m.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Отмена
-          </Button>
-          <Button disabled={pending} onClick={submit} className="gap-1.5">
-            {pending ? <Loader2 className="size-4 animate-spin" /> : <CheckCheck className="size-4" />}
-            Сохранить
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}

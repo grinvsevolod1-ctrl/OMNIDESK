@@ -688,16 +688,17 @@ async function setGroupChannels(
 ): Promise<void> {
   await query(`DELETE FROM source_channels WHERE resource_id = $1`, [resourceId])
   const ids = [...new Set(channelIds)].filter(Boolean)
-  for (const channelId of ids) {
-    // A channel belongs to at most one source; steal it from any other source so
-    // the latest assignment wins instead of erroring on the UNIQUE constraint.
-    await query(
-      `INSERT INTO source_channels (resource_id, channel_id)
-       VALUES ($1, $2)
-       ON CONFLICT (channel_id) DO UPDATE SET resource_id = EXCLUDED.resource_id`,
-      [resourceId, channelId],
-    )
-  }
+  if (ids.length === 0) return
+  // Single multi-row upsert via unnest instead of one INSERT per channel. A
+  // channel belongs to at most one source, so ON CONFLICT (channel_id) steals it
+  // from any other source — the latest assignment wins instead of erroring on
+  // the UNIQUE constraint.
+  await query(
+    `INSERT INTO source_channels (resource_id, channel_id)
+     SELECT $1, cid FROM unnest($2::uuid[]) AS t(cid)
+     ON CONFLICT (channel_id) DO UPDATE SET resource_id = EXCLUDED.resource_id`,
+    [resourceId, ids],
+  )
 }
 
 export async function createSourceGroup(
