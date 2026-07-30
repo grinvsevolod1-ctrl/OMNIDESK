@@ -19,6 +19,7 @@ import {
   clampInt,
   getExistingOptionalCols,
   isUndefinedColumn,
+  resetOptionalColsCache,
   mapSettings,
   type SettingsRow,
 } from './internal'
@@ -154,7 +155,7 @@ export async function updateSettings(patch: SettingsPatch): Promise<SimSettings>
     if (hasOptional && isUndefinedColumn(err)) {
       // Backstop: if the probe was stale, retry without optional assignments so
       // the rest of the save still lands instead of 500-ing.
-      optionalColsCache = null
+      resetOptionalColsCache()
       await run(effective.filter((a) => !a.optional))
     } else {
       throw err
