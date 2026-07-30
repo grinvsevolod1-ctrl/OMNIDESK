@@ -1,4 +1,7 @@
-import { unstable_cache } from 'next/cache'
+import { revalidateTag, unstable_cache } from 'next/cache'
+
+/** Single tag every cached analytics reader is registered under. */
+const ANALYTICS_TAG = 'analytics'
 
 /**
  * Time-based cache for analytics dashboard rollups.
@@ -31,6 +34,23 @@ export function cachedAnalytics<A extends unknown[], R>(
   if (ANALYTICS_TTL_SECONDS <= 0) return fn
   return unstable_cache(fn, keyParts, {
     revalidate: ANALYTICS_TTL_SECONDS,
-    tags: ['analytics'],
+    tags: [ANALYTICS_TAG],
   }) as (...args: A) => Promise<R>
+}
+
+/**
+ * Drop every cached analytics rollup. Call this from server actions that mutate
+ * data the dashboards aggregate (lead status/assignment changes, conversation
+ * or message writes) so the next dashboard read reflects the change instead of
+ * waiting out the TTL. Safe to call even when caching is disabled (TTL 0): no
+ * entries are tagged, so the invalidation is a cheap no-op.
+ *
+ * The `'max'` profile is Next 16's required stale-while-revalidate hint: readers
+ * keep serving the previous rollup while the fresh one recomputes in the
+ * background, so a burst of dashboard loads right after a mutation never all
+ * block on the same heavy query.
+ */
+export function invalidateAnalytics(): void {
+  if (ANALYTICS_TTL_SECONDS <= 0) return
+  revalidateTag(ANALYTICS_TAG, 'max')
 }

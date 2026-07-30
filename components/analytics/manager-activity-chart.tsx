@@ -1,10 +1,21 @@
 'use client'
 
 import { useEffect, useState, useTransition } from 'react'
+import dynamic from 'next/dynamic'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { getManagerActivityAnalyticsAction } from '@/app/actions/manager-analytics'
-import { ActivityChart } from '@/components/analytics/activity-chart'
+// Large canvas chart whose data is fetched client-side after mount; keep it out
+// of the manager home's initial bundle and load it lazily. ssr:false since
+// there's nothing meaningful to render before the client fetch resolves.
+const ActivityChart = dynamic(
+  () =>
+    import('@/components/analytics/activity-chart').then((m) => m.ActivityChart),
+  {
+    ssr: false,
+    loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
+  },
+)
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'

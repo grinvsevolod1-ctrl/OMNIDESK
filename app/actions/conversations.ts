@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { invalidateAnalytics } from '@/lib/analytics-cache'
 import { requireManager } from '@/lib/auth'
 import {
   listTransferTargets,
@@ -56,6 +57,9 @@ export async function transferConversationAction(
     }
   }
 
+  // Reassigning a conversation moves it between managers in the performance and
+  // group rollups, so drop the analytics cache to reflect it right away.
+  invalidateAnalytics()
   revalidatePath('/app/inbox')
   revalidatePath('/app')
   return { ok: true, message: 'Диалог передан менеджеру.' }

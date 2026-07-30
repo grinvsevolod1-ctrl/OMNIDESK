@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { invalidateAnalytics } from '@/lib/analytics-cache'
 import { hashPassword, requireAdmin } from '@/lib/auth'
 import { generatePassword } from '@/lib/crypto'
 import {
@@ -77,6 +78,9 @@ export async function createManagerAction(
     passwordHash,
     username: username || undefined,
   })
+  // A new manager appears in getManagerPerformance rollups; drop the analytics
+  // cache so the dashboard lists them without waiting out the TTL.
+  invalidateAnalytics()
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   return {
@@ -132,6 +136,7 @@ export async function deleteManagerAction(id: string): Promise<ActionResult> {
     return { ok: false, message: 'Администратора нельзя удалить.' }
   }
   await deleteManager(id)
+  invalidateAnalytics()
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   return { ok: true, message: `Manager ${manager.name} deleted.` }

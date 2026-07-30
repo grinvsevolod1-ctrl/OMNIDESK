@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useTransition } from 'react'
+import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import { useRouter } from 'next/navigation'
 import { Check, Layers, Loader2, Plus, Trash2, Users } from 'lucide-react'
@@ -12,7 +13,17 @@ import {
   getGroupAnalyticsAction,
   updateSourceGroupAction,
 } from '@/app/actions/groups'
-import { ActivityChart } from '@/components/analytics/activity-chart'
+// Rendered only once group analytics are fetched client-side, so defer the
+// heavy canvas chart out of the admin overview's initial bundle. ssr:false —
+// nothing to render before the client fetch resolves.
+const ActivityChart = dynamic(
+  () =>
+    import('@/components/analytics/activity-chart').then((m) => m.ActivityChart),
+  {
+    ssr: false,
+    loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
+  },
+)
 import { PageHeader, StatCard } from '@/components/page-parts'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -414,7 +425,7 @@ function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
                 </div>
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                   <span>{c.people} чел.</span>
-                  <span>{c.messages} сообщений</span>
+                  <span>{c.messages} со��бщений</span>
                 </div>
               </div>
             )

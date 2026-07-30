@@ -101,15 +101,24 @@ export async function finishJob(
 
 /* ----------------------------- Channels ----------------------------- */
 
+// Explicit column list mirroring ChannelRecord. Selecting these instead of `*`
+// keeps the query in lockstep with the type and stops a future column addition
+// from silently widening every channel read the worker performs.
+const CHANNEL_COLUMNS =
+  'id, manager_id, type, name, detail, status, session_status, phone, proxy_id, ingest_paused, config'
+
 export async function getChannel(id: string): Promise<ChannelRecord | null> {
-  return one<ChannelRecord>('SELECT * FROM channels WHERE id = $1', [id])
+  return one<ChannelRecord>(
+    `SELECT ${CHANNEL_COLUMNS} FROM channels WHERE id = $1`,
+    [id],
+  )
 }
 
 export async function listLiveChannels(): Promise<ChannelRecord[]> {
   // Only Telegram runs in this worker. WhatsApp (Cloud API), VK and MAX are all
   // served by the Next.js app, so we never open a session for them here.
   return query<ChannelRecord>(
-    `SELECT * FROM channels
+    `SELECT ${CHANNEL_COLUMNS} FROM channels
      WHERE type = 'telegram'
        AND session_status IN ('online', 'offline', 'starting')`,
   )
@@ -196,7 +205,8 @@ interface SecretRow {
 
 export async function getTgSession(channelId: string): Promise<string> {
   const row = await one<SecretRow>(
-    'SELECT * FROM channel_secrets WHERE channel_id = $1',
+    `SELECT channel_id, tg_session_enc, wa_state_enc, token_enc
+       FROM channel_secrets WHERE channel_id = $1`,
     [channelId],
   )
   if (!row?.tg_session_enc) return ''
@@ -233,6 +243,13 @@ interface ProxyRow {
   secret_enc: string | null
 }
 
+// Explicit column list mirroring ProxyRow. The `alias` param lets it serve both
+// the bare `FROM proxies` read and the joined `FROM proxies p` read below.
+function proxyCols(alias = ''): string {
+  const p = alias ? `${alias}.` : ''
+  return `${p}id, ${p}kind, ${p}host, ${p}port, ${p}username_enc, ${p}password_enc, ${p}secret_enc`
+}
+
 function rowToProxyConfig(row: ProxyRow): ProxyConfig {
   return {
     kind: row.kind,
@@ -248,7 +265,7 @@ export async function getProxyForChannel(
   channelId: string,
 ): Promise<ProxyConfig | null> {
   const row = await one<ProxyRow>(
-    `SELECT p.* FROM proxies p
+    `SELECT ${proxyCols('p')} FROM proxies p
      JOIN channels c ON c.proxy_id = p.id
      WHERE c.id = $1`,
     [channelId],
@@ -259,7 +276,10 @@ export async function getProxyForChannel(
 
 /** Load a proxy config directly by its id (used by the admin health check). */
 export async function getProxyById(id: string): Promise<ProxyConfig | null> {
-  const row = await one<ProxyRow>('SELECT * FROM proxies WHERE id = $1', [id])
+  const row = await one<ProxyRow>(
+    `SELECT ${proxyCols()} FROM proxies WHERE id = $1`,
+    [id],
+  )
   if (!row) return null
   return rowToProxyConfig(row)
 }
