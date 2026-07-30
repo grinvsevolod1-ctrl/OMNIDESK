@@ -14,7 +14,6 @@ import {
 } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
-import useSWR from 'swr'
 import {
   AlertCircle,
   ArrowLeft,
@@ -25,9 +24,6 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
-  Download,
-  ExternalLink,
-  FileText,
   Globe,
   History,
   Info,
@@ -43,8 +39,6 @@ import {
   Search,
   SendHorizonal,
   SlidersHorizontal,
-  Smile,
-  Sticker,
   Tag,
   Trash2,
   UserPlus,
@@ -117,11 +111,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
 import { AutopilotToggle } from '@/components/manager/autopilot-toggle'
 // Edit-history is opened on demand (message context menu), so defer its JS and
 // its SWR fetcher until an operator actually opens it — see the conditional
@@ -167,6 +156,11 @@ import type {
   QuickReply,
   StickerItem,
 } from '@/lib/types'
+import { EmojiPicker, StickerPicker } from '@/components/manager/inbox/pickers'
+import {
+  isMediaPlaceholder,
+  MessageMedia,
+} from '@/components/manager/inbox/message-media'
 
 /* -------------------------------------------------------------------------- */
 /*  Visual identity                                                           */
@@ -930,496 +924,7 @@ function StatusRadioItems({ Item }: { Item: typeof ContextMenuRadioItem }) {
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Media rendering + emoji / sticker pickers                                  */
-/* -------------------------------------------------------------------------- */
 
-/** Placeholder labels we synthesise at ingest for media without a caption. */
-const MEDIA_PLACEHOLDERS = new Set([
-  '[Фото]',
-  '[Видео]',
-  '[Видеосообщение]',
-  '[Голосовое сообщение]',
-  '[Аудио]',
-  '[Стикер]',
-  '[Файл]',
-  '[Документ]',
-])
-
-/** True when `body` is just a synthetic media placeholder (so we hide it). */
-function isMediaPlaceholder(body: string): boolean {
-  const b = body.trim()
-  if (MEDIA_PLACEHOLDERS.has(b)) return true
-  if (b.startsWith('[Файл:') || b.startsWith('[Стикер]')) return true
-  // Sticker placeholders may be "😀 [Стикер]".
-  if (b.endsWith('[Стикер]')) return true
-  return false
-}
-
-/**
- * Force-download a media file rather than navigating to it. The bytes are
- * same-origin (`/api/media/{id}`), so we fetch them as a blob and click a
- * temporary anchor with a `download` attribute — this works even when the
- * server streams the file `inline`, and lets us set a sensible filename.
- */
-async function downloadMedia(url: string, filename: string): Promise<void> {
-  try {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`status ${res.status}`)
-    const blob = await res.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = objectUrl
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    // Revoke a tick later so the download has a chance to start.
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
-  } catch {
-    // Fall back to opening in a new tab so the user can still save manually.
-    window.open(url, '_blank', 'noopener,noreferrer')
-    toast.error('Не удалось скачать файл — открыли в новой вкладке')
-  }
-}
-
-/** Suggest a filename for a downloaded media item from its type/name. */
-function mediaFilename(message: Message): string {
-  if (message.mediaName) return message.mediaName
-  const ext =
-    message.mediaType === 'image'
-      ? 'jpg'
-      : message.mediaType === 'video' || message.mediaType === 'video_note'
-        ? 'mp4'
-        : message.mediaType === 'voice' || message.mediaType === 'audio'
-          ? 'ogg'
-          : 'bin'
-  return `media-${message.id.slice(0, 8)}.${ext}`
-}
-
-/**
- * Fullscreen viewer for an image or video, with download + open-in-new-tab.
- * Rendered as a fixed overlay (only one is ever open per message bubble).
- */
-function MediaLightbox({
-  message,
-  onClose,
-}: {
-  message: Message
-  onClose: () => void
-}) {
-  const url = message.mediaUrl
-  const isVideo =
-    message.mediaType === 'video' || message.mediaType === 'video_note'
-
-  // Close on Escape for keyboard users.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  if (!url) return null
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Просмотр вложения"
-      className="fixed inset-0 z-[100] flex flex-col bg-black/90"
-      onClick={onClose}
-    >
-      <div className="flex shrink-0 items-center justify-end gap-2 p-3">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={(e) => {
-            e.stopPropagation()
-            void downloadMedia(url, mediaFilename(message))
-          }}
-        >
-          <Download className="size-4" />
-          Скачать
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={(e) => {
-            e.stopPropagation()
-            window.open(url, '_blank', 'noopener,noreferrer')
-          }}
-        >
-          <ExternalLink className="size-4" />
-          Открыть
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          aria-label="Закрыть"
-          onClick={onClose}
-        >
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div
-        className="flex min-h-0 flex-1 items-center justify-center p-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {isVideo ? (
-          <video
-            src={url}
-            controls
-            autoPlay
-            className="max-h-full max-w-full rounded-lg"
-          />
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={url || '/placeholder.svg'}
-            alt={message.body || 'Изображение'}
-            className="max-h-full max-w-full rounded-lg object-contain"
-          />
-        )}
-      </div>
-    </div>
-  )
-}
-
-/**
- * Render a message's media. Streams bytes from `/api/media/{id}` via the panel
- * proxy. On error (e.g. expired WhatsApp media) falls back to a small notice.
- * Images and videos are clickable to open a fullscreen viewer where they can be
- * saved.
- */
-function MessageMedia({ message }: { message: Message }) {
-  const [failed, setFailed] = useState(false)
-  const [lightbox, setLightbox] = useState(false)
-  const url = message.mediaUrl
-  const type = message.mediaType
-
-  if (!type) return null
-
-  // Stickers degrade to their emoji when there's no streamable URL (e.g. our
-  // own optimistic outgoing sticker) or when the download fails.
-  if (type === 'sticker' && (!url || failed)) {
-    return <span className="text-5xl leading-none">{message.body || '🎯'}</span>
-  }
-
-  if (!url) return null
-
-  if (failed) {
-    return (
-      <div className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-        <Info className="size-3.5 shrink-0" />
-        Медиа недоступно
-      </div>
-    )
-  }
-
-  if (type === 'sticker') {
-    return (
-      // Chat media comes from arbitrary external CDNs (Telegram/VK/etc.) with
-      // unknown dimensions; next/image can't optimize these, so a plain img is
-      // the correct choice here.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={url || '/placeholder.svg'}
-        alt={message.body || 'Стикер'}
-        className="size-32 object-contain"
-        loading="lazy"
-        onError={() => setFailed(true)}
-      />
-    )
-  }
-
-  if (type === 'image') {
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => setLightbox(true)}
-          className="group relative block cursor-zoom-in overflow-hidden rounded-lg"
-          aria-label="Открыть изображение"
-        >
-          {/* External chat media of unknown size — see note above; plain img. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={url || '/placeholder.svg'}
-            alt={message.body || 'Изображение'}
-            className="max-h-80 max-w-full rounded-lg object-contain"
-            loading="lazy"
-            onError={() => setFailed(true)}
-          />
-        </button>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
-        ) : null}
-      </>
-    )
-  }
-
-  if (type === 'video_note') {
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => setLightbox(true)}
-          className="block cursor-zoom-in rounded-full"
-          aria-label="Открыть видео"
-        >
-          <video
-            src={url}
-            className="pointer-events-none size-48 rounded-full object-cover"
-            onError={() => setFailed(true)}
-          />
-        </button>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
-        ) : null}
-      </>
-    )
-  }
-
-  if (type === 'video') {
-    return (
-      <div className="flex flex-col gap-1">
-        <video
-          src={url}
-          controls
-          className="max-h-80 max-w-full rounded-lg"
-          onError={() => setFailed(true)}
-        />
-        <div className="flex items-center gap-3 text-xs">
-          <button
-            type="button"
-            onClick={() => setLightbox(true)}
-            className="flex items-center gap-1 opacity-70 hover:opacity-100"
-          >
-            <ExternalLink className="size-3.5" />
-            Открыть
-          </button>
-          <button
-            type="button"
-            onClick={() => void downloadMedia(url, mediaFilename(message))}
-            className="flex items-center gap-1 opacity-70 hover:opacity-100"
-          >
-            <Download className="size-3.5" />
-            Скачать
-          </button>
-        </div>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
-        ) : null}
-      </div>
-    )
-  }
-
-  if (type === 'voice' || type === 'audio') {
-    return (
-      <div className="flex flex-col gap-1">
-        <audio
-          src={url}
-          controls
-          className="w-56 max-w-full"
-          onError={() => setFailed(true)}
-        />
-        <button
-          type="button"
-          onClick={() => void downloadMedia(url, mediaFilename(message))}
-          className="flex items-center gap-1 text-xs opacity-70 hover:opacity-100"
-        >
-          <Download className="size-3.5" />
-          Скачать
-        </button>
-      </div>
-    )
-  }
-
-  // document
-  return (
-    <button
-      type="button"
-      onClick={() => void downloadMedia(url, mediaFilename(message))}
-      className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium hover:bg-muted"
-    >
-      <FileText className="size-4 shrink-0" />
-      <span className="truncate">{message.mediaName || 'Файл'}</span>
-      <Download className="size-3.5 shrink-0 opacity-70" />
-    </button>
-  )
-}
-
-/** Curated emoji set grouped by category. Plain text — no extra dependency. */
-const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
-  {
-    label: 'Смайлы',
-    emojis: [
-      '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
-      '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😋', '😎', '🤩',
-      '🥳', '😏', '😢', '😭', '😤', '😠', '😡', '🤔', '🤗', '🤭',
-      '😴', '😬', '🙄', '😱', '😳', '🤯', '😅', '😢',
-    ],
-  },
-  {
-    label: 'Жесты',
-    emojis: [
-      '👍', '👎', '👌', '✌️', '🤞', '🤝', '👏', '🙏', '💪', '🫶',
-      '👋', '🤙', '✋', '🖐️', '👊', '🤛', '🤜', '☝️', '👆', '👉',
-    ],
-  },
-  {
-    label: 'Сердца',
-    emojis: [
-      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💔', '❣️',
-      '💕', '💞', '💓', '💗', '💖', '💘', '💝', '✨', '🔥', '⭐',
-    ],
-  },
-  {
-    label: 'Объекты',
-    emojis: [
-      '🎉', '🎊', '🎁', '🏆', '✅', '❌', '⚡', '💡', '📌', '📎',
-      '💰', '📞', '📧', '📅', '⏰', '🚀', '👀', '💬', '❓', '❗',
-    ],
-  },
-]
-
-/** Emoji picker popover. Inserts the chosen emoji into the composer draft. */
-function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
-  return (
-    <Popover>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0 rounded-full text-muted-foreground"
-            aria-label="Эмодзи"
-          >
-            <Smile className="size-5" />
-          </Button>
-        }
-      />
-      <PopoverContent align="start" className="w-72 p-2">
-        <div className="scrollbar-thin max-h-64 overflow-y-auto">
-          {EMOJI_CATEGORIES.map((cat) => (
-            <div key={cat.label} className="mb-2 last:mb-0">
-              <p className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                {cat.label}
-              </p>
-              <div className="grid grid-cols-8 gap-0.5">
-                {cat.emojis.map((e, i) => (
-                  <button
-                    key={`${e}-${i}`}
-                    type="button"
-                    onClick={() => onPick(e)}
-                    className="flex size-8 items-center justify-center rounded-md text-xl leading-none hover:bg-muted"
-                    aria-label={`Вставить ${e}`}
-                  >
-                    {e}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-/**
- * Sticker picker (Telegram only). Lazily fetches the account's sticker palette
- * from `/api/stickers` the first time it opens, renders thumbnails, and sends
- * the chosen sticker on click.
- */
-function StickerPicker({
-  channelId,
-  onSend,
-}: {
-  channelId: string
-  onSend: (sticker: StickerItem) => void
-}) {
-  const [open, setOpen] = useState(false)
-
-  // Lazy-load the channel's sticker set only once the picker is opened, and let
-  // SWR cache/dedupe it so reopening (or switching back to a channel) is instant
-  // and never re-fetches. `key = null` keeps the request idle until `open`.
-  const { data: stickers, isLoading: loading } = useSWR(
-    open ? `/api/stickers?channelId=${encodeURIComponent(channelId)}` : null,
-    (url: string) =>
-      fetch(url)
-        .then((r) => (r.ok ? r.json() : { stickers: [] }))
-        .then((data: { stickers: StickerItem[] }) => data.stickers ?? [])
-        .catch(() => [] as StickerItem[]),
-    { revalidateOnFocus: false },
-  )
-
-  function thumbUrl(s: StickerItem): string {
-    const qs = new URLSearchParams({
-      channelId,
-      id: s.id,
-      accessHash: s.accessHash,
-      fileReference: s.fileReference,
-    })
-    return `/api/stickers/thumb?${qs.toString()}`
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0 rounded-full text-muted-foreground"
-            aria-label="Стикеры"
-          >
-            <Sticker className="size-5" />
-          </Button>
-        }
-      />
-      <PopoverContent align="start" className="w-72 p-2">
-        {loading ? (
-          <div className="flex h-32 items-center justify-center">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : !stickers || stickers.length === 0 ? (
-          <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-            Нет доступных стикеров. Добавьте стикеры в избранное в Telegram, и
-            они появятся здесь.
-          </p>
-        ) : (
-          <div className="scrollbar-thin grid max-h-64 grid-cols-4 gap-1 overflow-y-auto">
-            {stickers.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => {
-                  onSend(s)
-                  setOpen(false)
-                }}
-                className="flex aspect-square items-center justify-center rounded-md p-1 hover:bg-muted"
-                aria-label={s.emoji ? `Стикер ${s.emoji}` : 'Стикер'}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={thumbUrl(s) || '/placeholder.svg'}
-                  alt={s.emoji || 'Стикер'}
-                  className="size-full object-contain"
-                  loading="lazy"
-                />
-              </button>
-            ))}
-          </div>
-        )}
-      </PopoverContent>
-    </Popover>
-  )
-}
 
 /* -------------------------------------------------------------------------- */
 /*  Main component                                                            */
@@ -2973,7 +2478,7 @@ export function InboxView({
                   }
                 />
                 <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel>Сортировка</DropdownMenuLabel>
+                  <DropdownMenuLabel>Со��тировка</DropdownMenuLabel>
                   <DropdownMenuRadioGroup
                     value={sortMode}
                     onValueChange={(v) =>
