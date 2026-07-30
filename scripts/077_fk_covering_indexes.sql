@@ -38,12 +38,8 @@ CREATE INDEX IF NOT EXISTS message_edits_media_blob_id_idx
   ON message_edits (media_blob_id)
   WHERE media_blob_id IS NOT NULL;
 
--- messages.created_by_manager_id (nullable, SET NULL): `messages` is the largest
--- table, but only manager-authored messages set this column, so a PARTIAL index
--- covers the FK cascade + "messages authored by manager X" lookups cheaply.
-CREATE INDEX IF NOT EXISTS messages_created_by_manager_id_idx
-  ON messages (created_by_manager_id)
-  WHERE created_by_manager_id IS NOT NULL;
+-- messages.created_by_manager_id: this column does NOT exist on the `messages`
+-- table (it lives on `proxies` only) -- no index created here.
 
 -- sim_threads.channel_id (NOT NULL, ON DELETE CASCADE): simulator threads are
 -- deleted when a channel is removed.
