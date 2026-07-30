@@ -191,7 +191,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     '',
     'ЖЁСТКИЕ ПРАВИЛА ЛИЧНОСТИ (нарушать нельзя):',
     '- Ты ЧЕЛОВЕК. Ты НИКОГДА и ни при каких условиях не признаёшься, что ты бот, ИИ, нейросеть, ассистент или программа.',
-    '- Если клиент прямо спрашивает «ты бот?/это робот?/ты человек?/ии?» — спокойно и уверенно отвечай, что ты живой сотрудник (например: «Живой-живой, менеджер компании 🙂 Чем помочь?»), и сразу продолжай вести диалог по делу. Не оправдывайся, не уходи в объяснения.',
+    '- Если клиент прямо спрашивает «ты бот?/это робот?/ты человек?/ии?» — спокойн�� и уверенно отвечай, что ты живой сотрудник (например: «Живой-живой, менеджер компании 🙂 Чем помочь?»), и сразу продолжай вести диалог по делу. Не оправдывайся, не уходи в объяснения.',
     '- Не пиши как робот: без списков-инструкций, без «как я могу помочь вам сегодня», без официоза. Пиши так, как переписываются живые люди.',
     '',
     'КАК ПИСАТЬ (чтобы тебя невозможно было принять за ИИ):',
@@ -277,7 +277,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
   if (input.lessons.length > 0) {
     parts.push(
       '',
-      'ПРИМЕРЫ ХОРОШИХ ОТВЕТОВ (как отвечать в похожих ситуациях):',
+      'ПРИМЕРЫ ХОРОШИХ ОТВЕТОВ (как отвечать в ��охожих ситуациях):',
       ...input.lessons.slice(0, 8).map((l) => {
         const situation = l.situation.trim() || '(общая ситуация)'
         const note = l.note?.trim() ? ` [важно: ${l.note.trim()}]` : ''
@@ -594,6 +594,36 @@ export async function generateManagerReply(
 }
 
 /**
+ * Cheap, dependency-free pre-filter for the readiness assessment. Returns true
+ * only when the CLIENT's recent messages hint they might be agreeing / handing
+ * over contacts — the only situation where the (paid) AI readiness check is
+ * worth running. Deliberately a bit generous so we never miss a real
+ * conversion; assessLeadReady then makes the final confident call.
+ *
+ * Shared by BOTH runtimes (Next.js live-chat + worker messenger) so readiness
+ * gating and cost behaviour are identical everywhere. NOTE: JS's \b word
+ * boundary does not work with Cyrillic, so word boundaries are emulated with
+ * Unicode lookarounds under the /u flag.
+ */
+export function clientShowsReadinessSignal(history: BrainMessage[]): boolean {
+  const clientLines = history
+    .filter((m) => m.role === 'client')
+    .slice(-3)
+    .map((m) => m.body.toLowerCase())
+  if (clientLines.length === 0) return false
+  const text = clientLines.join(' \n ')
+
+  // Agreement / commitment phrasing.
+  const AGREE =
+    /(?<![\p{L}\p{N}])(да|давай|согласен|согласна|готов|готова|хорошо|ок|окей|договорились|подходит|устраивает|начн[её]м|поехали|интересно|где начать|что дальше|куда писать|скинь|скиньте|скину|отправлю|записывайте)(?![\p{L}\p{N}])/iu
+  // Sharing / offering to share contact or personal data.
+  const CONTACT =
+    /(\+?\d[\d\s\-()]{8,}|@[a-z0-9_]{3,}|телефон|номер|вотсап|whatsapp|вайбер|телеграм|телег[еу]|почт[аеу]|карт[аеуы]|паспорт|реквизит|мои данные|мой номер)/i
+
+  return AGREE.test(text) || CONTACT.test(text)
+}
+
+/**
  * Decide whether the client is READY — i.e. has agreed to hand over their
  * contact/personal data and start working with us (the moment a lead becomes
  * «Ликвид» and should be handed to a human). Returns true ONLY on a confident
@@ -665,8 +695,15 @@ export async function assessLeadReady(
     // models may wrap the verdict ("Да, готов"). We scan for a standalone
     // да/yes affirmative while making sure it isn't negated (нет/no) first.
     const tokens = raw.replace(/[^\p{L}\s]/gu, ' ').split(/\s+/).filter(Boolean)
-    const negative = tokens.some((t) => t === 'нет' || t === 'no' || t === 'not')
-    const affirmative = tokens.some((t) => t === 'да' || t === 'yes' || t === 'готов')
+    // Negation must include the standalone particle «не» — otherwise a verbose
+    // "не готов" / "не согласен" is read as affirmative («готов») and the lead
+    // is falsely promoted. Any negation token vetoes readiness (conservative).
+    const negative = tokens.some(
+      (t) => t === 'нет' || t === 'не' || t === 'no' || t === 'not',
+    )
+    const affirmative = tokens.some(
+      (t) => t === 'да' || t === 'yes' || t === 'готов' || t === 'готова',
+    )
     const ready = affirmative && !negative
     log?.({
       level: 'debug',

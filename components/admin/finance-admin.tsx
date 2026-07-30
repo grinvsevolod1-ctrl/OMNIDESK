@@ -746,7 +746,7 @@ function GlobalDashboard({
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <Wallet className="size-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Балансы подключённых кабинето��</h3>
+          <h3 className="text-sm font-semibold">Балансы подключённых кабинетов</h3>
           <span className="text-xs text-muted-foreground">· в USD</span>
         </div>
         {cabinets.length === 0 ? (

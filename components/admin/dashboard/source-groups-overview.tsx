@@ -425,7 +425,7 @@ function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
                 </div>
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                   <span>{c.people} чел.</span>
-                  <span>{c.messages} со��бщений</span>
+                  <span>{c.messages} сообщений</span>
                 </div>
               </div>
             )

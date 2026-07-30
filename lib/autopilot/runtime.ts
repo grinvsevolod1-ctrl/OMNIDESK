@@ -16,7 +16,7 @@ import {
 import {
   assessLeadReady,
   type BrainLog,
-  type BrainMessage,
+  clientShowsReadinessSignal,
   detectEscalation,
   extractClientMemory,
   generateManagerReply,
@@ -222,7 +222,7 @@ async function runLivechatAiLead(input: {
       level: 'debug',
       source: 'ai-lead',
       event: 'inbound',
-      message: `Новое сообщение клиента: "${input.text.slice(0, 200)}" — готовлю ответ.`,
+      message: `Новое сообщение клиента: "${input.text.slice(0, 200)}" — готовлю отве��.`,
       conversationId: input.conversationId,
       channelType: 'livechat',
     })
@@ -396,31 +396,6 @@ async function runLivechatAiLead(input: {
   } finally {
     aiLeadInFlight.delete(input.conversationId)
   }
-}
-
-/**
- * Cheap, dependency-free pre-filter for the readiness assessment. Returns true
- * only when the CLIENT's recent messages hint they might be agreeing / handing
- * over contacts — the only situations where the (paid) AI readiness check is
- * worth running. Deliberately a bit generous so we never miss a real
- * conversion; the AI call then makes the final confident call.
- */
-function clientShowsReadinessSignal(history: BrainMessage[]): boolean {
-  const clientLines = history
-    .filter((m) => m.role === 'client')
-    .slice(-3)
-    .map((m) => m.body.toLowerCase())
-  if (clientLines.length === 0) return false
-  const text = clientLines.join(' \n ')
-
-  // Agreement / commitment phrasing.
-  const AGREE =
-    /\b(да|давай|согласен|согласна|готов|готова|хорошо|ок|окей|договорились|подходит|устраивает|начн[её]м|поехали|интересно|где начать|что дальше|куда писать|скинь|скиньте|скину|отправлю|записывайте)\b/i
-  // Sharing / offering to share contact or personal data.
-  const CONTACT =
-    /(\+?\d[\d\s\-()]{8,}|@[a-z0-9_]{3,}|телефон|номер|вотсап|whatsapp|вайбер|телеграм|телег[еу]|почт[аеу]|карт[аеуы]|паспорт|реквизит|мои данные|мой ном)/i
-
-  return AGREE.test(text) || CONTACT.test(text)
 }
 
 /** Send an AI-authored reply, keeping the AI-lead flag on (byAi). */

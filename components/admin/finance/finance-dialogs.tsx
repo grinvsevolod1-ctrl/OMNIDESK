@@ -344,7 +344,7 @@ export function AdAccountDialog({
                       placeholder="agency-client-login"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Для агентских аккаунтов — логин управляемого к��иента.
+                      Для агентских аккаунтов — логин управляемого клиента.
                     </p>
                   </div>
                   <div className="space-y-2">

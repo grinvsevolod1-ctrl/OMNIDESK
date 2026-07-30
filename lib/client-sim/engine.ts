@@ -37,7 +37,6 @@ import { logAi } from '@/lib/data/ai-log'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import { scoreManagerDialog } from '@/lib/ai/manager-brain'
 import {
-  addAutoLesson,
   getAiAssistSettings,
   saveManagerScorecard,
 } from '@/lib/data/ai-assist'
@@ -250,7 +249,7 @@ async function tick(): Promise<void> {
       level: 'error',
       source: 'sim',
       event: 'tick.error',
-      message: `Ошиб��а цикла симулятора: ${msg}`,
+      message: `Ошибка цикла симулятора: ${msg}`,
     })
   } finally {
     h.ticking = false
@@ -523,22 +522,15 @@ async function scoreFinishedDialog(
       turns: history.length,
     })
 
-    // Close the loop: turn the top weakness into a reusable brain lesson.
-    if (card.lesson) {
-      await addAutoLesson({
-        situation: card.lesson.situation,
-        corrected: card.lesson.corrected,
-        note: `Авто-урок из тренажёра (оценка ${card.score}/100).`,
-      })
-    }
-
+    // NOTE: the simulator is intentionally NOT allowed to write lessons back
+    // into the real manager's brain. Self-play scoring is stored only as a
+    // simulator-side scorecard (analytics). The two AIs — the production
+    // manager and the training simulator — stay fully decoupled.
     void logAi({
       level: 'info',
       source: 'sim',
       event: 'score.saved',
-      message: `Оценка работы менеджера по диалогу «${personaName}»: ${card.score}/100${
-        card.lesson ? ' — добавлен авто-урок для ИИ.' : '.'
-      }`,
+      message: `Оценка работы менеджера по диалогу «${personaName}»: ${card.score}/100.`,
       conversationId,
       channelType,
     })

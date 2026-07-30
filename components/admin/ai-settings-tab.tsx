@@ -455,7 +455,7 @@ function KnowledgeBaseCard() {
           onChange={(e) => setTitle(e.target.value)}
         />
         <Textarea
-          placeholder="Факт, который ИИ должен знать точно. На��р.: «Доставка по РФ — 350 ₽, бесплатно от 5000 ₽, срок 2–5 дней»."
+          placeholder="Факт, который ИИ должен знать точно. Напр.: «Доставка по РФ — 350 ₽, бесплатно от 5000 ₽, срок 2–5 дней»."
           value={content}
           onChange={(e) => setContent(e.target.value)}
           rows={3}

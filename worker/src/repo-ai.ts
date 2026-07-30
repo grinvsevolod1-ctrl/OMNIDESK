@@ -177,9 +177,13 @@ export async function recordAiGenerationMetric(m: {
 export async function listAiLessons(
   limit = 12,
 ): Promise<AiAssistLessonLite[]> {
+  // Exclude source='auto' lessons: those are produced by the training
+  // simulator's self-play scoring and must never train the real manager.
+  // Kept in sync with lib/data/ai-assist.ts#listBrainLessons.
   return query<AiAssistLessonLite>(
     `SELECT situation, corrected, note
        FROM ai_assist_lessons
+      WHERE source IS DISTINCT FROM 'auto'
       ORDER BY created_at DESC
       LIMIT $1`,
     [Math.max(1, Math.min(50, limit))],

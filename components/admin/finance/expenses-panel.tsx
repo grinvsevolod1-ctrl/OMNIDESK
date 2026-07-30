@@ -221,7 +221,7 @@ export function ExpensesPanel({
         <EmptyState
           icon={FolderPlus}
           title="Нет вкладок расходов"
-          description="Создайте вкладку (например, «Материал��» или «Хостинг»), чтобы добавлять расходы."
+          description="Создайте вкладку (например, «Материалы» или «Хостинг»), чтобы добавлять расходы."
         />
       ) : (
         <>
@@ -439,7 +439,7 @@ function AddSectionInline({
         className="gap-1.5"
         onClick={() => setOpen(true)}
       >
-        <FolderPlus className="size-4" /> Вклад��а
+        <FolderPlus className="size-4" /> Вкладка
       </Button>
     )
   }

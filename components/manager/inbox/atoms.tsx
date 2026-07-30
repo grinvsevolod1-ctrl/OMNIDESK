@@ -127,7 +127,7 @@ export function PresenceBadge({
       className={cn('inline-flex items-center gap-1.5 text-[11px] font-medium', v.text, className)}
       role="status"
       aria-live="polite"
-      title="Активн��сть посетителя на сайте в ��еальном времени"
+      title="Активность посетителя на сайте в реальном времени"
     >
       <PresenceDot state={state} />
       {v.label}

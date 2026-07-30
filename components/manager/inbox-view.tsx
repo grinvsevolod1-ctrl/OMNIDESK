@@ -14,6 +14,7 @@ import dynamic from 'next/dynamic'
 import {
   AlertCircle,
   ArrowLeft,
+  Ban,
   Bell,
   BellOff,
   Check,
@@ -840,7 +841,7 @@ export function InboxView({
   }, [activeId, thread.length, activeTypingDraft])
 
   // NOTE: The outbound "agent is typing" indicator (a server action fired on
-  // every keystroke) was removed for performance ��� a network round-trip per
+  // every keystroke) was removed for performance - a network round-trip per
   // character made the composer feel laggy. Typing is now purely local.
 
   // Live "visitor is typing" state for the open thread (auto-expired by sweep).
@@ -865,7 +866,7 @@ export function InboxView({
 
   // Opening a thread the AI handed off («Ликвид») acknowledges it. The banner
   // and list highlight already exclude the active thread, so it clears visually
-  // the instant it's opened �� here we only clear the SERVER flag so it doesn't
+  // the instant it's opened - here we only clear the SERVER flag so it doesn't
   // return on refresh. A ref guard keeps this to one call per opened handoff.
   useEffect(() => {
     if (!activeId) return
@@ -1129,7 +1130,7 @@ export function InboxView({
                   }
                 />
                 <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel>Со��тировка</DropdownMenuLabel>
+                  <DropdownMenuLabel>Сортировка</DropdownMenuLabel>
                   <DropdownMenuRadioGroup
                     value={sortMode}
                     onValueChange={(v) =>
@@ -1459,7 +1460,7 @@ export function InboxView({
                       ) : awaitingReply.get(c.id)?.waiting ? (
                         <span className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
                           <Reply className="size-3" />
-                          ждёт ответ��
+                          ждёт ответа
                         </span>
                       ) : null}
                     </div>
@@ -1682,6 +1683,20 @@ export function InboxView({
               </div>
             </div>
 
+            {/* Blocked-by-user banner. Shown whenever the contact has blocked
+                our manager — set from the god console (contact_blocked) and/or
+                inferred from failed deliveries. Presented as an ordinary
+                messenger block so the manager never sees anything unusual. */}
+            {active.contactBlocked ? (
+              <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+                <Ban className="size-3.5 shrink-0" />
+                <span>
+                  Пользователь заблокировал вас. Сообщения больше не
+                  доставляются.
+                </span>
+              </div>
+            ) : null}
+
             {/* Messages */}
             <div
               ref={messagesScrollRef}
@@ -1867,7 +1882,7 @@ export function InboxView({
                                       )}
                                     >
                                       <History className="size-2.5" />
-                                      из��енено
+                                      изменено
                                     </button>
                                   ) : null}
                                   {timeShort(m.createdAt)}
@@ -1900,11 +1915,16 @@ export function InboxView({
                                 bubble
                               )}
                               {isOut && m.status === 'failed' ? (
+                                // Any delivery failure is surfaced uniformly as
+                                // "the user blocked you". This deliberately hides
+                                // the raw provider/technical error (and, for
+                                // simulated contacts, any hint that the thread is
+                                // a simulation) so the manager only ever sees a
+                                // normal, human-looking reason.
                                 <p className="flex items-start gap-1 text-[11px] leading-snug text-destructive [overflow-wrap:anywhere]">
                                   <AlertCircle className="mt-0.5 size-3 shrink-0" />
                                   <span>
-                                    Не отправлено
-                                    {m.errorReason ? `: ${m.errorReason}` : '.'}
+                                    Не доставлено: пользователь заблокировал вас
                                   </span>
                                 </p>
                               ) : null}

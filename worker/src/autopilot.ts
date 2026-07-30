@@ -36,6 +36,7 @@ import { isOffHoursFor, type WorkingHoursLike } from '../../lib/offhours.js'
 import {
   assessLeadReady,
   type BrainLog,
+  clientShowsReadinessSignal,
   detectEscalation,
   extractClientMemory,
   generateManagerReply,
@@ -461,7 +462,15 @@ async function fireAiLead(params: {
     // to a human (pauses the AI + flags the panel banner). The «Ликвид» call is
     // a manager decision, never automatic. Best-effort — never let a promotion
     // failure affect the reply we already delivered.
+    //
+    // Cost guard (identical to the live-chat runtime): the readiness check is a
+    // second gateway call on every turn, so skip it until the client's own
+    // recent messages actually show a readiness signal. Keeps both runtimes in
+    // lockstep on behaviour and spend.
     try {
+      if (!clientShowsReadinessSignal(history)) {
+        return true
+      }
       const ready = await assessLeadReady(
         [...history, { role: 'manager', body: reply }],
         log,

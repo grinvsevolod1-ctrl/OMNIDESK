@@ -328,47 +328,11 @@ export async function getManagerScoreSummary(
 }
 
 /**
- * Add an auto-derived lesson from the self-play scoring loop. Deduplicates on
- * the situation text so the same weakness doesn't pile up identical lessons.
- * Best-effort. Tagged source='auto' so the panel can distinguish it.
- */
-export async function addAutoLesson(input: {
-  situation: string
-  corrected: string
-  note: string
-}): Promise<void> {
-  try {
-    const existing = await query<{ id: string }>(
-      `SELECT id FROM ai_assist_lessons
-        WHERE source = 'auto' AND lower(situation) = lower($1)
-        LIMIT 1`,
-      [input.situation],
-    )
-    if (existing.length > 0) {
-      await query(
-        `UPDATE ai_assist_lessons
-            SET corrected = $2, note = $3, created_at = now()
-          WHERE id = $1`,
-        [existing[0].id, input.corrected, input.note],
-      )
-      return
-    }
-    await query(
-      `INSERT INTO ai_assist_lessons (situation, draft, corrected, note, source)
-       VALUES ($1, '', $2, $3, 'auto')`,
-      [input.situation, input.corrected, input.note],
-    )
-  } catch (err) {
-    console.error('addAutoLesson failed:', err)
-  }
-}
-
-/**
  * Most recent lessons for the ADMIN management UI (newest first). Auto-authored
- * lessons (source='auto') are deliberately excluded here: they are produced by
- * an internal, non-manager training path and must never surface in the normal
- * admin panel. They still power replies via `listBrainLessons`, which is
- * unfiltered — so learning happens invisibly, without exposing its origin.
+ * lessons (source='auto') are excluded here — and, critically, they are ALSO
+ * excluded from `listBrainLessons`, so the real manager's brain is trained only
+ * by human-authored lessons. The simulator can never write into the manager's
+ * knowledge; the two AIs are fully decoupled.
  */
 export async function listLessons(limit = 50): Promise<AiAssistLesson[]> {
   const rows = await query<LessonRow>(
@@ -850,11 +814,17 @@ export async function acknowledgeAiHandoff(
   return rows.length > 0
 }
 
-/** Lessons in the shape the pure brain expects (for prompt injection). */
+/**
+ * Lessons in the shape the pure brain expects (for prompt injection). Only
+ * human-authored lessons are used — rows tagged source='auto' (produced by the
+ * simulator's self-play scoring) are excluded so the simulator can never train
+ * the production manager.
+ */
 export async function listBrainLessons(limit = 12): Promise<BrainLesson[]> {
   const rows = await query<LessonRow>(
     `SELECT situation, corrected, note
        FROM ai_assist_lessons
+      WHERE source IS DISTINCT FROM 'auto'
       ORDER BY created_at DESC
       LIMIT $1`,
     [Math.max(1, Math.min(50, limit))],
