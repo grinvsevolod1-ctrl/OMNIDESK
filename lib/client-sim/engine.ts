@@ -104,12 +104,29 @@ function handle(): EngineHandle {
   return g.__clientSimEngine
 }
 
+/**
+ * Hard kill-switch, independent of the DB `enabled` flag. Set
+ * `CLIENT_SIM_DISABLED=1` (or true/yes) in the environment to guarantee the
+ * simulator can NEVER spawn or drive dialogues on this host — the engine
+ * refuses to start, any running loop stops itself on the next tick, and boot
+ * resume is skipped. This is the definitive "off" when you want to be certain
+ * the simulator is not touching production, no matter what the stored setting
+ * says.
+ */
+export function simHardDisabled(): boolean {
+  return /^(1|true|yes)$/i.test(process.env.CLIENT_SIM_DISABLED ?? '')
+}
+
 export function engineRunning(): boolean {
   return handle().running
 }
 
 /** Start the background loop (idempotent). */
 export function startEngine(): void {
+  if (simHardDisabled()) {
+    console.log('[client-sim] start refused: CLIENT_SIM_DISABLED is set')
+    return
+  }
   const h = handle()
   if (h.timer) return
   h.running = true
@@ -156,6 +173,18 @@ async function tick(): Promise<void> {
   try {
     if (!process.env.DATABASE_URL) return
 
+    // Hard kill-switch wins over everything: stop the loop dead so a lingering
+    // interval can never keep spawning after the env flag is set.
+    if (simHardDisabled()) {
+      noteSim(
+        'hard_disabled',
+        'warn',
+        'Симулятор принудительно отключён переменной CLIENT_SIM_DISABLED — цикл остановлен.',
+      )
+      stopEngine()
+      return
+    }
+
     // Single-instance guard: only the process holding the advisory lock does
     // real work. Standby processes keep ticking and will take over if the
     // owner dies (PostgreSQL frees the lock on session end).
@@ -167,8 +196,12 @@ async function tick(): Promise<void> {
       noteSim(
         'disabled',
         'info',
-        'Симулятор выключен в настройках — новые диалоги не создаются.',
+        'Симулятор выключен в настройках — цикл остановлен, новые диалоги не создаются.',
       )
+      // Stop the interval entirely rather than just skipping: "off" should mean
+      // the loop is truly halted. Re-enabling via the panel calls startEngine()
+      // again, and a restart resumes only if the stored flag is still enabled.
+      stopEngine()
       return
     }
 
@@ -217,7 +250,7 @@ async function tick(): Promise<void> {
       level: 'error',
       source: 'sim',
       event: 'tick.error',
-      message: `Ошибка цикла симулятора: ${msg}`,
+      message: `Ошиб��а цикла симулятора: ${msg}`,
     })
   } finally {
     h.ticking = false

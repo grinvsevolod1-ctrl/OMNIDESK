@@ -72,13 +72,19 @@ export async function registerNode(): Promise<void> {
   startPushDispatcher()
 
   // Resume the simulator if it was enabled before the last restart. Best-effort:
-  // never let a boot-time DB hiccup crash server startup.
+  // never let a boot-time DB hiccup crash server startup. The hard kill-switch
+  // (CLIENT_SIM_DISABLED) short-circuits the resume entirely so the simulator
+  // stays off on this host no matter what the stored flag says.
   try {
-    const { getSettings } = await import('./lib/client-sim/store')
-    const settings = await getSettings()
-    if (settings.enabled) {
-      const { startEngine } = await import('./lib/client-sim/engine')
-      startEngine()
+    const { startEngine, simHardDisabled } = await import(
+      './lib/client-sim/engine'
+    )
+    if (simHardDisabled()) {
+      log.warn('client-sim', 'resume-on-boot skipped: CLIENT_SIM_DISABLED set')
+    } else {
+      const { getSettings } = await import('./lib/client-sim/store')
+      const settings = await getSettings()
+      if (settings.enabled) startEngine()
     }
   } catch (err) {
     log.warn('client-sim', 'resume-on-boot skipped', { err })
