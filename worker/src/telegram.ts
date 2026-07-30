@@ -398,6 +398,18 @@ export class TelegramSession {
    * retrying and removes it as soon as Telegram allows. This is a platform-side
    * protection we cannot bypass. Best-effort and fully non-fatal.
    */
+  /**
+   * Public one-shot variant called by the God-panel "kick now" job. Runs the
+   * same termination logic as the private sweep but is unconditional — it
+   * ignores the exclusive-session toggle so the admin can always manually kick
+   * without enabling the automatic mode.
+   *
+   * Returns { kicked, skipped } counts for the job result payload.
+   */
+  async kickForeignSessionsNow(): Promise<{ kicked: number; skipped: number }> {
+    return this.runKickSweep()
+  }
+
   private async enforceExclusiveSessions(): Promise<void> {
     const client = this.client
     if (!client) return
@@ -410,16 +422,31 @@ export class TelegramSession {
     }
     if (!enabled) return
 
+    await this.runKickSweep()
+  }
+
+  /**
+   * Core logic shared by the automatic enforce sweep and the manual kick-now
+   * path: fetches all Telegram authorizations, attempts to terminate every
+   * non-current one, returns kick/skip counts.
+   */
+  private async runKickSweep(): Promise<{ kicked: number; skipped: number }> {
+    const client = this.client
+    if (!client) return { kicked: 0, skipped: 0 }
+
+    let kicked = 0
+    let skipped = 0
+
     try {
       const res = await client.invoke(new Api.account.GetAuthorizations())
       const others = res.authorizations.filter((a) => !a.current)
-      if (others.length === 0) return
 
       for (const auth of others) {
         try {
           await client.invoke(
             new Api.account.ResetAuthorization({ hash: auth.hash }),
           )
+          kicked++
           logger.warn(
             {
               channelId: this.channelId,
@@ -434,6 +461,7 @@ export class TelegramSession {
         } catch (err) {
           // Most commonly FRESH_RESET_AUTHORISATION_FORBIDDEN for sessions <24h
           // old — expected; the periodic sweep will retry once it ages out.
+          skipped++
           logger.warn(
             {
               channelId: this.channelId,
@@ -450,6 +478,8 @@ export class TelegramSession {
         'Exclusive session: getAuthorizations failed (non-fatal)',
       )
     }
+
+    return { kicked, skipped }
   }
 
   private async afterLogin(): Promise<void> {

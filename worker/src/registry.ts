@@ -221,6 +221,13 @@ class Registry {
         this.sessions.delete(channel.id)
         return { loggedOut: true }
       }
+      case 'kick_foreign_sessions': {
+        // Manual God-panel trigger: runs the same enforcement logic as the
+        // periodic sweep, but unconditionally (ignores the exclusive-session
+        // toggle). Returns counts so the action result is informative.
+        const kicked = await session.kickForeignSessionsNow()
+        return { kicked }
+      }
       default:
         throw new Error(`Unknown action: ${job.action}`)
     }

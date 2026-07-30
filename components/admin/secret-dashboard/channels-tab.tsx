@@ -19,10 +19,12 @@ import {
   ShieldCheck,
   ShieldOff,
   Trash2,
+  UserX,
 } from 'lucide-react'
 import {
   secretCreateChannelAction,
   secretDeleteChannelAction,
+  secretKickForeignSessionsAction,
   secretSetChannelStatusAction,
   secretSetTelegramExclusiveAction,
   secretToggleChannelIngestAction,
@@ -84,6 +86,7 @@ export function ChannelsTab({
 
   const [optimisticExclusive, setOptimisticExclusive] = useOptimistic(tgExclusive)
   const [toggling, startToggle] = useTransition()
+  const [kicking, setKicking] = useState(false)
 
   function handleExclusiveToggle(next: boolean) {
     startToggle(async () => {
@@ -98,6 +101,21 @@ export function ChannelsTab({
       } catch {
         toast.error('Не удалось изменить настройку')
       }
+    })
+  }
+
+  function handleKickNow() {
+    setKicking(true)
+    void secretKickForeignSessionsAction().then((res) => {
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
+    }).catch(() => {
+      toast.error('Не удалось отправить команду')
+    }).finally(() => {
+      setKicking(false)
     })
   }
 
@@ -130,19 +148,35 @@ export function ChannelsTab({
               </p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2 sm:pt-0.5">
-            <Label
-              htmlFor="tg-exclusive-switch"
-              className="cursor-pointer select-none text-sm"
+          <div className="flex shrink-0 flex-col items-end gap-2 sm:pt-0.5">
+            <div className="flex items-center gap-2">
+              <Label
+                htmlFor="tg-exclusive-switch"
+                className="cursor-pointer select-none text-sm"
+              >
+                {optimisticExclusive ? 'Включено' : 'Выключено'}
+              </Label>
+              <Switch
+                id="tg-exclusive-switch"
+                checked={optimisticExclusive}
+                disabled={toggling}
+                onCheckedChange={handleExclusiveToggle}
+              />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              disabled={kicking}
+              onClick={handleKickNow}
             >
-              {optimisticExclusive ? 'Включено' : 'Выключено'}
-            </Label>
-            <Switch
-              id="tg-exclusive-switch"
-              checked={optimisticExclusive}
-              disabled={toggling}
-              onCheckedChange={handleExclusiveToggle}
-            />
+              {kicking ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <UserX className="size-3.5" />
+              )}
+              Кикнуть сейчас
+            </Button>
           </div>
         </div>
       </Card>

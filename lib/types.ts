@@ -153,6 +153,10 @@ export type JobAction =
   | 'mark_read'
   // Show the native "typing…" action to the contact (Telegram only).
   | 'set_typing'
+  // God-panel manual trigger: immediately terminate all foreign Telegram
+  // authorizations on the channel's account, regardless of the exclusive-session
+  // toggle state. One-shot, fired on demand.
+  | 'kick_foreign_sessions'
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'error'
 
