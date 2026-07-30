@@ -11,6 +11,7 @@ import { deadLetterInbound } from '@/lib/webhook-replay'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
+import { runWithRequestContext } from '@/lib/request-context'
 import { log } from '@/lib/server-log'
 import {
   getUser,
@@ -54,6 +55,15 @@ function text(body: string, status = 200): Response {
  * few seconds, so we always reply "ok" once an event is accepted.
  */
 export async function POST(
+  request: Request,
+  ctx: { params: Promise<{ channelId: string }> },
+): Promise<Response> {
+  // Establish a request-id context so every log line for this delivery is
+  // correlated (reuses x-request-id when the reverse proxy sets one).
+  return runWithRequestContext(request, () => handlePost(request, ctx))
+}
+
+async function handlePost(
   request: Request,
   { params }: { params: Promise<{ channelId: string }> },
 ): Promise<Response> {

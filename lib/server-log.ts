@@ -46,6 +46,13 @@ function emit(
     scope,
     msg: message,
   }
+  // Attach the current request id when running inside a request context. Read
+  // via a globalThis hook set by lib/request-context so this module stays free
+  // of node:async_hooks and safe to bundle for the Edge runtime.
+  const reqId = (
+    globalThis as unknown as { __getRequestId?: () => string | undefined }
+  ).__getRequestId?.()
+  if (reqId) line.requestId = reqId
   if (meta) {
     for (const [k, v] of Object.entries(meta)) {
       line[k] = k === 'err' || k === 'error' ? serializeError(v) : v
@@ -79,6 +86,17 @@ export const log = {
 export function logServerError(scope: string, error: unknown): string {
   const errorId = randomUUID()
   emit('error', scope, 'server_error', { errorId, err: error })
+  // Best-effort forward to the optional error reporter (Sentry). Read via a
+  // globalThis hook set by lib/error-reporter's init so this module stays
+  // edge-safe and free of the @sentry/node import.
+  ;(
+    globalThis as unknown as {
+      __captureException?: (
+        e: unknown,
+        c?: { scope?: string; errorId?: string },
+      ) => void
+    }
+  ).__captureException?.(error, { scope, errorId })
   return errorId
 }
 

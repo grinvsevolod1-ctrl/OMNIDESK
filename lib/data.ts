@@ -74,3 +74,6 @@ export * from './data/admin-audit'
 
 /* Inbound webhook dead-letter queue (durable retry of failed ingests) */
 export * from './data/webhook-dead-letter'
+
+/* Persistent login brute-force blocklist (survives restarts) */
+export * from './data/login-ban'

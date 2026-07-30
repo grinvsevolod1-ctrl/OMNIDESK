@@ -9,7 +9,12 @@ import {
   startSession,
   verifyAdminCredentials,
 } from '@/lib/auth'
-import { getManagerByIdentifier } from '@/lib/data'
+import {
+  checkLoginBan,
+  clearLoginBans,
+  getManagerByIdentifier,
+  recordLoginBan,
+} from '@/lib/data'
 import { rateLimit } from '@/lib/rate-limit'
 
 export interface LoginState {
@@ -61,15 +66,32 @@ export async function loginAction(
     return { error: 'Введите логин/email и пароль.' }
   }
 
-  // Rate limit before doing any credential work.
+  // Rate limit before doing any credential work. Two layers:
+  //  1) in-memory sliding window — fast, synchronous, first line of defence;
+  //  2) persistent DB blocklist — survives pm2 restarts/redeploys so an attacker
+  //     can't reset their budget by waiting for a deploy (login-only, async).
   const ip = await getClientIp()
-  const ipLimit = rateLimit(`login:ip:${ip}`, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS)
-  const idLimit = rateLimit(
-    `login:id:${identifier.toLowerCase()}`,
-    LOGIN_MAX_ATTEMPTS,
-    LOGIN_WINDOW_MS,
-  )
+  const ipKey = `ip:${ip}`
+  const idKey = `id:${identifier.toLowerCase()}`
+
+  // Durable ban check first — if a previous run already locked this key, honour
+  // it even across a restart.
+  const ban = await checkLoginBan([ipKey, idKey])
+  if (ban.banned) {
+    return {
+      error: `Слишком много попыток входа. Повторите через ${Math.ceil(ban.retryAfterSec / 60)} мин.`,
+    }
+  }
+
+  const ipLimit = rateLimit(`login:${ipKey}`, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS)
+  const idLimit = rateLimit(`login:${idKey}`, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS)
   if (!ipLimit.allowed || !idLimit.allowed) {
+    // In-memory limit tripped — escalate to a durable ban on the offending
+    // key(s) so it persists past the next restart.
+    const offenders: string[] = []
+    if (!ipLimit.allowed) offenders.push(ipKey)
+    if (!idLimit.allowed) offenders.push(idKey)
+    await Promise.all(offenders.map((k) => recordLoginBan(k)))
     const retry = Math.max(ipLimit.retryAfterSec, idLimit.retryAfterSec)
     return {
       error: `Слишком много попыток входа. Повторите через ${Math.ceil(retry / 60)} мин.`,
@@ -78,6 +100,8 @@ export async function loginAction(
 
   // 1) Admin is authenticated via environment variables (by email or login).
   if (verifyAdminCredentials(identifier, password)) {
+    // Proven credentials — clear any accumulated throttle for these keys.
+    await clearLoginBans([ipKey, idKey])
     await startSession({
       sub: 'admin',
       role: 'admin',
@@ -101,6 +125,9 @@ export async function loginAction(
   if (!ok) {
     return { error: 'Неверный логин/email или пароль.' }
   }
+
+  // Proven credentials — clear any accumulated throttle for these keys.
+  await clearLoginBans([ipKey, idKey])
 
   await startSession({
     sub: manager.id,

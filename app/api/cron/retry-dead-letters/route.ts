@@ -1,7 +1,9 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { processDeadLetterQueue } from '@/lib/webhook-replay'
+import { pruneLoginBans } from '@/lib/data'
 import { logServerError } from '@/lib/server-log'
+import { runWithRequestContext } from '@/lib/request-context'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -21,6 +23,10 @@ export const maxDuration = 60
  * backoff lives in the row's next_retry_at, not the schedule.
  */
 export async function GET(request: Request): Promise<Response> {
+  return runWithRequestContext(request, () => handle(request))
+}
+
+async function handle(request: Request): Promise<Response> {
   const secret = process.env.CRON_SECRET
   if (!secret) {
     return NextResponse.json(
@@ -40,7 +46,10 @@ export async function GET(request: Request): Promise<Response> {
 
   try {
     const result = await processDeadLetterQueue(50)
-    return NextResponse.json({ ok: true, result })
+    // Piggyback cheap housekeeping on the same minute tick: drop expired login
+    // bans so the table doesn't accumulate dead rows.
+    const prunedBans = await pruneLoginBans()
+    return NextResponse.json({ ok: true, result, prunedBans })
   } catch (error) {
     const errorId = logServerError('cron.retry-dead-letters', error)
     return NextResponse.json(

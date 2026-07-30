@@ -17,6 +17,13 @@
 export async function registerNode(): Promise<void> {
   const { log } = await import('./lib/server-log')
 
+  // Initialise the optional error reporter (Sentry) first, so any exception
+  // during the rest of startup is captured. No-op unless SENTRY_DSN is set.
+  const { initErrorReporter, captureException } = await import(
+    './lib/error-reporter'
+  )
+  await initErrorReporter()
+
   // Process-level safety net. The panel is a single long-lived Node process on
   // a VPS, so an unhandled rejection or thrown error in a background task (push
   // dispatch, realtime, simulator) must be logged rather than silently killing
@@ -24,9 +31,11 @@ export async function registerNode(): Promise<void> {
   // PM2 which restarts the process.
   process.on('unhandledRejection', (reason) => {
     log.error('process', 'unhandledRejection', { err: reason })
+    captureException(reason, { scope: 'process.unhandledRejection' })
   })
   process.on('uncaughtException', (err) => {
     log.error('process', 'uncaughtException', { err })
+    captureException(err, { scope: 'process.uncaughtException' })
   })
 
   // Graceful shutdown on PM2 reload / SIGTERM: stop the simulator loop and
