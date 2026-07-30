@@ -56,7 +56,7 @@ export async function POST(request: Request): Promise<Response> {
 
   // Cheap per-IP guard FIRST, before any DB work, so a flood can't hammer the
   // database. Generous enough for real users behind shared NAT.
-  const ipGuard = rateLimit(`lc:ingest:ip:${ip}`, 60, 60_000)
+  const ipGuard = await rateLimit(`lc:ingest:ip:${ip}`, 60, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
   let payload: z.infer<typeof ingestSchema>
@@ -107,7 +107,7 @@ export async function POST(request: Request): Promise<Response> {
 
   // Per-visitor message throttle: stops a single (possibly spoofed) visitor id
   // from spamming one channel's inbox while staying well above human typing.
-  const visitorGuard = rateLimit(
+  const visitorGuard = await rateLimit(
     `lc:ingest:v:${channel.id}:${handle}`,
     20,
     60_000,
@@ -126,7 +126,7 @@ export async function POST(request: Request): Promise<Response> {
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!existingRef) {
-    const newConvGuard = rateLimit(`lc:newconv:${ip}`, 6, 10 * 60_000)
+    const newConvGuard = await rateLimit(`lc:newconv:${ip}`, 6, 10 * 60_000)
     if (!newConvGuard.allowed) return tooMany(cors, newConvGuard.retryAfterSec)
   }
 

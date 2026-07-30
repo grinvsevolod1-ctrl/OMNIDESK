@@ -3,11 +3,11 @@ import { log } from '@/lib/server-log'
 
 // Collector for Content-Security-Policy violation reports.
 //
-// The panel ships CSP in Report-Only mode (see next.config.mjs): the browser
-// does NOT block anything, it just POSTs a JSON report here whenever a resource
-// would have been blocked by the policy. We log each violation as structured
-// JSON so the team can watch pm2 logs for a while, confirm the policy doesn't
-// break any real feature, then flip Report-Only → enforcing.
+// The panel ships an ENFORCING, nonce-based CSP (emitted per-request from
+// proxy.ts). The policy still carries `report-uri /api/csp-report`, so whenever
+// the browser blocks a resource it also POSTs a JSON report here. We log each
+// violation as structured JSON so the team can spot anything the policy breaks
+// (e.g. a newly added external origin) in the pm2 logs and tighten accordingly.
 //
 // Two payload shapes are accepted:
 //  - legacy `report-uri`:      { "csp-report": { ... } }

@@ -96,7 +96,7 @@ export async function secretUnlockAction(passcode: string): Promise<ActionResult
   if (!isGodPasscodeConfigured())
     return { ok: false, message: 'Секретный пароль не настроен (SECRET_PANEL_PASSWORD)' }
 
-  const rl = rateLimit(`god-unlock:${admin.sub}`, 6, 5 * 60_000)
+  const rl = await rateLimit(`god-unlock:${admin.sub}`, 6, 5 * 60_000)
   if (!rl.allowed)
     return {
       ok: false,

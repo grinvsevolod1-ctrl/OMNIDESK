@@ -55,7 +55,7 @@ export async function POST(request: Request): Promise<Response> {
   const cors = corsHeaders(origin)
 
   // Per-IP guard for this ephemeral heartbeat endpoint.
-  const ipGuard = rateLimit(`lc:presence:ip:${clientIp(request.headers)}`, 120, 60_000)
+  const ipGuard = await rateLimit(`lc:presence:ip:${clientIp(request.headers)}`, 120, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
   let payload: z.infer<typeof presenceSchema>

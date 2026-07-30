@@ -199,6 +199,34 @@ export async function listMessages(
 }
 
 /**
+ * Load an older page of a thread's history: the most recent messages created
+ * strictly BEFORE `before` (an ISO timestamp — normally the oldest message the
+ * client currently holds). Powers the inbox "load older messages" control for
+ * threads longer than MESSAGE_HISTORY_LIMIT. Manager-scoped via the join, so an
+ * id that isn't the caller's simply yields []. Returned oldest-first so the
+ * caller can prepend the slice directly.
+ */
+export async function listMessagesBefore(
+  conversationId: string,
+  managerId: string,
+  before: string,
+  limit = MESSAGE_HISTORY_LIMIT,
+): Promise<Message[]> {
+  const capped = Math.min(Math.max(1, Math.trunc(limit)), MESSAGE_HISTORY_LIMIT)
+  const rows = await query<MessageRow>(
+    `SELECT ${MESSAGE_SELECT}
+     FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     ${MESSAGE_REPLY_JOIN}
+     WHERE m.conversation_id = $1 AND c.manager_id = $2 AND m.created_at < $3
+     ORDER BY m.created_at DESC
+     LIMIT $4`,
+    [conversationId, managerId, before, capped],
+  )
+  return rows.reverse().map(toMessage)
+}
+
+/**
  * Backfill: every message for a manager created strictly after `since`,
  * ordered oldest-first. Used by the SSE route to replay events a browser
  * missed while it was disconnected (gap recovery via Last-Event-ID).

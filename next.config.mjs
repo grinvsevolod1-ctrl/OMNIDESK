@@ -7,45 +7,13 @@ const noCache = { key: 'Cache-Control', value: 'public, max-age=0, must-revalida
 // This header authorises that broader scope.
 const swAllowRoot = { key: 'Service-Worker-Allowed', value: '/' }
 
-// Content-Security-Policy in REPORT-ONLY mode. This blocks nothing — the
-// browser only POSTs a violation report to /api/csp-report whenever a resource
-// WOULD be blocked. Run it in report-only for a while, watch pm2 logs for real
-// violations (especially unexpected connect-src / img-src origins), then:
-//   1. tighten the directives to remove anything unused,
-//   2. replace 'unsafe-inline' on script-src with a per-request nonce,
-//   3. rename the header key to 'Content-Security-Policy' to ENFORCE it.
-// 'unsafe-inline' is present now only because Next.js emits inline hydration
-// scripts and the app uses inline styles; report-only means it protects nothing
-// yet, so this is a staging step, not the final policy.
-const cspReportOnly = [
-  "default-src 'self'",
-  // Next.js inline hydration + styled-jsx. Swap for a nonce before enforcing.
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
-  "font-src 'self' data:",
-  // Same-origin API routes + SSE realtime. Add external browser-called origins
-  // here as report-only surfaces them.
-  "connect-src 'self' https://ai-gateway.vercel.sh",
-  "media-src 'self' blob: https:",
-  "worker-src 'self' blob:",
-  "manifest-src 'self'",
-  // The admin widget preview is a same-origin iframe; the customer-facing widget
-  // is injected as DOM (not an iframe of this origin), so 'self' is safe.
-  "frame-ancestors 'self'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  'report-uri /api/csp-report',
-].join('; ')
-
 // Baseline security headers applied to every response (defence-in-depth for an
-// authenticated ops panel). The enforcing set is conservative; the CSP above is
-// report-only so it can't break the live panel or the embeddable widget while
-// the team validates it. Note the v0 chat preview strips framing/CSP headers, so
-// these only fully apply on the deployed VPS (also fine to duplicate at nginx).
+// authenticated ops panel). The enforcing Content-Security-Policy is NOT set
+// here: it carries a per-request nonce and so is emitted from proxy.ts (the
+// Node.js middleware) on every HTML route instead. Note the v0 chat preview
+// strips framing/CSP headers, so these only fully apply on the deployed VPS
+// (also fine to duplicate at nginx).
 const securityHeaders = [
-  // CSP violation reporting (blocks nothing — see cspReportOnly above).
-  { key: 'Content-Security-Policy-Report-Only', value: cspReportOnly },
   // Stop MIME-sniffing responses into an unexpected content type.
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   // Don't leak full URLs (which may carry ids) to third-party origins.

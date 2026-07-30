@@ -35,7 +35,7 @@ export async function POST(request: Request): Promise<Response> {
 
   // Conversion tracking must not be inflatable: cap clicks per IP so the
   // analytics/goals can't be skewed by a script hammering this endpoint.
-  const ipGuard = rateLimit(`lc:track:ip:${clientIp(request.headers)}`, 30, 60_000)
+  const ipGuard = await rateLimit(`lc:track:ip:${clientIp(request.headers)}`, 30, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
   let payload: z.infer<typeof trackSchema>

@@ -46,7 +46,7 @@ export async function POST(request: Request): Promise<Response> {
   // Ephemeral, high-frequency endpoint: guard per IP so it can't be abused to
   // flood managers' inboxes with typing pings, while staying well above the
   // widget's own throttle for real typing.
-  const ipGuard = rateLimit(`lc:typing:ip:${clientIp(request.headers)}`, 240, 60_000)
+  const ipGuard = await rateLimit(`lc:typing:ip:${clientIp(request.headers)}`, 240, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
   let payload: z.infer<typeof typingSchema>

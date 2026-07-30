@@ -74,7 +74,7 @@ async function handlePost(
   // per-channel secret, but if it ever leaks this caps how hard one channel
   // endpoint can hammer the database. Generous enough for real VK traffic.
   // We reply "ok" so VK doesn't retry-storm us while we're shedding load.
-  const floodGuard = rateLimit(`vk:webhook:${channelId}`, 120, 60_000)
+  const floodGuard = await rateLimit(`vk:webhook:${channelId}`, 120, 60_000)
   if (!floodGuard.allowed) return text('ok')
 
   const channel = await getVkChannelById(channelId)

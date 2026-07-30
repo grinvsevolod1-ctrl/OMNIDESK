@@ -47,7 +47,7 @@ export async function POST(request: Request): Promise<Response> {
   const ip = clientIp(request.headers)
 
   // Cheap per-IP guard before any DB work.
-  const ipGuard = rateLimit(`lc:push:ip:${ip}`, 30, 60_000)
+  const ipGuard = await rateLimit(`lc:push:ip:${ip}`, 30, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
   let payload: z.infer<typeof pushSchema>

@@ -83,8 +83,8 @@ export async function loginAction(
     }
   }
 
-  const ipLimit = rateLimit(`login:${ipKey}`, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS)
-  const idLimit = rateLimit(`login:${idKey}`, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS)
+  const ipLimit = await rateLimit(`login:${ipKey}`, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS)
+  const idLimit = await rateLimit(`login:${idKey}`, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS)
   if (!ipLimit.allowed || !idLimit.allowed) {
     // In-memory limit tripped — escalate to a durable ban on the offending
     // key(s) so it persists past the next restart.

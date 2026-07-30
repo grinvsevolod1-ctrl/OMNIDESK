@@ -22,6 +22,7 @@ import {
   Check,
   CheckCheck,
   ChevronDown,
+  ChevronUp,
   Clock,
   Download,
   ExternalLink,
@@ -64,6 +65,7 @@ import {
   forwardMessageAction,
   toggleConversationAiAction,
   acknowledgeAiHandoffAction,
+  loadOlderMessagesAction,
 } from '@/app/actions/messages'
 import {
   dismissReplyReminderAction,
@@ -1915,6 +1917,48 @@ export function InboxView({
     Record<string, Message[]>
   >(messagesByConversation)
 
+  // "Load older messages" state. Threads hydrate with only the most-recent
+  // slice (see MESSAGE_HISTORY_LIMIT server-side); this lets a manager pull
+  // older history on demand. `noOlder` marks threads with nothing left to load;
+  // the scroll container ref preserves the reading position across a prepend.
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [noOlder, setNoOlder] = useState<Record<string, boolean>>({})
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null)
+
+  const handleLoadOlder = useCallback(async () => {
+    if (!activeId || loadingOlder) return
+    const current = localMessages[activeId] ?? []
+    const oldest = current[0]
+    if (!oldest) return
+    setLoadingOlder(true)
+    const container = messagesScrollRef.current
+    const prevHeight = container?.scrollHeight ?? 0
+    try {
+      const before = new Date(oldest.createdAt).toISOString()
+      const res = await loadOlderMessagesAction(activeId, before)
+      if (res.ok && res.messages.length > 0) {
+        setLocalMessages((prev) => {
+          const existing = prev[activeId] ?? []
+          const known = new Set(existing.map((m) => m.id))
+          const older = res.messages.filter((m) => !known.has(m.id))
+          if (older.length === 0) return prev
+          return { ...prev, [activeId]: [...older, ...existing] }
+        })
+        // Keep the viewport anchored to the same message after older ones are
+        // prepended above it (otherwise the list would jump to the top).
+        requestAnimationFrame(() => {
+          const c = messagesScrollRef.current
+          if (c) c.scrollTop = c.scrollHeight - prevHeight
+        })
+      }
+      if (!res.hasMore) setNoOlder((p) => ({ ...p, [activeId]: true }))
+    } catch {
+      toast.error('Не удалось загрузить историю')
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [activeId, loadingOlder, localMessages])
+
   // Optimistic "no reply needed" dismissals (conversationId -> dismissal time in
   // ms). Lets the badge/sorting update instantly before the server round-trip,
   // and is merged with the persisted `replyDismissedAt` from the server.
@@ -2589,6 +2633,10 @@ export function InboxView({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLocalMessages(messagesByConversation)
+    // The fresh props carry only the most-recent slice again, so any previously
+    // loaded older history is gone — reset the "nothing older" flags so the
+    // load-older control reappears where applicable.
+    setNoOlder({})
   }, [messagesByConversation])
 
   const active = useMemo(
@@ -3470,6 +3518,7 @@ export function InboxView({
 
             {/* Messages */}
             <div
+              ref={messagesScrollRef}
               className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-muted/20 px-3 py-4 sm:px-6"
               style={{
                 backgroundImage:
@@ -3478,6 +3527,26 @@ export function InboxView({
               }}
             >
               <div className="mx-auto flex max-w-3xl flex-col gap-1">
+                {/* Older-history loader: shown only when the thread was truncated
+                    to the most-recent slice and there may be more to fetch. */}
+                {activeId && thread.length >= 300 && !noOlder[activeId] ? (
+                  <div className="mb-2 flex justify-center">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleLoadOlder}
+                      disabled={loadingOlder}
+                      className="gap-1.5 text-xs text-muted-foreground"
+                    >
+                      {loadingOlder ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <ChevronUp className="size-3.5" />
+                      )}
+                      Загрузить ранние сообщения
+                    </Button>
+                  </div>
+                ) : null}
                 {thread.map((m, i) => {
                   const prev = thread[i - 1]
                   const showDay =

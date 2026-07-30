@@ -27,7 +27,7 @@ export async function GET(request: Request): Promise<Response> {
   const origin = request.headers.get('origin')
   const cors = corsHeaders(origin)
 
-  const ipGuard = rateLimit(`lc:avatar:ip:${clientIp(request.headers)}`, 120, 60_000)
+  const ipGuard = await rateLimit(`lc:avatar:ip:${clientIp(request.headers)}`, 120, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
   const apiKey = (url.searchParams.get('key') ?? '').trim()

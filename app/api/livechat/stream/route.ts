@@ -35,7 +35,7 @@ export async function GET(request: Request): Promise<Response> {
   // Cap how often one IP can (re)open a long-lived SSE connection, so a script
   // can't exhaust server connection slots. Normal reconnects (network blips,
   // serverless timeouts) stay well under this.
-  const connGuard = rateLimit(`lc:stream:ip:${clientIp(request.headers)}`, 40, 60_000)
+  const connGuard = await rateLimit(`lc:stream:ip:${clientIp(request.headers)}`, 40, 60_000)
   if (!connGuard.allowed) return tooMany(cors, connGuard.retryAfterSec)
 
   const apiKey = (url.searchParams.get('key') ?? '').trim()

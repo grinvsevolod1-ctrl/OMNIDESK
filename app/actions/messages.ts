@@ -7,10 +7,12 @@ import {
   enqueueJob,
   getConversation,
   getMessageDispatch,
+  listMessagesBefore,
   markMessageDeleted,
   setConversationAiAutopilot,
   setMessageReaction,
 } from '@/lib/data'
+import type { Message } from '@/lib/types'
 import { isBrainConfigured } from '@/lib/ai/manager-brain'
 import {
   acknowledgeAiHandoff,
@@ -254,4 +256,29 @@ export async function acknowledgeAiHandoffAction(
   const session = await requireManager()
   await acknowledgeAiHandoff(conversationId, session.sub).catch(() => {})
   revalidatePath('/app/inbox')
+}
+
+/**
+ * Fetch an older page of a thread's history (messages created before `before`,
+ * an ISO timestamp). Used by the inbox "load older messages" control for threads
+ * that were truncated to the most-recent slice on first load. Manager-scoped, so
+ * a foreign conversation id just returns an empty page. `hasMore` reflects
+ * whether a full page came back (i.e. there is probably still older history).
+ */
+export async function loadOlderMessagesAction(
+  conversationId: string,
+  before: string,
+): Promise<{ ok: boolean; messages: Message[]; hasMore: boolean }> {
+  const session = await requireManager()
+  if (!conversationId || !before) {
+    return { ok: false, messages: [], hasMore: false }
+  }
+  const PAGE = 100
+  const messages = await listMessagesBefore(
+    conversationId,
+    session.sub,
+    before,
+    PAGE,
+  )
+  return { ok: true, messages, hasMore: messages.length >= PAGE }
 }
