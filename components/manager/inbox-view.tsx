@@ -13,6 +13,7 @@ import {
   useTransition,
 } from 'react'
 import { useRouter } from 'next/navigation'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import useSWR from 'swr'
 import {
   AlertCircle,
@@ -2387,6 +2388,24 @@ export function InboxView({
     localMessages,
   ])
 
+  // --- Conversation-list virtualization -------------------------------------
+  // The sidebar can hold hundreds/thousands of threads; rendering every row
+  // (each with an avatar, presence dot and a full Radix context menu) makes
+  // scrolling janky and inflates the DOM. We virtualize the list so only the
+  // rows near the viewport are mounted. Row heights vary slightly (badges,
+  // "печатает…", source chip), so we use dynamic measurement via
+  // measureElement rather than a fixed size; estimateSize is just the starting
+  // guess. The context menu still works because each measured row renders its
+  // full markup — we only skip off-screen rows.
+  const convScrollRef = useRef<HTMLDivElement>(null)
+  const convVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => convScrollRef.current,
+    estimateSize: () => 76,
+    overscan: 8,
+    getItemKey: (index) => filtered[index]?.id ?? index,
+  })
+
   // When the channel-type filter changes, drop any selected sources that no
   // longer belong to a visible type, so stale selections can't hide everything.
   useEffect(() => {
@@ -3149,8 +3168,11 @@ export function InboxView({
           </div>
         </div>
 
-        {/* List */}
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+        {/* List (virtualized — only near-viewport rows are mounted) */}
+        <div
+          ref={convScrollRef}
+          className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5"
+        >
           {filtered.length === 0 ? (
             <p className="px-4 py-10 text-center text-sm text-muted-foreground">
               {conversations.length === 0
@@ -3158,7 +3180,21 @@ export function InboxView({
                 : 'Ничего не найдено по фильтрам.'}
             </p>
           ) : (
-            filtered.map((c) => (
+            <div
+              className="relative w-full"
+              style={{ height: convVirtualizer.getTotalSize() }}
+            >
+              {convVirtualizer.getVirtualItems().map((vitem) => {
+                const c = filtered[vitem.index]
+                if (!c) return null
+                return (
+                  <div
+                    key={vitem.key}
+                    data-index={vitem.index}
+                    ref={convVirtualizer.measureElement}
+                    className="absolute left-0 top-0 w-full"
+                    style={{ transform: `translateY(${vitem.start}px)` }}
+                  >
               <ContextMenu key={c.id}>
                 <ContextMenuTrigger
                   render={
@@ -3326,7 +3362,10 @@ export function InboxView({
                     ) : null}
                   </ContextMenuContent>
                 </ContextMenu>
-              ))
+                  </div>
+                )
+              })}
+            </div>
           )}
         </div>
       </div>

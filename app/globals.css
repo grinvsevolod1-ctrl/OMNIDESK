@@ -137,6 +137,10 @@
   }
   html {
     @apply font-sans;
+    /* Плавная прокрутка по якорям/programmatic scroll — как в нативных
+       приложениях. Отключается автоматически для prefers-reduced-motion
+       (см. media-запрос ниже). */
+    scroll-behavior: smooth;
   }
   :root {
     /* Apple-подобные кривые ускорения. `apple-out` — фирменное «резко стартует,
@@ -232,6 +236,19 @@
   }
   .press-scale:active {
     transform: scale(0.97);
+  }
+
+  /* Мягкий подъём карточек/кликабельных плиток при наведении: едва заметный
+     сдвиг вверх с фирменным торможением — тактильно «живой», но не крикливый.
+     Навешивается точечно на карточки, где это уместно. */
+  .hover-lift {
+    transition:
+      transform 0.2s var(--ease-apple-out),
+      box-shadow 0.2s var(--ease-apple-out);
+    will-change: transform;
+  }
+  .hover-lift:hover {
+    transform: translateY(-2px);
   }
 
   /* Слайдеры симулятора: тонкая дорожка в цветах темы + аккуратный бегунок,
