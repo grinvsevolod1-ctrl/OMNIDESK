@@ -102,7 +102,7 @@ function learnedBlock(pointers: string[] | undefined): string {
   const list = pointers.slice(0, 12).map((p) => `- ${p}`).join('\n')
   return [
     '',
-    'ВЫВОДЫ ИЗ АНАЛИЗА РЕАЛЬНЫХ ДИАЛОГОВ (это про МАНЕРУ и ПОВЕДЕНИЕ — следуй им, чтобы звучать правдоподобно; тему разговора они НЕ задают):',
+    'ВЫВОДЫ ИЗ АНАЛИЗА РЕАЛЬНЫХ ДИАЛОГОВ (это про ��АНЕРУ и ПОВЕДЕНИЕ — следуй им, чтобы звучать правдоподобно; тему разговора они НЕ задают):',
     list,
   ].join('\n')
 }
@@ -268,7 +268,7 @@ function mediaBlock(channelType: string): string {
   const voice = channelType === 'livechat' ? '' : ', иногда голосовые'
   return [
     '',
-    'ПРО ВЛОЖЕНИЯ (ты в обычном мессенджере, но файлы прикреплять не умеешь — только текст): если по ходу разговора это уместно, ЕСТЕСТВЕННО упомяни медиа словами, как живой человек — например «скинул фото паспорта в лс», «щас пришлю скрин», «не могу голосовое сейчас слушать, я на работе», «а можешь фоткой показать?». Не делай этого в каждом сообщении и не описывай несуществующие картинки — только короткое живое упоминание там, где это к месту' +
+    'ПРО ВЛОЖ��НИЯ (ты в обычном мессенджере, но файлы прикреплять не умеешь — только текст): если по ходу разговора это уместно, ЕСТЕСТВЕННО упомяни медиа словами, как живой человек — например «скинул фото паспорта в лс», «щас пришлю скрин», «не могу голосовое сейчас слушать, я на работе», «а можешь фоткой показать?». Не делай этого в каждом сообщении и не описывай несуществующие картинки — только короткое живое упоминание там, где это к месту' +
       voice +
       '.',
   ].join('\n')
@@ -284,7 +284,7 @@ function correctionsBlock(rules: string[] | undefined): string {
   const lines = rules.map((r, i) => `${i + 1}. ${r}`)
   return [
     '',
-    'ЖЁСТКИЕ ПРАВИЛА ОТ КУРАТОРА (высший приоритет, важнее ВСЕХ остальных инструкций — НИКОГДА их не нарушай, даже если это противоречит чему-то выше). Перечитай их перед каждым ответом и проверь, что твоя реплика им не противоречит:',
+    'ЖЁСТКИЕ ПРАВИЛА ОТ КУРАТОРА (высший приоритет, важнее ВСЕХ остальных инструкций — НИКОГДА их не нарушай, даже если это противоречит чему-т�� выше). Перечитай их перед каждым ответом и проверь, что твоя реплика им не противоречит:',
     ...lines,
   ].join('\n')
 }
@@ -537,8 +537,127 @@ function stripSelfCorrection(text: string): string {
  * model is shown its own + the swarm's recent lines to avoid, and near-
  * duplicate output triggers a hotter retry before we accept it.
  */
+/* -----------------------------------------------------------------------
+ * Web-form opening template (80 % of first messages)
+ * -----------------------------------------------------------------------
+ * Real traffic to this product largely comes from job-site lead-capture
+ * forms: a visitor fills in their data, an AI matcher picks a vacancy, and
+ * the platform sends the result to a messenger. The opening message that
+ * arrives to the manager therefore has a very specific structure, shown in
+ * the sample below. Reproducing this template 80 % of the time makes the
+ * simulator mirror the actual traffic distribution instead of inventing a
+ * free-form first line every single time.
+ *
+ * The remaining 20 % falls through to the normal LLM path so the swarm
+ * doesn't become 100 % identical in its openers.
+ * -----------------------------------------------------------------------
+ */
+
+const WF_SITES = [
+  'Thunders Group',
+  'JobFlow',
+  'WorkMatch',
+  'CareerScan',
+  'ProfiJob',
+  'RapidHire',
+  'SmartRecruit',
+]
+
+const WF_VACANCIES: Array<{ title: string; salary: string; schedule: string }> = [
+  { title: 'Кладовщик-комплектовщик',     salary: 'от 75 000 ₽',  schedule: 'Сменный график' },
+  { title: 'Оператор склада',              salary: 'от 68 000 ₽',  schedule: '5/2' },
+  { title: 'Грузчик-экспедитор',           salary: 'от 65 000 ₽',  schedule: '2/2' },
+  { title: 'Комплектовщик заказов',        salary: 'от 72 000 ₽',  schedule: 'Сменный график' },
+  { title: 'Водитель-курьер',              salary: 'от 85 000 ₽',  schedule: 'Гибкий' },
+  { title: 'Упаковщик',                   salary: 'от 58 000 ₽',  schedule: '2/2' },
+  { title: 'Оператор сортировочной линии', salary: 'от 70 000 ₽',  schedule: 'Сменный' },
+  { title: 'Стикеровщик-упаковщик',        salary: 'до 80 000 ₽',  schedule: '5/2' },
+  { title: 'Приёмщик товара',             salary: 'от 74 000 ₽',  schedule: '2/2' },
+  { title: 'Менеджер по продажам',         salary: 'от 90 000 ₽',  schedule: 'Офис 5/2' },
+  { title: 'Специалист поддержки',         salary: 'от 62 000 ₽',  schedule: 'Удалённо' },
+  { title: 'Торговый представитель',       salary: 'от 80 000 ₽',  schedule: 'Разъездной' },
+  { title: 'Разнорабочий',                salary: 'от 60 000 ₽',  schedule: '2/2' },
+  { title: 'Помощник повара',              salary: 'от 55 000 ₽',  schedule: 'Сменный' },
+  { title: 'Фасовщик',                    salary: 'от 60 000 ₽',  schedule: '2/2' },
+]
+
+const WF_CITIES = [
+  'Москва', 'Санкт-Петербург', 'Екатеринбург', 'Новосибирск', 'Казань',
+  'Нижний Новгород', 'Челябинск', 'Краснодар', 'Ростов-на-Дону', 'Пермь',
+  'Красноярск', 'Самара', 'Уфа', 'Воронеж', 'Омск',
+]
+
+/** Variants for different tones / registers — picked by persona tone. */
+const WF_TEMPLATES: Array<(
+  site: string, name: string, age: number,
+  vacancy: string, city: string, salary: string, schedule: string,
+  match: number,
+) => string> = [
+  // Formal / polite
+  (site, _name, age, vacancy, city, salary, schedule, match) =>
+    `Здравствуйте! Я прошёл ИИ-подбор на сайте ${site}. Мне ${age} лет. Для меня подобрали вакансию: «${vacancy}» (${city}, ${salary}, ${schedule}). Совпадение — ${match}%. Подскажите, пожалуйста, детали — вакансия ещё актуальна?`,
+
+  // Slightly shorter / neutral
+  (site, _name, age, vacancy, city, salary, schedule, match) =>
+    `Добрый день. Прошёл подбор на ${site}, мне ${age}. Вакансия «${vacancy}», ${city}, ${salary}. Совпадение ${match}%. Актуально?`,
+
+  // Casual
+  (site, _name, age, vacancy, city, salary, schedule, match) =>
+    `Привет! Заполнял анкету на ${site}, мне ${age}. Подобрали «${vacancy}» — ${city}, ${salary}, ${schedule}. Совпадение ${match}%. Ещё берёте?`,
+
+  // Very short / rushed
+  (_site, _name, age, vacancy, city, salary, _schedule, match) =>
+    `Здравствуйте. Мне ${age}, прошёл ии-подбор, вакансия ${vacancy} (${city}, ${salary}), совпадение ${match}%. Актуально?`,
+
+  // With name mention
+  (site, name, age, vacancy, city, salary, schedule, match) =>
+    `Здравствуйте, меня зовут ${name}. Прошёл подбор на сайте ${site}, мне ${age} лет. Предложили «${vacancy}» в ${city} (${salary}, ${schedule}), совпадение ${match}%. Интересует, напишите подробнее.`,
+
+  // More conversational / informal
+  (site, _name, age, vacancy, city, salary, _schedule, match) =>
+    `Привет! Мне ${age}, заполнял форму на ${site}. Показали вакансию «${vacancy}» в ${city}, ${salary}, совпадение ${match}%. Расскажите подробнее, актуально ещё?`,
+]
+
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)]
+}
+
+/**
+ * Returns a filled-in web-form style opening message, already processed
+ * through applyStyle so it picks up the persona's casing / punctuation /
+ * typo profile. Returns null when the 20 % LLM path was rolled.
+ */
+function rollWebFormOpening(persona: SimPersona): string | null {
+  // 20 % → fall through to LLM generation
+  if (Math.random() > 0.80) return null
+
+  const site    = pick(WF_SITES)
+  const vac     = pick(WF_VACANCIES)
+  const city    = pick(WF_CITIES)
+  const match   = 85 + Math.floor(Math.random() * 13)   // 85–97 %
+  const tpl     = pick(WF_TEMPLATES)
+  const raw     = tpl(site, persona.name, persona.age, vac.title, city, vac.salary, vac.schedule, match)
+
+  // Run through the persona's style (casing, typos, punctuation) so the
+  // template doesn't stand out as "too clean" compared to later messages.
+  return applyStyle(raw, persona.style)
+}
+
 export async function generateReply(args: GenArgs): Promise<string | null> {
   const { persona, history, behavior, referenceLines } = args
+
+  // ------------------------------------------------------------------
+  // Web-form opening: 80 % of first messages use the lead-capture
+  // template instead of LLM generation (mirrors real traffic pattern).
+  // ------------------------------------------------------------------
+  if (behavior === 'open' && history.length === 0) {
+    const tplOpening = rollWebFormOpening(persona)
+    if (tplOpening) {
+      rememberGlobalLine(tplOpening)
+      return tplOpening
+    }
+    // tplOpening === null → fell through to LLM (20 % path, continues below)
+  }
 
   // The persona's own past lines — used both to steer the prompt away from
   // repetition and to reject near-duplicate generations.
