@@ -7,6 +7,7 @@ import {
   resolveMaxAgentId,
 } from '@/lib/data'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { deadLetterInbound } from '@/lib/webhook-replay'
 import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
 import { log } from '@/lib/server-log'
@@ -163,15 +164,33 @@ export async function POST(
     return json({ ok: true, conversationId })
   } catch (err) {
     // Dead-letter: unlike a successful ingest, we return 500 so MAX retries the
-    // delivery (its retry window is more forgiving than VK's). Still log it as a
-    // dead_letter with full context so a message that never succeeds across
-    // retries is greppable/replayable from pm2 logs rather than lost silently.
+    // delivery (its retry window is more forgiving than VK's). But provider
+    // retries are finite, so we ALSO persist the normalized inbound to the
+    // durable dead-letter queue — if every MAX retry fails, our own retry loop
+    // (/api/cron/retry-dead-letters) still replays it into the inbox with
+    // exponential backoff instead of losing the message. The insert is
+    // idempotent per (channel, provider message id), so overlapping MAX retries
+    // don't stack duplicates.
+    const providerMessageId = message.body?.mid ?? null
     log.error('max.webhook', 'inbound_dropped', {
       err,
       deadLetter: true,
       channelId: channel.id,
       contactHandle,
-      providerMessageId: message.body?.mid ?? null,
+      providerMessageId,
+    })
+    await deadLetterInbound({
+      channelType: 'max',
+      channelId: channel.id,
+      contactHandle,
+      providerMessageId,
+      payload: {
+        contactName: maxUserName(sender),
+        contactHandle,
+        body: text,
+        providerMessageId,
+      },
+      error: err,
     })
     return json({ ok: false, error: 'server_error' }, 500)
   }

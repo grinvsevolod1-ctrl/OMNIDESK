@@ -7,6 +7,7 @@ import {
   resolveVkAgentId,
 } from '@/lib/data'
 import { archiveVkMediaSoon } from '@/lib/media-archive-fetch'
+import { deadLetterInbound } from '@/lib/webhook-replay'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
 import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
@@ -232,20 +233,41 @@ export async function POST(
     return text('ok')
   } catch (err) {
     // Dead-letter: we ack "ok" so VK doesn't retry-storm us on a transient DB
-    // error, which means THIS inbound message is dropped. Log it as a
-    // dead_letter with full context so it can be grepped/replayed from pm2 logs
-    // instead of vanishing silently.
+    // error. Instead of dropping the message, persist the normalized inbound to
+    // the durable dead-letter queue so the retry loop
+    // (/api/cron/retry-dead-letters) can replay it into the inbox with
+    // exponential backoff. The pool + fallback manager are re-resolved at replay
+    // time, so only the message-shaped fields are stored here.
+    const providerMessageId =
+      message.conversation_message_id != null
+        ? String(message.conversation_message_id)
+        : message.id != null
+          ? String(message.id)
+          : null
     log.error('vk.webhook', 'inbound_dropped', {
       err,
       deadLetter: true,
       channelId: channel.id,
       contactHandle,
-      providerMessageId:
-        message.conversation_message_id != null
-          ? String(message.conversation_message_id)
-          : message.id != null
-            ? String(message.id)
-            : null,
+      providerMessageId,
+    })
+    await deadLetterInbound({
+      channelType: 'vk',
+      channelId: channel.id,
+      contactHandle,
+      providerMessageId,
+      payload: {
+        contactName,
+        contactHandle,
+        body,
+        preview: body || media?.preview,
+        mediaType: media?.mediaType ?? null,
+        mediaMime: media?.mediaMime ?? null,
+        mediaName: media?.mediaName ?? null,
+        mediaRef: media?.mediaRef ?? null,
+        providerMessageId,
+      },
+      error: err,
     })
     // Reply "ok" anyway so VK doesn't retry-storm us on a transient DB error.
     return text('ok')

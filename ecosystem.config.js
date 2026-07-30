@@ -16,7 +16,8 @@
 //   (which runs `next start 3000`) — a plain restart keeps that broken
 //   definition forever. Always recreate from this file after a code update:
 //     rm -rf .next && pnpm install && pnpm build
-//     pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads
+//     pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads \
+//       omnidesk-cron-retry-dead-letters omnidesk-log-reporter
 //     pm2 start ecosystem.config.js
 //     pm2 save
 //
@@ -112,6 +113,26 @@ module.exports = {
       cwd: __dirname,
       autorestart: false,
       cron_restart: '0 */6 * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
+      // Self-hosted replacement for Vercel Cron: replays the inbound webhook
+      // dead-letter queue (webhook_dead_letter). Runs every minute as a
+      // scheduled one-shot; the per-row exponential backoff lives in the DB, so
+      // frequent runs only pick up rows that are actually due. Requires
+      // CRON_SECRET in the shared .env.
+      //
+      // NOTE: if you update an already-running deploy, remember to include this
+      // app in the `pm2 delete ...` line (see the header) before re-starting
+      // from this file, otherwise PM2 keeps the old process list.
+      name: 'omnidesk-cron-retry-dead-letters',
+      script: 'scripts/cron-retry-dead-letters.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '* * * * *',
       env: {
         ...rootEnv,
         NODE_ENV: 'production',

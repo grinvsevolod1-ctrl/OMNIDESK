@@ -71,3 +71,6 @@ export * from './data/telemost'
 
 /* Admin audit trail (God-panel privileged actions) */
 export * from './data/admin-audit'
+
+/* Inbound webhook dead-letter queue (durable retry of failed ingests) */
+export * from './data/webhook-dead-letter'
