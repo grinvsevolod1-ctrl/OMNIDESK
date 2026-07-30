@@ -379,7 +379,7 @@ const MOTIVATIONS = [
   'откладывает на первый взнос по ипотеке', 'надо отдать долг другу',
   'потерял работу из-за закрытия фирмы', 'хочет сменить сферу, пробует новое',
   'скучно дома, хочет чем-то заняться и подзаработать', 'коплю на учёбу ребёнку',
-  'нужно на ремонт машины после аварии', 'просто увидел объявление, стало любопытно',
+  'нужно на ремонт машины после аварии', 'просто ��видел объявление, стало любопытно',
   'хочет доказать себе, что может зарабатывать сам', 'копит на переезд в другой город',
 ]
 
@@ -802,28 +802,18 @@ export function reactionMessage(): string {
 }
 
 /**
- * Classic RU-chat autocorrect blunders: the phone "fixes" a word into a wrong
- * but real one. Keyed on common substrings so it only fires when plausible.
- */
-const AUTOCORRECT: Array<[RegExp, string]> = [
-  [/\bсейчас\b/i, 'сейчак'],
-  [/\bпривет\b/i, 'приает'],
-  [/\bконечно\b/i, 'конесно'],
-  [/\bнормально\b/i, 'нормаьлно'],
-  [/\bработа\b/i, 'ращота'],
-  [/\bденьги\b/i, 'деньнги'],
-  [/\bспасибо\b/i, 'спасбо'],
-  [/\bпонятно\b/i, 'понятон'],
-]
-
-/**
  * Given the ordered bubbles the persona is about to send, occasionally weave in
- * believable human glitches, returning the NEW ordered list of bubbles:
+ * believable human glitches, returning the NEW ordered list of bubbles.
  *
- *   • typo + correction — a bubble ships with a typo, next bubble is «*слово».
- *   • autocorrect + fix — an autocorrected word, then the corrected word alone.
- *   • accidental send    — a short unfinished fragment fired before the real one.
- *   • duplicate          — the same short bubble sent twice (double-tap send).
+ * IMPORTANT — we deliberately DO NOT do "self-corrections" here anymore:
+ *   • no «*слово» typo-then-correction bubbles, and
+ *   • no fixed-list autocorrect ("сейчас"→"сейчак") with a standalone fix.
+ * Both were dead giveaways: the «*слово» pattern screams "scripted bot", and the
+ * autocorrect list reused the SAME handful of misspellings across every dialog,
+ * so different "people" fixed the exact same words the exact same way. What's
+ * left are glitches that are genuinely random and non-repetitive:
+ *   • accidental early send — a short unfinished fragment fired before the full.
+ *   • duplicate            — the same short bubble sent twice (double-tap send).
  *
  * Rates are deliberately low so glitches are seasoning, not noise. `typoRate`
  * scales how error-prone this persona is (polite personas ~never glitch).
@@ -844,38 +834,7 @@ export function humanizeBubbles(bubbles: string[], style: SimStyle): string[] {
       out.push(words.slice(0, randInt(1, 2)).join(' '))
     }
 
-    // --- autocorrect blunder + standalone fix ------------------------------
-    let handled = false
-    if (chance(glitchiness * 0.4)) {
-      for (const [re, wrong] of AUTOCORRECT) {
-        const m = bubble.match(re)
-        if (m) {
-          out.push(bubble.replace(re, wrong))
-          out.push(m[0].toLowerCase()) // the corrected word, sent alone
-          handled = true
-          break
-        }
-      }
-    }
-
-    // --- typo + «*correction» ---------------------------------------------
-    if (!handled && words.length >= 2 && chance(glitchiness * 0.5)) {
-      // Pick a "meaty" word to fumble, typo it, ship the bubble, then correct.
-      const targetIdx = words.findIndex((w) => w.length >= 5)
-      if (targetIdx >= 0) {
-        const correct = words[targetIdx].replace(/[.,!?…]+$/, '')
-        const mangled = typoWord(correct)
-        if (mangled !== correct) {
-          const typoed = words.slice()
-          typoed[targetIdx] = typoed[targetIdx].replace(correct, mangled)
-          out.push(typoed.join(' '))
-          out.push(`*${correct}`)
-          handled = true
-        }
-      }
-    }
-
-    if (!handled) out.push(bubble)
+    out.push(bubble)
 
     // --- accidental duplicate (double-tap) on short bubbles ----------------
     if (words.length <= 4 && chance(glitchiness * 0.15)) {
@@ -915,7 +874,7 @@ const OPENERS = [
   'доброе утро интересует {hook} с чего начать',
   'здрасте нашёл {hook} в телеге куда обращаться',
   'привет это правда что по {hook} платят каждый день',
-  'здравствуйте хотел бы попробовать {hook}',
+  'здравствуйте хотел бы попробов��ть {hook}',
   'добрый а {hook} для новичка подойдёт',
   'здарова короче видел {hook} чё по чём',
   'здравствуйте можно узнать про {hook} поподробнее',

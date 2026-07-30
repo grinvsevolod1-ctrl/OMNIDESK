@@ -102,7 +102,7 @@ function learnedBlock(pointers: string[] | undefined): string {
   const list = pointers.slice(0, 12).map((p) => `- ${p}`).join('\n')
   return [
     '',
-    'ВЫВОДЫ ИЗ АНАЛИЗА РЕАЛЬНЫХ ДИАЛОГОВ (это про МАНЕРУ и ПОВЕДЕНИЕ — следуй им, чтобы звучать правдоподобно; тему разговора они НЕ задают):',
+    'ВЫВОДЫ ИЗ АНАЛИЗА РЕАЛЬНЫХ ДИАЛОГОВ (это про ��АНЕРУ и ПОВЕДЕНИЕ — следуй им, чтобы звучать правдоподобно; тему разговора они НЕ задают):',
     list,
   ].join('\n')
 }
@@ -371,11 +371,17 @@ function systemPrompt(
     polite
       ? '- пиши грамотно, опечатки редки; сокращения — умеренно.'
       : '- пиши живо и разговорно, можешь сокращать по-своему и делать редкие опечатки — но естественно, а не одинаково в каждом сообщении.',
-    s.dumbness > 0.4 ? '- иногда чего-то не догоняешь с первого раза — но переспрашивай осмысленно, целой фразой, а не одним словом.' : '',
+    s.dumbness > 0.55
+      ? '- ты соображаешь туговато: не всегда догоняешь с первого раза, путаешься в деталях, задаёшь простые/наивные вопросы — но переспрашивай осмысленно, целой фразой, а не одним словом.'
+      : s.dumbness < 0.25
+        ? '- ты сообразительный и внимательный: ловишь суть с полуслова, замечаешь нестыковки и увёртки менеджера, задаёшь точные неудобные вопросы по делу.'
+        : '- соображаешь как обычный человек: что-то схватываешь сразу, над чем-то думаешь, иногда переспрашиваешь.',
     s.profanity > 0.5 ? '- материшься свободно, грубо, по-настоящему, когда бесит.' : s.profanity > 0.2 ? '- иногда проскакивает мат.' : polite ? '- мата нет вообще.' : '- мат редко.',
     '- НИКОГДА не используй длинное тире «—» и среднее тире «–». Живые лю��и в ��ереписке их не ставят, это сразу выдаёт бота. Разделяй мысли запятой, точкой, дефисом «-» или просто отправляй отдельными сообщениями.',
     '- НЕ повторяй свои прошлые фразы и обороты, каждый раз формулируй по-новому, своими словами.',
     '- НЕ начинай подряд сообщения с одного и того же слова.',
+    '- НИКОГДА не исправляй сам себя: не отправляй отдельным сообщением «*слово», не дублируй слово в исправленном виде, не пиши «ой опечатался», «имею в виду», «* правильно так». Если где-то опечатка — просто оставь как есть, живые люди в чате чаще всего не заморачиваются с исправлениями.',
+    '- НЕ используй дежурные деревянные междометия-затычки, которыми грешат боты: «мда», «хм», «эх», «ну да», «понятненько», «вот так вот», «такие дела». Если нужно среагировать — реагируй по смыслу, живыми словами, а не штампом.',
     '- НЕ здоровайся повторно, если уже начали разговор.',
     '- Оставайся собой: твой тип личности, жизненная ситуация и настроение должны читаться в каждом сообщении и делать тебя не похожим на других.',
     '- Иногда вворачивай конкретную деталь ИЗ СВОЕЙ ЖИЗНИ (та, что описана в твоём персонаже — работа, семья, город, почему ищешь работу), как живой человек. Это не повод менять тему: деталь звучит по ходу разговора о работе, а не превращается в отдельную беседу на посторонний предмет.',
@@ -497,8 +503,28 @@ function trimDanglingWord(text: string): string {
   const lastSpace = out.lastIndexOf(' ')
   if (lastSpace > 0) out = out.slice(0, lastSpace).trimEnd()
   // Strip a trailing dangling connector left hanging by the cut.
-  out = out.replace(/\s+(и|а|но|что|чтобы|потому|если|как|за|на|в|с|по|о|про|это|мне|мой|моя)$/i, '')
+  out = out.replace(/\s+(и|а|н��|что|чтобы|потому|если|как|за|на|в|с|по|о|про|это|мне|мой|моя)$/i, '')
   return out.trimEnd()
+}
+
+/**
+ * Safety net for the «*слово» self-correction tell. Even with the prompt asking
+ * it not to, the model can still emit a "typo then *fix" artifact. A real fix
+ * would be a *separate* later message, never part of the same reply — so any
+ * asterisk-correction fragment inside one generated message is always a bot
+ * tell. We strip it: drop standalone «*слово» lines and any trailing " *слово"
+ * tacked onto the end of the text. A lone «*» that's clearly a footnote/censor
+ * (e.g. «п***») is left alone since it doesn't match the "*word" shape.
+ */
+function stripSelfCorrection(text: string): string {
+  let out = text
+    // Drop whole lines that are just an asterisk-correction, e.g. "*работу".
+    .replace(/(^|\n)\s*\*\s*[\p{L}]+[.!?]*\s*(?=\n|$)/gu, '$1')
+    // Drop a trailing " *слово" correction hanging at the very end of the text.
+    .replace(/[ \t]+\*\s*[\p{L}]+[.!?]*\s*$/u, '')
+  // Collapse any blank lines the removal left behind.
+  out = out.replace(/\n{2,}/g, '\n').trim()
+  return out
 }
 
 /**
@@ -525,7 +551,7 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
   // itself AND echoing what the swarm just said (the dead-giveaway of a bot
   // farm firing identical/near-identical messages).
   const avoidLines = Array.from(
-    new Set([...getGlobalRecentLines(40), ...ownLines]),
+    new Set([...getGlobalRecentLines(80), ...ownLines]),
   )
 
   // Opening words the swarm used recently, so this message starts differently
@@ -599,6 +625,8 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         // If the model hit the token ceiling it may have stopped mid-word;
         // drop the dangling fragment so we never post a chopped-off word.
         if (finishReason === 'length') candidate = trimDanglingWord(candidate)
+        // Strip any «*слово» self-correction artifact — a hard bot tell.
+        candidate = stripSelfCorrection(candidate)
         if (!candidate || looksLikeRefusal(candidate)) continue
 
         // Rank this candidate: base score is its worst similarity to anything we
