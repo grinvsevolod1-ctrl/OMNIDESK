@@ -51,6 +51,26 @@ server {
 #
 #     ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
 #     ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+#
+#     # --- TLS hardening -----------------------------------------------------
+#     # Только современные протоколы. TLSv1/TLSv1.1 устарели и небезопасны —
+#     # НЕ включайте их (POODLE/BEAST и слабые шифры).
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#     ssl_prefer_server_ciphers off;   # для TLS1.3 приоритет отдаёт клиент
+#     ssl_session_timeout 1d;
+#     ssl_session_cache shared:SSL:10m;
+#     ssl_session_tickets off;
+#
+#     # --- Security headers (defence-in-depth; дублирует next.config.mjs) -----
+#     # always — чтобы заголовки ставились и на ответах об ошибке (4xx/5xx).
+#     add_header Strict-Transport-Security "max-age=63072000" always;
+#     add_header X-Content-Type-Options "nosniff" always;
+#     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+#     add_header X-Frame-Options "SAMEORIGIN" always;
+#     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    # Не раскрывать версию nginx в заголовке Server и на страницах ошибок.
+    server_tokens off;
 
     # Медиа/загрузки могут быть большими (фото/видео из мессенджеров).
     client_max_body_size 64m;

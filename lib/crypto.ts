@@ -2,6 +2,7 @@ import {
   createCipheriv,
   createDecipheriv,
   randomBytes,
+  randomInt,
   createHash,
 } from 'crypto'
 
@@ -117,6 +118,24 @@ export function decryptJson<T = unknown>(envelope: string): T {
 /** True when ENCRYPTION_KEY is present (used to gate encrypted features). */
 export function isEncryptionConfigured(): boolean {
   return Boolean(process.env.ENCRYPTION_KEY)
+}
+
+/**
+ * Generate a random human-friendly password using a CSPRNG.
+ *
+ * Uses crypto.randomInt() (not Math.random(), which is not cryptographically
+ * secure and is predictable) so server-issued manager passwords cannot be
+ * reconstructed. randomInt() draws unbiased integers in the range, avoiding the
+ * modulo bias a naive `randomBytes % len` would introduce. The alphabet omits
+ * visually ambiguous characters (0/O/1/l/I) to keep passwords easy to type.
+ */
+export function generatePassword(length = 16): string {
+  const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  let out = ''
+  for (let i = 0; i < length; i++) {
+    out += chars[randomInt(chars.length)]
+  }
+  return out
 }
 
 /** Mask a secret for display/logging, e.g. "12345…cdef". */

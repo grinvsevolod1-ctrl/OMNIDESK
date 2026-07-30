@@ -39,12 +39,24 @@ export function originAllowed(
  */
 export function clientIp(headers: Headers): string {
   if (process.env.TRUST_PROXY === 'false') return 'unknown'
-  return (
-    (headers.get('x-forwarded-for')?.split(',')[0] ?? '').trim() ||
-    headers.get('x-real-ip')?.trim() ||
-    headers.get('cf-connecting-ip')?.trim() ||
-    'unknown'
-  )
+
+  // Prefer headers a trusted proxy sets to the real TCP peer and that a client
+  // cannot forge end-to-end: Cloudflare's CF-Connecting-IP and nginx's
+  // X-Real-IP ($remote_addr).
+  const cf = headers.get('cf-connecting-ip')?.trim()
+  if (cf) return cf
+  const real = headers.get('x-real-ip')?.trim()
+  if (real) return real
+
+  // X-Forwarded-For fallback: with `$proxy_add_x_forwarded_for` the header is
+  // "<client-supplied>, <real-ip>", so the trustworthy address is the LAST hop
+  // appended by our proxy — never the first (client-controlled) entry.
+  const fwd = headers.get('x-forwarded-for')
+  if (fwd) {
+    const parts = fwd.split(',').map((p) => p.trim()).filter(Boolean)
+    if (parts.length) return parts[parts.length - 1]!
+  }
+  return 'unknown'
 }
 
 /** Standard 429 response for the live-chat endpoints. */

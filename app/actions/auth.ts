@@ -29,9 +29,22 @@ async function getClientIp(): Promise<string> {
   // client cannot forge its IP to dodge the per-IP brute-force limit below.
   if (process.env.TRUST_PROXY === 'false') return 'unknown'
   const h = await headers()
+
+  // Behind our nginx reverse proxy, X-Real-IP is set to $remote_addr — the
+  // actual TCP peer — so it cannot be forged by the client. Prefer it.
+  const real = h.get('x-real-ip')?.trim()
+  if (real) return real
+
+  // Fall back to X-Forwarded-For. IMPORTANT: with nginx's
+  // `$proxy_add_x_forwarded_for` the header becomes "<client-supplied>,
+  // <real-ip>", so a client can prepend a spoofed value. The trustworthy
+  // address is the LAST hop (appended by our proxy), never the first entry.
   const fwd = h.get('x-forwarded-for')
-  if (fwd) return fwd.split(',')[0]!.trim()
-  return h.get('x-real-ip')?.trim() || 'unknown'
+  if (fwd) {
+    const parts = fwd.split(',').map((p) => p.trim()).filter(Boolean)
+    if (parts.length) return parts[parts.length - 1]!
+  }
+  return 'unknown'
 }
 
 export async function loginAction(

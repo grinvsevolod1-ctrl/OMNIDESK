@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { hashPassword, requireAdmin } from '@/lib/auth'
+import { generatePassword } from '@/lib/crypto'
 import {
   createManager,
   deleteManager,
@@ -21,13 +22,10 @@ export interface ActionResult {
   username?: string
 }
 
+// Server-issued passwords use the CSPRNG-backed generator in lib/crypto so they
+// cannot be predicted (Math.random() is not cryptographically secure).
 function genPassword(): string {
-  const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  let out = ''
-  for (let i = 0; i < 12; i++) {
-    out += chars[Math.floor(Math.random() * chars.length)]
-  }
-  return out
+  return generatePassword(16)
 }
 
 export async function createManagerAction(
