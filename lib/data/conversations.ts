@@ -14,6 +14,7 @@ import type {
   NotLiquidReason,
 } from '../types'
 import {
+  conversationColumns,
   effectiveStatusSql,
   MESSAGE_REPLY_JOIN,
   MESSAGE_SELECT,
@@ -38,7 +39,7 @@ export async function listConversations(
   managerId: string,
 ): Promise<Conversation[]> {
   const rows = await query<ConversationRow & { channel_name: string | null }>(
-    `SELECT c.*, ch.name AS channel_name
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
       WHERE c.manager_id = $1
@@ -71,7 +72,7 @@ export async function listConversationsByStatus(
   params.push(CONVERSATION_LIST_LIMIT)
   const limitParam = `$${params.length}`
   const rows = await query<ConversationRow & { channel_name: string | null }>(
-    `SELECT c.*, ch.name AS channel_name
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
       WHERE c.manager_id = $1
@@ -91,7 +92,7 @@ export async function getConversation(
   managerId: string,
 ): Promise<Conversation | null> {
   const rows = await query<ConversationRow>(
-    'SELECT * FROM conversations WHERE id = $1 AND manager_id = $2 LIMIT 1',
+    `SELECT ${conversationColumns()} FROM conversations WHERE id = $1 AND manager_id = $2 LIMIT 1`,
     [conversationId, managerId],
   )
   return rows[0] ? toConversation(rows[0]) : null

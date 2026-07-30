@@ -198,6 +198,58 @@ export const MESSAGE_SELECT = `m.id, m.conversation_id, m.direction, m.body, m.a
         rt.body AS reply_to_body, rt.media_type AS reply_to_media_type`
 export const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_message_id`
 
+/**
+ * Explicit column lists for the core entities, replacing `SELECT *`.
+ *
+ * Selecting named columns (instead of `*`) means adding a column to a table
+ * never silently widens every query that reads it, and it keeps the wire payload
+ * limited to exactly what the row mapper consumes. Each list is the authoritative
+ * mirror of the matching *Row interface above — keep them in sync when a column
+ * is added to (or removed from) a row type.
+ *
+ * Each helper takes the table alias used in the query (default = table name) so
+ * the same list works for both `SELECT ... FROM managers` and joined
+ * `SELECT m... FROM ... m` shapes.
+ */
+const MANAGER_COLUMN_NAMES = [
+  'id', 'name', 'email', 'username', 'password_hash', 'status',
+  'session_version', 'on_lunch', 'created_at',
+] as const
+
+const CHANNEL_COLUMN_NAMES = [
+  'id', 'manager_id', 'type', 'name', 'detail', 'status', 'session_status',
+  'ingest_paused', 'phone', 'proxy_id', 'last_error', 'config', 'created_at',
+  'connected_at', 'last_checked_at',
+] as const
+
+const CONVERSATION_COLUMN_NAMES = [
+  'id', 'channel_id', 'manager_id', 'channel_type', 'contact_name',
+  'contact_handle', 'contact_username', 'last_message', 'last_message_at',
+  'unread', 'status', 'status_detail', 'status_updated_at', 'reply_dismissed_at',
+  'muted', 'meta', 'visitor_no', 'contact_blocked', 'contact_name_hidden',
+  'ai_autopilot_enabled', 'ai_paused', 'ai_handoff_pending', 'ai_handoff_at',
+  'created_at',
+] as const
+
+function qualify(cols: readonly string[], alias: string): string {
+  return cols.map((c) => `${alias}.${c}`).join(', ')
+}
+
+/** Column list for `managers` (mirrors ManagerRow). */
+export function managerColumns(alias = 'managers'): string {
+  return qualify(MANAGER_COLUMN_NAMES, alias)
+}
+
+/** Column list for `channels` (mirrors ChannelRow). */
+export function channelColumns(alias = 'channels'): string {
+  return qualify(CHANNEL_COLUMN_NAMES, alias)
+}
+
+/** Column list for `conversations` (mirrors ConversationRow). */
+export function conversationColumns(alias = 'conversations'): string {
+  return qualify(CONVERSATION_COLUMN_NAMES, alias)
+}
+
 /* ----------------------------- Converters ----------------------------- */
 
 export function toManager(r: ManagerRow): Manager {

@@ -3,6 +3,7 @@
  * goals, admin dashboard rollups and source groups.
  * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
  */
+import { cachedAnalytics } from '../analytics-cache'
 import { query } from '../db'
 import type {
   ChannelStatus,
@@ -14,6 +15,7 @@ import type {
   NotLiquidReason,
 } from '../types'
 import {
+  conversationColumns,
   effectiveStatusSql,
   MESSAGE_REPLY_JOIN,
   MESSAGE_SELECT,
@@ -121,7 +123,7 @@ export interface LeadAnalytics {
  * "New leads per day" uses each conversation's FIRST message timestamp so the
  * dynamics reflect when a contact actually started writing in.
  */
-export async function getLeadAnalytics(
+async function getLeadAnalyticsUncached(
   managerId?: string,
 ): Promise<LeadAnalytics> {
   // Simulator-created conversations are real leads and are counted here just
@@ -206,6 +208,11 @@ export async function getLeadAnalytics(
   }
 }
 
+/** Lead analytics for the manager home dashboard (time-cached). */
+export const getLeadAnalytics = cachedAnalytics(getLeadAnalyticsUncached, [
+  'getLeadAnalytics',
+])
+
 /** Record a chat → messenger transition (off-hours widget link tap). */
 export async function recordMessengerClick(
   channelId: string | null,
@@ -229,7 +236,7 @@ export interface MessengerAnalytics {
  * Chat → messenger transition analytics. Scoped to a manager's channels when
  * managerId is supplied, otherwise system-wide (admin).
  */
-export async function getMessengerAnalytics(
+async function getMessengerAnalyticsUncached(
   managerId?: string,
 ): Promise<MessengerAnalytics> {
   const join = managerId
@@ -287,6 +294,12 @@ export async function getMessengerAnalytics(
   }
 }
 
+/** Messenger click analytics (time-cached). */
+export const getMessengerAnalytics = cachedAnalytics(
+  getMessengerAnalyticsUncached,
+  ['getMessengerAnalytics'],
+)
+
 /* --------------------------- Conversion goals --------------------------- */
 
 export interface ConversionGoal {
@@ -317,7 +330,8 @@ function toGoal(r: ConversionGoalRow): ConversionGoal {
 
 export async function listConversionGoals(): Promise<ConversionGoal[]> {
   const rows = await query<ConversionGoalRow>(
-    `SELECT * FROM conversion_goals ORDER BY created_at ASC`,
+    `SELECT id, name, messenger, active, created_at
+       FROM conversion_goals ORDER BY created_at ASC`,
   )
   return rows.map(toGoal)
 }
@@ -403,7 +417,7 @@ export interface ManagerPerformance {
  * A handful of grouped queries are stitched together in JS keyed by manager id —
  * cheap at this app's scale and far clearer than one giant join.
  */
-export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
+async function getManagerPerformanceUncached(): Promise<ManagerPerformance[]> {
   const managers = await listManagers()
   if (managers.length === 0) return []
 
@@ -492,6 +506,12 @@ export async function getManagerPerformance(): Promise<ManagerPerformance[]> {
   })
 }
 
+/** Admin overview leaderboard rollup (time-cached). */
+export const getManagerPerformance = cachedAnalytics(
+  getManagerPerformanceUncached,
+  ['getManagerPerformance'],
+)
+
 /**
  * Admin-only: fetch a single conversation by id WITHOUT manager scoping, along
  * with its owning manager's display name. Authorization is enforced by the
@@ -503,7 +523,7 @@ export async function getConversationAdmin(
   const rows = await query<
     ConversationRow & { channel_name: string | null; manager_name: string | null }
   >(
-    `SELECT c.*, ch.name AS channel_name, m.name AS manager_name
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name, m.name AS manager_name
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers m ON m.id = c.manager_id
@@ -574,7 +594,7 @@ export async function listConversationsAdmin(opts?: {
   const rows = await query<
     ConversationRow & { channel_name: string | null; manager_name: string | null }
   >(
-    `SELECT c.*, ch.name AS channel_name, m.name AS manager_name
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name, m.name AS manager_name
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers m ON m.id = c.manager_id
@@ -727,7 +747,7 @@ export async function deleteSourceGroup(id: string): Promise<void> {
  * numbers in «Учёт». Returns a map of resourceId → distinct inbound people.
  * Pass a date range to scope it; omit for all-time.
  */
-export async function getResourceLeadCounts(
+async function getResourceLeadCountsUncached(
   resourceIds: string[],
   range?: { fromISO: string; toISO: string },
 ): Promise<Record<string, number>> {
@@ -758,6 +778,12 @@ export async function getResourceLeadCounts(
   for (const r of rows) out[r.resource_id] = Number(r.people)
   return out
 }
+
+/** Distinct-people counts per resource for the finance dashboard (time-cached). */
+export const getResourceLeadCounts = cachedAnalytics(
+  getResourceLeadCountsUncached,
+  ['getResourceLeadCounts'],
+)
 
 /* ----------------------- Source group analytics ------------------------ */
 
@@ -823,7 +849,7 @@ function emptyTypeStats(): Record<ChannelType, { people: number; messages: numbe
  * at least one inbound message inside [from, to). Counts are broken down per
  * channel, per messenger type, and per day.
  */
-export async function getGroupAnalytics(
+async function getGroupAnalyticsUncached(
   groupId: string,
   fromISO: string,
   toISO: string,
@@ -983,6 +1009,11 @@ export async function getGroupAnalytics(
   }
 }
 
+/** Source-group activity analytics (time-cached). */
+export const getGroupAnalytics = cachedAnalytics(getGroupAnalyticsUncached, [
+  'getGroupAnalytics',
+])
+
 export interface ManagerActivityAnalytics {
   from: string
   to: string
@@ -1016,7 +1047,7 @@ export interface ManagerActivityAnalytics {
  * conversations. Day/hour buckets use the manager's local calendar via
  * `tzOffsetMinutes` (JS `Date.getTimezoneOffset()` convention; MSK = -180).
  */
-export async function getManagerActivityAnalytics(
+async function getManagerActivityAnalyticsUncached(
   managerId: string,
   fromISO: string,
   toISO: string,
@@ -1114,6 +1145,12 @@ export async function getManagerActivityAnalytics(
     byHour,
   }
 }
+
+/** Per-manager activity analytics (time-cached). */
+export const getManagerActivityAnalytics = cachedAnalytics(
+  getManagerActivityAnalyticsUncached,
+  ['getManagerActivityAnalytics'],
+)
 
 /* -------------------------------------------------------------------------- */
 /*  Quick replies (manager-scoped canned responses)                           */

@@ -6,7 +6,7 @@ import { query } from '../db'
 import { decrypt } from '../crypto'
 import type { ProxyDescriptor } from '../proxy-agent'
 import type { ChannelStatus } from '../types'
-import { readPool, type ChannelRow } from './shared'
+import { channelColumns, readPool, type ChannelRow } from './shared'
 // Cross-domain calls resolved at runtime via the facade to avoid import cycles.
 import {
   getProxyForChannel,
@@ -67,7 +67,7 @@ export async function getMaxChannelById(
   channelId: string,
 ): Promise<MaxChannel | null> {
   const rows = await query<ChannelRow>(
-    `SELECT * FROM channels WHERE id = $1 AND type = 'max' LIMIT 1`,
+    `SELECT ${channelColumns()} FROM channels WHERE id = $1 AND type = 'max' LIMIT 1`,
     [channelId],
   )
   return rows[0] ? toMaxChannel(rows[0]) : null

@@ -5,7 +5,12 @@
 import { randomUUID } from 'crypto'
 import { query } from '../db'
 import type { Manager, ManagerStatus } from '../types'
-import { excludeAdminSql, toManager, type ManagerRow } from './shared'
+import {
+  excludeAdminSql,
+  managerColumns,
+  toManager,
+  type ManagerRow,
+} from './shared'
 
 /* ----------------------------- Managers ----------------------------- */
 
@@ -27,7 +32,7 @@ export async function getManagerByEmail(
 ): Promise<ManagerWithSecret | null> {
   const normalized = email.trim().toLowerCase()
   const rows = await query<ManagerRow>(
-    'SELECT * FROM managers WHERE lower(email) = $1 LIMIT 1',
+    `SELECT ${managerColumns()} FROM managers WHERE lower(email) = $1 LIMIT 1`,
     [normalized],
   )
   return rows[0] ? toManagerWithSecret(rows[0]) : null
@@ -63,8 +68,8 @@ export async function getManagerByIdentifier(
   const byEmail = id.includes('@')
   const rows = await query<ManagerRow>(
     byEmail
-      ? 'SELECT * FROM managers WHERE lower(email) = $1 LIMIT 1'
-      : 'SELECT * FROM managers WHERE lower(username) = $1 LIMIT 1',
+      ? `SELECT ${managerColumns()} FROM managers WHERE lower(email) = $1 LIMIT 1`
+      : `SELECT ${managerColumns()} FROM managers WHERE lower(username) = $1 LIMIT 1`,
     [id],
   )
   return rows[0] ? toManagerWithSecret(rows[0]) : null
@@ -134,7 +139,7 @@ export async function getManagerAuthState(
 
 export async function getManagerById(id: string): Promise<Manager | null> {
   const rows = await query<ManagerRow>(
-    'SELECT * FROM managers WHERE id = $1 LIMIT 1',
+    `SELECT ${managerColumns()} FROM managers WHERE id = $1 LIMIT 1`,
     [id],
   )
   return rows[0] ? toManager(rows[0]) : null
@@ -144,7 +149,7 @@ export async function listManagers(): Promise<Manager[]> {
   // Exclude the env-backed administrator: it is not a real manager and must
   // never appear in the managers pool (assignment, transfer, blocking, etc.).
   const rows = await query<ManagerRow>(
-    `SELECT * FROM managers
+    `SELECT ${managerColumns()} FROM managers
       WHERE true ${excludeAdminSql('managers')}
       ORDER BY created_at DESC`,
   )

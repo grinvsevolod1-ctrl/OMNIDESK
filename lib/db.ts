@@ -113,13 +113,42 @@ export interface DbExecutor {
   ): Promise<T[]>
 }
 
+/**
+ * Slow-query threshold in milliseconds. Any statement that takes longer is
+ * logged (once, with its duration and a normalized snippet) so real hot spots
+ * surface in the pm2 logs instead of being guessed at. Tunable per deployment
+ * via DB_SLOW_QUERY_MS; set to 0 to disable. Default 500ms.
+ */
+const SLOW_QUERY_MS = (() => {
+  const raw = Number.parseInt(process.env.DB_SLOW_QUERY_MS || '', 10)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 500
+})()
+
+/** Collapse whitespace and truncate so a slow-query log line stays one row. */
+function summarizeSql(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > 140 ? `${flat.slice(0, 140)}…` : flat
+}
+
+/** Log a warning when a query exceeded the slow threshold. Never throws. */
+function maybeLogSlow(text: string, startedAt: number, rowCount: number): void {
+  if (SLOW_QUERY_MS <= 0) return
+  const ms = Math.round(performance.now() - startedAt)
+  if (ms < SLOW_QUERY_MS) return
+  console.warn(
+    `[db] slow query ${ms}ms (rows=${rowCount}): ${summarizeSql(text)}`,
+  )
+}
+
 function executorFor(client: PoolClient): DbExecutor {
   return {
     async query<T extends QueryResultRow = QueryResultRow>(
       text: string,
       params?: unknown[],
     ): Promise<T[]> {
+      const startedAt = performance.now()
       const result = await client.query<T>(text, params as never)
+      maybeLogSlow(text, startedAt, result.rowCount ?? result.rows.length)
       return result.rows
     },
   }
@@ -151,8 +180,10 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   text: string,
   params?: unknown[],
 ): Promise<T[]> {
+  const startedAt = performance.now()
   try {
     const result = await getPool().query<T>(text, params as never)
+    maybeLogSlow(text, startedAt, result.rowCount ?? result.rows.length)
     return result.rows
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

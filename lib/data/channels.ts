@@ -17,7 +17,12 @@ import {
   type LivechatGlobalDefaults,
   type LivechatWidgetConfig,
 } from '../widget-config'
-import { readPool, toChannel, type ChannelRow } from './shared'
+import {
+  channelColumns,
+  readPool,
+  toChannel,
+  type ChannelRow,
+} from './shared'
 // Cross-domain read resolved at runtime via the facade to avoid an import cycle.
 import { listManagers } from '../data'
 
@@ -25,7 +30,7 @@ import { listManagers } from '../data'
 
 export async function listChannels(managerId: string): Promise<Channel[]> {
   const rows = await query<ChannelRow>(
-    'SELECT * FROM channels WHERE manager_id = $1 ORDER BY created_at DESC',
+    `SELECT ${channelColumns()} FROM channels WHERE manager_id = $1 ORDER BY created_at DESC`,
     [managerId],
   )
   return rows.map(toChannel)
@@ -33,7 +38,7 @@ export async function listChannels(managerId: string): Promise<Channel[]> {
 
 export async function listAllChannels(): Promise<Channel[]> {
   const rows = await query<ChannelRow>(
-    'SELECT * FROM channels ORDER BY created_at DESC',
+    `SELECT ${channelColumns()} FROM channels ORDER BY created_at DESC`,
   )
   return rows.map(toChannel)
 }
@@ -99,7 +104,7 @@ export async function getChannel(
   managerId: string,
 ): Promise<Channel | null> {
   const rows = await query<ChannelRow>(
-    'SELECT * FROM channels WHERE id = $1 AND manager_id = $2 LIMIT 1',
+    `SELECT ${channelColumns()} FROM channels WHERE id = $1 AND manager_id = $2 LIMIT 1`,
     [id, managerId],
   )
   return rows[0] ? toChannel(rows[0]) : null
@@ -137,7 +142,7 @@ export interface LivechatAdminChannel extends Channel {
 export async function listLivechatChannels(): Promise<LivechatAdminChannel[]> {
   const [rows, managers, globals] = await Promise.all([
     query<ChannelRow & { manager_name: string | null }>(
-      `SELECT c.*, m.name AS manager_name
+      `SELECT ${channelColumns('c')}, m.name AS manager_name
          FROM channels c
          LEFT JOIN managers m ON m.id = c.manager_id
         WHERE c.type = 'livechat'
@@ -363,7 +368,7 @@ export async function listAdminChannels(): Promise<AdminChannel[]> {
   const rows = await query<
     ChannelRow & { manager_name: string | null; proxy_label: string | null }
   >(
-    `SELECT c.*, m.name AS manager_name, p.label AS proxy_label
+    `SELECT ${channelColumns('c')}, m.name AS manager_name, p.label AS proxy_label
        FROM channels c
        LEFT JOIN managers m ON m.id = c.manager_id
        LEFT JOIN proxies p ON p.id = c.proxy_id
@@ -380,7 +385,7 @@ export async function listAdminChannels(): Promise<AdminChannel[]> {
 /** Admin/webhook: fetch any channel by id (no manager scope). */
 export async function getChannelById(id: string): Promise<Channel | null> {
   const rows = await query<ChannelRow>(
-    'SELECT * FROM channels WHERE id = $1 LIMIT 1',
+    `SELECT ${channelColumns()} FROM channels WHERE id = $1 LIMIT 1`,
     [id],
   )
   return rows[0] ? toChannel(rows[0]) : null

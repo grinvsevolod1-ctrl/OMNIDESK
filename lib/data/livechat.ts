@@ -12,6 +12,7 @@ import {
 } from '../widget-config'
 import {
   assignManagerRoundRobin,
+  channelColumns,
   readPool,
   sanitizeConversationMeta,
   type ChannelRow,
@@ -103,7 +104,7 @@ export async function getLivechatChannelByApiKey(
 ): Promise<LivechatChannel | null> {
   if (!apiKey) return null
   const rows = await query<ChannelRow>(
-    `SELECT * FROM channels
+    `SELECT ${channelColumns()} FROM channels
        WHERE type = 'livechat' AND config->>'apiKey' = $1
        LIMIT 1`,
     [apiKey],
@@ -137,7 +138,7 @@ export async function getLivechatWidgetConfigByApiKey(
   if (!apiKey) return null
   const [rows, globals] = await Promise.all([
     query<ChannelRow>(
-      `SELECT * FROM channels
+      `SELECT ${channelColumns()} FROM channels
          WHERE type = 'livechat' AND config->>'apiKey' = $1
          LIMIT 1`,
       [apiKey],
@@ -181,7 +182,7 @@ export async function getLivechatWorkingHoursByChannelId(
 ): Promise<WidgetWorkingHours | null> {
   const [rows, globals] = await Promise.all([
     query<ChannelRow>(
-      `SELECT * FROM channels WHERE id = $1 AND type = 'livechat' LIMIT 1`,
+      `SELECT ${channelColumns()} FROM channels WHERE id = $1 AND type = 'livechat' LIMIT 1`,
       [channelId],
     ),
     getLivechatGlobalDefaults(),

@@ -6,7 +6,7 @@ import { query } from '../db'
 import { decrypt } from '../crypto'
 import type { ProxyDescriptor } from '../proxy-agent'
 import type { ChannelStatus, MediaType } from '../types'
-import { readPool, type ChannelRow } from './shared'
+import { channelColumns, readPool, type ChannelRow } from './shared'
 // Cross-domain calls resolved at runtime via the facade to avoid import cycles.
 import {
   getProxyForChannel,
