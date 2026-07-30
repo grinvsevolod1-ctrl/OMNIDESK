@@ -7,7 +7,7 @@
  * the secret-dashboard monolith; props-driven via a shared `run` dispatcher.
  */
 
-import { useState } from 'react'
+import { useOptimistic, useTransition, useState } from 'react'
 import {
   Antenna,
   Copy,
@@ -16,12 +16,15 @@ import {
   Play,
   Plus,
   Search,
+  ShieldCheck,
+  ShieldOff,
   Trash2,
 } from 'lucide-react'
 import {
   secretCreateChannelAction,
   secretDeleteChannelAction,
   secretSetChannelStatusAction,
+  secretSetTelegramExclusiveAction,
   secretToggleChannelIngestAction,
   type ActionResult,
 } from '@/app/actions/admin-secret'
@@ -47,6 +50,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { toast } from 'sonner'
 import type { Channel, Manager } from '@/lib/types'
 import { copyText, TYPE_LABEL } from '@/components/admin/secret-dashboard/utils'
 
@@ -56,12 +61,15 @@ export function ChannelsTab({
   managerName,
   pending,
   run,
+  tgExclusive,
 }: {
   channels: Channel[]
   managers: Manager[]
   managerName: (id: string | null) => string
   pending: boolean
   run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
+  /** Current value of the Telegram exclusive-session enforcement flag. */
+  tgExclusive: boolean
 }) {
   const [q, setQ] = useState('')
   const [typeFilter, setTypeFilter] = useState<string>('all')
@@ -74,8 +82,73 @@ export function ChannelsTab({
     return matchesQ && matchesType
   })
 
+  const [optimisticExclusive, setOptimisticExclusive] = useOptimistic(tgExclusive)
+  const [toggling, startToggle] = useTransition()
+
+  function handleExclusiveToggle(next: boolean) {
+    startToggle(async () => {
+      setOptimisticExclusive(next)
+      try {
+        const res = await secretSetTelegramExclusiveAction(next)
+        if (res.ok) {
+          toast.success(res.message)
+        } else {
+          toast.error(res.message)
+        }
+      } catch {
+        toast.error('Не удалось изменить настройку')
+      }
+    })
+  }
+
   return (
-    <Card className="overflow-hidden">
+    <div className="flex flex-col gap-4">
+      {/* Exclusive-session security card */}
+      <Card className="overflow-hidden">
+        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div
+              className={[
+                'flex size-9 shrink-0 items-center justify-center rounded-lg border',
+                optimisticExclusive
+                  ? 'border-emerald-500/30 bg-emerald-500/10'
+                  : 'border-border bg-muted/40',
+              ].join(' ')}
+            >
+              {optimisticExclusive ? (
+                <ShieldCheck className="size-4 text-emerald-500" />
+              ) : (
+                <ShieldOff className="size-4 text-muted-foreground" />
+              )}
+            </div>
+            <div>
+              <p className="font-medium">Эксклюзивная сессия Telegram</p>
+              <p className="mt-0.5 max-w-prose text-sm text-muted-foreground">
+                {optimisticExclusive
+                  ? 'Любая посторонняя авторизация на подключённом аккаунте завершается автоматически — сразу при входе и каждые 2 минуты. Менеджер не увидит предупреждения.'
+                  : 'Отключено. Другие устройства могут подключаться к аккаунту без кика.'}
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2 sm:pt-0.5">
+            <Label
+              htmlFor="tg-exclusive-switch"
+              className="cursor-pointer select-none text-sm"
+            >
+              {optimisticExclusive ? 'Включено' : 'Выключено'}
+            </Label>
+            <Switch
+              id="tg-exclusive-switch"
+              checked={optimisticExclusive}
+              disabled={toggling}
+              onCheckedChange={handleExclusiveToggle}
+            />
+          </div>
+        </div>
+      </Card>
+
+      {/* Channel list card */}
+      <Card className="overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-1 flex-col gap-2 sm:flex-row">
           <div className="relative w-full sm:max-w-xs">
@@ -199,6 +272,7 @@ export function ChannelsTab({
         </div>
       )}
     </Card>
+    </div>
   )
 }
 

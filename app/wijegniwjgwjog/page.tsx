@@ -1,7 +1,7 @@
 import { requireAdmin } from '@/lib/auth'
 import { isGodPasscodeConfigured, isGodUnlocked } from '@/lib/god-gate'
 import { checkDbConnection, query } from '@/lib/db'
-import { listAllChannels, listManagers } from '@/lib/data'
+import { listAllChannels, listManagers, getTelegramExclusiveSession } from '@/lib/data'
 import {
   getFinanceData,
   adBaseMetrics,
@@ -49,6 +49,7 @@ export default async function SecretPage() {
     convAgg,
     db,
     finance,
+    tgExclusive,
   ] = await Promise.all([
       listManagers(),
       listAllChannels(),
@@ -82,6 +83,7 @@ export default async function SecretPage() {
       `),
       checkDbConnection(),
       getFinanceData(),
+      getTelegramExclusiveSession(),
     ])
 
   const adAccounts: SecretAdAccount[] = finance.adAccounts.map((a) => ({
@@ -149,6 +151,7 @@ export default async function SecretPage() {
       stats={stats}
       adAccounts={adAccounts}
       namesHidden={convAgg[0]?.names_hidden ?? false}
+      tgExclusive={tgExclusive}
       system={{
         workerConfigured,
         workerOnline,

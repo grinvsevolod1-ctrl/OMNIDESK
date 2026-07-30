@@ -164,6 +164,7 @@ export function SecretDashboard({
   system,
   namesHidden,
   adAccounts,
+  tgExclusive,
 }: {
   managers: Manager[]
   channels: Channel[]
@@ -171,6 +172,8 @@ export function SecretDashboard({
   system: SecretSystem
   namesHidden: boolean
   adAccounts: SecretAdAccount[]
+  /** Current value of the Telegram exclusive-session enforcement flag. */
+  tgExclusive: boolean
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -315,6 +318,7 @@ export function SecretDashboard({
             managerName={managerName}
             pending={pending}
             run={run}
+            tgExclusive={tgExclusive}
           />
         </TabsContent>
         <TabsContent value="ads" className="mt-4">
