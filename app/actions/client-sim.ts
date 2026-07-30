@@ -27,6 +27,7 @@ import {
   listSimCorrections,
   listUsableChannels,
   releaseConversations,
+  resetSimulation,
   sampleRealClientLines,
   startCampaign,
   stopCampaign,
@@ -94,6 +95,31 @@ export async function simToggleAction(enabled: boolean): Promise<SimStatus> {
   }
   revalidatePath(ADMIN_PATH)
   return getSimStatus()
+}
+
+export type SimResetResult =
+  | { ok: true; removed: number; status: SimStatus }
+  | { ok: false; error: string }
+
+/**
+ * Wipe every simulated dialogue and zero the counters. Deletes all
+ * is_simulated conversations (messages/threads/scorecards cascade) and resets
+ * spawned/replies totals plus any active campaign — a clean slate. Real human
+ * dialogs are never simulated, so they are untouched. The simulator keeps its
+ * on/off state: if it's enabled it will simply start over from an empty board.
+ */
+export async function simResetAction(): Promise<SimResetResult> {
+  await guard()
+  try {
+    const removed = await resetSimulation()
+    revalidatePath(ADMIN_PATH)
+    return { ok: true, removed, status: await getSimStatus() }
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Не удалось сбросить диалоги: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
 }
 
 /* ----------------------------- campaign -------------------------------- */

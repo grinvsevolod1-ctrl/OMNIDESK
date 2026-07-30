@@ -292,7 +292,19 @@ async function maybeSpawn(settings: SimSettings): Promise<void> {
     // Spread the remaining spawns evenly across the remaining window.
     avgGapSec = Math.max(15, Math.round(windowLeftSec / remaining))
   } else {
-    const perDay = Math.max(1, Math.floor(settings.dialogsPerDay) || 1)
+    // "0 dialogues per day" is an explicit operator choice: keep the simulator
+    // RUNNING (existing dialogues still get replies via processDueThreads), but
+    // never open new ones. Previously Math.max(1, …) floored this to 1/day, so
+    // the simulator kept spawning even at 0 — that was the reported bug.
+    const perDay = Math.floor(settings.dialogsPerDay) || 0
+    if (perDay <= 0) {
+      noteSim(
+        'spawn_paused',
+        'info',
+        'Создание новых диалогов приостановлено (0 диалогов/сутки). Существующие диалоги продолжают жить — отвечаю в них как обычно.',
+      )
+      return
+    }
     avgGapSec = Math.max(20, Math.round(86_400 / perDay))
   }
 

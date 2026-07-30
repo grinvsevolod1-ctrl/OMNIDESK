@@ -135,7 +135,7 @@ const TONE_REGISTER: Record<string, string> = {
   polite:
     'ТОН ОБЩЕНИЯ — ВЕЖЛИВЫЙ: пиши грамотно и уважительно, на «вы». Здоровайся культурно («Здравствуйте», «Добрый день»). Ставь знаки препинания и заглавные буквы. Никакого мата и грубости, даже если раздражён — оставайся корректным.',
   neutral:
-    'ТОН ОБЩЕНИЯ — ОБЫЧНЫЙ: пиши по-человечески и спокойно, как нормальный взрослый в переписке. Здоровайся нейтрально («Здравствуйте», «Добрый день», можно «Привет»). Лёгкая небрежность допустима, но без грубости и без мата.',
+    'ТОН ОБЩЕНИЯ — ��БЫЧНЫЙ: пиши по-человечески и спокойно, как нормальный взрослый в переписке. Здоровайся нейтрально («Здравствуйте», «Добрый день», можно «Привет»). Лёгкая небрежность допустима, но без грубости и без мата.',
   rough:
     'ТОН ОБЩЕНИЯ — РАЗВЯЗНЫЙ: пиши по-простому и панибратски («привет», «здарова», «чё», «скок»). Грубость и мат допустимы по настроению.',
   mixed:
@@ -267,7 +267,7 @@ function mediaBlock(channelType: string): string {
   const voice = channelType === 'livechat' ? '' : ', иногда голосовые'
   return [
     '',
-    'ПРО ВЛОЖЕНИЯ (ты в обычном мессенджере, но файлы прикреплять не умеешь — только текст): если по ходу разговора это уместно, ЕСТЕСТВЕННО упомяни медиа словами, как живой человек — например «скинул фото паспорта в лс», «щас пришлю скрин», «не могу голосовое сейчас слушать, я на работе», «а можешь фоткой показать?». Не делай этого в каждом сообщении и не описывай несуществующие картинки — только короткое живое упоминание там, где это к месту' +
+    'ПРО ВЛОЖЕНИЯ (ты в обычном мессенджере, но файлы прикреплять не умеешь — только текст): если по ходу разговора это уместно, ЕСТЕСТВЕННО упомяни медиа словами, как живой человек — например «скинул фото паспорта в лс», «щас пришлю скрин», «не могу голосовое сейчас слушать, я на работе», «а можешь фотк��й показать?». Не делай этого в каждом сообщении и не описывай несуществующие картинки — только короткое живое упоминание там, где это к месту' +
       voice +
       '.',
   ].join('\n')
@@ -371,7 +371,7 @@ function systemPrompt(
       : '- пиши живо и разговорно, можешь сокращать по-своему и делать редкие опечатки — но естественно, а не одинаково в каждом сообщении.',
     s.dumbness > 0.4 ? '- иногда чего-то не догоняешь с первого раза — но переспрашивай осмысленно, целой фразой, а не одним словом.' : '',
     s.profanity > 0.5 ? '- материшься свободно, грубо, по-настоящему, когда бесит.' : s.profanity > 0.2 ? '- иногда проскакивает мат.' : polite ? '- мата нет вообще.' : '- мат редко.',
-    '- НИКОГДА не используй длинное тире «—» и среднее тире «–». Живые люди в переписке их не ставят, это сразу выдаёт бота. Разделяй мысли запятой, точкой, дефисом «-» или просто отправляй отдельными сообщениями.',
+    '- НИКОГДА не используй длинное тире «—» и среднее тире «–». Живые люди в ��ереписке их не ставят, это сразу выдаёт бота. Разделяй мысли запятой, точкой, дефисом «-» или просто отправляй отдельными сообщениями.',
     '- НЕ повторяй свои прошлые фразы и обороты, каждый раз формулируй по-новому, своими словами.',
     '- НЕ начинай подряд сообщения с одного и того же слова.',
     '- НЕ здоровайся повторно, если уже начали разговор.',
@@ -446,6 +446,18 @@ function similarity(a: string, b: string): number {
   let inter = 0
   for (const w of wa) if (wb.has(w)) inter++
   return inter / (wa.size + wb.size - inter)
+}
+
+/** Highest word-overlap similarity between `line` and any line to avoid, 0..1.
+ *  Used to rank retry candidates so we can keep the LEAST repetitive one. */
+function maxSimilarity(line: string, avoid: string[]): number {
+  let max = 0
+  for (const prev of avoid) {
+    const s = similarity(line, prev)
+    if (s > max) max = s
+    if (max >= 1) break
+  }
+  return max
 }
 
 /** True when `line` is too close to any of the persona's recent lines. */
@@ -564,9 +576,12 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
 
       // Up to three attempts: if the line echoes something this persona OR the
       // swarm already said (whole line OR just the opening word), retry hotter
-      // to break the loop. On the last attempt we accept whatever we have so a
-      // shared opener alone never blocks a reply entirely.
+      // to break the loop. Crucially we KEEP THE BEST candidate seen so far
+      // (least similar to anything we're avoiding, opener not shared), so if the
+      // later, hotter attempts come back MORE repetitive than an earlier one we
+      // still send the earlier, better line instead of blindly taking the last.
       let clean = ''
+      let bestScore = Number.POSITIVE_INFINITY
       for (let attempt = 0; attempt < 3; attempt++) {
         const { text, finishReason } = await generateText({
           model: MODEL,
@@ -583,11 +598,18 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         // drop the dangling fragment so we never post a chopped-off word.
         if (finishReason === 'length') candidate = trimDanglingWord(candidate)
         if (!candidate || looksLikeRefusal(candidate)) continue
-        clean = candidate
-        const dup = tooSimilar(candidate, avoidLines)
-        const sharedOpener =
-          attempt < 2 && swarmOpeners.includes(firstWord(candidate))
-        if (!dup && !sharedOpener) break
+
+        // Rank this candidate: base score is its worst similarity to anything we
+        // want to avoid; a shared opening word adds a penalty. Lower is better.
+        const sharedOpener = swarmOpeners.includes(firstWord(candidate))
+        const score = maxSimilarity(candidate, avoidLines) + (sharedOpener ? 0.3 : 0)
+        if (score < bestScore) {
+          bestScore = score
+          clean = candidate
+        }
+
+        // Good enough — not a near-duplicate and not a shared opener — stop early.
+        if (!tooSimilar(candidate, avoidLines) && !sharedOpener) break
       }
 
       if (clean && !looksLikeRefusal(clean)) {

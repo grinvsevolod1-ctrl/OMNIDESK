@@ -391,6 +391,54 @@ export async function bumpRepliesTotal(): Promise<void> {
   )
 }
 
+/**
+ * Full reset of the simulator's data. Deletes EVERY conversation the simulator
+ * ever created (is_simulated = true) — their messages, sim_threads, scorecards,
+ * ai_memory, etc. cascade away via ON DELETE CASCADE — then zeroes the lifetime
+ * counters and clears any active campaign for a clean slate. Real human dialogs
+ * are never is_simulated = true (the simulator can't adopt them — see migration
+ * 065), so they are guaranteed untouched. Returns how many were removed.
+ */
+export async function resetSimulation(): Promise<number> {
+  const removed = await query<{ id: string }>(
+    `DELETE FROM conversations WHERE is_simulated = true RETURNING id`,
+  )
+
+  // Zero the always-present counters. Campaign columns are migration-gated, so
+  // only clear them when present (older DBs simply skip that part).
+  const cols = await getExistingOptionalCols()
+  const hasCampaign = [
+    'campaign_active',
+    'campaign_target',
+    'campaign_ends_at',
+    'campaign_started_at',
+    'campaign_baseline',
+  ].every((c) => cols.has(c))
+  await query(
+    `UPDATE sim_settings
+        SET spawned_total = 0,
+            replies_total = 0,${
+              hasCampaign
+                ? `
+            campaign_active = false,
+            campaign_target = 0,
+            campaign_ends_at = NULL,
+            campaign_started_at = NULL,
+            campaign_baseline = 0,`
+                : ''
+            }
+            updated_at = now()
+      WHERE id = true`,
+  )
+
+  // The swarm anti-repetition memory is in-process; clear it so the next run
+  // starts truly fresh instead of avoiding phrases from a population that no
+  // longer exists.
+  clearGlobalLineMemory()
+
+  return removed.length
+}
+
 /* -------------------------------- campaign ------------------------------ */
 
 /** Thrown when campaign mode is used on a DB that hasn't applied migration 062. */
@@ -523,6 +571,13 @@ export function rememberGlobalLine(line: string): void {
 export function getGlobalRecentLines(n = 40): string[] {
   const buf = globalLines()
   return buf.slice(-Math.max(0, n))
+}
+
+/** Wipe the swarm's in-process line/opener memory (used by a full reset so a
+ *  fresh population doesn't inherit phrases from the wiped one). */
+export function clearGlobalLineMemory(): void {
+  g.__simGlobalLines = []
+  g.__simGlobalOpeners = []
 }
 
 /**

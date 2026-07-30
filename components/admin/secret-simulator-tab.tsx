@@ -7,12 +7,20 @@ import {
   Bot,
   CalendarClock,
   CircleDot,
+  FlaskConical,
   Gauge,
+  GraduationCap,
+  Inbox,
+  LayoutDashboard,
   Loader2,
+  Megaphone,
   Minus,
   MessageCircle,
   Plus,
   Power,
+  RotateCcw,
+  ScrollText,
+  Settings2,
   TriangleAlert,
   Users2,
 } from 'lucide-react'
@@ -24,6 +32,7 @@ import { SecretSimulatorLogs } from '@/components/admin/secret-simulator-logs'
 import { SecretSimulatorTest } from '@/components/admin/secret-simulator-test'
 import { SecretSimulatorTrain } from '@/components/admin/secret-simulator-train'
 import {
+  simResetAction,
   simStatusAction,
   simToggleAction,
   simUpdateSettingsAction,
@@ -31,9 +40,19 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import type { Channel } from '@/lib/types'
 import type { SimStatus } from '@/lib/client-sim/types'
@@ -68,7 +87,9 @@ const OUTCOME_LABEL: Record<string, string> = {
 
 const OUTCOME_ORDER = ['ended', 'left', 'competitor', 'ghosted', 'angry'] as const
 
-const MIN_PER_DAY = 1
+// 0 is a valid, meaningful value: keep the simulator running (existing dialogues
+// still get replies) but stop opening NEW ones.
+const MIN_PER_DAY = 0
 const MAX_PER_DAY = 5000
 const MIN_CONCURRENT = 1
 const MAX_CONCURRENT = 1000
@@ -84,18 +105,43 @@ function humanGap(total: number): string {
 
 /** Explain the real-world cadence a per-day target implies. */
 function perDayHint(perDay: number): string {
-  const clamped = Math.min(Math.max(perDay, MIN_PER_DAY), MAX_PER_DAY)
+  if (perDay <= 0) {
+    return 'новые диалоги не создаются — симулятор только ведёт уже существующие'
+  }
+  const clamped = Math.min(Math.max(perDay, 1), MAX_PER_DAY)
   const avgGap = 86_400 / clamped
   return `≈ новый диалог в среднем раз в ${humanGap(avgGap)}, вразнобой и круглосуточно`
 }
+
+type SimTabKey =
+  | 'settings'
+  | 'campaign'
+  | 'overview'
+  | 'learn'
+  | 'dialogs'
+  | 'log'
+  | 'test'
+
+const SIM_TABS: { key: SimTabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { key: 'settings', label: 'Настройки', icon: Settings2 },
+  { key: 'campaign', label: 'Кампания', icon: Megaphone },
+  { key: 'overview', label: 'Обзор', icon: LayoutDashboard },
+  { key: 'learn', label: 'Обучение', icon: GraduationCap },
+  { key: 'dialogs', label: 'Диалоги', icon: Inbox },
+  { key: 'log', label: 'Лог', icon: ScrollText },
+  { key: 'test', label: 'Песочница', icon: FlaskConical },
+]
 
 export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   const eligible = channels.filter((c) => c.managerId)
 
   const [pending, startTransition] = useTransition()
+  const [resetting, startReset] = useTransition()
+  const [resetOpen, setResetOpen] = useState(false)
+  const [tab, setTab] = useState<SimTabKey>('settings')
 
-  // The single tunable + channel selection. Synced from the server snapshot on
-  // first load and after saves.
+  // The tunables + channel selection. Synced from the server snapshot on first
+  // load and after saves.
   const [perDay, setPerDay] = useState(20)
   const [maxConcurrent, setMaxConcurrent] = useState(100)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -136,8 +182,32 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
     })
   }
 
+  function confirmReset() {
+    startReset(async () => {
+      try {
+        const res = await simResetAction()
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        void mutateStatus(res.status, { revalidate: false })
+        setResetOpen(false)
+        toast.success(
+          res.removed > 0
+            ? `Сброшено: удалено ${res.removed} диалогов, счётчики обнулены`
+            : 'Диалогов не было — счётчики обнулены',
+        )
+      } catch {
+        toast.error('Не удалось сбросить диалоги')
+      }
+    })
+  }
+
   function save() {
-    const dialogsPerDay = Math.min(Math.max(Math.round(perDay) || MIN_PER_DAY, MIN_PER_DAY), MAX_PER_DAY)
+    const dialogsPerDay = Math.min(
+      Math.max(Math.round(perDay) || MIN_PER_DAY, MIN_PER_DAY),
+      MAX_PER_DAY,
+    )
     const maxCc = Math.min(
       Math.max(Math.round(maxConcurrent) || MIN_CONCURRENT, MIN_CONCURRENT),
       MAX_CONCURRENT,
@@ -179,18 +249,20 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
   }
 
   const noChannelsChosen = selected.size === 0
+  const paused = running && (status?.dialogsPerDay ?? perDay) <= 0 && !status?.campaignActive
 
   return (
     <div className="flex flex-col gap-4">
-      {/* ---- Master control ---- */}
+      {/* ============================ COMMAND BAR ============================ */}
       <Card
         className={cn(
-          'flex flex-col gap-4 p-5 transition-colors',
+          'flex flex-col gap-4 p-4 transition-colors sm:p-5',
           running && 'border-success/40 bg-success/5',
         )}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-start gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          {/* Identity + status */}
+          <div className="flex min-w-0 items-center gap-3">
             <div
               className={cn(
                 'flex size-11 shrink-0 items-center justify-center rounded-xl border',
@@ -201,14 +273,21 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
             >
               <Bot className="size-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-semibold tracking-tight">Симулятор клиентов</h3>
                 {running ? (
-                  <Badge className="gap-1 bg-success/15 text-success">
-                    <CircleDot className="size-3 animate-pulse" />
-                    Работает
-                  </Badge>
+                  paused ? (
+                    <Badge variant="secondary" className="gap-1">
+                      <CircleDot className="size-3" />
+                      На паузе (0/сутки)
+                    </Badge>
+                  ) : (
+                    <Badge className="gap-1 bg-success/15 text-success">
+                      <CircleDot className="size-3 animate-pulse" />
+                      Работает
+                    </Badge>
+                  )
                 ) : (
                   <Badge variant="secondary" className="gap-1">
                     <Power className="size-3" />
@@ -216,337 +295,446 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
                   </Badge>
                 )}
               </div>
-              <p className="max-w-prose text-sm text-muted-foreground text-pretty">
-                Живые ИИ-клиенты сами пишут менеджерам по выбранным каналам,
-                торгуются, ругаются, тупят и по-разному реагируют на предложения.
-                Каждый «клиент» уникален — тон, характер и манера свои, никто не
-                повторяется. Работает в фоне даже с закрытой панелью.
+              <p className="mt-0.5 text-xs text-muted-foreground text-pretty">
+                Живые ИИ-клиенты сами пишут менеджерам: торгуются, ругаются,
+                тупят — каждый уникален и не повторяется. Работает в фоне.
               </p>
             </div>
           </div>
-          <Switch
-            checked={running}
-            onCheckedChange={(v) => toggle(Boolean(v))}
-            disabled={pending || (!running && noChannelsChosen)}
-            aria-label="Включить симулятор"
+
+          {/* Actions */}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => setResetOpen(true)}
+              disabled={resetting}
+            >
+              {resetting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RotateCcw className="size-4" />
+              )}
+              <span className="hidden sm:inline">Сбросить диалоги</span>
+              <span className="sm:hidden">Сброс</span>
+            </Button>
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-1.5">
+              <span className="text-xs font-medium text-muted-foreground">
+                {running ? 'Вкл' : 'Выкл'}
+              </span>
+              <Switch
+                checked={running}
+                onCheckedChange={(v) => toggle(Boolean(v))}
+                disabled={pending || (!running && noChannelsChosen)}
+                aria-label="Включить симулятор"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Compact live stats strip */}
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <MiniStat
+            icon={Users2}
+            label="Активные"
+            value={`${status?.activeThreads ?? 0} / ${status?.maxConcurrent ?? maxConcurrent}`}
+          />
+          <MiniStat
+            icon={MessageCircle}
+            label="Ответов всего"
+            value={status?.repliesTotal ?? 0}
+          />
+          <MiniStat icon={Bot} label="Создано" value={status?.spawnedTotal ?? 0} />
+          <MiniStat
+            icon={CalendarClock}
+            label="В сутки"
+            value={status?.dialogsPerDay ?? perDay}
           />
         </div>
 
+        {/* Inline alerts */}
         {!running && noChannelsChosen && (
-          <div className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
-            <TriangleAlert className="size-4 shrink-0" />
-            Выберите хотя бы один канал ниже, затем сохраните — и можно запускать.
-          </div>
+          <Alert tone="warning">
+            Выберите хотя бы один канал во вкладке «Настройки», сохраните — и можно
+            запускать.
+          </Alert>
         )}
-
         {status && !status.aiConfigured && (
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-            <TriangleAlert className="size-4 shrink-0" />
-            ИИ-генерация недоступна (нет ключа AI Gateway) — используются
-            встроенные шаблоны с рандомизацией.
-          </div>
+          <Alert tone="muted">
+            ИИ-генерация недоступна (нет ключа AI Gateway) — используются встроенные
+            шаблоны с рандомизацией.
+          </Alert>
         )}
-
         {loadError && (
-          <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-            <TriangleAlert className="size-4 shrink-0" />
-            Не удалось получить статус симулятора.
-          </div>
+          <Alert tone="destructive">Не удалось получить статус симулятора.</Alert>
         )}
       </Card>
 
-      {/* ---- Live counters ---- */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <MiniStat
-          icon={Users2}
-          label="Активные диалоги"
-          value={`${status?.activeThreads ?? 0} / ${status?.maxConcurrent ?? maxConcurrent}`}
-        />
-        <MiniStat
-          icon={MessageCircle}
-          label="Ответов всего"
-          value={status?.repliesTotal ?? 0}
-        />
-        <MiniStat
-          icon={Bot}
-          label="Создано диалогов"
-          value={status?.spawnedTotal ?? 0}
-        />
-        <MiniStat
-          icon={CalendarClock}
-          label="Диалогов в сутки"
-          value={status?.dialogsPerDay ?? perDay}
-        />
-      </div>
-
-      {/* ---- Campaign scheduler (N dialogues over H hours) ---- */}
-      <SecretSimulatorCampaign
-        status={status}
-        onChanged={(s) => void mutateStatus(s, { revalidate: false })}
-      />
-
-      {/* ---- Lifecycle state breakdown ---- */}
-      {status && (
-        <Card className="flex flex-col gap-3 p-4">
-          <div className="flex flex-wrap gap-2">
-            {STATE_ORDER.map((st) => (
-              <div
-                key={st}
-                className="flex items-center gap-2 rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs"
-              >
-                <span className="text-muted-foreground">{STATE_LABEL[st]}</span>
-                <span className="font-semibold tabular-nums">
-                  {status.byState[st] ?? 0}
-                </span>
-              </div>
+      {/* ============================== TABS =============================== */}
+      <Tabs value={tab} onValueChange={(v) => setTab(v as SimTabKey)}>
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <TabsList className="flex-nowrap">
+            {SIM_TABS.map(({ key, label, icon: Icon }) => (
+              <TabsTrigger key={key} value={key} className="flex-none whitespace-nowrap px-3">
+                <Icon className="size-4" />
+                {label}
+              </TabsTrigger>
             ))}
-          </div>
-          {/* Fates of finished dialogues */}
-          <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
-            <span className="text-xs text-muted-foreground">Как завершились:</span>
-            {OUTCOME_ORDER.map((oc) => (
-              <div
-                key={oc}
-                className="flex items-center gap-2 rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs"
-              >
-                <span className="text-muted-foreground">{OUTCOME_LABEL[oc]}</span>
-                <span className="font-semibold tabular-nums">
-                  {status.byOutcome[oc] ?? 0}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {/* ---- Learn from real dialogues ---- */}
-      <SecretSimulatorLearn
-        key={status?.learnedProfile?.learnedAt ?? 'none'}
-        initial={status?.learnedProfile ?? null}
-      />
-
-      {/* ---- The single knob + channels ---- */}
-      <Card className="flex flex-col gap-6 p-5">
-        <div className="flex items-center gap-2">
-          <Gauge className="size-4 text-muted-foreground" />
-          <h3 className="font-semibold tracking-tight">Настройки</h3>
+          </TabsList>
         </div>
 
-        {/* Dialogues per day */}
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="sim-per-day">Диалогов в сутки</Label>
-            <span className="text-xs text-muted-foreground">{perDayHint(perDay)}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="size-10 shrink-0"
-              onClick={() => bumpPerDay(-1)}
-              disabled={perDay <= MIN_PER_DAY}
-              aria-label="Меньше"
-            >
-              <Minus className="size-4" />
-            </Button>
-            <Input
-              id="sim-per-day"
-              type="number"
-              inputMode="numeric"
-              min={MIN_PER_DAY}
-              max={MAX_PER_DAY}
-              value={perDay}
-              onChange={(e) => setPerDay(Number(e.target.value))}
-              onBlur={() =>
-                setPerDay((v) =>
-                  Math.min(Math.max(Math.round(v) || MIN_PER_DAY, MIN_PER_DAY), MAX_PER_DAY),
-                )
-              }
-              className="h-10 max-w-32 text-center text-base font-semibold tabular-nums"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="size-10 shrink-0"
-              onClick={() => bumpPerDay(1)}
-              disabled={perDay >= MAX_PER_DAY}
-              aria-label="Больше"
-            >
-              <Plus className="size-4" />
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground text-pretty">
-            Темп прихода новых. Скорость ответов, тон и характер симулятор
-            подбирает сам, чтобы поведение было живым и непредсказуемым.
-          </p>
-        </div>
+        {/* ---- Settings ---- */}
+        <TabsContent value="settings" className="mt-4">
+          <Card className="flex flex-col gap-6 p-5">
+            <div className="flex items-center gap-2">
+              <Gauge className="size-4 text-muted-foreground" />
+              <h3 className="font-semibold tracking-tight">Основные настройки</h3>
+            </div>
 
-        {/* Max concurrent dialogues — independent of daily throughput */}
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="sim-max-cc">Одновременных диалогов (лимит)</Label>
-            <span className="text-xs text-muted-foreground">
-              до {MAX_CONCURRENT}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="size-10 shrink-0"
-              onClick={() => bumpConcurrent(-5)}
-              disabled={maxConcurrent <= MIN_CONCURRENT}
-              aria-label="Меньше"
-            >
-              <Minus className="size-4" />
-            </Button>
-            <Input
-              id="sim-max-cc"
-              type="number"
-              inputMode="numeric"
-              min={MIN_CONCURRENT}
-              max={MAX_CONCURRENT}
-              value={maxConcurrent}
-              onChange={(e) => setMaxConcurrent(Number(e.target.value))}
-              onBlur={() =>
-                setMaxConcurrent((v) =>
+            {/* Dialogues per day */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="sim-per-day">Диалогов в сутки</Label>
+                <span className="text-right text-xs text-muted-foreground">
+                  {perDayHint(perDay)}
+                </span>
+              </div>
+              <Stepper
+                id="sim-per-day"
+                value={perDay}
+                min={MIN_PER_DAY}
+                max={MAX_PER_DAY}
+                step={1}
+                onBump={bumpPerDay}
+                onChange={setPerDay}
+                onCommit={(v) =>
+                  Math.min(Math.max(Math.round(v) || MIN_PER_DAY, MIN_PER_DAY), MAX_PER_DAY)
+                }
+                setValue={setPerDay}
+              />
+              <p className="text-xs text-muted-foreground text-pretty">
+                Темп прихода новых. Поставьте <strong>0</strong>, чтобы новые не
+                создавались вовсе — уже начатые диалоги продолжат жить. Скорость
+                ответов, тон и характер симулятор подбирает сам.
+              </p>
+            </div>
+
+            {/* Max concurrent */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="sim-max-cc">Одновременных диалогов (лимит)</Label>
+                <span className="text-xs text-muted-foreground">до {MAX_CONCURRENT}</span>
+              </div>
+              <Stepper
+                id="sim-max-cc"
+                value={maxConcurrent}
+                min={MIN_CONCURRENT}
+                max={MAX_CONCURRENT}
+                step={5}
+                onBump={bumpConcurrent}
+                onChange={setMaxConcurrent}
+                onCommit={(v) =>
                   Math.min(
                     Math.max(Math.round(v) || MIN_CONCURRENT, MIN_CONCURRENT),
                     MAX_CONCURRENT,
-                  ),
-                )
-              }
-              className="h-10 max-w-32 text-center text-base font-semibold tabular-nums"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="size-10 shrink-0"
-              onClick={() => bumpConcurrent(5)}
-              disabled={maxConcurrent >= MAX_CONCURRENT}
-              aria-label="Больше"
-            >
-              <Plus className="size-4" />
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground text-pretty">
-            Сколько «живых» клиентов может вести переписку одновременно —
-            независимо от суточного потока. Сюда входят и те, кто сейчас спит,
-            обещал ответить позже или временно пропал: они занимают место, но не
-            пишут постоянно. Можно смело ставить до 100.
-          </p>
-        </div>
-
-        {/* Channels */}
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <Label>Каналы для симуляции</Label>
-            <div className="flex items-center gap-2 text-xs">
-              <button
-                type="button"
-                className="text-foreground/70 underline-offset-2 hover:underline"
-                onClick={() => setSelected(new Set(eligible.map((c) => c.id)))}
-              >
-                Все
-              </button>
-              <span className="text-muted-foreground">·</span>
-              <button
-                type="button"
-                className="text-foreground/70 underline-offset-2 hover:underline"
-                onClick={() => setSelected(new Set())}
-              >
-                Сброс
-              </button>
+                  )
+                }
+                setValue={setMaxConcurrent}
+              />
+              <p className="text-xs text-muted-foreground text-pretty">
+                Сколько «живых» клиентов может вести переписку одновременно —
+                независимо от суточного потока. Сюда входят и те, кто спит, обещал
+                ответить позже или временно пропал. Можно смело ставить до 100.
+              </p>
             </div>
-          </div>
-          {eligible.length === 0 ? (
-            <p className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              Нет каналов с назначенным менеджером. Создайте канал и назначьте
-              владельца во вкладке «Каналы».
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {eligible.map((c) => {
-                const on = selected.has(c.id)
-                return (
+
+            {/* Channels */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <Label>Каналы для симуляции</Label>
+                <div className="flex items-center gap-2 text-xs">
                   <button
-                    key={c.id}
                     type="button"
-                    onClick={() => toggleChannel(c.id)}
-                    className={cn(
-                      'press-scale inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                      on
-                        ? 'border-foreground/20 bg-foreground text-background'
-                        : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',
-                    )}
+                    className="text-foreground/70 underline-offset-2 hover:underline"
+                    onClick={() => setSelected(new Set(eligible.map((c) => c.id)))}
                   >
-                    <ChannelIcon type={c.type} className="size-3.5" />
-                    {c.name}
+                    Все
                   </button>
-                )
-              })}
+                  <span className="text-muted-foreground">·</span>
+                  <button
+                    type="button"
+                    className="text-foreground/70 underline-offset-2 hover:underline"
+                    onClick={() => setSelected(new Set())}
+                  >
+                    Сброс
+                  </button>
+                </div>
+              </div>
+              {eligible.length === 0 ? (
+                <p className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  Нет каналов с назначенным менеджером. Создайте канал и назначьте
+                  владельца во вкладке «Каналы».
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {eligible.map((c) => {
+                    const on = selected.has(c.id)
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => toggleChannel(c.id)}
+                        aria-pressed={on}
+                        className={cn(
+                          'press-scale inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                          on
+                            ? 'border-foreground/20 bg-foreground text-background'
+                            : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        <ChannelIcon type={c.type} className="size-3.5" />
+                        {c.name}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        <Button
-          size="lg"
-          className="press-scale gap-2 self-start"
-          onClick={save}
-          disabled={pending}
-        >
-          {pending ? (
-            <Loader2 className="size-4 animate-spin" />
+            <Button
+              size="lg"
+              className="press-scale gap-2 self-start"
+              onClick={save}
+              disabled={pending}
+            >
+              {pending ? <Loader2 className="size-4 animate-spin" /> : <Gauge className="size-4" />}
+              Сохранить настройки
+            </Button>
+          </Card>
+        </TabsContent>
+
+        {/* ---- Campaign ---- */}
+        <TabsContent value="campaign" className="mt-4">
+          <SecretSimulatorCampaign
+            status={status}
+            onChanged={(s) => void mutateStatus(s, { revalidate: false })}
+          />
+        </TabsContent>
+
+        {/* ---- Overview: lifecycle + outcomes ---- */}
+        <TabsContent value="overview" className="mt-4">
+          {status ? (
+            <Card className="flex flex-col gap-4 p-5">
+              <div className="flex items-center gap-2">
+                <LayoutDashboard className="size-4 text-muted-foreground" />
+                <h3 className="font-semibold tracking-tight">Что происходит сейчас</h3>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Стадии диалогов
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {STATE_ORDER.map((st) => (
+                    <StatPill key={st} label={STATE_LABEL[st]} value={status.byState[st] ?? 0} />
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 border-t border-border/60 pt-4">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Как завершились
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {OUTCOME_ORDER.map((oc) => (
+                    <StatPill key={oc} label={OUTCOME_LABEL[oc]} value={status.byOutcome[oc] ?? 0} />
+                  ))}
+                </div>
+              </div>
+            </Card>
           ) : (
-            <Gauge className="size-4" />
+            <Card className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Загрузка статуса…
+            </Card>
           )}
-          Сохранить настройки
-        </Button>
-      </Card>
+        </TabsContent>
 
-      {/* ---- Continue existing / real dialogues ---- */}
-      <SecretSimulatorAdopt />
+        {/* ---- Learn + Train ---- */}
+        <TabsContent value="learn" className="mt-4">
+          <div className="flex flex-col gap-4">
+            <SecretSimulatorLearn
+              key={status?.learnedProfile?.learnedAt ?? 'none'}
+              initial={status?.learnedProfile ?? null}
+            />
+            <SecretSimulatorTrain />
+          </div>
+        </TabsContent>
 
-      {/* ---- Train the simulator (flag wrong messages → strict rules) ---- */}
-      <SecretSimulatorTrain />
+        {/* ---- Adopt / continue real dialogues ---- */}
+        <TabsContent value="dialogs" className="mt-4">
+          <SecretSimulatorAdopt />
+        </TabsContent>
 
-      {/* ---- Live activity log (simulator-only, god-panel isolated) ---- */}
-      <SecretSimulatorLogs />
+        {/* ---- Live log ---- */}
+        <TabsContent value="log" className="mt-4">
+          <SecretSimulatorLogs />
+        </TabsContent>
 
-      {/* ---- Interactive test sandbox ---- */}
-      <SecretSimulatorTest />
+        {/* ---- Interactive sandbox ---- */}
+        <TabsContent value="test" className="mt-4">
+          <SecretSimulatorTest />
+        </TabsContent>
+      </Tabs>
+
+      {/* ============================ RESET MODAL ========================== */}
+      <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TriangleAlert className="size-5 text-destructive" />
+              Сбросить все диалоги симулятора?
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              Будут безвозвратно удалены <strong>все</strong> диалоги, созданные
+              симулятором, вместе с их сообщениями и статистикой, а счётчики
+              «создано» / «ответов» обнулятся. Активная кампания остановится.
+              Настоящие переписки с реальными клиентами <strong>не затрагиваются</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose
+              render={
+                <Button variant="outline" disabled={resetting}>
+                  Отмена
+                </Button>
+              }
+            />
+            <Button variant="destructive" className="gap-2" onClick={confirmReset} disabled={resetting}>
+              {resetting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RotateCcw className="size-4" />
+              )}
+              Да, сбросить всё
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
 /* ------------------------------- pieces --------------------------------- */
 
+function Alert({
+  tone,
+  children,
+}: {
+  tone: 'warning' | 'muted' | 'destructive'
+  children: React.ReactNode
+}) {
+  const toneClass =
+    tone === 'warning'
+      ? 'border-warning/30 bg-warning/10 text-warning'
+      : tone === 'destructive'
+        ? 'border-destructive/30 bg-destructive/10 text-destructive'
+        : 'border-border bg-muted/40 text-muted-foreground'
+  return (
+    <div className={cn('flex items-center gap-2 rounded-lg border p-3 text-xs', toneClass)}>
+      <TriangleAlert className="size-4 shrink-0" />
+      <span className="text-pretty">{children}</span>
+    </div>
+  )
+}
+
+function StatPill({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center gap-2 rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-semibold tabular-nums">{value}</span>
+    </div>
+  )
+}
+
+function Stepper({
+  id,
+  value,
+  min,
+  max,
+  step,
+  onBump,
+  onChange,
+  onCommit,
+  setValue,
+}: {
+  id: string
+  value: number
+  min: number
+  max: number
+  step: number
+  onBump: (delta: number) => void
+  onChange: (v: number) => void
+  onCommit: (v: number) => number
+  setValue: (v: number) => void
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-10 shrink-0"
+        onClick={() => onBump(-step)}
+        disabled={value <= min}
+        aria-label="Меньше"
+      >
+        <Minus className="size-4" />
+      </Button>
+      <Input
+        id={id}
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        onBlur={() => setValue(onCommit(value))}
+        className="h-10 max-w-32 text-center text-base font-semibold tabular-nums"
+      />
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-10 shrink-0"
+        onClick={() => onBump(step)}
+        disabled={value >= max}
+        aria-label="Больше"
+      >
+        <Plus className="size-4" />
+      </Button>
+    </div>
+  )
+}
+
 function MiniStat({
   icon: Icon,
   label,
   value,
-  small,
 }: {
   icon: React.ComponentType<{ className?: string }>
   label: string
   value: string | number
-  small?: boolean
 }) {
   return (
-    <Card className="flex items-center gap-3 p-4">
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
+    <div className="flex items-center gap-2.5 rounded-lg border border-border bg-muted/20 p-2.5">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
         <Icon className="size-4 text-foreground" />
       </div>
       <div className="min-w-0">
-        <p className="truncate text-xs text-muted-foreground">{label}</p>
-        <p className={cn('font-semibold tabular-nums', small ? 'text-sm' : 'text-lg')}>
-          {value}
-        </p>
+        <p className="truncate text-[11px] text-muted-foreground">{label}</p>
+        <p className="text-base font-semibold tabular-nums leading-tight">{value}</p>
       </div>
-    </Card>
+    </div>
   )
 }
