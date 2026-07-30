@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import {
@@ -77,9 +78,53 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import type { Channel, Manager } from '@/lib/types'
-import { MessagesTrendChart, ChannelsTypeChart } from '@/components/admin/secret-charts'
-import { SecretConsole } from '@/components/admin/secret-console'
-import { SecretSimulatorTab } from '@/components/admin/secret-simulator-tab'
+// Recharts is heavy; keep it out of the initial secret-dashboard bundle and
+// load each chart lazily when the dashboard renders. ssr:false because the
+// charts measure their container and produce no useful server HTML.
+const MessagesTrendChart = dynamic(
+  () =>
+    import('@/components/admin/secret-charts').then(
+      (m) => m.MessagesTrendChart,
+    ),
+  {
+    ssr: false,
+    loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
+  },
+)
+const ChannelsTypeChart = dynamic(
+  () =>
+    import('@/components/admin/secret-charts').then((m) => m.ChannelsTypeChart),
+  {
+    ssr: false,
+    loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
+  },
+)
+// Console + simulator are large, rarely the first tab an admin opens, and each
+// pulls its own tree of sub-components. Radix TabsContent doesn't mount inactive
+// tabs, so loading these lazily means their JS only downloads when the admin
+// actually switches to that tab. ssr:false since they're interactive-only.
+const SecretConsole = dynamic(
+  () =>
+    import('@/components/admin/secret-console').then((m) => m.SecretConsole),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-96 animate-pulse rounded-lg bg-muted/40" />
+    ),
+  },
+)
+const SecretSimulatorTab = dynamic(
+  () =>
+    import('@/components/admin/secret-simulator-tab').then(
+      (m) => m.SecretSimulatorTab,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-96 animate-pulse rounded-lg bg-muted/40" />
+    ),
+  },
+)
 import { SecretTransferTab } from '@/components/admin/secret-transfer-tab'
 import {
   SecretAdsTab,

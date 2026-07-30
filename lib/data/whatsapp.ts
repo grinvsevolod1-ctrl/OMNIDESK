@@ -7,7 +7,7 @@ import { query } from '../db'
 import { decrypt, encrypt, maskSecret } from '../crypto'
 import type { ProxyDescriptor } from '../proxy-agent'
 import type { ChannelStatus, MediaType } from '../types'
-import { readPool, type ChannelRow } from './shared'
+import { channelColumns, readPool, type ChannelRow } from './shared'
 // Cross-domain calls resolved at runtime via the facade to avoid import cycles.
 import {
   getProxyForChannel,
@@ -223,7 +223,7 @@ function toWhatsappNumber(
 /** Admin: list every WhatsApp number with its assigned manager. */
 export async function listWhatsappNumbers(): Promise<WhatsappNumber[]> {
   const rows = await query<ChannelRow & { manager_name: string | null }>(
-    `SELECT c.*, m.name AS manager_name
+    `SELECT ${channelColumns('c')}, m.name AS manager_name
        FROM channels c
        LEFT JOIN managers m ON m.id = c.manager_id
       WHERE c.type = 'whatsapp'
@@ -237,7 +237,7 @@ export async function getWhatsappNumberByPhoneId(
   phoneNumberId: string,
 ): Promise<WhatsappNumber | null> {
   const rows = await query<ChannelRow & { manager_name: string | null }>(
-    `SELECT c.*, m.name AS manager_name
+    `SELECT ${channelColumns('c')}, m.name AS manager_name
        FROM channels c
        LEFT JOIN managers m ON m.id = c.manager_id
       WHERE c.type = 'whatsapp' AND c.config->>'phoneNumberId' = $1
@@ -315,8 +315,8 @@ export async function resolveWhatsappInboundByPhoneId(
   phoneNumberId: string,
 ): Promise<WhatsappInboundRoute | null> {
   const rows = await query<ChannelRow>(
-    `SELECT * FROM channels
-      WHERE type = 'whatsapp' AND config->>'phoneNumberId' = $1
+    `SELECT ${channelColumns()} FROM channels
+       WHERE type = 'whatsapp' AND config->>'phoneNumberId' = $1
       LIMIT 1`,
     [phoneNumberId],
   )

@@ -40,6 +40,23 @@ interface ProxyRow {
   owner_manager_name?: string | null
 }
 
+/**
+ * Real table columns for `proxies` (excludes the join-only *_manager_name
+ * fields on ProxyRow). Selecting these explicitly instead of `*` keeps the
+ * encrypted-credential columns off the wire when they aren't needed and stops a
+ * future column addition from silently widening every proxy read. The `alias`
+ * lets the same list serve `FROM proxies` and joined `FROM proxies p` shapes.
+ */
+const PROXY_COLUMN_NAMES = [
+  'id', 'manager_id', 'created_by_role', 'created_by_manager_id', 'label',
+  'kind', 'host', 'port', 'username_enc', 'password_enc', 'secret_enc',
+  'status', 'last_error', 'created_at',
+] as const
+
+function proxyColumns(alias = 'proxies'): string {
+  return PROXY_COLUMN_NAMES.map((c) => `${alias}.${c}`).join(', ')
+}
+
 function toProxy(r: ProxyRow): Proxy {
   return {
     id: r.id,
@@ -66,9 +83,9 @@ function toProxy(r: ProxyRow): Proxy {
  */
 export async function listProxies(managerId: string): Promise<Proxy[]> {
   const rows = await query<ProxyRow>(
-    `SELECT * FROM proxies
-      WHERE manager_id = $1 OR created_by_manager_id = $1
-      ORDER BY created_at DESC`,
+    `SELECT ${proxyColumns()} FROM proxies
+       WHERE manager_id = $1 OR created_by_manager_id = $1
+       ORDER BY created_at DESC`,
     [managerId],
   )
   return rows.map(toProxy)
@@ -82,9 +99,9 @@ export async function listManagerOwnedProxies(
   managerId: string,
 ): Promise<Proxy[]> {
   const rows = await query<ProxyRow>(
-    `SELECT * FROM proxies
-      WHERE created_by_role = 'manager' AND created_by_manager_id = $1
-      ORDER BY created_at DESC`,
+    `SELECT ${proxyColumns()} FROM proxies
+       WHERE created_by_role = 'manager' AND created_by_manager_id = $1
+       ORDER BY created_at DESC`,
     [managerId],
   )
   return rows.map(toProxy)
@@ -98,8 +115,8 @@ export async function listManagerAssignedProxies(
   managerId: string,
 ): Promise<Proxy[]> {
   const rows = await query<ProxyRow>(
-    `SELECT * FROM proxies
-      WHERE manager_id = $1::uuid
+    `SELECT ${proxyColumns()} FROM proxies
+       WHERE manager_id = $1::uuid
         AND (created_by_role = 'admin' OR created_by_manager_id <> $1::uuid)
       ORDER BY created_at DESC`,
     [managerId],
@@ -110,7 +127,7 @@ export async function listManagerAssignedProxies(
 /** Every proxy, with assigned-manager and owner-manager names joined in. */
 export async function listAllProxies(): Promise<Proxy[]> {
   const rows = await query<ProxyRow>(
-    `SELECT p.*, m.name AS assigned_manager_name, o.name AS owner_manager_name
+      `SELECT ${proxyColumns('p')}, m.name AS assigned_manager_name, o.name AS owner_manager_name
        FROM proxies p
        LEFT JOIN managers m ON m.id = p.manager_id
        LEFT JOIN managers o ON o.id = p.created_by_manager_id
@@ -121,7 +138,7 @@ export async function listAllProxies(): Promise<Proxy[]> {
 
 export async function getProxyById(id: string): Promise<Proxy | null> {
   const rows = await query<ProxyRow>(
-    `SELECT p.*, m.name AS assigned_manager_name, o.name AS owner_manager_name
+      `SELECT ${proxyColumns('p')}, m.name AS assigned_manager_name, o.name AS owner_manager_name
        FROM proxies p
        LEFT JOIN managers m ON m.id = p.manager_id
        LEFT JOIN managers o ON o.id = p.created_by_manager_id
@@ -243,7 +260,7 @@ export async function getProxyDescriptorById(
   id: string,
 ): Promise<ProxyDescriptor | null> {
   const rows = await query<ProxyRow>(
-    'SELECT * FROM proxies WHERE id = $1 LIMIT 1',
+    `SELECT ${proxyColumns()} FROM proxies WHERE id = $1 LIMIT 1`,
     [id],
   )
   const r = rows[0]
@@ -316,7 +333,7 @@ export async function listAvailableProxiesForType(
   managerId?: string,
 ): Promise<Proxy[]> {
   const rows = await query<ProxyRow>(
-    `SELECT p.*, m.name AS assigned_manager_name, o.name AS owner_manager_name
+    `SELECT ${proxyColumns('p')}, m.name AS assigned_manager_name, o.name AS owner_manager_name
        FROM proxies p
        LEFT JOIN managers m ON m.id = p.manager_id
        LEFT JOIN managers o ON o.id = p.created_by_manager_id

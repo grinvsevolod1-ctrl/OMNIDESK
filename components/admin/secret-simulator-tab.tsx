@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState, useTransition } from 'react'
+import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
@@ -25,12 +26,55 @@ import {
   Users2,
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
-import { SecretSimulatorAdopt } from '@/components/admin/secret-simulator-adopt'
-import { SecretSimulatorCampaign } from '@/components/admin/secret-simulator-campaign'
-import { SecretSimulatorLearn } from '@/components/admin/secret-simulator-learn'
-import { SecretSimulatorLogs } from '@/components/admin/secret-simulator-logs'
-import { SecretSimulatorTest } from '@/components/admin/secret-simulator-test'
-import { SecretSimulatorTrain } from '@/components/admin/secret-simulator-train'
+// Each simulator sub-tab lives behind its own Radix TabsContent (only one is
+// mounted at a time), so load them lazily: the admin downloads a sub-tab's JS
+// only when they open it, not all six up front. ssr:false — these are
+// interactive/polling panels with no meaningful server render.
+const simLoading = () => (
+  <div className="h-64 animate-pulse rounded-lg bg-muted/40" />
+)
+const SecretSimulatorAdopt = dynamic(
+  () =>
+    import('@/components/admin/secret-simulator-adopt').then(
+      (m) => m.SecretSimulatorAdopt,
+    ),
+  { ssr: false, loading: simLoading },
+)
+const SecretSimulatorCampaign = dynamic(
+  () =>
+    import('@/components/admin/secret-simulator-campaign').then(
+      (m) => m.SecretSimulatorCampaign,
+    ),
+  { ssr: false, loading: simLoading },
+)
+const SecretSimulatorLearn = dynamic(
+  () =>
+    import('@/components/admin/secret-simulator-learn').then(
+      (m) => m.SecretSimulatorLearn,
+    ),
+  { ssr: false, loading: simLoading },
+)
+const SecretSimulatorLogs = dynamic(
+  () =>
+    import('@/components/admin/secret-simulator-logs').then(
+      (m) => m.SecretSimulatorLogs,
+    ),
+  { ssr: false, loading: simLoading },
+)
+const SecretSimulatorTest = dynamic(
+  () =>
+    import('@/components/admin/secret-simulator-test').then(
+      (m) => m.SecretSimulatorTest,
+    ),
+  { ssr: false, loading: simLoading },
+)
+const SecretSimulatorTrain = dynamic(
+  () =>
+    import('@/components/admin/secret-simulator-train').then(
+      (m) => m.SecretSimulatorTrain,
+    ),
+  { ssr: false, loading: simLoading },
+)
 import {
   simResetAction,
   simStatusAction,

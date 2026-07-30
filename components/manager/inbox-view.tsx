@@ -13,6 +13,7 @@ import {
   useTransition,
 } from 'react'
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import useSWR from 'swr'
 import {
   AlertCircle,
@@ -122,7 +123,16 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { AutopilotToggle } from '@/components/manager/autopilot-toggle'
-import { EditHistoryDialog } from '@/components/manager/edit-history-dialog'
+// Edit-history is opened on demand (message context menu), so defer its JS and
+// its SWR fetcher until an operator actually opens it — see the conditional
+// render below, which only mounts it once historyMessage is set.
+const EditHistoryDialog = dynamic(
+  () =>
+    import('@/components/manager/edit-history-dialog').then(
+      (m) => m.EditHistoryDialog,
+    ),
+  { ssr: false },
+)
 import { VirtualList } from '@/components/manager/virtual-list'
 import {
   channelIcon,
@@ -559,7 +569,7 @@ function PresenceBadge({
       className={cn('inline-flex items-center gap-1.5 text-[11px] font-medium', v.text, className)}
       role="status"
       aria-live="polite"
-      title="Активность посетителя на сайте в ��еальном времени"
+      title="Активн��сть посетителя на сайте в ��еальном времени"
     >
       <PresenceDot state={state} />
       {v.label}
@@ -3701,7 +3711,7 @@ export function InboxView({
                                       )}
                                     >
                                       <History className="size-2.5" />
-                                      изменено
+                                      из��енено
                                     </button>
                                   ) : null}
                                   {timeShort(m.createdAt)}
@@ -3987,15 +3997,17 @@ export function InboxView({
         </DialogContent>
       </Dialog>
 
-      <EditHistoryDialog
-        messageId={historyMessage?.id ?? null}
-        currentBody={historyMessage?.body ?? ''}
-        currentMediaType={historyMessage?.mediaType}
-        currentMediaUrl={historyMessage?.mediaUrl}
-        onOpenChange={(open) => {
-          if (!open) setHistoryMessage(null)
-        }}
-      />
+      {historyMessage && (
+        <EditHistoryDialog
+          messageId={historyMessage.id}
+          currentBody={historyMessage.body ?? ''}
+          currentMediaType={historyMessage.mediaType}
+          currentMediaUrl={historyMessage.mediaUrl}
+          onOpenChange={(open) => {
+            if (!open) setHistoryMessage(null)
+          }}
+        />
+      )}
     </div>
   )
 }

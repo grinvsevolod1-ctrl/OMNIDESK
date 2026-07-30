@@ -9,6 +9,7 @@ import {
   useState,
   useTransition,
 } from 'react'
+import dynamic from 'next/dynamic'
 import {
   ArrowDown,
   ArrowLeft,
@@ -121,7 +122,18 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { AdsTrendChart } from './finance-charts'
+// Recharts is heavy (~100kb+); load the ads trend chart only when its tab is
+// actually rendered, keeping it out of the initial finance-admin bundle.
+// ssr:false because the chart measures its container and has no useful SSR HTML.
+const AdsTrendChart = dynamic(
+  () => import('./finance-charts').then((m) => m.AdsTrendChart),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-64 animate-pulse rounded-lg bg-muted/40" />
+    ),
+  },
+)
 import {
   downloadText,
   findReusedSecrets,
@@ -2332,7 +2344,7 @@ function AddSectionInline({
         className="gap-1.5"
         onClick={() => setOpen(true)}
       >
-        <FolderPlus className="size-4" /> Вкладка
+        <FolderPlus className="size-4" /> Вклад��а
       </Button>
     )
   }

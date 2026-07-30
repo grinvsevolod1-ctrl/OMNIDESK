@@ -81,6 +81,9 @@ export function ChannelCard({ channel }: { channel: Channel }) {
     let cancelled = false
 
     async function tick() {
+      // Skip the round-trip while the tab is backgrounded; the next visible
+      // tick catches up. Avoids status polling running for every hidden tab.
+      if (typeof document !== 'undefined' && document.hidden) return
       const snap = await getChannelStatusAction(channel.id)
       if (cancelled || !snap) return
       setSessionStatus(snap.sessionStatus)

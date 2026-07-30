@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
+import { SWRProvider } from '@/components/swr-provider'
 import { requireAdmin } from '@/lib/auth'
 
 const nav: NavItem[] = [
@@ -33,12 +34,14 @@ export default async function AdminLayout({
 }) {
   const user = await requireAdmin()
   return (
-    <DashboardShell
-      nav={nav}
-      roleLabel="Администратор"
-      user={{ name: user.name, email: user.email }}
-    >
-      {children}
-    </DashboardShell>
+    <SWRProvider>
+      <DashboardShell
+        nav={nav}
+        roleLabel="Администратор"
+        user={{ name: user.name, email: user.email }}
+      >
+        {children}
+      </DashboardShell>
+    </SWRProvider>
   )
 }

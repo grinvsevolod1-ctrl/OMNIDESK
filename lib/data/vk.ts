@@ -83,7 +83,7 @@ export async function getVkChannelById(
   channelId: string,
 ): Promise<VkChannel | null> {
   const rows = await query<ChannelRow>(
-    `SELECT * FROM channels WHERE id = $1 AND type = 'vk' LIMIT 1`,
+    `SELECT ${channelColumns()} FROM channels WHERE id = $1 AND type = 'vk' LIMIT 1`,
     [channelId],
   )
   return rows[0] ? toVkChannel(rows[0]) : null
