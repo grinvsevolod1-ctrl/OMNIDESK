@@ -17,13 +17,22 @@ import {
 export interface ManagerWithSecret extends Manager {
   passwordHash: string
   sessionVersion: number
+  /**
+   * Encrypted (AES-256-GCM) additional "temporary" password, or null when none
+   * is set. This is a SEPARATE credential from passwordHash — see
+   * scripts/079_manager_temp_password.sql and the temp-password helpers below.
+   */
+  tempPasswordEnc: string | null
 }
 
-function toManagerWithSecret(row: ManagerRow): ManagerWithSecret {
+function toManagerWithSecret(
+  row: ManagerRow & { temp_password_enc?: string | null },
+): ManagerWithSecret {
   return {
     ...toManager(row),
     passwordHash: row.password_hash,
     sessionVersion: row.session_version ?? 0,
+    tempPasswordEnc: row.temp_password_enc ?? null,
   }
 }
 
@@ -31,8 +40,8 @@ export async function getManagerByEmail(
   email: string,
 ): Promise<ManagerWithSecret | null> {
   const normalized = email.trim().toLowerCase()
-  const rows = await query<ManagerRow>(
-    `SELECT ${managerColumns()} FROM managers WHERE lower(email) = $1 LIMIT 1`,
+  const rows = await query<ManagerRow & { temp_password_enc: string | null }>(
+    `SELECT ${managerColumns()}, temp_password_enc FROM managers WHERE lower(email) = $1 LIMIT 1`,
     [normalized],
   )
   return rows[0] ? toManagerWithSecret(rows[0]) : null
@@ -66,10 +75,10 @@ export async function getManagerByIdentifier(
   const id = identifier.trim().toLowerCase()
   if (!id) return null
   const byEmail = id.includes('@')
-  const rows = await query<ManagerRow>(
+  const rows = await query<ManagerRow & { temp_password_enc: string | null }>(
     byEmail
-      ? `SELECT ${managerColumns()} FROM managers WHERE lower(email) = $1 LIMIT 1`
-      : `SELECT ${managerColumns()} FROM managers WHERE lower(username) = $1 LIMIT 1`,
+      ? `SELECT ${managerColumns()}, temp_password_enc FROM managers WHERE lower(email) = $1 LIMIT 1`
+      : `SELECT ${managerColumns()}, temp_password_enc FROM managers WHERE lower(username) = $1 LIMIT 1`,
     [id],
   )
   return rows[0] ? toManagerWithSecret(rows[0]) : null
@@ -262,5 +271,83 @@ export async function deleteManager(id: string): Promise<void> {
   await query('DELETE FROM managers WHERE id = $1', [id])
   // Drop cached auth state so the deleted manager is logged out immediately.
   invalidateManagerAuthState(id)
+}
+
+/* ------------------------- Temporary password ----------------------- */
+
+/**
+ * A manager's temporary password is an OPTIONAL, ADDITIONAL login credential
+ * that is completely independent of their main bcrypt password. Unlike the main
+ * password it is stored ENCRYPTED (reversible, AES-256-GCM) rather than hashed,
+ * so the God panel can read it back and show it. Setting/clearing it never
+ * touches password_hash or session_version, and both credentials work at login.
+ *
+ * NOTE: crypto is imported lazily inside each function so this module (widely
+ * imported across the app) does not pull the crypto util — and its
+ * ENCRYPTION_KEY requirement — into unrelated code paths.
+ */
+
+export interface ManagerTempPassword {
+  /** Decrypted plaintext, or null when none is set / decryption failed. */
+  password: string | null
+  /** When the current temp password was set, or null when none. */
+  setAt: string | Date | null
+}
+
+/**
+ * Set (or replace) a manager's temporary password. Encrypts the plaintext at
+ * rest. Does NOT bump session_version — this is a parallel credential and must
+ * not invalidate existing sessions.
+ */
+export async function setManagerTempPassword(
+  id: string,
+  plaintext: string,
+): Promise<void> {
+  const { encrypt } = await import('../crypto')
+  const enc = encrypt(plaintext)
+  await query(
+    `UPDATE managers
+        SET temp_password_enc = $2, temp_password_set_at = now()
+      WHERE id = $1`,
+    [id, enc],
+  )
+}
+
+/** Remove a manager's temporary password (the main password is untouched). */
+export async function clearManagerTempPassword(id: string): Promise<void> {
+  await query(
+    `UPDATE managers
+        SET temp_password_enc = NULL, temp_password_set_at = NULL
+      WHERE id = $1`,
+    [id],
+  )
+}
+
+/**
+ * Read back a manager's temporary password in the clear (God panel reveal).
+ * Returns { password: null } when none is set or the ciphertext can't be
+ * decrypted (e.g. ENCRYPTION_KEY rotated).
+ */
+export async function getManagerTempPassword(
+  id: string,
+): Promise<ManagerTempPassword> {
+  const rows = await query<{
+    temp_password_enc: string | null
+    temp_password_set_at: string | Date | null
+  }>(
+    `SELECT temp_password_enc, temp_password_set_at FROM managers WHERE id = $1 LIMIT 1`,
+    [id],
+  )
+  const row = rows[0]
+  if (!row?.temp_password_enc) return { password: null, setAt: null }
+  try {
+    const { decrypt } = await import('../crypto')
+    return {
+      password: decrypt(row.temp_password_enc),
+      setAt: row.temp_password_set_at,
+    }
+  } catch {
+    return { password: null, setAt: row.temp_password_set_at }
+  }
 }
 

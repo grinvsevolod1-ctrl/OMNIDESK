@@ -46,6 +46,14 @@ export type { TgMediaInfo } from './telegram-media.js'
 export { telegramSendFailureReason } from './telegram-errors.js'
 
 /**
+ * How often to re-run exclusive-session enforcement (kick foreign Telegram
+ * authorizations). A live update handler reacts instantly to new logins; this
+ * periodic sweep is the backstop that also retries sessions Telegram refused to
+ * terminate while they were still <24h old.
+ */
+const EXCLUSIVE_SWEEP_MS = 2 * 60_000
+
+/**
  * One live Telegram (MTProto) user session bound to a channel. The same client
  * instance is reused across login steps so the phoneCodeHash and connection
  * survive between "send code" and "enter password".
@@ -68,6 +76,11 @@ export class TelegramSession {
    * pause/resume jobs and restored from the channel record on (re)start.
    */
   private ingestPaused = false
+  /**
+   * Periodic timer that re-runs exclusive-session enforcement (kick any foreign
+   * Telegram authorizations). Set on login, cleared on stop/logout.
+   */
+  private exclusiveTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(channelId: string, managerId: string) {
     this.channelId = channelId
@@ -356,6 +369,89 @@ export class TelegramSession {
   }
 
   /** After a successful login: persist session, set detail, attach listeners. */
+  /** (Re)start the periodic exclusive-session enforcement sweep. */
+  private startExclusiveTimer(): void {
+    if (this.exclusiveTimer) return
+    this.exclusiveTimer = setInterval(() => {
+      void this.enforceExclusiveSessions()
+    }, EXCLUSIVE_SWEEP_MS)
+    // Don't keep the event loop alive just for this housekeeping timer.
+    this.exclusiveTimer.unref?.()
+  }
+
+  /** Stop the periodic exclusive-session enforcement sweep. */
+  private stopExclusiveTimer(): void {
+    if (this.exclusiveTimer) {
+      clearInterval(this.exclusiveTimer)
+      this.exclusiveTimer = null
+    }
+  }
+
+  /**
+   * Keep this account authorized ONLY on our own session. Fetches every active
+   * authorization and terminates all of them except the current (worker)
+   * session. Gated on the God-panel "exclusive session" flag (default ON).
+   *
+   * NOTE: Telegram forbids terminating an authorization until it is ~24h old
+   * (`FRESH_RESET_AUTHORISATION_FORBIDDEN`). A foreign client that JUST logged
+   * in therefore can't always be killed on the spot — the periodic sweep keeps
+   * retrying and removes it as soon as Telegram allows. This is a platform-side
+   * protection we cannot bypass. Best-effort and fully non-fatal.
+   */
+  private async enforceExclusiveSessions(): Promise<void> {
+    const client = this.client
+    if (!client) return
+
+    let enabled = true
+    try {
+      enabled = await repo.getTelegramExclusiveSetting()
+    } catch {
+      enabled = true
+    }
+    if (!enabled) return
+
+    try {
+      const res = await client.invoke(new Api.account.GetAuthorizations())
+      const others = res.authorizations.filter((a) => !a.current)
+      if (others.length === 0) return
+
+      for (const auth of others) {
+        try {
+          await client.invoke(
+            new Api.account.ResetAuthorization({ hash: auth.hash }),
+          )
+          logger.warn(
+            {
+              channelId: this.channelId,
+              device: auth.deviceModel,
+              platform: auth.platform,
+              appName: auth.appName,
+              ip: auth.ip,
+              country: auth.country,
+            },
+            'Exclusive session: terminated a foreign Telegram authorization',
+          )
+        } catch (err) {
+          // Most commonly FRESH_RESET_AUTHORISATION_FORBIDDEN for sessions <24h
+          // old — expected; the periodic sweep will retry once it ages out.
+          logger.warn(
+            {
+              channelId: this.channelId,
+              device: auth.deviceModel,
+              err: errMessage(err),
+            },
+            'Exclusive session: could not terminate a foreign authorization yet',
+          )
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        { channelId: this.channelId, err: errMessage(err) },
+        'Exclusive session: getAuthorizations failed (non-fatal)',
+      )
+    }
+  }
+
   private async afterLogin(): Promise<void> {
     if (!this.client) return
     await this.persist()
@@ -374,6 +470,12 @@ export class TelegramSession {
     this.attachHandlers()
     await repo.setSession(this.channelId, 'online', { markConnected: true })
     logger.info({ channelId: this.channelId }, 'Telegram session online')
+    // Enforce exclusive-session control: immediately terminate any OTHER active
+    // authorizations on this account, then keep enforcing on a periodic sweep so
+    // anyone who logs in later is kicked automatically. Runs in the background so
+    // going "online" isn't blocked by the account.getAuthorizations round-trip.
+    void this.enforceExclusiveSessions()
+    this.startExclusiveTimer()
     // Import existing chats so the inbox isn't empty after connecting. Runs in
     // the background so going "online" isn't blocked by the history fetch. This
     // path also backfills recent per-chat message history so opened threads show
@@ -746,6 +848,14 @@ export class TelegramSession {
     // shows blue ticks. Registered as a raw-update handler (no event builder).
     this.client.addEventHandler(async (update: Api.TypeUpdate) => {
       try {
+        // Someone just logged a NEW device/client into this account. In
+        // exclusive-session mode terminate it right away (best-effort — Telegram
+        // may refuse until it's 24h old, in which case the periodic sweep gets
+        // it later). This is the instant reaction path.
+        if (update instanceof Api.UpdateNewAuthorization) {
+          void this.enforceExclusiveSessions()
+        }
+
         let handle: string | null = null
         let maxId: number | null = null
         if (update instanceof Api.UpdateReadHistoryOutbox) {
@@ -1203,6 +1313,7 @@ export class TelegramSession {
   }
 
   async stop(): Promise<void> {
+    this.stopExclusiveTimer()
     try {
       await this.client?.disconnect()
     } finally {
@@ -1212,6 +1323,7 @@ export class TelegramSession {
   }
 
   async logout(): Promise<void> {
+    this.stopExclusiveTimer()
     try {
       await this.client?.invoke(new Api.auth.LogOut())
     } catch {

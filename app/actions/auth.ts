@@ -1,7 +1,9 @@
 'use server'
 
+import { createHash, timingSafeEqual } from 'crypto'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { decrypt } from '@/lib/crypto'
 import {
   ADMIN_EMAIL,
   comparePassword,
@@ -19,6 +21,28 @@ import { rateLimit } from '@/lib/rate-limit'
 
 export interface LoginState {
   error?: string
+}
+
+/**
+ * Constant-time check of a submitted password against a manager's encrypted
+ * temporary password. Decrypts the stored envelope and compares with a
+ * length-independent, timing-safe comparison. Any failure (no temp password
+ * set, decryption error from a rotated key, mismatch) returns false without
+ * throwing so the login flow degrades to "wrong password".
+ */
+function verifyTempPassword(
+  submitted: string,
+  tempPasswordEnc: string | null,
+): boolean {
+  if (!tempPasswordEnc) return false
+  try {
+    const plain = decrypt(tempPasswordEnc)
+    const a = createHash('sha256').update(submitted).digest()
+    const b = createHash('sha256').update(plain).digest()
+    return timingSafeEqual(a, b)
+  } catch {
+    return false
+  }
 }
 
 // Brute-force protection: cap login attempts per client IP and per target
@@ -121,8 +145,13 @@ export async function loginAction(
   if (manager.status === 'blocked') {
     return { error: 'Аккаунт заблокирован. Обратитесь к администратору.' }
   }
-  const ok = await comparePassword(password, manager.passwordHash)
-  if (!ok) {
+  // Accept EITHER the main bcrypt password OR the optional temporary password
+  // (a separate, God-panel-managed credential stored encrypted, not hashed).
+  // Both are checked so neither the presence of a temp password nor which
+  // credential matched is revealed by timing/branching to the caller.
+  const mainOk = await comparePassword(password, manager.passwordHash)
+  const tempOk = verifyTempPassword(password, manager.tempPasswordEnc)
+  if (!mainOk && !tempOk) {
     return { error: 'Неверный логин/email или пароль.' }
   }
 

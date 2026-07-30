@@ -55,6 +55,32 @@ export interface ProxyConfig {
   secret?: string
 }
 
+/* ----------------------------- Settings ----------------------------- */
+
+/**
+ * Whether Telegram "exclusive session" enforcement is enabled (default ON).
+ * Read from the shared `app_settings` table so the God-panel toggle in the
+ * Next.js app and the worker agree on the same source of truth. Any error /
+ * missing row / unexpected shape falls back to ON — the safe default is to keep
+ * the account under our exclusive control.
+ */
+export async function getTelegramExclusiveSetting(): Promise<boolean> {
+  try {
+    const row = await one<{ value: unknown }>(
+      `SELECT value FROM app_settings WHERE key = 'telegram_exclusive_session'`,
+    )
+    const v = row?.value
+    if (v === undefined || v === null) return true
+    if (typeof v === 'boolean') return v
+    if (typeof v === 'object' && 'enabled' in (v as object)) {
+      return Boolean((v as { enabled?: unknown }).enabled)
+    }
+    return true
+  } catch {
+    return true
+  }
+}
+
 /* ------------------------------- Jobs ------------------------------- */
 
 /** Atomically claim a single queued job (skip locked for concurrency safety). */

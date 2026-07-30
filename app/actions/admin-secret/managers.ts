@@ -11,11 +11,16 @@ import {
 } from '@/lib/db'
 import {
   adminReassignConversations,
+  clearManagerTempPassword,
   getConversationAdmin,
+  getManagerById,
+  getManagerTempPassword,
   listConversationsAdmin,
   listMessagesAdmin,
+  setManagerTempPassword,
   updateManagerStatus,
 } from '@/lib/data'
+import { generatePassword } from '@/lib/crypto'
 import {
   getThreadSimInfoOne,
   getThreadsSimInfo,
@@ -50,6 +55,91 @@ export async function secretSetManagerStatusAction(
     ok: true,
     message: status === 'blocked' ? 'Менеджер заблокирован' : 'Менеджер разблокирован',
   }
+}
+
+/* ===================================================================== */
+/*  God-mode temporary passwords                                         */
+/* ===================================================================== */
+
+export interface TempPasswordResult extends ActionResult {
+  /** Present on success: the current temp password (null when cleared/none). */
+  password?: string | null
+  /** ISO timestamp of when it was set, or null. */
+  setAt?: string | null
+}
+
+function toIso(v: string | Date | null): string | null {
+  if (!v) return null
+  return v instanceof Date ? v.toISOString() : new Date(v).toISOString()
+}
+
+/**
+ * Reveal a manager's temporary password (decrypted) for display in the God
+ * panel. Read-only; does not create one if absent.
+ */
+export async function secretRevealManagerTempPasswordAction(
+  managerId: string,
+): Promise<TempPasswordResult> {
+  const admin = await requireAdmin()
+  if (!managerId) return { ok: false, message: 'Не указан менеджер' }
+  const manager = await getManagerById(managerId)
+  if (!manager) return { ok: false, message: 'Менеджер не найден' }
+  const { password, setAt } = await getManagerTempPassword(managerId)
+  audit(admin, 'manager.temp_password.reveal', { targetId: managerId })
+  return {
+    ok: true,
+    message: password ? 'Пароль показан' : 'Временный пароль не задан',
+    password,
+    setAt: toIso(setAt),
+  }
+}
+
+/**
+ * Set or replace a manager's temporary password. When `password` is omitted a
+ * strong one is generated. Returns the plaintext so the panel can show/copy it.
+ * Independent of the main password — existing sessions are NOT invalidated.
+ */
+export async function secretSetManagerTempPasswordAction(input: {
+  managerId: string
+  password?: string
+}): Promise<TempPasswordResult> {
+  const admin = await requireAdmin()
+  const { managerId } = input
+  if (!managerId) return { ok: false, message: 'Не указан менеджер' }
+  const manager = await getManagerById(managerId)
+  if (!manager) return { ok: false, message: 'Менеджер не найден' }
+
+  const custom = (input.password ?? '').trim()
+  if (custom && custom.length < 6)
+    return { ok: false, message: 'Минимальная длина пароля — 6 символов' }
+  const password = custom || generatePassword(16)
+
+  await setManagerTempPassword(managerId, password)
+  audit(admin, 'manager.temp_password.set', {
+    targetId: managerId,
+    detail: { generated: !custom },
+  })
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: custom ? 'Временный пароль сохранён' : 'Временный пароль сгенерирован',
+    password,
+    setAt: new Date().toISOString(),
+  }
+}
+
+/** Remove a manager's temporary password (their main password is untouched). */
+export async function secretClearManagerTempPasswordAction(
+  managerId: string,
+): Promise<TempPasswordResult> {
+  const admin = await requireAdmin()
+  if (!managerId) return { ok: false, message: 'Не указан менеджер' }
+  const manager = await getManagerById(managerId)
+  if (!manager) return { ok: false, message: 'Менеджер не найден' }
+  await clearManagerTempPassword(managerId)
+  audit(admin, 'manager.temp_password.clear', { targetId: managerId })
+  revalidatePath(ADMIN_PATH)
+  return { ok: true, message: 'Временный пароль удалён', password: null, setAt: null }
 }
 
 /* ===================================================================== */

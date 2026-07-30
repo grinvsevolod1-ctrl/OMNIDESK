@@ -18,6 +18,9 @@
 /* Managers */
 export * from './data/managers'
 
+/* Telegram account security (exclusive-session enforcement flag) */
+export * from './data/telegram-security'
+
 /* Channels (incl. widget defaults + admin channel management) */
 export * from './data/channels'
 
