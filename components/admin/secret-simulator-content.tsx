@@ -34,7 +34,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { SimContentConfig, SimStatus } from '@/lib/client-sim/types'
+import type { SimContentConfig } from '@/lib/client-sim/types'
 import { SIM_CONTENT_DEFAULTS } from '@/lib/client-sim/content-defaults'
 import {
   simStatusAction,
@@ -190,15 +190,19 @@ interface PoolTextareaProps {
 function PoolTextarea({ label, placeholder, value, onChange, rows = 8 }: PoolTextareaProps) {
   const [raw, setRaw] = useState(() => joinLines(value))
 
+  // Resync during render (React's recommended alternative to an effect) when the
+  // parent replaces `value` from outside — e.g. load/save/reset. Local editing
+  // never changes `value` until blur, so in-progress typing is never clobbered.
+  const [lastValue, setLastValue] = useState(value)
+  if (value !== lastValue) {
+    setLastValue(value)
+    setRaw(joinLines(value))
+  }
+
   // Sync outward on blur so we don't thrash the parent on every keystroke.
   function handleBlur() {
     onChange(splitLines(raw))
   }
-
-  // Keep in sync when value changes from outside (e.g. reset).
-  useEffect(() => {
-    setRaw(joinLines(value))
-  }, [value])
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -297,7 +301,6 @@ function configToForm(cfg: SimContentConfig | null): ContentForm {
  * ===================================================================== */
 
 export function SecretSimulatorContent() {
-  const [status, setStatus] = useState<SimStatus | null>(null)
   const [form, setForm] = useState<ContentForm>(() => configToForm(null))
   const [saving, startSave] = useTransition()
   const [resetting, startReset] = useTransition()
@@ -312,7 +315,6 @@ export function SecretSimulatorContent() {
   const load = useCallback(async () => {
     try {
       const s = await simStatusAction()
-      setStatus(s)
       setForm(configToForm(s.contentConfig))
     } catch {
       toast.error('Не удалось загрузить конфигурацию контента')
@@ -320,6 +322,9 @@ export function SecretSimulatorContent() {
   }, [])
 
   useEffect(() => {
+    // One-shot fetch that seeds local editable state from the server on mount.
+    // The set-state-in-effect heuristic doesn't apply to initial data loads.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
   }, [load])
 
@@ -333,7 +338,6 @@ export function SecretSimulatorContent() {
     startSave(async () => {
       try {
         const next = await simUpdateContentConfigAction(formToConfig(form))
-        setStatus(next)
         setForm(configToForm(next.contentConfig))
         toast.success('Контент сохранён')
       } catch (err) {
@@ -346,8 +350,7 @@ export function SecretSimulatorContent() {
   function handleReset() {
     startReset(async () => {
       try {
-        const next = await simUpdateContentConfigAction(null)
-        setStatus(next)
+        await simUpdateContentConfigAction(null)
         setForm(configToForm(null))
         toast.success('Контент сброшен до значений по умолчанию')
       } catch (err) {

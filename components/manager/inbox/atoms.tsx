@@ -196,7 +196,10 @@ export function SyncBadge({ state }: { state: 'connecting' | 'live' | 'offline' 
   }[state]
   return (
     <span
-      className={cn('inline-flex items-center gap-1.5 text-[11px] font-medium', cfg.text)}
+      className={cn(
+        'inline-flex items-center gap-1.5 text-[11px] font-medium transition-colors duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
+        cfg.text,
+      )}
       title={cfg.title}
       role="status"
       aria-live="polite"
@@ -205,13 +208,19 @@ export function SyncBadge({ state }: { state: 'connecting' | 'live' | 'offline' 
         {cfg.pulse ? (
           <span
             className={cn(
-              'absolute inline-flex size-full animate-ping rounded-full opacity-60',
+              'absolute inline-flex size-full animate-ping rounded-full opacity-60 transition-colors duration-500',
               cfg.dot,
             )}
             aria-hidden
           />
         ) : null}
-        <span className={cn('relative inline-flex size-2 rounded-full', cfg.dot)} aria-hidden />
+        <span
+          className={cn(
+            'relative inline-flex size-2 rounded-full transition-colors duration-500',
+            cfg.dot,
+          )}
+          aria-hidden
+        />
       </span>
       {cfg.label}
     </span>

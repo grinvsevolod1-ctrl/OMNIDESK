@@ -96,7 +96,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { AutopilotToggle } from '@/components/manager/autopilot-toggle'
 // Edit-history is opened on demand (message context menu), so defer its JS and
 // its SWR fetcher until an operator actually opens it — see the conditional
@@ -155,6 +154,7 @@ import {
   SyncBadge,
 } from '@/components/manager/inbox/atoms'
 import { MessageComposer } from '@/components/manager/inbox/message-composer'
+import { TransferDialog } from '@/components/manager/inbox/transfer-dialog'
 import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
 import { filterAndSortConversations } from '@/components/manager/inbox/filtering'
 
@@ -1403,7 +1403,7 @@ export function InboxView({
                       type="button"
                       onClick={() => setActiveId(c.id)}
                       className={cn(
-                        'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors hover:bg-muted/60',
+                        'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-muted/60 active:scale-[0.985]',
                         activeId === c.id
                           ? 'bg-secondary hover:bg-secondary'
                           : '',
@@ -2076,89 +2076,17 @@ export function InboxView({
       </div>
 
       {/* Hand-off dialog: pick a colleague and optionally leave a note. */}
-      <Dialog
+      <TransferDialog
         open={transferForId !== null}
-        onOpenChange={(open) => {
-          if (!open) setTransferForId(null)
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Передать диалог</DialogTitle>
-            <DialogDescription>
-              Диалог перейдёт выбранному менеджеру и исчезнет из ваших входящих.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-4 py-2">
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-foreground">
-                Кому передать
-              </span>
-              <div className="scrollbar-thin flex max-h-56 flex-col gap-1 overflow-y-auto">
-                {transferTargets.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setTransferTo(t.id)}
-                    className={cn(
-                      'flex items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors',
-                      transferTo === t.id
-                        ? 'border-primary bg-primary/10 text-foreground'
-                        : 'border-border hover:bg-muted',
-                    )}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Avatar className="size-6">
-                        <AvatarFallback className="text-[10px]">
-                          {t.name.slice(0, 2).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      {t.name}
-                    </span>
-                    {t.onLunch ? (
-                      <span className="text-xs text-muted-foreground">
-                        на обеде
-                      </span>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-foreground">
-                Заметка для коллеги (необязательно)
-              </span>
-              <Textarea
-                value={transferNote}
-                onChange={(e) => setTransferNote(e.target.value)}
-                placeholder="Например: клиент ждёт расчёт по доставке"
-                maxLength={500}
-                rows={3}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setTransferForId(null)}
-              disabled={transferPending}
-            >
-              Отмена
-            </Button>
-            <Button
-              onClick={submitTransfer}
-              disabled={transferPending || !transferTo}
-            >
-              {transferPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <UserPlus className="size-4" />
-              )}
-              Передать
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onClose={() => setTransferForId(null)}
+        targets={transferTargets}
+        selectedId={transferTo}
+        onSelect={setTransferTo}
+        note={transferNote}
+        onNoteChange={setTransferNote}
+        pending={transferPending}
+        onSubmit={submitTransfer}
+      />
 
       {historyMessage && (
         <EditHistoryDialog

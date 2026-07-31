@@ -251,6 +251,27 @@
     transform: translateY(-2px);
   }
 
+  /* Премиальный «шиммер» для скелетонов: мягкая световая полоса пробегает
+     слева направо (как в нативных загрузках iOS/macOS) поверх приглушённого
+     фона. Тоньше и дороже на вид, чем простое мигание opacity. */
+  .skeleton-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .skeleton-shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklch, var(--foreground) 8%, transparent),
+      transparent
+    );
+    animation: shimmer 1.6s var(--ease-apple-out) infinite;
+  }
+
   /* Слайдеры симулятора: тонкая дорожка в цветах темы + аккуратный бегунок,
      единообразно в WebKit и Firefox. */
   .sim-range {
@@ -301,6 +322,31 @@
 }
 .animate-shake {
   animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+/* Одноразовая «пульсация» кольца вокруг карточки, когда на неё наводят фокус
+   из ИИ-консоли (интент «агрессивность»): мягко расходится и затухает — как
+   подсветка нужного элемента в системных настройках macOS. */
+@keyframes highlight-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--primary) 55%, transparent);
+  }
+  30% {
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 0%, transparent);
+  }
+}
+.animate-highlight-ring {
+  animation: highlight-ring 1.6s var(--ease-apple-out) both;
+}
+
+/* Пробегающий блик для скелетонов (см. утилиту .skeleton-shimmer). */
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 /* Уважаем системную настройку «уменьшить движение»: у пользователей с этой

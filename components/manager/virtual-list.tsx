@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
  * functions the React Compiler cannot memoize, so any component that calls it is
  * skipped by the compiler (it emits `react-hooks/incompatible-library`). By
  * isolating the hook here — a tiny leaf component — the large parents that embed
- * a list (e.g. the 3.8k-line InboxView) stay fully compiled/memoized, and only
+ * a list (e.g. the multi-thousand-line InboxView) stay fully compiled/memoized, and only
  * this negligible wrapper opts out. That matters for views with frequent
  * realtime re-renders, where losing memoization on the whole screen would be a
  * bigger regression than the DOM savings from virtualization.

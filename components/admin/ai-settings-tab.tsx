@@ -271,14 +271,13 @@ function AggressivenessCard({
   onSave: (value: number) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [highlight, setHighlight] = useState(false)
 
+  // Scroll into view when opened via the console intent. The one-shot "pulse"
+  // is a pure CSS animation (see .animate-highlight-ring) keyed off `focus`,
+  // so no React state / set-state-in-effect is needed.
   useEffect(() => {
     if (!focus) return
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    setHighlight(true)
-    const t = setTimeout(() => setHighlight(false), 1600)
-    return () => clearTimeout(t)
   }, [focus])
 
   const current =
@@ -289,8 +288,8 @@ function AggressivenessCard({
     <Card
       ref={ref}
       className={cn(
-        'flex flex-col gap-4 p-4 transition-shadow',
-        highlight && 'ring-2 ring-primary ring-offset-2 ring-offset-background',
+        'flex flex-col gap-4 p-4',
+        focus && 'animate-highlight-ring',
       )}
     >
       <div className="flex items-start gap-3">

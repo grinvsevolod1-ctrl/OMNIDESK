@@ -95,13 +95,37 @@ export function useInboxRealtime({
     // all conversations + messages), so calling it once per event caused a
     // refresh storm whenever several conversations were active at once.
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    // Set when an event asked for a refresh while the tab was hidden, so we can
+    // catch up in a single refetch the moment the manager returns.
+    let pendingWhileHidden = false
     const scheduleRefresh = () => {
+      // Skip the (expensive) full server-tree refetch while the tab is hidden —
+      // the manager isn't looking, and browsers throttle background timers
+      // anyway. We remember that data changed and refresh once on refocus.
+      // In-place message patches above still apply; only the whole-tree refetch
+      // is deferred, so nothing is lost.
+      if (typeof document !== 'undefined' && document.hidden) {
+        pendingWhileHidden = true
+        return
+      }
       if (refreshTimer) return
       refreshTimer = setTimeout(() => {
         refreshTimer = null
         router.refresh()
       }, 400)
     }
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      if (!pendingWhileHidden) return
+      pendingWhileHidden = false
+      // Back in view with stale data queued: catch up immediately (no debounce).
+      if (refreshTimer) {
+        clearTimeout(refreshTimer)
+        refreshTimer = null
+      }
+      router.refresh()
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
     const es = new EventSource('/api/stream')
     es.addEventListener('ready', () => setSyncState('live'))
     es.onopen = () => setSyncState('live')
@@ -250,6 +274,7 @@ export function useInboxRealtime({
     return () => {
       es.close()
       clearInterval(sweep)
+      document.removeEventListener('visibilitychange', handleVisibility)
       if (refreshTimer) clearTimeout(refreshTimer)
     }
   }, [router, setLocalMessages])

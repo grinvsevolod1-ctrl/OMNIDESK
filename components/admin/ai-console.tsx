@@ -247,7 +247,11 @@ export function AiConsole({
   )
 
   useEffect(() => {
+    // Post-mount capability detection: `speechSynthesis` can't be read during
+    // SSR, and a render-time read would cause a hydration mismatch, so this
+    // one-shot setState in an effect is the intended pattern.
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTtsSupported(true)
     }
   }, [])
@@ -1352,6 +1356,11 @@ function useSpeechInput({
       (window as WindowWithSpeech).SpeechRecognition ||
       (window as WindowWithSpeech).webkitSpeechRecognition
     if (!Ctor) return
+    // Capability detection must happen after mount (window isn't available
+    // during SSR, and a lazy render-time read would cause a hydration
+    // mismatch). This effect genuinely wires up the SpeechRecognition external
+    // system, so the one-shot setState here is the intended pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSupported(true)
 
     const rec = new Ctor()
