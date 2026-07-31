@@ -144,7 +144,8 @@ export interface FollowupCandidate {
  *  - not simulated, AI-enrolled, not on manual pause,
  *  - the last message in the thread was OURS (direction 'out') — i.e. we're
  *    waiting on the client — and it's older than `delayHours`,
- *  - the dialog isn't already handed to a human / transferred,
+ *  - the dialog isn't handed to a human / transferred, nor a lead a manager
+ *    explicitly disqualified ('not_liquid'),
  *  - on an allowed channel,
  *  - fewer than `maxTouches` nudges have been sent SINCE the last real client
  *    message (so a new client reply resets the streak, and we never exceed the
@@ -206,7 +207,12 @@ export async function findFollowupCandidates(opts: {
         AND c.ai_paused = false
         AND s.enabled = true
         AND c.channel_type = ANY($1::text[])
-        AND COALESCE(c.status, 'unsubscribed') NOT IN ('handoff', 'transferred')
+        -- Never auto-nudge dialogs a human owns ('handoff'/'transferred') or a
+        -- lead a manager explicitly disqualified ('not_liquid'). The default
+        -- 'unsubscribed' here is the neutral "wrote in, not yet pinned" state
+        -- (see DEFAULT_LEAD_STATUS), NOT an opt-out, so it stays eligible.
+        AND COALESCE(c.status, 'unsubscribed')
+            NOT IN ('handoff', 'transferred', 'not_liquid')
         AND li.at IS NOT NULL
         AND lm.direction = 'out'
         AND lm.created_at < now() - ($2 || ' hours')::interval

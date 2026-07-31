@@ -7,6 +7,7 @@ import {
   BookOpen,
   Check,
   Copy,
+  BellRing,
   Flame,
   GraduationCap,
   Highlighter,
@@ -104,6 +105,7 @@ const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
   knowledge: BookOpen,
   lesson: GraduationCap,
   directive: ScrollText,
+  followup: BellRing,
 }
 
 /** Human tone labels for the status strip. */
