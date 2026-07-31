@@ -19,6 +19,22 @@ export interface AssistantTurn {
 }
 
 /**
+ * A revertible settings patch. Only settings mutations can be undone — the
+ * shape mirrors the `updateAiAssistSettings` patch so the revert action can
+ * apply it verbatim to restore the previous value. Content additions
+ * (knowledge/lessons) are intentionally not auto-revertible.
+ */
+export interface SettingsRevert {
+  enabled?: boolean
+  tone?: string
+  persona?: string
+  aggressiveness?: number
+  temperature?: number
+  maxTokens?: number
+  model?: string
+}
+
+/**
  * A concrete change the assistant performed during a turn, surfaced in the UI as
  * a small "receipt" chip so the admin always sees what actually happened.
  */
@@ -34,6 +50,11 @@ export interface ExecutedAction {
     | 'lesson'
   /** Short human summary, e.g. «Включил ИИ» or «Агрессивность → Максимум». */
   label: string
+  /**
+   * When present, the UI shows an «Отменить» button that restores the previous
+   * value by applying this patch. Only settings mutations carry it.
+   */
+  revert?: SettingsRevert
 }
 
 /** The full result of one assistant turn, consumed by the console UI. */

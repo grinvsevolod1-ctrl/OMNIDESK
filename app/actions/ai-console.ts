@@ -11,6 +11,7 @@ import {
   listKnowledge,
   upsertKnowledge,
   addLesson,
+  listLessons,
   countLessons,
   listAiEnrolledConversations,
 } from '@/lib/data/ai-assist'
@@ -26,6 +27,7 @@ import {
   type AssistantResult,
   type AssistantTurn,
   type ExecutedAction,
+  type SettingsRevert,
 } from '@/lib/ai-console/assistant'
 
 /**
@@ -50,17 +52,6 @@ const ASSISTANT_MODEL =
   process.env.AI_CONSOLE_ASSISTANT_MODEL || 'openai/gpt-4.1'
 
 const AI_PATH = '/admin/ai'
-
-/** Panels the assistant may hand off to for hands-on work. */
-const PANELS: ConsoleIntent[] = [
-  'settings',
-  'aggressiveness',
-  'knowledge',
-  'training',
-  'corrections',
-  'dialogs',
-  'logs',
-]
 
 /** Natural acknowledgement per panel for the deterministic fallback path. */
 function fallbackReply(intent: ConsoleIntent): string {
@@ -148,6 +139,11 @@ export async function aiAssistantAction(
   let openPanel: ConsoleIntent | null = null
   let settingsChanged = false
 
+  // Pre-turn snapshot: every settings mutation attaches a revert patch back to
+  // these values, so the UI can offer a one-click «Отменить» that restores the
+  // exact state from before this turn.
+  const baseline = await getAiAssistSettings()
+
   const tools = {
     getStatus: tool({
       description:
@@ -166,6 +162,7 @@ export async function aiAssistantAction(
         actions.push({
           kind: 'enabled',
           label: enabled ? 'Включил ИИ-менеджера' : 'Выключил ИИ-менеджера',
+          revert: { enabled: baseline.enabled },
         })
         return { ok: true, enabled }
       },
@@ -186,7 +183,11 @@ export async function aiAssistantAction(
             : tone === 'friendly'
               ? 'дружелюбный'
               : 'убедительный'
-        actions.push({ kind: 'tone', label: `Тон → ${label}` })
+        actions.push({
+          kind: 'tone',
+          label: `Тон → ${label}`,
+          revert: { tone: baseline.tone },
+        })
         return { ok: true, tone }
       },
     }),
@@ -200,7 +201,11 @@ export async function aiAssistantAction(
       execute: async ({ persona }) => {
         await updateAiAssistSettings({ persona: persona.trim() })
         settingsChanged = true
-        actions.push({ kind: 'persona', label: 'Обновил описание компании' })
+        actions.push({
+          kind: 'persona',
+          label: 'Обновил описание компании',
+          revert: { persona: baseline.persona },
+        })
         return { ok: true }
       },
     }),
@@ -217,6 +222,7 @@ export async function aiAssistantAction(
         actions.push({
           kind: 'aggressiveness',
           label: `Агрессивность → ${AGGRESSIVENESS_LABELS[level]}`,
+          revert: { aggressiveness: baseline.aggressiveness },
         })
         return { ok: true, level, label: AGGRESSIVENESS_LABELS[level] }
       },
@@ -239,9 +245,20 @@ export async function aiAssistantAction(
         })
         settingsChanged = true
         const parts: string[] = []
-        if (temperature != null) parts.push(`temperature ${temperature}`)
-        if (maxTokens != null) parts.push(`ответ ${maxTokens} токенов`)
-        actions.push({ kind: 'model', label: `Модель: ${parts.join(', ')}` })
+        const revert: SettingsRevert = {}
+        if (temperature != null) {
+          parts.push(`temperature ${temperature}`)
+          revert.temperature = baseline.temperature
+        }
+        if (maxTokens != null) {
+          parts.push(`ответ ${maxTokens} токенов`)
+          revert.maxTokens = baseline.maxTokens
+        }
+        actions.push({
+          kind: 'model',
+          label: `Модель: ${parts.join(', ')}`,
+          revert,
+        })
         return { ok: true, temperature, maxTokens }
       },
     }),
@@ -277,6 +294,43 @@ export async function aiAssistantAction(
         })
         actions.push({ kind: 'lesson', label: 'Добавил урок в обучение' })
         return { ok: true }
+      },
+    }),
+
+    searchKnowledge: tool({
+      description:
+        'Найти, что ИИ-менеджер уже знает: ищет по базе знаний (факты) и обучающим урокам. Используй, когда админ спрашивает «что ты знаешь про…», «есть ли факт о…», «как ты отвечаешь на…», «чему тебя учили». Без query возвращает свежие записи.',
+      inputSchema: z.object({
+        query: z.string().max(200).optional(),
+      }),
+      execute: async ({ query }) => {
+        const [knowledge, lessons] = await Promise.all([
+          listKnowledge(),
+          listLessons(50),
+        ])
+        const q = (query ?? '').trim().toLowerCase()
+        const match = (s: string) => !q || s.toLowerCase().includes(q)
+        const facts = knowledge
+          .filter((k) => match(k.title) || match(k.content))
+          .slice(0, 8)
+          .map((k) => ({ title: k.title, content: k.content }))
+        const trainedOn = lessons
+          .filter(
+            (l) => match(l.situation) || match(l.corrected) || match(l.note),
+          )
+          .slice(0, 8)
+          .map((l) => ({
+            situation: l.situation,
+            answer: l.corrected,
+            note: l.note,
+          }))
+        return {
+          query: q || null,
+          factCount: facts.length,
+          lessonCount: trainedOn.length,
+          facts,
+          lessons: trainedOn,
+        }
       },
     }),
 
@@ -378,5 +432,36 @@ const SYSTEM_INSTRUCTIONS = [
   '• Если админ просит что-то ИЗМЕНИТЬ и это можно сделать инструментом — сделай это сразу соответствующим инструментом, затем кратко подтверди человеческим языком, что именно поменял.',
   '• Если задача требует ручной работы (подключить ИИ к конкретному диалогу, исправить конкретное сообщение, посмотреть журнал подробно, полноценно обучить на аккаунте) — вызови openPanel с нужной панелью и скажи, что открыл её.',
   '• Если админ просит ОБЪЯСНИТЬ или РАССКАЗАТЬ — отвечай понятно и по делу, без воды, опираясь на getStatus.',
+  '• Если админ спрашивает, что ИИ уже знает или чему обучен («что ты знаешь про…», «как отвечаешь на…») — вызови searchKnowledge и ответь по найденному, не выдумывая.',
+  '• Если админ спрашивает про ошибки/сбои/«почему молчит» — вызови getRecentLogs и объясни простыми словами, что нашёл.',
   '• Пиши по-русски, коротко, тепло и живо, как умный коллега. Без канцелярита, без markdown-заголовков, максимум пара предложений плюс, при необходимости, короткий список.',
 ].join('\n')
+
+/**
+ * Restore a settings value the assistant changed this session (the «Отменить»
+ * button on an action receipt). Admin-only; mirrors the same clamping the agent
+ * tools use, so a stale/odd revert patch fails soft.
+ */
+export async function aiRevertSettingsAction(
+  revert: SettingsRevert,
+): Promise<{ ok: boolean }> {
+  await requireAdmin()
+  const patch: SettingsRevert = {}
+  if (typeof revert.enabled === 'boolean') patch.enabled = revert.enabled
+  if (typeof revert.tone === 'string') patch.tone = revert.tone
+  if (typeof revert.persona === 'string') patch.persona = revert.persona
+  if (typeof revert.aggressiveness === 'number') {
+    patch.aggressiveness = Math.max(0, Math.min(3, Math.round(revert.aggressiveness)))
+  }
+  if (typeof revert.temperature === 'number') {
+    patch.temperature = Math.max(0, Math.min(2, revert.temperature))
+  }
+  if (typeof revert.maxTokens === 'number') {
+    patch.maxTokens = Math.max(50, Math.min(4000, Math.round(revert.maxTokens)))
+  }
+  if (typeof revert.model === 'string') patch.model = revert.model
+  if (Object.keys(patch).length === 0) return { ok: false }
+  await updateAiAssistSettings(patch)
+  revalidatePath(AI_PATH)
+  return { ok: true }
+}

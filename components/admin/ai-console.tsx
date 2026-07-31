@@ -6,34 +6,44 @@ import {
   useMemo,
   useRef,
   useState,
-  useTransition,
 } from 'react'
 import dynamic from 'next/dynamic'
 import {
   ArrowUp,
   BookOpen,
   Check,
+  Copy,
   Flame,
   GraduationCap,
   Highlighter,
   Loader2,
   MessagesSquare,
   Mic,
+  Plus,
+  Power,
   ScrollText,
   Settings2,
   Sparkles,
+  Square,
+  Undo2,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import type { AiAssistLesson, AiAssistSettings } from '@/lib/data/ai-assist'
 import { INTENT_BY_ID, type ConsoleIntent } from '@/lib/ai-console/intents'
-import type {
-  AssistantResult,
-  AssistantTurn,
-  ExecutedAction,
+import {
+  AGGRESSIVENESS_LABELS,
+  type AssistantResult,
+  type AssistantTurn,
+  type ExecutedAction,
 } from '@/lib/ai-console/assistant'
-import { aiAssistantAction } from '@/app/actions/ai-console'
+import {
+  aiAssistantAction,
+  aiRevertSettingsAction,
+} from '@/app/actions/ai-console'
 import { aiSettingsAction, aiListLessonsAction } from '@/app/actions/ai-assist'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -86,13 +96,20 @@ const PANEL_ICON: Record<ConsoleIntent, LucideIcon> = {
 
 /** Icon per executed-action receipt category. */
 const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
-  enabled: Settings2,
+  enabled: Power,
   tone: Sparkles,
   persona: Settings2,
   aggressiveness: Flame,
   model: Settings2,
   knowledge: BookOpen,
   lesson: GraduationCap,
+}
+
+/** Human tone labels for the status strip. */
+const TONE_LABEL: Record<string, string> = {
+  professional: 'Деловой',
+  friendly: 'Дружелюбный',
+  persuasive: 'Убедительный',
 }
 
 /** One rendered turn in the conversation. */
@@ -135,7 +152,7 @@ const PROMPT_GROUPS: { title: string; icon: LucideIcon; prompts: string[] }[] = 
     prompts: [
       'Добавь факт: доставка по городу 300 ₽',
       'Добавь урок, как отвечать на «дорого»',
-      'Открой обучение',
+      'Что ты знаешь про доставку?',
     ],
   },
   {
@@ -151,6 +168,23 @@ const PROMPT_GROUPS: { title: string; icon: LucideIcon; prompts: string[] }[] = 
 
 let idSeq = 0
 const nextId = () => `m${Date.now()}_${idSeq++}`
+
+/** Contextual follow-up chips shown under the latest assistant turn. */
+function deriveSuggestions(
+  settings: AiAssistSettings,
+  last: ChatMessage,
+): string[] {
+  const out: string[] = []
+  if (!settings.enabled) out.push('Включи ИИ-менеджера')
+  else out.push('Как ты сейчас настроен?')
+  if (settings.aggressiveness >= 3) out.push('Смягчи дожим')
+  else out.push('Дожимай клиентов жёстче')
+  // If the last turn opened logs, nudge toward fixing; otherwise offer content.
+  if (last.openPanel === 'logs') out.push('Почему ИИ молчит?')
+  else out.push('Что с ошибками ИИ?')
+  out.push('Что ты знаешь про доставку?')
+  return out.slice(0, 4)
+}
 
 interface Props {
   initialSettings: AiAssistSettings
@@ -171,7 +205,13 @@ export function AiConsole({
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
-  const [pending, startTransition] = useTransition()
+  const [loading, setLoading] = useState(false)
+  const [undone, setUndone] = useState<Set<string>>(() => new Set())
+
+  // Speak assistant replies aloud (Siri-style). Off by default so text-only
+  // admins are never surprised by audio.
+  const [voiceMode, setVoiceMode] = useState(false)
+  const [ttsSupported, setTtsSupported] = useState(false)
 
   // The single inline panel currently expanded, tied to the message that opened
   // it (so it renders directly under that assistant turn).
@@ -180,6 +220,8 @@ export function AiConsole({
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  // Monotonic token: a Stop or a newer request invalidates in-flight replies.
+  const reqRef = useRef(0)
 
   const closePanel = useCallback(() => {
     setActivePanel(null)
@@ -207,24 +249,47 @@ export function AiConsole({
     }
   }, [])
 
+  // Text-to-speech: only speak when the user turned voice mode on.
+  const speak = useCallback(
+    (text: string) => {
+      if (!voiceMode || typeof window === 'undefined') return
+      const synth = window.speechSynthesis
+      if (!synth) return
+      synth.cancel()
+      const u = new SpeechSynthesisUtterance(text)
+      u.lang = 'ru-RU'
+      synth.speak(u)
+    },
+    [voiceMode],
+  )
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      setTtsSupported(true)
+    }
+  }, [])
+
   const send = useCallback(
     (raw: string) => {
       const q = raw.trim()
-      if (!q || pending) return
+      if (!q || loading) return
 
       const userMsg: ChatMessage = { id: nextId(), role: 'user', content: q }
       const withUser = [...messages, userMsg]
       setMessages(withUser)
       setInput('')
+      setLoading(true)
 
       const historyTurns: AssistantTurn[] = withUser.map((m) => ({
         role: m.role,
         content: m.content,
       }))
 
-      startTransition(async () => {
+      const token = ++reqRef.current
+      ;(async () => {
         try {
           const res = await aiAssistantAction(historyTurns)
+          if (reqRef.current !== token) return // stopped or superseded
           const asstMsg: ChatMessage = {
             id: nextId(),
             role: 'assistant',
@@ -242,7 +307,9 @@ export function AiConsole({
           }
           if (res.settingsChanged) await refreshSettings()
           if (res.actions.some((a) => a.kind === 'lesson')) await refreshLessons()
+          speak(res.reply)
         } catch {
+          if (reqRef.current !== token) return
           toast.error('Не удалось получить ответ. Попробуйте ещё раз.')
           setMessages((prev) => [
             ...prev,
@@ -253,10 +320,55 @@ export function AiConsole({
               animate: true,
             },
           ])
+        } finally {
+          if (reqRef.current === token) setLoading(false)
         }
-      })
+      })()
     },
-    [messages, pending, refreshSettings, refreshLessons],
+    [messages, loading, refreshSettings, refreshLessons, speak],
+  )
+
+  // Stop a running generation: invalidate the in-flight token and drop loading.
+  const stop = useCallback(() => {
+    reqRef.current++
+    setLoading(false)
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+  }, [])
+
+  // Start a fresh conversation.
+  const newChat = useCallback(() => {
+    reqRef.current++
+    setMessages([])
+    setInput('')
+    setLoading(false)
+    closePanel()
+    setUndone(new Set())
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+    inputRef.current?.focus()
+  }, [closePanel])
+
+  // Undo a settings change from a receipt chip.
+  const undo = useCallback(
+    async (key: string, action: ExecutedAction) => {
+      if (!action.revert) return
+      try {
+        const res = await aiRevertSettingsAction(action.revert)
+        if (!res.ok) {
+          toast.error('Не удалось отменить изменение.')
+          return
+        }
+        setUndone((prev) => new Set(prev).add(key))
+        await refreshSettings()
+        toast.success('Изменение отменено.')
+      } catch {
+        toast.error('Не удалось отменить изменение.')
+      }
+    },
+    [refreshSettings],
   )
 
   // Instant panel open from a quick chip — no model call, added as a turn so the
@@ -274,7 +386,10 @@ export function AiConsole({
     setActivePanelMsgId(asstMsg.id)
   }, [])
 
-  const voice = useSpeechInput((text) => send(text))
+  const voice = useSpeechInput({
+    onInterim: (text) => setInput(text),
+    onFinal: (text) => send(text),
+  })
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Submit on plain Enter; Shift+Enter inserts a newline. Respect IME
@@ -311,9 +426,22 @@ export function AiConsole({
   }, [messages, activePanel])
 
   const hasChat = messages.length > 0
+  const lastMessage = messages[messages.length - 1]
+  const suggestions =
+    hasChat && !loading && lastMessage?.role === 'assistant'
+      ? deriveSuggestions(settings, lastMessage)
+      : []
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Live status strip — instant situational awareness. */}
+      <StatusStrip
+        settings={settings}
+        lessonCount={lessonCount}
+        hasChat={hasChat}
+        onNewChat={newChat}
+      />
+
       {!configured ? (
         <Card className="border-amber-500/40 bg-amber-500/5 p-4 text-sm text-amber-700 dark:text-amber-400">
           Ключ AI Gateway не найден. Полноценный разговор с ассистентом заработает,
@@ -330,7 +458,12 @@ export function AiConsole({
             <div key={m.id} className="flex flex-col gap-3">
               <MessageBubble message={m} />
               {m.actions && m.actions.length > 0 ? (
-                <ActionReceipts actions={m.actions} />
+                <ActionReceipts
+                  actions={m.actions}
+                  messageId={m.id}
+                  undone={undone}
+                  onUndo={undo}
+                />
               ) : null}
               {m.openPanel && activePanelMsgId === m.id && activePanel ? (
                 <InlinePanel
@@ -347,7 +480,10 @@ export function AiConsole({
               ) : null}
             </div>
           ))}
-          {pending ? <ThinkingBubble /> : null}
+          {loading ? <ThinkingBubble /> : null}
+          {suggestions.length > 0 ? (
+            <Suggestions items={suggestions} onPick={send} />
+          ) : null}
           <div ref={bottomRef} />
         </div>
       ) : (
@@ -356,6 +492,16 @@ export function AiConsole({
 
       {/* Composer — the one place you talk to the assistant. */}
       <Card className="sticky bottom-4 z-10 flex flex-col gap-3 p-3 shadow-lg">
+        {voice.listening ? (
+          <div className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary duration-300 animate-in fade-in">
+            <span className="flex gap-0.5" aria-hidden="true">
+              <Bar delay="0ms" />
+              <Bar delay="120ms" />
+              <Bar delay="240ms" />
+            </span>
+            Слушаю… говорите
+          </div>
+        ) : null}
         <div className="relative">
           <Textarea
             ref={inputRef}
@@ -363,12 +509,37 @@ export function AiConsole({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             rows={2}
-            disabled={pending}
+            disabled={loading}
             placeholder="Спросите или скажите, что сделать с ИИ-менеджером. Напр.: «дожимай жёстче», «добавь факт про доставку», «как ты настроен?»"
-            className="resize-none pr-24"
+            className="resize-none pr-32"
             aria-label="Сообщение ассистенту ИИ-менеджера"
           />
           <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
+            {ttsSupported ? (
+              <Button
+                type="button"
+                size="icon"
+                variant={voiceMode ? 'default' : 'ghost'}
+                className="size-8"
+                onClick={() => {
+                  if (voiceMode && window.speechSynthesis) {
+                    window.speechSynthesis.cancel()
+                  }
+                  setVoiceMode((v) => !v)
+                }}
+                aria-label={
+                  voiceMode ? 'Отключить озвучку ответов' : 'Озвучивать ответы'
+                }
+                aria-pressed={voiceMode}
+                title={voiceMode ? 'Озвучка включена' : 'Озвучивать ответы'}
+              >
+                {voiceMode ? (
+                  <Volume2 className="size-4" />
+                ) : (
+                  <VolumeX className="size-4" />
+                )}
+              </Button>
+            ) : null}
             {voice.supported ? (
               <Button
                 type="button"
@@ -376,26 +547,34 @@ export function AiConsole({
                 variant={voice.listening ? 'default' : 'ghost'}
                 className={cn('size-8', voice.listening && 'animate-pulse')}
                 onClick={voice.toggle}
-                disabled={pending}
+                disabled={loading}
                 aria-label={voice.listening ? 'Остановить запись' : 'Голосовой ввод'}
                 aria-pressed={voice.listening}
               >
                 <Mic className="size-4" />
               </Button>
             ) : null}
-            <Button
-              size="icon"
-              className="size-8"
-              disabled={pending || !input.trim()}
-              onClick={() => send(input)}
-              aria-label="Отправить"
-            >
-              {pending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
+            {loading ? (
+              <Button
+                size="icon"
+                variant="secondary"
+                className="size-8"
+                onClick={stop}
+                aria-label="Остановить генерацию"
+              >
+                <Square className="size-3.5" />
+              </Button>
+            ) : (
+              <Button
+                size="icon"
+                className="size-8"
+                disabled={!input.trim()}
+                onClick={() => send(input)}
+                aria-label="Отправить"
+              >
                 <ArrowUp className="size-4" />
-              )}
-            </Button>
+              </Button>
+            )}
           </div>
         </div>
 
@@ -410,7 +589,7 @@ export function AiConsole({
                 key={intent}
                 type="button"
                 onClick={() => openPanelDirect(intent)}
-                disabled={pending}
+                disabled={loading}
                 className={cn(
                   'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
                   activePanel === intent
@@ -429,14 +608,104 @@ export function AiConsole({
   )
 }
 
+/* ------------------------------ Status strip ---------------------------- */
+
+function StatusStrip({
+  settings,
+  lessonCount,
+  hasChat,
+  onNewChat,
+}: {
+  settings: AiAssistSettings
+  lessonCount: number
+  hasChat: boolean
+  onNewChat: () => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <StatusChip
+        icon={Power}
+        tone={settings.enabled ? 'on' : 'off'}
+        label={settings.enabled ? 'ИИ включён' : 'ИИ выключен'}
+      />
+      <StatusChip
+        icon={Sparkles}
+        tone="neutral"
+        label={TONE_LABEL[settings.tone] ?? settings.tone}
+      />
+      <StatusChip
+        icon={Flame}
+        tone="neutral"
+        label={
+          AGGRESSIVENESS_LABELS[settings.aggressiveness] ?? 'Сбалансированный'
+        }
+      />
+      <StatusChip
+        icon={GraduationCap}
+        tone="neutral"
+        label={`${lessonCount} ${pluralLessons(lessonCount)}`}
+      />
+      {hasChat ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onNewChat}
+          className="ml-auto gap-1.5 text-muted-foreground"
+        >
+          <Plus className="size-4" />
+          Новый диалог
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
+function StatusChip({
+  icon: Icon,
+  label,
+  tone,
+}: {
+  icon: LucideIcon
+  label: string
+  tone: 'on' | 'off' | 'neutral'
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+        tone === 'on' &&
+          'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+        tone === 'off' &&
+          'border-border bg-muted/50 text-muted-foreground',
+        tone === 'neutral' && 'border-border bg-card text-foreground',
+      )}
+    >
+      <Icon className="size-3.5" />
+      {label}
+    </span>
+  )
+}
+
 /* ------------------------------ Message bubbles -------------------------- */
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user'
+  const [copied, setCopied] = useState(false)
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      toast.error('Не удалось скопировать.')
+    }
+  }
+
   return (
     <div
       className={cn(
-        'flex gap-2.5 duration-300 animate-in fade-in slide-in-from-bottom-2',
+        'group flex gap-2.5 duration-300 animate-in fade-in slide-in-from-bottom-2',
         isUser ? 'flex-row-reverse' : 'flex-row',
       )}
     >
@@ -457,19 +726,46 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </span>
       <div
         className={cn(
-          'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm',
-          isUser
-            ? 'rounded-tr-sm bg-primary text-primary-foreground'
-            : 'rounded-tl-sm bg-muted text-foreground',
+          'flex max-w-[85%] flex-col gap-1',
+          isUser ? 'items-end' : 'items-start',
         )}
       >
-        {message.role === 'assistant' ? (
-          <AssistantText text={message.content} animate={!!message.animate} />
-        ) : (
-          <p className="whitespace-pre-wrap text-pretty leading-relaxed">
-            {message.content}
-          </p>
-        )}
+        <div
+          className={cn(
+            'rounded-2xl px-3.5 py-2.5 text-sm',
+            isUser
+              ? 'rounded-tr-sm bg-primary text-primary-foreground'
+              : 'rounded-tl-sm bg-muted text-foreground',
+          )}
+        >
+          {message.role === 'assistant' ? (
+            <AssistantText text={message.content} animate={!!message.animate} />
+          ) : (
+            <p className="whitespace-pre-wrap text-pretty leading-relaxed">
+              {message.content}
+            </p>
+          )}
+        </div>
+        {message.role === 'assistant' && message.content ? (
+          <button
+            type="button"
+            onClick={copy}
+            className="flex items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+            aria-label="Скопировать ответ"
+          >
+            {copied ? (
+              <>
+                <Check className="size-3" />
+                Скопировано
+              </>
+            ) : (
+              <>
+                <Copy className="size-3" />
+                Копировать
+              </>
+            )}
+          </button>
+        ) : null}
       </div>
     </div>
   )
@@ -485,10 +781,9 @@ function AssistantText({
 }) {
   const [shown, setShown] = useState(animate ? '' : text)
   useEffect(() => {
-    if (!animate) {
-      setShown(text)
-      return
-    }
+    // Assistant message text is fixed after mount; only the animated branch
+    // needs to progressively reveal it.
+    if (!animate) return
     let i = 0
     const id = window.setInterval(() => {
       i += 2
@@ -527,20 +822,82 @@ function Dot({ delay }: { delay: string }) {
   )
 }
 
+/** Equalizer bar for the "listening" indicator. */
+function Bar({ delay }: { delay: string }) {
+  return (
+    <span
+      className="inline-block w-0.5 animate-pulse rounded-full bg-primary"
+      style={{ height: '0.75rem', animationDelay: delay }}
+    />
+  )
+}
+
+/** Contextual follow-up chips under the latest assistant turn. */
+function Suggestions({
+  items,
+  onPick,
+}: {
+  items: string[]
+  onPick: (text: string) => void
+}) {
+  return (
+    <div className="ml-9 flex flex-wrap gap-1.5 duration-300 animate-in fade-in">
+      {items.map((s) => (
+        <button
+          key={s}
+          type="button"
+          onClick={() => onPick(s)}
+          className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted/60 hover:text-foreground"
+        >
+          {s}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** Receipts for the concrete mutations performed during a turn. */
-function ActionReceipts({ actions }: { actions: ExecutedAction[] }) {
+function ActionReceipts({
+  actions,
+  messageId,
+  undone,
+  onUndo,
+}: {
+  actions: ExecutedAction[]
+  messageId: string
+  undone: Set<string>
+  onUndo: (key: string, action: ExecutedAction) => void
+}) {
   return (
     <div className="ml-9 flex flex-wrap gap-1.5 duration-300 animate-in fade-in">
       {actions.map((a, i) => {
         const Icon = ACTION_ICON[a.kind]
+        const key = `${messageId}:${i}`
+        const isUndone = undone.has(key)
         return (
           <span
             key={i}
-            className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs font-medium text-primary"
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+              isUndone
+                ? 'border-border bg-muted/50 text-muted-foreground line-through'
+                : 'border-primary/30 bg-primary/5 text-primary',
+            )}
           >
             <Check className="size-3.5" />
             <Icon className="size-3.5" />
             {a.label}
+            {a.revert && !isUndone ? (
+              <button
+                type="button"
+                onClick={() => onUndo(key, a)}
+                className="ml-1 inline-flex items-center gap-0.5 rounded-full px-1 text-primary/80 hover:text-primary"
+                aria-label="Отменить изменение"
+              >
+                <Undo2 className="size-3" />
+                Отменить
+              </button>
+            ) : null}
           </span>
         )
       })}
@@ -714,17 +1071,29 @@ interface SpeechInput {
 }
 
 /**
- * Thin wrapper over the Web Speech API (ru-RU). Auto-submits the recognised
- * phrase on a final result so it feels like talking to Siri. Degrades to
- * `supported: false` where the API is missing (e.g. Firefox), and the mic button
- * is simply not rendered.
+ * Thin wrapper over the Web Speech API (ru-RU). Streams interim results into the
+ * composer as you speak and auto-submits the final phrase — so it feels like
+ * talking to Siri. Degrades to `supported: false` where the API is missing (e.g.
+ * Firefox), and the mic button is simply not rendered.
  */
-function useSpeechInput(onFinal: (text: string) => void): SpeechInput {
+function useSpeechInput({
+  onInterim,
+  onFinal,
+}: {
+  onInterim: (text: string) => void
+  onFinal: (text: string) => void
+}): SpeechInput {
   const [supported, setSupported] = useState(false)
   const [listening, setListening] = useState(false)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const onInterimRef = useRef(onInterim)
   const onFinalRef = useRef(onFinal)
-  onFinalRef.current = onFinal
+
+  // Keep the latest callbacks in refs without writing during render.
+  useEffect(() => {
+    onInterimRef.current = onInterim
+    onFinalRef.current = onFinal
+  }, [onInterim, onFinal])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -736,11 +1105,20 @@ function useSpeechInput(onFinal: (text: string) => void): SpeechInput {
 
     const rec = new Ctor()
     rec.lang = 'ru-RU'
-    rec.interimResults = false
+    rec.interimResults = true
     rec.maxAlternatives = 1
     rec.onresult = (e: SpeechRecognitionEventLike) => {
-      const transcript = e.results?.[0]?.[0]?.transcript?.trim()
-      if (transcript) onFinalRef.current(transcript)
+      let interim = ''
+      let final = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const result = e.results[i]
+        const transcript = result[0]?.transcript ?? ''
+        if (result.isFinal) final += transcript
+        else interim += transcript
+      }
+      if (interim) onInterimRef.current(interim)
+      const trimmed = final.trim()
+      if (trimmed) onFinalRef.current(trimmed)
     }
     rec.onend = () => setListening(false)
     rec.onerror = () => setListening(false)
@@ -793,8 +1171,12 @@ interface SpeechRecognitionLike {
   onend: (() => void) | null
   onerror: (() => void) | null
 }
+interface SpeechRecognitionResultLike extends ArrayLike<{ transcript: string }> {
+  isFinal: boolean
+}
 interface SpeechRecognitionEventLike {
-  results: ArrayLike<ArrayLike<{ transcript: string }>>
+  resultIndex: number
+  results: ArrayLike<SpeechRecognitionResultLike>
 }
 interface WindowWithSpeech extends Window {
   SpeechRecognition?: new () => SpeechRecognitionLike
