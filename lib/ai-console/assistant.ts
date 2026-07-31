@@ -51,6 +51,7 @@ export interface ExecutedAction {
     | 'directive'
     | 'followup'
     | 'dialog'
+    | 'report'
   /** Short human summary, e.g. «Включил ИИ» or «Агрессивность → Максимум». */
   label: string
   /**
@@ -58,6 +59,22 @@ export interface ExecutedAction {
    * value by applying this patch. Only settings mutations carry it.
    */
   revert?: SettingsRevert
+}
+
+/**
+ * A downloadable report the co-pilot generated this turn. The UI shows a
+ * «Скачать отчёт» button that saves `content` as a file named `filename`
+ * (client-side Blob download — no server storage involved).
+ */
+export interface AssistantReport {
+  /** Suggested file name, e.g. «omnidesk-report-2026-08-01.md». */
+  filename: string
+  /** MIME type for the Blob, e.g. 'text/markdown' or 'text/csv'. */
+  mimeType: string
+  /** Full file contents. */
+  content: string
+  /** Short human label for the button, e.g. «Отчёт за 7 дней». */
+  label: string
 }
 
 /** The full result of one assistant turn, consumed by the console UI. */
@@ -83,6 +100,11 @@ export interface AssistantResult {
    * When present, the UI shows a Confirm/Cancel card instead of a silent change.
    */
   pending?: PendingConfirmation | null
+  /**
+   * A downloadable report produced this turn (via the exportReport tool). Null
+   * on the vast majority of turns; when set, the UI renders a download button.
+   */
+  report?: AssistantReport | null
   /** Which engine answered: the tool-calling agent or the offline fallback. */
   source: 'ai' | 'fallback'
 }

@@ -89,8 +89,12 @@ scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.m
   (`rememberDirective`/`list`/`update`/`toggle`/`forget`/`reorder`), базу знаний
   (add/list/update/delete), уроки (add/list/delete), диалоги (`listDialogs`,
   `attachAi`, `detachAi`), аналитику (`getPerformance`, `getCostStats`,
-  `dealTemperature`), дожим (`getFollowupStatus`, `configureFollowup`), предпросмотр
-  ответа (`previewReply`), генерацию сценария (`generateScenario`).
+  `dealTemperature`), дожим (`getFollowupStatus`, `configureFollowup` — включая
+  тихие часы и `quietTz`/часовой пояс), выгрузку отчётов (`exportReport` — md/csv,
+  скачивается кнопкой под сообщением через `report` в `AssistantResult`),
+  предпросмотр ответа (`previewReply`), генерацию сценария (`generateScenario`).
+  Директивы также видны в UI настроек в режиме «только чтение»
+  (`aiListDirectivesAction` → карточка в `components/admin/ai-settings-tab.tsx`).
 - **Рискованные действия ГАРДИРУЮТСЯ:** выключение ИИ, максимальный дожим
   (уровень 3), включение авто-дожима — возвращают `needsConfirmation` (через
   `pending`), а не применяются сразу. UI показывает кнопку подтверждения.

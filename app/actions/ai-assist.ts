@@ -51,7 +51,11 @@ import {
   type AiLogLevel,
   type AiLogRow,
 } from '@/lib/data/ai-log'
-import { directiveTexts } from '@/lib/data/ai-directives'
+import {
+  directiveTexts,
+  listDirectives,
+  type AiDirective,
+} from '@/lib/data/ai-directives'
 
 /**
  * Server actions backing the admin «ИИ» tab: shared assistant settings, the
@@ -213,6 +217,21 @@ export async function aiListLessonsAction(): Promise<AiAssistLesson[]> {
 export async function aiSampleConversationsAction(): Promise<TrainingSample[]> {
   await requireAdmin()
   return sampleTrainingConversations(8)
+}
+
+/**
+ * List the co-pilot-managed directives (the mandate) for a READ-ONLY display in
+ * the settings UI. Directives are created and edited through the co-pilot chat;
+ * this action only lets the admin see what is currently in force.
+ */
+export async function aiListDirectivesAction(): Promise<AiDirective[]> {
+  await requireAdmin()
+  try {
+    return await listDirectives()
+  } catch {
+    // Table may not exist before the directives migration has run.
+    return []
+  }
 }
 
 /* --------------------------- Train on an account -------------------------- */

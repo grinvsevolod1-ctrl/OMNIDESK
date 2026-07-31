@@ -16,12 +16,14 @@ import {
   Loader2,
   MessagesSquare,
   Plus,
+  ScrollText,
   Sliders,
   BrainCircuit,
   Trash2,
 } from 'lucide-react'
 import {
   aiDeleteKnowledgeAction,
+  aiListDirectivesAction,
   aiListKnowledgeAction,
   aiSaveKnowledgeAction,
   aiUpdateSettingsAction,
@@ -30,6 +32,7 @@ import {
   type AiAssistSettings,
   type KnowledgeEntry,
 } from '@/lib/data/ai-assist'
+import { type AiDirective } from '@/lib/data/ai-directives'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -206,10 +209,13 @@ export function SettingsTab({
         onSave={(aggressiveness) => save({ aggressiveness })}
       />
 
-      {/* 4. Facts the AI must quote exactly. */}
+      {/* 4. The mandate from the boss — read-only mirror of the co-pilot rules. */}
+      <DirectivesCard />
+
+      {/* 5. Facts the AI must quote exactly. */}
       <KnowledgeBaseCard />
 
-      {/* 5. Everything advanced is tucked away so the page stays calm. */}
+      {/* 6. Everything advanced is tucked away so the page stays calm. */}
       <AdvancedSettings settings={settings} onSave={save} pending={pending} />
     </div>
   )
@@ -521,6 +527,93 @@ function TuningFields({
         </Button>
       </div>
     </>
+  )
+}
+
+/* ------------------------ Directives (mandate) mirror ------------------- */
+
+/**
+ * READ-ONLY view of the co-pilot-managed directives (the mandate). Rules are
+ * created and edited through the co-pilot chat; here the admin can simply see
+ * what is currently steering the AI manager, in priority order. Disabled rules
+ * are shown greyed out and labelled so it is obvious they are not in force.
+ */
+function DirectivesCard() {
+  const [items, setItems] = useState<AiDirective[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [loading, startLoad] = useTransition()
+
+  useEffect(() => {
+    startLoad(async () => {
+      try {
+        setItems(await aiListDirectivesAction())
+      } catch {
+        /* silent — table may be pre-migration */
+      } finally {
+        setLoaded(true)
+      }
+    })
+  }, [])
+
+  const activeCount = items.filter((d) => d.enabled).length
+
+  return (
+    <Card className="flex flex-col gap-4 p-4">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 rounded-md bg-primary/10 p-2 text-primary">
+          <ScrollText className="size-5" />
+        </div>
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <p className="font-medium">Правила от руководителя</p>
+            {loaded && items.length > 0 ? (
+              <Badge variant="secondary" className="shrink-0">
+                {activeCount} из {items.length} активны
+              </Badge>
+            ) : null}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Указания, которым ИИ следует в первую очередь. Задаются и меняются
+            через чат с ассистентом — здесь их можно только просмотреть.
+          </p>
+        </div>
+      </div>
+
+      {loading && !loaded ? (
+        <p className="py-4 text-center text-sm text-muted-foreground">
+          Загрузка…
+        </p>
+      ) : items.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-border py-4 text-center text-sm text-muted-foreground">
+          Пока нет правил. Скажите ассистенту в чате, например: «Всегда уточняй
+          город клиента» — и правило появится здесь.
+        </p>
+      ) : (
+        <ol className="flex flex-col gap-2">
+          {items.map((d, i) => (
+            <li
+              key={d.id}
+              className={cn(
+                'flex items-start gap-3 rounded-lg border border-border p-3',
+                !d.enabled && 'opacity-60',
+              )}
+            >
+              <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+                {i + 1}
+              </span>
+              <p className="flex-1 whitespace-pre-wrap text-sm leading-relaxed">
+                {d.body}
+              </p>
+              {!d.enabled ? (
+                <Badge variant="outline" className="shrink-0">
+                  Выключено
+                </Badge>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      )}
+    </Card>
   )
 }
 

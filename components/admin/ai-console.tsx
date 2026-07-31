@@ -8,6 +8,7 @@ import {
   Check,
   Copy,
   BellRing,
+  FileDown,
   Flame,
   GraduationCap,
   Highlighter,
@@ -32,6 +33,7 @@ import type { AiAssistLesson, AiAssistSettings } from '@/lib/data/ai-assist'
 import { INTENT_BY_ID, type ConsoleIntent } from '@/lib/ai-console/intents'
 import {
   AGGRESSIVENESS_LABELS,
+  type AssistantReport,
   type AssistantResult,
   type AssistantTurn,
   type ExecutedAction,
@@ -107,6 +109,7 @@ const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
   directive: ScrollText,
   followup: BellRing,
   dialog: MessagesSquare,
+  report: FileDown,
 }
 
 /** Human tone labels for the status strip. */
@@ -126,6 +129,8 @@ interface ChatMessage {
   source?: AssistantResult['source']
   /** A guarded change awaiting the admin's Confirm/Cancel (rendered as a card). */
   pending?: PendingConfirmation | null
+  /** A downloadable report produced this turn (rendered as a download button). */
+  report?: AssistantReport | null
   /** A high-impact preset awaiting confirmation (rendered as a card). */
   presetConfirm?: ConsolePreset | null
   /** True while tokens are still streaming into this bubble. */
@@ -291,6 +296,7 @@ export function AiConsole({
                   openPanel: res.openPanel,
                   source: res.source,
                   pending: res.pending ?? null,
+                  report: res.report ?? null,
                   streaming: false,
                 }
               : m,
@@ -366,6 +372,7 @@ export function AiConsole({
             openPanel: meta?.openPanel ?? null,
             settingsChanged: meta?.settingsChanged ?? false,
             pending: meta?.pending ?? null,
+            report: meta?.report ?? null,
             source: meta?.source ?? 'ai',
           })
         } catch (err) {
@@ -698,6 +705,7 @@ export function AiConsole({
                   onUndo={undo}
                 />
               ) : null}
+              {m.report ? <ReportDownload report={m.report} /> : null}
               {m.openPanel && activePanelMsgId === m.id && activePanel ? (
                 <InlinePanel
                   intent={activePanel}
@@ -1127,6 +1135,45 @@ function ActionReceipts({
           </span>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * Download button for a co-pilot-generated report. The file is built entirely
+ * on the client from the report payload (Blob + object URL), so nothing is
+ * stored server-side and the download works offline once the turn has arrived.
+ */
+function ReportDownload({ report }: { report: AssistantReport }) {
+  const download = () => {
+    try {
+      const blob = new Blob([report.content], { type: report.mimeType })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = report.filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Revoke on the next tick so the click has time to start the download.
+      setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch {
+      toast.error('Не удалось сформировать файл')
+    }
+  }
+
+  return (
+    <div className="ml-9 duration-300 animate-in fade-in">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={download}
+        className="gap-2"
+      >
+        <FileDown className="size-4" />
+        {`Скачать: ${report.label}`}
+      </Button>
     </div>
   )
 }

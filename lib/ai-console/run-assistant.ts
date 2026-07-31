@@ -51,6 +51,7 @@ import { classifyByKeywords, type ConsoleIntent } from './intents'
 import {
   AGGRESSIVENESS_LABELS,
   ASSISTANT_HISTORY_LIMIT,
+  type AssistantReport,
   type AssistantResult,
   type AssistantTurn,
   type ExecutedAction,
@@ -171,6 +172,7 @@ export async function prepareAssistantRun(
   let openPanel: ConsoleIntent | null = null
   let settingsChanged = false
   let pending: PendingConfirmation | null = null
+  let report: AssistantReport | null = null
 
   // Pre-turn snapshot so each mutation can attach a one-click revert patch.
   const baseline = await getAiAssistSettings()
@@ -775,6 +777,117 @@ export async function prepareAssistantRun(
       },
     }),
 
+    exportReport: tool({
+      description:
+        'Собрать выгружаемый отчёт о работе ИИ-менеджера и дать админу файл для скачивания. Вызывай, когда админ просит «выгрузи отчёт», «сделай отчёт», «скачать статистику», «отчёт за месяц», «отчёт в файл/таблицу», «пришли сводку». Формат md — читаемый текстовый отчёт со всеми разделами; формат csv — таблица «горячих» сделок для Excel. Передай days (по умолчанию 7). После вызова коротко скажи, что отчёт готов к скачиванию по кнопке под сообщением, и назови 2–3 главные цифры.',
+      inputSchema: z.object({
+        days: z.number().int().min(1).max(365).optional(),
+        format: z.enum(['md', 'csv']).optional(),
+      }),
+      execute: async ({ days, format }) => {
+        const win = days ?? 7
+        const fmt = format ?? 'md'
+        const [perf, models, deals, followup, directives, lessons, corrections] =
+          await Promise.all([
+            getAiPerformanceSummary(win),
+            getAiModelStats(win),
+            listDealHeat(20),
+            getFollowupSettings(),
+            countDirectives(),
+            countLessons(),
+            countManualCorrections(),
+          ])
+        const today = new Date().toISOString().slice(0, 10)
+
+        if (fmt === 'csv') {
+          const esc = (v: string | number | null) =>
+            `"${String(v ?? '').replace(/"/g, '""')}"`
+          const rows: (string | number | null)[][] = [
+            ['Клиент', 'Канал', 'Статус', 'Балл', 'Категория', 'Часов молчания', 'Ждёт нас', 'Причины'],
+            ...deals.map((d) => [
+              d.contactName,
+              d.channelType,
+              d.status,
+              d.score,
+              d.band,
+              d.hoursSinceLast ?? '',
+              d.awaitingUs ? 'да' : 'нет',
+              d.reasons.join('; '),
+            ]),
+          ]
+          // Prepend BOM so Excel opens Cyrillic UTF-8 correctly; CRLF line ends.
+          const content =
+            '\uFEFF' + rows.map((r) => r.map(esc).join(',')).join('\r\n')
+          report = {
+            filename: `omnidesk-deals-${today}.csv`,
+            mimeType: 'text/csv;charset=utf-8',
+            content,
+            label: `Горячие сделки (CSV, ${deals.length})`,
+          }
+        } else {
+          const pct = (n: number) => `${n.toFixed(1)}%`
+          const lines: string[] = [
+            `# Отчёт по ИИ-менеджеру OMNIDESK`,
+            ``,
+            `Период: последние ${win} дн. · Сформирован: ${today}`,
+            ``,
+            `## Результаты`,
+            `- Всего диалогов под ИИ: ${perf.totalDialogs}`,
+            `- Ликвидных лидов: ${perf.liquid} (${pct(perf.liquidRatePct)})`,
+            `- Неликвид: ${perf.notLiquid}`,
+            `- Передано человеку: ${perf.handoffs} (${pct(perf.handoffRatePct)})`,
+            `- Переведено дальше: ${perf.transferred}`,
+            `- Ушли после одного сообщения: ${perf.unsubscribed}`,
+            ``,
+            `## Настройки и база`,
+            `- Правил (директив): ${directives}`,
+            `- Обучающих уроков: ${lessons}`,
+            `- Ручных исправлений: ${corrections}`,
+            `- Авто-дожим: ${followup.enabled ? 'включён' : 'выключен'} · задержка ${followup.delayHours} ч · до ${followup.maxTouches} касаний · тихие часы ${followup.quietStart}:00–${followup.quietEnd}:00 (${followup.quietTz})`,
+            ``,
+            `## Модели (расход и скорость)`,
+            ...(models.length
+              ? models.map(
+                  (m) =>
+                    `- ${m.model}: ${m.total} запросов · успешных ${pct(m.okRate * 100)} · ~${Math.round(m.avgLatencyMs)} мс · ~${Math.round(m.avgCompletionTokens)} токенов/ответ`,
+                )
+              : ['- Нет данных за период']),
+            ``,
+            `## Топ горячих сделок`,
+            ...(deals.length
+              ? deals
+                  .slice(0, 15)
+                  .map(
+                    (d, i) =>
+                      `${i + 1}. ${d.contactName ?? 'без имени'} (${d.channelType}) — ${d.score}/100, ${d.band}${d.awaitingUs ? ', ждёт нашего ответа' : ''}`,
+                  )
+              : ['- Нет активных сделок']),
+            ``,
+          ]
+          report = {
+            filename: `omnidesk-report-${today}.md`,
+            mimeType: 'text/markdown;charset=utf-8',
+            content: lines.join('\n'),
+            label: `Отчёт за ${win} дн.`,
+          }
+        }
+
+        actions.push({ kind: 'report', label: `Сформировал отчёт: ${report.label}` })
+        return {
+          ok: true,
+          format: fmt,
+          windowDays: win,
+          summary: {
+            dialogs: perf.totalDialogs,
+            liquid: perf.liquid,
+            liquidRatePct: perf.liquidRatePct,
+            handoffs: perf.handoffs,
+            hotDeals: deals.filter((d) => d.band === 'hot').length,
+          },
+        }
+      },
+    }),
+
     dealTemperature: tool({
       description:
         'Оценить «температуру» сделок — насколько клиент горячий и готов к покупке. Вызывай, когда админ спрашивает «кого дожимать в первую очередь», «самые горячие клиенты», «кто готов купить», «насколько горячий этот диалог». Без conversationId вернёт топ самых горячих клиентов; с conversationId — оценку по конкретному диалогу. У каждой оценки есть балл 0–100, категория и понятные причины — проговори их админу.',
@@ -805,13 +918,14 @@ export async function prepareAssistantRun(
 
     configureFollowup: tool({
       description:
-        'Настроить авто-дожим (follow-up) молчащих клиентов: ИИ сам напоминает о себе, если клиент перестал отвечать. Вызывай, когда админ просит «дожимай молчунов», «напоминай, если не отвечают», «пиши сам через N часов», «хватит по два напоминания». Можно менять задержку, число касаний, тихие часы и каналы. ВКЛЮЧЕНИЕ (enabled=true) высокоэффективно — оно требует подтверждения администратора и вернёт needsConfirmation, не применяясь сразу. Все прочие изменения и выключение применяются сразу.',
+        'Настроить авто-дожим (follow-up) молчащих клиентов: ИИ сам напоминает о себе, если клиент перестал отвечать. Вызывай, когда админ просит «дожимай молчунов», «напоминай, если не отвечают», «пиши сам через N часов», «хватит по два напоминания», «не беспокой ночью», «мой часовой пояс — …». Можно менять задержку, число касаний, тихие часы (когда не писать), часовой пояс тихих часов и каналы. quietTz — строка вида «Europe/Moscow», «Asia/Yekaterinburg»: по ней вычисляются тихие часы. ВКЛЮЧЕНИЕ (enabled=true) высокоэффективно — оно требует подтверждения администратора и вернёт needsConfirmation, не применяясь сразу. Все прочие изменения и выключение применяются сразу.',
       inputSchema: z.object({
         enabled: z.boolean().optional(),
         delayHours: z.number().int().min(1).max(720).optional(),
         maxTouches: z.number().int().min(1).max(5).optional(),
         quietStart: z.number().int().min(0).max(23).optional(),
         quietEnd: z.number().int().min(0).max(23).optional(),
+        quietTz: z.string().min(1).max(64).optional(),
         channels: z
           .array(z.enum(['livechat', 'whatsapp', 'vk', 'max', 'telegram']))
           .optional(),
@@ -822,6 +936,7 @@ export async function prepareAssistantRun(
         maxTouches,
         quietStart,
         quietEnd,
+        quietTz,
         channels,
       }) => {
         // Guard: turning follow-up ON makes the AI message clients unprompted →
@@ -835,12 +950,22 @@ export async function prepareAssistantRun(
           }
           return { ok: true, needsConfirmation: true }
         }
+        // Validate the timezone against the runtime's IANA database so we never
+        // persist a bogus zone that would silently break quiet-hour math.
+        if (quietTz != null) {
+          try {
+            new Intl.DateTimeFormat('en-US', { timeZone: quietTz })
+          } catch {
+            return { ok: false, reason: 'invalid_timezone', quietTz }
+          }
+        }
         const patch: Parameters<typeof updateFollowupSettings>[0] = {}
         if (enabled === false) patch.enabled = false
         if (delayHours != null) patch.delayHours = delayHours
         if (maxTouches != null) patch.maxTouches = maxTouches
         if (quietStart != null) patch.quietStart = quietStart
         if (quietEnd != null) patch.quietEnd = quietEnd
+        if (quietTz != null) patch.quietTz = quietTz
         if (channels != null) patch.channels = channels
         if (Object.keys(patch).length === 0) {
           return { ok: true, unchanged: true }
@@ -938,6 +1063,7 @@ export async function prepareAssistantRun(
       openPanel,
       settingsChanged,
       pending,
+      report,
       source: 'ai',
     }
   }
@@ -1017,6 +1143,7 @@ const SYSTEM_INSTRUCTIONS = [
   '• Уроки обучения: показать сохранённые — listLessons; удалить — deleteLesson (сначала возьми id через listLessons). Добавляй уроки только через addLesson и только с согласия админа.',
   '• Управление диалогами прямо из чата: listDialogs — показать, что ведёт ИИ (scope=enrolled) или найти диалог для подключения (scope=all или поиск по имени); attachAi — поручить диалог боту; detachAi — вернуть диалог человеку. Всегда сначала listDialogs, чтобы взять правильный conversationId, и подтверди админу, к какому именно контакту подключил/от какого отключил ИИ.',
   '• Когда админ спрашивает про расходы на ИИ или скорость («сколько тратим», «расход токенов», «какая модель», «как быстро отвечает») — вызови getCostStats и объясни по моделям простыми словами.',
+  '• Когда админ просит выгрузить/скачать отчёт или сводку («сделай отчёт», «выгрузи статистику», «отчёт за месяц в файл», «пришли таблицу по клиентам») — вызови exportReport (format=md для читаемого отчёта, format=csv для таблицы сделок в Excel; days — период). После этого скажи, что файл готов к скачиванию по кнопке под сообщением, и назови 2–3 ключевые цифры из сводки.',
   '• Настройки «мозга»: setModel меняет саму модель (умнее/быстрее/дешевле или сброс на значение по умолчанию), setModelParams меняет temperature (насколько живо/непредсказуемо пишет) и maxTokens (длина ответа), setAggressiveness — насколько напористо продаёт (0 мягко … 3 максимально; уровень 3 требует подтверждения). Если админ просит абстрактно («сделай поумнее», «пусть отвечает живее», «дожимай сильнее») — объясни простыми словами, какой параметр за это отвечает, предложи конкретное значение и меняй после согласия.',
   '• Когда админ просит разобрать ошибки или доучить продавца («разбери провалы», «где мы теряем клиентов», «чему тебя доучить») — вызови findWeakSpots, покажи предложенные уроки коротким списком и спроси, какие сохранить. Сохраняй только одобренные — через addLesson. Не сохраняй уроки без согласия админа.',
   '• Когда админ говорит про дожим молчунов или напоминания («дожимай, если не отвечают», «пиши сам через N часов», «напоминай два раза», «во сколько не беспокоить») — используй getFollowupStatus, чтобы показать текущие настройки, и configureFollowup, чтобы их менять. Помни: включение авто-дожима требует подтверждения (вернётся needsConfirmation) — объясни админу, что после включения ИИ сам начнёт писать напоминания молчащим клиентам. Задержку, число касаний, тихие часы и каналы можно менять сразу.',
