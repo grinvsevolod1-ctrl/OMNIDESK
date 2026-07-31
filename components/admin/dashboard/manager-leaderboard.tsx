@@ -180,8 +180,9 @@ export function ManagerLeaderboard({
                 </div>
               </div>
 
-              {/* Metrics */}
-              <div className="grid grid-cols-4 gap-3 sm:gap-5">
+              {/* Metrics — 2×2 on narrow phones so the two-word labels
+                  («Без ответа») don't wrap into a cramped mess, one row from sm+. */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-5">
                 <Metric label="Отписок" value={m.totalLeads} />
                 <Metric label="Новые" value={m.newThisWeek} />
                 <Metric
