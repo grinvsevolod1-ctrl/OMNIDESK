@@ -46,6 +46,15 @@ export type SimState =
 export type SimOutcome = 'ended' | 'left' | 'competitor' | 'ghosted' | 'angry'
 
 /**
+ * A persona's daily rhythm — rolled once at spawn so each "person" has a stable
+ * time-of-day when they're fast vs slow to reply:
+ *   lark   — «жаворонок»: quick in the morning, fades in the evening
+ *   owl    — «сова»: sluggish mornings, sharp late at night
+ *   normal — average day-active person (default)
+ */
+export type SimChronotype = 'lark' | 'owl' | 'normal'
+
+/**
  * Per-persona writing fingerprint. Every value is rolled once at spawn so a
  * given "person" writes consistently across the whole conversation — one guy
  * always drops punctuation, another always TYPES IN CAPS when angry, etc.
@@ -193,6 +202,12 @@ export interface SimPersona {
    * typing habit, sentence ending, recurring detail). Optional for legacy rows.
    */
   speechFingerprint?: SpeechFingerprint
+  /**
+   * Daily rhythm ("жаворонок"/"сова"/обычный) — rolled once at spawn so this
+   * person is consistently faster or slower to reply at certain hours. Optional
+   * for legacy rows (treated as 'normal').
+   */
+  chronotype?: SimChronotype
 }
 
 /**

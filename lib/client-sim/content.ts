@@ -1,5 +1,6 @@
 import type { ChannelType } from '@/lib/types'
 import type {
+  SimChronotype,
   SimGender,
   SimPersona,
   SimPersonaConfig,
@@ -307,6 +308,11 @@ export function makePersona(
     })(),
     goal: pick(goalPool),
     speechFingerprint: rollSpeechFingerprint(),
+    // ~25% larks, ~25% owls, ~50% ordinary day-active people.
+    chronotype: ((): SimChronotype => {
+      const r = Math.random()
+      return r < 0.25 ? 'lark' : r < 0.5 ? 'owl' : 'normal'
+    })(),
   }
 }
 
@@ -372,6 +378,32 @@ function typoWord(word: string): string {
   return word
 }
 
+
+/**
+ * Take a clean sentence and return a version with exactly ONE believable typo
+ * in a single "real" word (len >= 4, letters only), or null if no suitable word
+ * exists. Used to send a message with a slip that the persona then EDITS to fix
+ * a moment later — the most human anti-bot signal there is. Deterministic-ish:
+ * picks one eligible word at random and mangles just that one.
+ */
+export function injectSingleTypo(clean: string): string | null {
+  const text = clean.trim()
+  if (!text) return null
+  const tokens = text.split(/(\s+)/) // keep whitespace tokens for rejoin
+  // Indices of "real" words worth typoing.
+  const eligible: number[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]
+    if (/^[\p{L}]{4,}$/u.test(t)) eligible.push(i)
+  }
+  if (eligible.length === 0) return null
+  const idx = eligible[randInt(0, eligible.length - 1)]
+  const mangled = typoWord(tokens[idx])
+  if (mangled === tokens[idx]) return null // no change produced
+  tokens[idx] = mangled
+  const out = tokens.join('')
+  return out === text ? null : out
+}
 
 /** Pick an emoji token from the pool this persona is consistent in. */
 function pickEmoji(style: SimStyle): string {

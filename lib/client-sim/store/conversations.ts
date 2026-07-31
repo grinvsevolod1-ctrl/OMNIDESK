@@ -105,11 +105,12 @@ export async function insertInboundMessage(
   conversationId: string,
   author: string,
   body: string,
-): Promise<void> {
+): Promise<string> {
+  const messageId = randomUUID()
   await query(
     `INSERT INTO messages (id, conversation_id, direction, body, author)
      VALUES ($1, $2, 'in', $3, $4)`,
-    [randomUUID(), conversationId, body, author],
+    [messageId, conversationId, body, author],
   )
   await query(
     `UPDATE conversations
@@ -117,6 +118,60 @@ export async function insertInboundMessage(
       WHERE id = $1`,
     [conversationId, body],
   )
+  return messageId
+}
+
+/**
+ * Edit a message the simulator itself previously sent — IN PLACE, exactly the
+ * way a real contact edits a message in Telegram/WhatsApp from a linked device.
+ * Reuses the same tables the genuine ingest path uses (see lib/data/media-archive
+ * `applyIncomingEdit`): the prior text is snapshotted into `message_edits` and
+ * the live row gets the new body + `edited_at = now()` + bumped `edit_count`.
+ *
+ * The manager's inbox then renders the "изменено" marker and the full
+ * before/after trail, indistinguishable from a human editing their own message.
+ * No-op if the message doesn't exist or the body is unchanged.
+ */
+export async function applySimSelfEdit(
+  conversationId: string,
+  messageId: string,
+  newBody: string,
+): Promise<boolean> {
+  const rows = await query<{ body: string; edit_count: number }>(
+    `SELECT body, edit_count FROM messages
+      WHERE id = $1 AND conversation_id = $2 LIMIT 1`,
+    [messageId, conversationId],
+  )
+  const row = rows[0]
+  if (!row) return false
+  if (row.body === newBody) return false
+
+  const nextVersion = (row.edit_count ?? 0) + 1
+  // Snapshot the prior version into the append-only history.
+  await query(
+    `INSERT INTO message_edits (message_id, version, body)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (message_id, version) DO NOTHING`,
+    [messageId, nextVersion, row.body],
+  )
+  // Overwrite the live message with the corrected text.
+  await query(
+    `UPDATE messages
+        SET body = $2, edited_at = now(), edit_count = $3
+      WHERE id = $1`,
+    [messageId, newBody, nextVersion],
+  )
+  // Keep the conversation's last-message preview in sync if this was the tail.
+  await query(
+    `UPDATE conversations
+        SET last_message = $2
+      WHERE id = $1
+        AND last_message_at = (
+          SELECT created_at FROM messages WHERE id = $3
+        )`,
+    [conversationId, newBody, messageId],
+  )
+  return true
 }
 
 /**

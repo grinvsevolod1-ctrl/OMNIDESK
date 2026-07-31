@@ -1,4 +1,4 @@
-import type { SimOutcome, SimPersona, SimSettings, SimThreadRow, SimTone } from './types'
+import type { SimChronotype, SimOutcome, SimPersona, SimSettings, SimStyle, SimThreadRow, SimTone } from './types'
 import {
   chance,
   humanizeBubbles,
@@ -17,6 +17,7 @@ import {
   claimSpawnSlot,
   countActiveThreads,
   createSimConversation,
+  applySimSelfEdit,
   expireStaleThreads,
   findConversationsAwaitingManager,
   findThreadsAwaitingReaction,
@@ -30,7 +31,7 @@ import {
   updateThread,
   type SimChannel,
 } from './store'
-import { impatientPoke, pick } from './content'
+import { impatientPoke, injectSingleTypo, pick } from './content'
 import { computeMood, type MoodResult } from './mood'
 import { logAi } from '@/lib/data/ai-log'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
@@ -407,7 +408,7 @@ async function maybeSpawn(settings: SimSettings): Promise<void> {
   })
   // Post any remaining opening bubbles with typing gaps, then let the AI manager
   // answer the full opening like any real inbound (triggered inside, once).
-  void deliverFollowupBubbles(conversationId, persona.name, bubbles.slice(1), body)
+  void deliverFollowupBubbles(conversationId, persona.name, bubbles.slice(1), body, persona.style)
 }
 
 /* --------------------- reacting to manager replies ---------------------- */
@@ -439,6 +440,51 @@ function messageComplexity(text: string): number {
   return Math.min(3.5, mult)
 }
 
+/** Current Moscow hour (0-23) and weekend flag — UTC+3, no DST. */
+function moscowNow(): { hour: number; weekend: boolean } {
+  const msk = new Date(Date.now() + 3 * 60 * 60 * 1000)
+  const dow = msk.getUTCDay() // 0=Sun … 6=Sat
+  return { hour: msk.getUTCHours(), weekend: dow === 0 || dow === 6 }
+}
+
+/**
+ * Reply-delay multiplier for the time of day, shaped by the persona's chronotype.
+ * 1.0 = baseline speed, higher = slower to reply. Instead of a flat "night
+ * penalty" this is a smooth daily curve: everyone crawls in the dead of night,
+ * is sharp during their personal peak, and larks/owls peak at opposite ends.
+ * Weekends add a mild extra sluggishness (people are relaxing, not glued to
+ * chat). This kills the tell of perfectly time-independent response speed.
+ */
+function circadianMultiplier(
+  hour: number,
+  chronotype: SimChronotype | undefined,
+  weekend: boolean,
+): number {
+  // Base curve for an ordinary day-active person, indexed by hour 0..23.
+  // Deep night = very slow, mid-day/evening = fast.
+  const base: number[] = [
+    6.0, 7.0, 8.0, 8.0, 7.0, 5.0, // 0-5  night
+    3.0, 1.8, 1.2, 1.0, 1.0, 1.0, // 6-11 morning ramp
+    1.1, 1.2, 1.0, 1.0, 1.0, 1.1, // 12-17 day
+    1.0, 1.0, 1.1, 1.4, 2.2, 3.5, // 18-23 evening → night
+  ]
+  let m = base[Math.max(0, Math.min(23, hour))]
+
+  if (chronotype === 'lark') {
+    // Sharper mornings, but tired earlier in the evening.
+    if (hour >= 6 && hour < 11) m *= 0.6
+    if (hour >= 21 || hour < 2) m *= 1.6
+  } else if (chronotype === 'owl') {
+    // Groggy mornings, wide awake late.
+    if (hour >= 6 && hour < 11) m *= 1.8
+    if (hour >= 21 && hour <= 23) m *= 0.45
+    if (hour >= 0 && hour < 3) m *= 0.7
+  }
+
+  if (weekend) m *= 1.25
+  return m
+}
+
 /**
  * For every thread where the manager has posted a reply we haven't reacted to,
  * schedule a human-like delayed reaction. We DON'T reply instantly — we set
@@ -449,15 +495,19 @@ function messageComplexity(text: string): number {
  *  • 20% of the time the persona is in an "online session" — they glanced at
  *    the phone and will reply in 8–40 s, scaled by message complexity.
  *  • 8% of the time they're genuinely busy and won't answer for 15–60 min.
+ *  • 7% they're away for hours (meeting/driving/working).
  *  • Otherwise: base 25–180 s, scaled up by message complexity so a long
  *    multi-question message takes naturally longer than a one-word "ок".
- *  • Night hours (23:00–08:00) stretch all delays 2–5×.
+ *  • The whole thing is then multiplied by a smooth per-persona circadian curve
+ *    (chronotype-aware) plus a weekend factor, so response speed rises and falls
+ *    naturally over the day instead of being suspiciously time-independent.
  *
  * The result is a realistic skewed distribution rather than a flat uniform
  * spread, which is the most obvious statistical tell of a bot farm.
  */
 async function scheduleManagerReactions(): Promise<void> {
   const pending = await findThreadsAwaitingReaction(40)
+  const { hour, weekend } = moscowNow()
   for (const p of pending) {
     const complexity = messageComplexity(p.managerBody ?? '')
     let delay: number
@@ -481,15 +531,49 @@ async function scheduleManagerReactions(): Promise<void> {
       delay = randInt(Math.max(15, base), Math.min(600, top))
     }
 
-    // Night penalty: people are slower to reply at night.
-    const hour = new Date().getHours()
-    if (hour >= 23 || hour < 8) {
-      delay = Math.round(delay * (2 + Math.random() * 3))
+    // Smooth circadian shaping by the persona's own daily rhythm + weekend.
+    const mult = circadianMultiplier(hour, p.thread.persona.chronotype, weekend)
+    delay = Math.round(delay * mult)
+
+    // --- Real-life interruption -------------------------------------------
+    // Occasionally, when the persona was about to reply promptly, life gets in
+    // the way: they fire off a quick "hang on, someone needs me" and only come
+    // back with the real answer several minutes later. A very human pattern that
+    // bots never produce. Only when they were going to be quick (delay < 5 min)
+    // and not in the dead of night.
+    if (delay < 300 && (hour < 23 && hour >= 7) && chance(0.05)) {
+      const brb = pick(LIFE_INTERRUPTIONS)
+      // Post the aside now; do NOT trigger the manager for it — the real reply
+      // that follows will drive the conversation forward on its own.
+      await insertInboundMessage(p.thread.conversationId, p.thread.persona.name, brb)
+      await bumpRepliesTotal()
+      // The real answer lands 5–20 min later.
+      delay = randInt(300, 1200)
     }
 
     await scheduleReaction(p.thread.conversationId, p.managerMessageId, delay)
   }
 }
+
+/**
+ * Short real-life asides a persona fires off mid-conversation before going quiet
+ * for a few minutes — the "hang on, something came up" moment. Deliberately
+ * mundane and varied so no single phrase becomes a recognisable tell.
+ */
+const LIFE_INTERRUPTIONS: string[] = [
+  'секунду, начальник зовёт',
+  'ща, минутку отойду',
+  'подождите, тут отвлекают',
+  'ой, погодите, звонок важный',
+  'секунду, ребёнок зовёт',
+  'момент, тут коллега подошёл',
+  'извините, отвлекли на минуту',
+  'ща, гляну и вернусь',
+  'подождите чуть, дела навалились',
+  'секунду, тут аврал небольшой',
+  'момент, договорю и напишу',
+  'ой отвлекли, счас вернусь',
+]
 
 /* ---------------------- processing scheduled turns ---------------------- */
 
@@ -558,6 +642,52 @@ const CHUNK_GAP_MIN_SEC = 2
 const CHUNK_GAP_MAX_SEC = 9
 
 /**
+ * Post ONE client bubble and, with a small human probability, first send it with
+ * a single typo and then EDIT it in place a few seconds later to the correct
+ * text — exactly like a real person spotting their slip and fixing it from the
+ * messenger. The manager sees the message arrive, then sees it flip to "изменено"
+ * with the corrected wording. This is one of the strongest "definitely a human"
+ * signals, because bots never edit their own already-sent messages.
+ *
+ * Falls back to a plain insert when the roll misses or no believable typo can be
+ * produced. Returns nothing; the edit is fire-and-forget on a short timer.
+ */
+async function postClientBubble(
+  conversationId: string,
+  authorName: string,
+  bubble: string,
+  style: SimStyle,
+): Promise<void> {
+  const clean = bubble
+  const typoRate = Math.max(0, Math.min(1, style.typoRate ?? 0))
+  // Self-edits are rarer than raw typos: only long-ish bubbles, scaled by the
+  // persona's own sloppiness, capped so it stays occasional (~max 16%).
+  const canEdit = clean.trim().length >= 10 && typoRate > 0.02
+  const editChance = Math.min(0.16, typoRate * 0.4)
+
+  if (canEdit && chance(editChance)) {
+    const typoed = injectSingleTypo(clean)
+    if (typoed && typoed !== clean) {
+      const messageId = await insertInboundMessage(conversationId, authorName, typoed)
+      // Fire-and-forget: person notices the typo and fixes it 4–30s later.
+      void (async () => {
+        try {
+          await sleep(randInt(4, 30) * 1000)
+          await applySimSelfEdit(conversationId, messageId, clean)
+        } catch (err) {
+          console.log(
+            '[client-sim] self-edit failed:',
+            err instanceof Error ? err.message : String(err),
+          )
+        }
+      })()
+      return
+    }
+  }
+  await insertInboundMessage(conversationId, authorName, clean)
+}
+
+/**
  * Deliver the follow-up bubbles of a client message (everything after the first,
  * which the caller already posted) with human-like typing gaps, then hand the
  * FULL message to the AI manager exactly once.
@@ -576,11 +706,12 @@ async function deliverFollowupBubbles(
   authorName: string,
   tail: string[],
   fullBody: string,
+  style: SimStyle,
 ): Promise<void> {
   try {
     for (const bubble of tail) {
       await sleep(randInt(CHUNK_GAP_MIN_SEC, CHUNK_GAP_MAX_SEC) * 1000)
-      await insertInboundMessage(conversationId, authorName, bubble)
+      await postClientBubble(conversationId, authorName, bubble, style)
     }
   } catch (err) {
     console.log(
@@ -893,7 +1024,7 @@ async function runThreadTurn(thread: SimThreadRow, settings?: SimSettings): Prom
   // Post the first bubble now, advance the state machine, then deliver the rest
   // with typing gaps and trigger the manager once at the end.
   const bubbles = humanizeBubbles(splitIntoMessages(body, persona.style), persona.style)
-  await insertInboundMessage(conversationId, persona.name, bubbles[0] ?? body)
+  await postClientBubble(conversationId, persona.name, bubbles[0] ?? body, persona.style)
   await bumpRepliesTotal()
 
   if (plan.kind === 'later') {
@@ -937,7 +1068,7 @@ async function runThreadTurn(thread: SimThreadRow, settings?: SimSettings): Prom
   }
 
   // Follow-up bubbles + the (single) manager trigger, on a human typing cadence.
-  void deliverFollowupBubbles(conversationId, persona.name, bubbles.slice(1), body)
+  void deliverFollowupBubbles(conversationId, persona.name, bubbles.slice(1), body, persona.style)
 }
 
 /** Human-readable reasons for the "Логи" tab / dashboard. */
