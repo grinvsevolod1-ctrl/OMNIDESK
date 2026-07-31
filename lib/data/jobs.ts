@@ -43,7 +43,8 @@ function toJob(r: JobRow): ChannelJob {
  */
 export async function enqueueJob(input: {
   channelId: string
-  managerId: string
+  /** Null for system/admin-initiated jobs (env-backed super-admin has no row). */
+  managerId: string | null
   action: JobAction
   payload?: Record<string, unknown>
 }): Promise<ChannelJob> {

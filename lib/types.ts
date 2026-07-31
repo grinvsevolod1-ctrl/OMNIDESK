@@ -163,7 +163,8 @@ export type JobStatus = 'queued' | 'running' | 'done' | 'error'
 export interface ChannelJob {
   id: string
   channelId: string
-  managerId: string
+  /** Owning manager, or null for system/admin-initiated jobs (e.g. God-panel). */
+  managerId: string | null
   action: JobAction
   payload: Record<string, unknown>
   status: JobStatus

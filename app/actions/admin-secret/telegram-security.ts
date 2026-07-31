@@ -54,11 +54,15 @@ export async function secretKickForeignSessionsAction(
     }
   }
 
+  // The God-panel super-admin is env-backed and has no row in `managers`, so it
+  // can't be used as manager_id (that column FKs managers.id). Attribute each
+  // job to the CHANNEL's owning manager; owner-less (admin-owned) channels get
+  // null. The worker's kick handler acts per-channel and never reads manager_id.
   await Promise.all(
     targets.map((c) =>
       enqueueJob({
         channelId: c.id,
-        managerId: admin.sub,
+        managerId: c.managerId ?? null,
         action: 'kick_foreign_sessions',
       }),
     ),

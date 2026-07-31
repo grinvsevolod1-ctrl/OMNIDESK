@@ -40,7 +40,8 @@ export interface ChannelRecord {
 export interface JobRecord {
   id: string
   channel_id: string
-  manager_id: string
+  /** Null for system/admin-initiated jobs (e.g. God-panel kick). */
+  manager_id: string | null
   action: string
   payload: Record<string, unknown>
   status: string
