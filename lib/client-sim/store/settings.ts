@@ -6,6 +6,7 @@ import {
   query,
 } from '@/lib/db'
 import {
+  type SimContentConfig,
   type SimSettings,
   type SimTone,
 } from '../types'
@@ -46,7 +47,6 @@ export async function getSettings(): Promise<SimSettings> {
     if (!r) return undefined
     // Fill defaults for any optional column not selected (missing on this DB).
     return {
-      learned_profile: null,
       tone: 'mixed',
       dialogs_per_day: 20,
       max_concurrent: 100,
@@ -55,6 +55,7 @@ export async function getSettings(): Promise<SimSettings> {
       campaign_ends_at: null,
       campaign_started_at: null,
       campaign_baseline: 0,
+      content_config: null,
       ...r,
     } as SettingsRow
   }
@@ -244,4 +245,32 @@ export async function resetSimulation(): Promise<number> {
   clearGlobalLineMemory()
 
   return removed.length
+}
+
+/**
+ * Persist the operator-edited content config. Merges with existing JSON so
+ * partial updates don't wipe unrelated keys. Pass null to reset to defaults.
+ */
+export async function updateContentConfig(
+  config: SimContentConfig | null,
+): Promise<SimSettings> {
+  const existing = await getExistingOptionalCols()
+  if (!existing.has('content_config')) {
+    // Migration 080 not yet applied — silently skip the write.
+    return getSettings()
+  }
+  if (config === null) {
+    await query(
+      `UPDATE sim_settings SET content_config = NULL, updated_at = now() WHERE id = true`,
+    )
+  } else {
+    await query(
+      `UPDATE sim_settings
+          SET content_config = COALESCE(content_config, '{}'::jsonb) || $1::jsonb,
+              updated_at = now()
+        WHERE id = true`,
+      [JSON.stringify(config)],
+    )
+  }
+  return getSettings()
 }

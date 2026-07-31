@@ -3,6 +3,7 @@ import type {
   SimBackstory,
   SimGender,
   SimPersona,
+  SimPersonaConfig,
   SimStyle,
   SimTone,
 } from './types'
@@ -218,18 +219,40 @@ function rollStyle(aggression: number, tone: SimTone): SimStyle {
 /**
  * Build a channel-appropriate fake client. Telegram leans on weird @nicks,
  * WhatsApp on phone-number handles, VK/MAX on id-style handles + real names.
+ * Pass `personaCfg` (from sim_settings.content_config.persona) to override any
+ * pool; missing or empty arrays fall back to the hardcoded data.ts defaults.
  */
 export function makePersona(
   channelType: ChannelType,
   aggression: number,
   tone: SimTone = 'mixed',
+  personaCfg?: SimPersonaConfig | null,
 ): SimPersona {
+  // Helper: use operator pool if non-empty, otherwise fall back to default.
+  function pool<T>(op: T[] | undefined, def: T[]): T[] {
+    return op && op.length > 0 ? op : def
+  }
+
+  const archetypePool = pool(
+    personaCfg?.archetypes as typeof ARCHETYPES[number][] | undefined,
+    ARCHETYPES as unknown as typeof ARCHETYPES[number][],
+  )
+  const maleFirst   = pool(personaCfg?.maleFirstNames,   MALE_FIRST)
+  const femaleFirst = pool(personaCfg?.femaleFirstNames,  FEMALE_FIRST)
+  const lastNames   = pool(personaCfg?.lastNames,         MALE_LAST)
+  const temperPool  = pool(personaCfg?.tempers,           TEMPERS)
+  const occPool     = pool(personaCfg?.occupations,       OCCUPATIONS)
+  const motivPool   = pool(personaCfg?.motivations,       MOTIVATIONS)
+  const detailPool  = pool(personaCfg?.lifeDetails,       LIFE_DETAILS)
+  const quirksPool  = pool(personaCfg?.quirks,            QUIRKS_POOL)
+  const goalPool    = pool(personaCfg?.goals,             GOALS)
+
   // Pick the behavioural archetype first — it colours age, mood and pacing.
-  const archetype = pick(ARCHETYPES)
+  const archetype = pick(archetypePool)
 
   const gender: SimGender = chance(0.55) ? 'male' : 'female'
-  const first = pick(gender === 'male' ? MALE_FIRST : FEMALE_FIRST)
-  const baseLast = pick(MALE_LAST)
+  const first = pick(gender === 'male' ? maleFirst : femaleFirst)
+  const baseLast = pick(lastNames)
   const last = gender === 'male' ? baseLast : femaleLast(baseLast)
 
   // Age roughly consistent with the archetype so a «Студент» isn't 50.
@@ -284,7 +307,7 @@ export function makePersona(
     }
   }
 
-  const temper = pick(TEMPERS)
+  const temper = pick(temperPool)
 
   return {
     name,
@@ -298,10 +321,19 @@ export function makePersona(
     tone,
     style: rollStyle(effAggression, tone),
     archetype,
-    backstory: makeBackstory(),
-    quirks: rollQuirks(),
-    traits: rollTraits(temper),
-    goal: rollGoal(),
+    backstory: {
+      occupation: pick(occPool),
+      motivation: pick(motivPool),
+      region: pick(REGIONS),
+      detail: pick(detailPool),
+    },
+    quirks: shuffle(quirksPool).slice(0, randInt(0, 3)),
+    traits: (() => {
+      const set = new Set<string>([temper])
+      while (set.size < randInt(2, 3) + 1) set.add(pick(temperPool))
+      return Array.from(set)
+    })(),
+    goal: pick(goalPool),
   }
 }
 

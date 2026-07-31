@@ -1,5 +1,6 @@
 import { query } from '@/lib/db'
 import type {
+  SimContentConfig,
   SimOutcome,
   SimPersona,
   SimSettings,
@@ -43,6 +44,7 @@ export interface SettingsRow {
   campaign_ends_at: string | Date | null
   campaign_started_at: string | Date | null
   campaign_baseline: number
+  content_config: SimContentConfig | null
 }
 
 export function mapSettings(r: SettingsRow): SimSettings {
@@ -71,6 +73,7 @@ export function mapSettings(r: SettingsRow): SimSettings {
       ? new Date(r.campaign_started_at).toISOString()
       : null,
     campaignBaseline: r.campaign_baseline ?? 0,
+    contentConfig: r.content_config ?? null,
   }
 }
 
@@ -89,6 +92,7 @@ export const OPTIONAL_SETTINGS_COLS = [
   'campaign_ends_at',
   'campaign_started_at',
   'campaign_baseline',
+  'content_config',
 ] as const
 
 /**
@@ -214,7 +218,7 @@ export function isUndefinedColumn(err: unknown): boolean {
   const msg = (err as { message?: string }).message ?? ''
   return (
     code === '42703' ||
-    /learned_profile|\btone\b|dialogs_per_day|max_concurrent|campaign_|column .* does not exist/i.test(msg)
+    /\btone\b|dialogs_per_day|max_concurrent|campaign_|content_config|column .* does not exist/i.test(msg)
   )
 }
 

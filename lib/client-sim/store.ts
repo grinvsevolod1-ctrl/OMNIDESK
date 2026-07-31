@@ -9,6 +9,7 @@
  */
 
 export * from './store/settings'
+export type { SimContentConfig, SimPersonaConfig } from './types'
 export * from './store/campaign'
 export * from './store/threads'
 export * from './store/conversations'
@@ -27,7 +28,6 @@ export {
 export type {
   SimCorrection,
   SimReviewMessage,
-  CorpusDialogue,
 } from './learning'
 export {
   addSimCorrection,

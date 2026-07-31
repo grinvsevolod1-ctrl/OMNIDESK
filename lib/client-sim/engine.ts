@@ -221,7 +221,7 @@ async function tick(): Promise<void> {
         level: 'info',
         source: 'sim',
         event: 'reaped',
-        message: `Закрыто ${reaped} диалогов, где клиент перестал отвечать (≥ ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
+        message: `Закрыто ${reaped} диалогов, где кли��нт перестал отвечать (�� ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
       })
     }
 
@@ -236,7 +236,7 @@ async function tick(): Promise<void> {
     // an INDEPENDENT operator knob (maxConcurrent, up to ~100+).
     await maybeSpawn(settings)
     await scheduleManagerReactions()
-    await processDueThreads()
+    await processDueThreads(settings)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.log('[client-sim] tick error:', msg)
@@ -352,18 +352,21 @@ async function maybeSpawn(settings: SimSettings): Promise<void> {
   if (!won) return
 
   const channel: SimChannel = pick(channels)
+  const contentConfig = settings.contentConfig ?? null
   // "Polygamous" population: every persona rolls its OWN tone and aggression so
   // the swarm spans polite→toxic instead of sounding like one configured voice.
   const persona = makePersona(
     channel.type as ChannelType,
     rollAggression(),
     rollTone(),
+    contentConfig?.persona,
   )
 
   const body = await generateReply({
     persona,
     history: [],
     behavior: 'open',
+    contentConfig,
   })
   // No template fallback: if the AI couldn't write the opening line, DON'T
   // create a half-baked conversation. Skip this spawn and try again next tick.
@@ -445,11 +448,11 @@ async function scheduleManagerReactions(): Promise<void> {
 
 /* ---------------------- processing scheduled turns ---------------------- */
 
-async function processDueThreads(): Promise<void> {
+async function processDueThreads(settings: SimSettings): Promise<void> {
   const due = await claimDueThreads(20)
   for (const thread of due) {
     try {
-      await runThreadTurn(thread)
+      await runThreadTurn(thread, settings)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.log('[client-sim] thread turn error:', msg)
@@ -584,8 +587,9 @@ async function sweepBacklog(): Promise<void> {
  * where the "always react differently" behaviour lives: intent is re-rolled
  * every single turn, weighted by the persona's temperament.
  */
-async function runThreadTurn(thread: SimThreadRow): Promise<void> {
+async function runThreadTurn(thread: SimThreadRow, settings?: SimSettings): Promise<void> {
   const { persona, conversationId } = thread
+  const contentConfig = settings?.contentConfig ?? null
 
   // Race guard: if an operator stepped into this dialogue (paused it) between
   // the scheduler claiming it and now, back off immediately so we never post a
@@ -686,6 +690,7 @@ async function runThreadTurn(thread: SimThreadRow): Promise<void> {
     history,
     behavior,
     moodHint: managerSpoke ? mood.hint : undefined,
+    contentConfig,
   })
   // No template fallback: if the AI couldn't write this turn, post NOTHING and
   // keep the thread alive to retry shortly. Silence beats robotic filler.
@@ -803,7 +808,7 @@ export function rollBehavior(
 
   // Temperament nudges.
   if (/наглый|дерзкий|борзый|вспыльчивый|нервный/.test(temper)) weights.angry += 4
-  if (/подозрительн|осторожн/.test(temper)) weights.dismissive += 3
+  if (/подозрительн|ост��рожн/.test(temper)) weights.dismissive += 3
   if (/тупова|простоват/.test(temper)) weights.confused += 4
   if (/жадн|делов/.test(temper)) weights.curious += 4
   if (/спокойн|дружелюб|уставш/.test(temper)) weights.curious += 2

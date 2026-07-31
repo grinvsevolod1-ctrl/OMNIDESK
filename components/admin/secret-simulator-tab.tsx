@@ -8,6 +8,7 @@ import {
   Bot,
   CalendarClock,
   CircleDot,
+  FilePen,
   FlaskConical,
   Gauge,
   GraduationCap,
@@ -51,6 +52,13 @@ const SecretSimulatorLearn = dynamic(
   () =>
     import('@/components/admin/secret-simulator-learn').then(
       (m) => m.SecretSimulatorLearn,
+    ),
+  { ssr: false, loading: simLoading },
+)
+const SecretSimulatorContent = dynamic(
+  () =>
+    import('@/components/admin/secret-simulator-content').then(
+      (m) => m.SecretSimulatorContent,
     ),
   { ssr: false, loading: simLoading },
 )
@@ -161,6 +169,7 @@ type SimTabKey =
   | 'settings'
   | 'campaign'
   | 'overview'
+  | 'content'
   | 'learn'
   | 'dialogs'
   | 'log'
@@ -170,7 +179,7 @@ const SIM_TABS: { key: SimTabKey; label: string; icon: React.ComponentType<{ cla
   { key: 'settings', label: 'Настройки', icon: Settings2 },
   { key: 'campaign', label: 'Кампания', icon: Megaphone },
   { key: 'overview', label: 'Обзор', icon: LayoutDashboard },
-  { key: 'learn', label: 'Обучение', icon: GraduationCap },
+  { key: 'content', label: 'Контент', icon: FilePen },
   { key: 'dialogs', label: 'Диалоги', icon: Inbox },
   { key: 'log', label: 'Лог', icon: ScrollText },
   { key: 'test', label: 'Песочница', icon: FlaskConical },
@@ -488,7 +497,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
                 setValue={setMaxConcurrent}
               />
               <p className="text-xs text-muted-foreground text-pretty">
-                Сколько «живых» клиентов может вести переписку одновременно —
+                Сколь��о «живых» клиентов может вести переписку одновременно —
                 независимо от суточного потока. Сюда входят и те, кто спит, обещал
                 ответить позже или временно пропал. Можно смело ставить до 100.
               </p>
@@ -604,13 +613,10 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           )}
         </TabsContent>
 
-        {/* ---- Learn + Train ---- */}
+        {/* ---- Train ---- */}
         <TabsContent value="learn" className="mt-4">
           <div className="flex flex-col gap-4">
-            <SecretSimulatorLearn
-              key={status?.learnedProfile?.learnedAt ?? 'none'}
-              initial={status?.learnedProfile ?? null}
-            />
+            <SecretSimulatorLearn />
             <SecretSimulatorTrain />
           </div>
         </TabsContent>

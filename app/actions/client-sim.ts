@@ -29,12 +29,14 @@ import {
   resetSimulation,
   startCampaign,
   stopCampaign,
+  updateContentConfig,
   updateSettings,
   type AdoptableConversation,
   type SettingsPatch,
   type SimCorrection,
   type SimReviewMessage,
 } from '@/lib/client-sim/store'
+import type { SimContentConfig } from '@/lib/client-sim/types'
 import {
   clearAiLogs,
   listAiLogs,
@@ -443,4 +445,20 @@ export async function simDeleteCorrectionAction(id: string): Promise<void> {
   await deleteSimCorrection(id)
   invalidateSimCorrectionsCache()
   revalidatePath(ADMIN_PATH)
+}
+
+/* ------------------------- content config -------------------------------- */
+
+/**
+ * Persist operator-edited content pools (site name, vacancies, cities,
+ * schedule types, persona banks) to sim_settings.content_config.
+ * Pass `null` to reset all pools to hardcoded defaults.
+ */
+export async function simUpdateContentConfigAction(
+  config: SimContentConfig | null,
+): Promise<SimStatus> {
+  await guard()
+  await updateContentConfig(config)
+  revalidatePath(ADMIN_PATH)
+  return getSimStatus()
 }

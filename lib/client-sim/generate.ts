@@ -1,5 +1,5 @@
 import { generateText } from 'ai'
-import type { SimPersona } from './types'
+import type { SimContentConfig, SimPersona } from './types'
 import { applyStyle } from './content'
 import {
   getGlobalRecentLines,
@@ -77,8 +77,8 @@ interface GenArgs {
    * callers that don't have them fall back to the cached loader.
    */
   corrections?: string[]
-  /** Content pool config (vacancies, cities, etc.) — from sim_settings. */
-  contentConfig?: SimContentConfig
+  /** Content pool config (vacancies, cities, etc.) — from sim_settings. NULL = use defaults. */
+  contentConfig?: SimContentConfig | null
 }
 
 function avoidBlock(avoidLines: string[] | undefined): string {
@@ -482,7 +482,7 @@ function trimDanglingWord(text: string): string {
  * it not to, the model can still emit a "typo then *fix" artifact. A real fix
  * would be a *separate* later message, never part of the same reply — so any
  * asterisk-correction fragment inside one generated message is always a bot
- * tell. We strip it: drop standalone «*слово» lines and any trailing " *слово"
+ * tell. We strip it: drop standalone «*сло��о» lines and any trailing " *слово"
  * tacked onto the end of the text. A lone «*» that's clearly a footnote/censor
  * (e.g. «п***») is left alone since it doesn't match the "*word" shape.
  */
@@ -523,24 +523,18 @@ function stripSelfCorrection(text: string): string {
  * -----------------------------------------------------------------------
  */
 
-export interface WFVacancy {
-  title: string
-  salary: string
-}
-
-/** Content config — driven from sim_settings.content_config (god-panel). */
-export interface SimContentConfig {
+/** Resolved content config with all required fields (no optional). */
+export interface ResolvedWFConfig {
   siteName: string
-  vacancies: WFVacancy[]
+  vacancies: Array<{ title: string; salary: string }>
   cities: string[]
-  /** Allowed work-schedule labels, e.g. ["Удалённо", "Полный день", "Сменный"] */
   scheduleTypes: string[]
   matchPctMin: number
   matchPctMax: number
 }
 
 /** Fallback used when no DB config is present yet. */
-export const SIM_CONTENT_DEFAULTS: SimContentConfig = {
+export const SIM_CONTENT_DEFAULTS: ResolvedWFConfig = {
   siteName: 'Thunders Group',
   vacancies: [
     { title: 'Менеджер по продажам',              salary: 'от 90 000 ₽' },
@@ -569,14 +563,32 @@ function pick<T>(arr: T[]): T {
 }
 
 /**
+ * Merge DB-side SimContentConfig (any fields can be null/undefined) with
+ * SIM_CONTENT_DEFAULTS to produce a fully-resolved config with no gaps.
+ */
+export function resolveWFConfig(cfg: SimContentConfig | null | undefined): ResolvedWFConfig {
+  const d = SIM_CONTENT_DEFAULTS
+  if (!cfg) return d
+  return {
+    siteName:      cfg.siteName      ?? d.siteName,
+    vacancies:     (cfg.vacancies && cfg.vacancies.length > 0) ? cfg.vacancies : d.vacancies,
+    cities:        (cfg.cities    && cfg.cities.length    > 0) ? cfg.cities    : d.cities,
+    scheduleTypes: (cfg.scheduleTypes && cfg.scheduleTypes.length > 0) ? cfg.scheduleTypes : d.scheduleTypes,
+    matchPctMin:   cfg.matchPctMin ?? d.matchPctMin,
+    matchPctMax:   cfg.matchPctMax ?? d.matchPctMax,
+  }
+}
+
+/**
  * Returns a filled-in web-form opening message using the single canonical
  * Thunders Group template. The message is returned verbatim — no applyStyle,
  * no typos, no casing mangling. Returns null for the 20 % LLM-path roll.
  */
 function rollWebFormOpening(
   persona: SimPersona,
-  cfg: SimContentConfig = SIM_CONTENT_DEFAULTS,
+  raw?: SimContentConfig | null,
 ): string | null {
+  const cfg: ResolvedWFConfig = resolveWFConfig(raw)
   // 20 % → fall through to LLM generation
   if (Math.random() > 0.80) return null
 

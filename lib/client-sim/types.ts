@@ -149,6 +149,53 @@ export interface SimPersona {
   goal?: string
 }
 
+/**
+ * Operator-editable persona name banks. All arrays are optional — missing
+ * entries fall back to the hardcoded defaults in content/data.ts.
+ */
+export interface SimPersonaConfig {
+  maleFirstNames?: string[]
+  femaleFirstNames?: string[]
+  lastNames?: string[]
+  tempers?: string[]
+  occupations?: string[]
+  motivations?: string[]
+  lifeDetails?: string[]
+  quirks?: string[]
+  goals?: string[]
+  /** Archetype overrides: provide the full list to replace all 16 defaults. */
+  archetypes?: Array<{
+    id: string
+    label: string
+    brief: string
+    moodBias: number
+    patienceBias: number
+    talkativeness: number
+  }>
+  openerTemplates?: string[]
+  emojiPictures?: string[]
+}
+
+/**
+ * Full content config stored in sim_settings.content_config.
+ * Combines web-form lead config (opener) with persona factory pools.
+ * NULL on any sub-field means "use the hardcoded default".
+ */
+export interface SimContentConfig {
+  /** Name shown in the opening message, e.g. "Thunders Group". */
+  siteName?: string
+  /** Vacancy list for the web-form opener. */
+  vacancies?: Array<{ title: string; salary: string }>
+  /** City pool for the opener. */
+  cities?: string[]
+  /** Work-schedule type labels: "Удалённо", "Полный день", "Сменный график". */
+  scheduleTypes?: string[]
+  matchPctMin?: number
+  matchPctMax?: number
+  /** Persona name / trait pools. */
+  persona?: SimPersonaConfig
+}
+
 /** Singleton control row (mirrors sim_settings). */
 export interface SimSettings {
   enabled: boolean
@@ -181,6 +228,12 @@ export interface SimSettings {
   repliesTotal: number
   startedAt: string | null
   updatedAt: string
+  /**
+   * Operator-edited content pools (site name, vacancies, cities, schedule
+   * types, persona banks). NULL means "use hardcoded defaults". Persisted as
+   * JSONB in sim_settings.content_config (migration 080).
+   */
+  contentConfig: SimContentConfig | null
 
   /* ----------------------------- campaign ------------------------------- */
   /**
