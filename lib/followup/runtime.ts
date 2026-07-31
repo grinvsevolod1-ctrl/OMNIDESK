@@ -26,14 +26,11 @@ import { deliverWhatsappMessage } from '../whatsapp-dispatch'
 /**
  * Follow-up autopilot runtime.
  *
- * Gently re-engages REAL clients who went silent, across every channel. Driven
- * by the co-pilot-configured settings (OFF by default) and swept on a schedule
- * by the follow-up cron. Nothing is sent unless an admin explicitly enabled it
- * in chat.
- *
- * ISOLATION: candidate selection is `is_simulated = false` (see
- * lib/data/ai-followup.ts). This module never imports client-sim or god-gate,
- * so a follow-up nudge can never reach a simulated dialog or the god panel.
+ * Gently re-engages clients who went silent, across every channel. Driven by
+ * the co-pilot-configured settings (OFF by default) and swept on a schedule by
+ * the follow-up cron. Nothing is sent unless an admin explicitly enabled it in
+ * chat. It works over AI-enrolled conversations, like the rest of the AI
+ * manager.
  */
 
 export interface FollowupSweepResult {

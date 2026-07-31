@@ -4,9 +4,8 @@
 -- channel. All of it is driven from the co-pilot chat (nothing hardcoded) and
 -- nothing is ever sent until an admin explicitly enables it here.
 --
--- ISOLATION: these tables have NO relationship to the simulator or god panel.
--- The follow-up runtime only ever reads real conversations (is_simulated=false)
--- and never touches client-sim/god-gate data.
+-- Follow-up works over AI-enrolled conversations, exactly like the rest of the
+-- AI manager — dialogs are just dialogs.
 
 -- Singleton settings row (id is always true), mirroring ai_assist_settings.
 CREATE TABLE IF NOT EXISTS ai_followup_settings (

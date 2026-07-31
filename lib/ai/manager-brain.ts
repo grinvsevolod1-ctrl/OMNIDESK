@@ -1423,12 +1423,12 @@ export interface ProposedLesson {
 }
 
 /**
- * Study a batch of REAL dialogs that went badly (handed off or lost) and propose
+ * Study a batch of dialogs that went badly (handed off or lost) and propose
  * concrete lessons: for each recurring failure, the client situation and a
- * better answer. This is how the co-pilot turns real losses into training — the
+ * better answer. This is how the co-pilot turns losses into training — the
  * admin reviews the proposals in chat and decides which to save. Nothing is
  * persisted here. Returns [] when the gateway is unavailable or nothing useful
- * was found. Callers MUST only pass non-simulated transcripts (isolation).
+ * was found.
  */
 export async function analyzeDialogsForLessons(
   transcripts: string[],

@@ -3,13 +3,8 @@ import { query } from '../db'
 
 /**
  * Follow-up autopilot data layer: the chat-configured settings singleton, the
- * silent-client finder, and the per-touch dedup ledger.
- *
- * ISOLATION INVARIANT: every read here is scoped to REAL conversations
- * (`is_simulated = false`). Nothing in this module imports or references the
- * simulator (`lib/client-sim/*`) or the god panel (`lib/god-gate.ts`,
- * `secret-*`) — follow-up must never reach a simulated dialog, not even
- * indirectly.
+ * silent-client finder, and the per-touch dedup ledger. It treats every
+ * AI-enrolled conversation the same way — dialogs are just dialogs.
  */
 
 /** Chat-configured follow-up settings (singleton row). */
@@ -139,19 +134,19 @@ export interface FollowupCandidate {
 }
 
 /**
- * Find REAL, AI-led dialogs where the client went silent and a nudge is due:
+ * Find AI-led dialogs where the client went silent and a nudge is due:
  *
- *  - not simulated, AI-enrolled, not on manual pause,
+ *  - AI-enrolled, not on manual pause,
  *  - the last message in the thread was OURS (direction 'out') — i.e. we're
  *    waiting on the client — and it's older than `delayHours`,
  *  - the dialog isn't handed to a human / transferred, nor a lead a manager
  *    explicitly disqualified ('not_liquid'),
  *  - on an allowed channel,
- *  - fewer than `maxTouches` nudges have been sent SINCE the last real client
+ *  - fewer than `maxTouches` nudges have been sent SINCE the last client
  *    message (so a new client reply resets the streak, and we never exceed the
  *    per-streak cap or double-send for the same silence).
  *
- * Ordered oldest-silence first, capped. Honors the isolation invariant.
+ * Ordered oldest-silence first, capped.
  */
 export async function findFollowupCandidates(opts: {
   delayHours: number
@@ -202,8 +197,7 @@ export async function findFollowupCandidates(opts: {
        JOIN ai_assist_settings s ON s.id = true
        JOIN last_msg lm ON lm.conversation_id = c.id
        LEFT JOIN last_inbound li ON li.conversation_id = c.id
-      WHERE c.is_simulated = false
-        AND c.ai_enrolled = true
+      WHERE c.ai_enrolled = true
         AND c.ai_paused = false
         AND s.enabled = true
         AND c.channel_type = ANY($1::text[])

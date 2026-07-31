@@ -1,14 +1,11 @@
 /**
  * Analytics for the AI co-pilot console: performance rollups over the AI
- * manager's REAL work, so an admin can ask "how did we do this week?" in chat
- * and get honest numbers.
+ * manager's work, so an admin can ask "how did we do this week?" in chat and get
+ * honest numbers.
  *
- * ISOLATION INVARIANT: every query here filters `is_simulated = false`. The
- * simulator and the god panel must never be reachable — not even indirectly —
- * from the co-pilot surface, so simulated dialogs are excluded from every
- * co-pilot-facing aggregate. (This is deliberately STRICTER than the training
- * harvest, which treats sim dialogs as real; the co-pilot must only ever report
- * on genuine client outcomes.)
+ * These aggregates cover ALL AI-led conversations. Dialogs are just dialogs —
+ * the AI, analytics, lessons and follow-up all treat every conversation the same
+ * way, exactly like the rest of the app. There is no special-casing here.
  */
 import { query } from '../db'
 import { effectiveStatusSql } from './shared'
@@ -18,7 +15,7 @@ import type { LeadStatus } from '../types'
 export interface AiPerformanceSummary {
   /** Size of the window in days (as requested). */
   windowDays: number
-  /** Real dialogs the AI led that were created in the window. */
+  /** Dialogs the AI led that were created in the window. */
   totalDialogs: number
   /** Dialogs where the AI handed off to a human (lost control / escalation). */
   handoffs: number
@@ -39,9 +36,8 @@ export interface AiPerformanceSummary {
 }
 
 /**
- * Roll up the AI manager's real outcomes over the last `days` days. Only counts
- * conversations that are AI-enrolled and NOT simulated, so the numbers reflect
- * genuine client work. `days` is clamped to 1..365.
+ * Roll up the AI manager's outcomes over the last `days` days across all
+ * AI-enrolled conversations. `days` is clamped to 1..365.
  */
 export async function getAiPerformanceSummary(
   days = 7,
@@ -51,8 +47,7 @@ export async function getAiPerformanceSummary(
   const rows = await query<{ status: string; n: string | number }>(
     `SELECT ${effectiveStatusSql('c')} AS status, COUNT(*) AS n
        FROM conversations c
-      WHERE c.is_simulated = false
-        AND c.ai_enrolled = true
+      WHERE c.ai_enrolled = true
         AND c.created_at >= now() - ($1 || ' days')::interval
       GROUP BY ${effectiveStatusSql('c')}`,
     [String(windowDays)],
@@ -88,7 +83,7 @@ export async function getAiPerformanceSummary(
   }
 }
 
-/** A real dialog where the AI likely underperformed, with its transcript. */
+/** A dialog where the AI likely underperformed, with its transcript. */
 export interface WeakDialog {
   conversationId: string
   status: LeadStatus
@@ -97,10 +92,9 @@ export interface WeakDialog {
 }
 
 /**
- * Find REAL (never simulated) AI-led dialogs that ended badly — handed off to a
- * human or marked not-liquid — so the co-pilot can study what went wrong and
- * propose lessons. Only two-way dialogs (both sides spoke) are useful. Newest
- * first, capped. Honors the isolation invariant: `is_simulated = false`.
+ * Find AI-led dialogs that ended badly — handed off to a human or marked
+ * not-liquid — so the co-pilot can study what went wrong and propose lessons.
+ * Only two-way dialogs (both sides spoke) are useful. Newest first, capped.
  */
 export async function listUnderperformingDialogs(
   limit = 8,
@@ -111,8 +105,7 @@ export async function listUnderperformingDialogs(
        FROM conversations c
        JOIN messages m ON m.conversation_id = c.id
                        AND m.deleted_at IS NULL AND m.body <> ''
-      WHERE c.is_simulated = false
-        AND c.ai_enrolled = true
+      WHERE c.ai_enrolled = true
         AND ${effectiveStatusSql('c')} IN ('handoff', 'not_liquid')
       GROUP BY c.id, c.status, c.last_message_at
      HAVING COUNT(*) FILTER (WHERE m.direction = 'in')  > 0
