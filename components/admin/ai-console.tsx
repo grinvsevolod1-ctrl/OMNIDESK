@@ -1,31 +1,41 @@
 'use client'
 
-import { useCallback, useRef, useState, useTransition } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
 import dynamic from 'next/dynamic'
 import {
-  ArrowLeft,
   ArrowUp,
   BookOpen,
+  Check,
   Flame,
   GraduationCap,
   Highlighter,
   Loader2,
   MessagesSquare,
+  Mic,
   ScrollText,
   Settings2,
   Sparkles,
+  X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import type { AiAssistLesson, AiAssistSettings } from '@/lib/data/ai-assist'
-import {
-  INTENT_CATALOGUE,
-  INTENT_BY_ID,
-  type ConsoleIntent,
-} from '@/lib/ai-console/intents'
-import { aiCommandRouterAction } from '@/app/actions/ai-console'
+import { INTENT_BY_ID, type ConsoleIntent } from '@/lib/ai-console/intents'
+import type {
+  AssistantResult,
+  AssistantTurn,
+  ExecutedAction,
+} from '@/lib/ai-console/assistant'
+import { aiAssistantAction } from '@/app/actions/ai-console'
+import { aiSettingsAction, aiListLessonsAction } from '@/app/actions/ai-assist'
 import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
@@ -33,7 +43,7 @@ import { SettingsTab } from '@/components/admin/ai-settings-tab'
 import { TrainingTab } from '@/components/admin/ai-training-tab'
 
 // Heavier, less-frequently opened panels load on demand — the console's initial
-// chunk stays lean (just the launcher + settings/training).
+// chunk stays lean (just the composer + settings/training).
 const panelLoading = () => (
   <div className="flex items-center justify-center p-8 text-sm text-muted-foreground">
     <Loader2 className="mr-2 size-4 animate-spin" />
@@ -62,8 +72,8 @@ const KnowledgeBaseCard = dynamic(
   { loading: panelLoading },
 )
 
-/** Icon per intent for chips and the active-panel header. */
-const INTENT_ICON: Record<ConsoleIntent, LucideIcon> = {
+/** Icon per panel for the inline-panel header and the quick-access chips. */
+const PANEL_ICON: Record<ConsoleIntent, LucideIcon> = {
   settings: Settings2,
   aggressiveness: Flame,
   knowledge: BookOpen,
@@ -74,14 +84,73 @@ const INTENT_ICON: Record<ConsoleIntent, LucideIcon> = {
   help: Sparkles,
 }
 
-/** The currently opened destination. */
-interface ActivePanel {
-  intent: ConsoleIntent
-  /** Natural-language acknowledgement shown above the panel. */
-  reply: string
-  /** Whether the router was confident (drives the soft-confirm hint). */
-  lowConfidence: boolean
+/** Icon per executed-action receipt category. */
+const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
+  enabled: Settings2,
+  tone: Sparkles,
+  persona: Settings2,
+  aggressiveness: Flame,
+  model: Settings2,
+  knowledge: BookOpen,
+  lesson: GraduationCap,
 }
+
+/** One rendered turn in the conversation. */
+interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  actions?: ExecutedAction[]
+  openPanel?: ConsoleIntent | null
+  source?: AssistantResult['source']
+  /** Assistant bubbles typewriter-reveal on first mount only. */
+  animate?: boolean
+}
+
+/** Quick-access panels shown as a compact row (instant open, no model call). */
+const QUICK_PANELS: ConsoleIntent[] = [
+  'settings',
+  'aggressiveness',
+  'knowledge',
+  'training',
+  'corrections',
+  'dialogs',
+  'logs',
+]
+
+/** Example prompts grouped by theme for the empty-state hero. */
+const PROMPT_GROUPS: { title: string; icon: LucideIcon; prompts: string[] }[] = [
+  {
+    title: 'Настройка',
+    icon: Settings2,
+    prompts: [
+      'Включи ИИ-менеджера',
+      'Дожимай клиентов жёстче',
+      'Поменяй тон на дружелюбный',
+    ],
+  },
+  {
+    title: 'Обучение',
+    icon: GraduationCap,
+    prompts: [
+      'Добавь факт: доставка по городу 300 ₽',
+      'Добавь урок, как отвечать на «дорого»',
+      'Открой обучение',
+    ],
+  },
+  {
+    title: 'Аналитика',
+    icon: ScrollText,
+    prompts: [
+      'Расскажи, как ты сейчас настроен',
+      'Что с ошибками ИИ?',
+      'Объясни, что такое агрессивность продаж',
+    ],
+  },
+]
+
+let idSeq = 0
+const nextId = () => `m${Date.now()}_${idSeq++}`
 
 interface Props {
   initialSettings: AiAssistSettings
@@ -100,47 +169,112 @@ export function AiConsole({
   const [lessons, setLessons] = useState(initialLessons)
   const [lessonCount, setLessonCount] = useState(initialLessonCount)
 
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
-  const [active, setActive] = useState<ActivePanel | null>(null)
-  const [routing, startRouting] = useTransition()
+  const [pending, startTransition] = useTransition()
+
+  // The single inline panel currently expanded, tied to the message that opened
+  // it (so it renders directly under that assistant turn).
+  const [activePanel, setActivePanel] = useState<ConsoleIntent | null>(null)
+  const [activePanelMsgId, setActivePanelMsgId] = useState<string | null>(null)
+
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
-  const patchSettings = useCallback((next: AiAssistSettings) => {
-    setSettings(next)
+  const closePanel = useCallback(() => {
+    setActivePanel(null)
+    setActivePanelMsgId(null)
   }, [])
 
-  // Chips open their intent directly — we already know it, so skip the router
-  // (instant, no gateway call).
-  const openIntent = useCallback((intent: ConsoleIntent) => {
-    const meta = INTENT_BY_ID[intent]
-    setActive({
-      intent,
-      reply: meta ? `Открываю: ${meta.label.toLowerCase()}.` : 'Готово.',
-      lowConfidence: false,
-    })
+  // Keep settings/lessons in sync after the agent mutates them server-side.
+  const refreshSettings = useCallback(async () => {
+    try {
+      const { settings: fresh, lessonCount: count } = await aiSettingsAction()
+      setSettings(fresh)
+      setLessonCount(count)
+    } catch {
+      /* non-fatal — panels still work with the last known state */
+    }
   }, [])
 
-  // Free text goes through the AI router (with deterministic fallback inside).
-  const runCommand = useCallback(
-    (text: string) => {
-      const q = text.trim()
-      if (!q) return
-      startRouting(async () => {
+  const refreshLessons = useCallback(async () => {
+    try {
+      const fresh = await aiListLessonsAction()
+      setLessons(fresh)
+      setLessonCount(fresh.length)
+    } catch {
+      /* non-fatal */
+    }
+  }, [])
+
+  const send = useCallback(
+    (raw: string) => {
+      const q = raw.trim()
+      if (!q || pending) return
+
+      const userMsg: ChatMessage = { id: nextId(), role: 'user', content: q }
+      const withUser = [...messages, userMsg]
+      setMessages(withUser)
+      setInput('')
+
+      const historyTurns: AssistantTurn[] = withUser.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }))
+
+      startTransition(async () => {
         try {
-          const res = await aiCommandRouterAction(q)
-          setActive({
-            intent: res.intent,
-            reply: res.reply,
-            lowConfidence: res.intent !== 'help' && res.confidence < 0.5,
-          })
-          setInput('')
+          const res = await aiAssistantAction(historyTurns)
+          const asstMsg: ChatMessage = {
+            id: nextId(),
+            role: 'assistant',
+            content: res.reply,
+            actions: res.actions,
+            openPanel: res.openPanel,
+            source: res.source,
+            animate: true,
+          }
+          setMessages((prev) => [...prev, asstMsg])
+
+          if (res.openPanel) {
+            setActivePanel(res.openPanel)
+            setActivePanelMsgId(asstMsg.id)
+          }
+          if (res.settingsChanged) await refreshSettings()
+          if (res.actions.some((a) => a.kind === 'lesson')) await refreshLessons()
         } catch {
-          toast.error('Не удалось распознать запрос. Попробуйте ещё раз.')
+          toast.error('Не удалось получить ответ. Попробуйте ещё раз.')
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextId(),
+              role: 'assistant',
+              content: 'Что-то пошло не так со связью. Попробуйте ещё раз.',
+              animate: true,
+            },
+          ])
         }
       })
     },
-    [],
+    [messages, pending, refreshSettings, refreshLessons],
   )
+
+  // Instant panel open from a quick chip — no model call, added as a turn so the
+  // conversation stays coherent.
+  const openPanelDirect = useCallback((intent: ConsoleIntent) => {
+    const meta = INTENT_BY_ID[intent]
+    const asstMsg: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      content: meta ? `Открыл: ${meta.label.toLowerCase()}.` : 'Готово.',
+      openPanel: intent,
+    }
+    setMessages((prev) => [...prev, asstMsg])
+    setActivePanel(intent)
+    setActivePanelMsgId(asstMsg.id)
+  }, [])
+
+  const voice = useSpeechInput((text) => send(text))
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Submit on plain Enter; Shift+Enter inserts a newline. Respect IME
@@ -152,30 +286,76 @@ export function AiConsole({
       e.keyCode !== 229
     ) {
       e.preventDefault()
-      runCommand(input)
+      send(input)
     }
   }
+
+  // Autofocus the composer on mount.
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  // Esc closes the open inline panel.
+  useEffect(() => {
+    if (!activePanel) return
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closePanel()
+    }
+    window.addEventListener('keydown', onEsc)
+    return () => window.removeEventListener('keydown', onEsc)
+  }, [activePanel, closePanel])
+
+  // Keep the newest turn / opened panel in view.
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [messages, activePanel])
+
+  const hasChat = messages.length > 0
 
   return (
     <div className="flex flex-col gap-4">
       {!configured ? (
         <Card className="border-amber-500/40 bg-amber-500/5 p-4 text-sm text-amber-700 dark:text-amber-400">
-          Ключ AI Gateway не найден в переменных окружения. ИИ-ответы работать не
-          будут, пока не задан{' '}
-          <code className="font-mono">AI_GATEWAY_API_KEY</code>. Настройки и
-          обучение доступны и сохранятся заранее.
+          Ключ AI Gateway не найден. Полноценный разговор с ассистентом заработает,
+          когда будет задан <code className="font-mono">AI_GATEWAY_API_KEY</code>.
+          Пока я буду просто открывать нужные разделы по вашему запросу — все
+          настройки и обучение доступны.
         </Card>
       ) : null}
 
-      {/* The one command box that replaces the whole tab bar. */}
-      <Card className="flex flex-col gap-3 p-4">
-        <div className="flex items-center gap-2">
-          <span className="rounded-md bg-primary/10 p-1.5 text-primary">
-            <Sparkles className="size-4" />
-          </span>
-          <p className="text-sm font-medium">Чем я могу помочь?</p>
+      {/* Conversation thread (or the empty-state hero). */}
+      {hasChat ? (
+        <div className="flex flex-col gap-4">
+          {messages.map((m) => (
+            <div key={m.id} className="flex flex-col gap-3">
+              <MessageBubble message={m} />
+              {m.actions && m.actions.length > 0 ? (
+                <ActionReceipts actions={m.actions} />
+              ) : null}
+              {m.openPanel && activePanelMsgId === m.id && activePanel ? (
+                <InlinePanel
+                  intent={activePanel}
+                  settings={settings}
+                  onSettingsChange={setSettings}
+                  lessons={lessons}
+                  onLessonsChange={(next) => {
+                    setLessons(next)
+                    setLessonCount(next.length)
+                  }}
+                  onClose={closePanel}
+                />
+              ) : null}
+            </div>
+          ))}
+          {pending ? <ThinkingBubble /> : null}
+          <div ref={bottomRef} />
         </div>
+      ) : (
+        <EmptyHero lessonCount={lessonCount} onPick={send} />
+      )}
 
+      {/* Composer — the one place you talk to the assistant. */}
+      <Card className="sticky bottom-4 z-10 flex flex-col gap-3 p-3 shadow-lg">
         <div className="relative">
           <Textarea
             ref={inputRef}
@@ -183,40 +363,57 @@ export function AiConsole({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             rows={2}
-            disabled={routing}
-            placeholder="Напишите, что хотите сделать. Напр.: «покажи логи», «дожимай клиентов жёстче», «добавь факт про доставку»"
-            className="resize-none pr-12"
-            aria-label="Команда для ИИ-панели"
+            disabled={pending}
+            placeholder="Спросите или скажите, что сделать с ИИ-менеджером. Напр.: «дожимай жёстче», «добавь факт про доставку», «как ты настроен?»"
+            className="resize-none pr-24"
+            aria-label="Сообщение ассистенту ИИ-менеджера"
           />
-          <Button
-            size="icon"
-            className="absolute bottom-2 right-2 size-8"
-            disabled={routing || !input.trim()}
-            onClick={() => runCommand(input)}
-            aria-label="Выполнить"
-          >
-            {routing ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <ArrowUp className="size-4" />
-            )}
-          </Button>
+          <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
+            {voice.supported ? (
+              <Button
+                type="button"
+                size="icon"
+                variant={voice.listening ? 'default' : 'ghost'}
+                className={cn('size-8', voice.listening && 'animate-pulse')}
+                onClick={voice.toggle}
+                disabled={pending}
+                aria-label={voice.listening ? 'Остановить запись' : 'Голосовой ввод'}
+                aria-pressed={voice.listening}
+              >
+                <Mic className="size-4" />
+              </Button>
+            ) : null}
+            <Button
+              size="icon"
+              className="size-8"
+              disabled={pending || !input.trim()}
+              onClick={() => send(input)}
+              aria-label="Отправить"
+            >
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <ArrowUp className="size-4" />
+              )}
+            </Button>
+          </div>
         </div>
 
-        {/* Quick chips — instant shortcuts to each destination. */}
-        <div className="flex flex-wrap gap-2">
-          {INTENT_CATALOGUE.map((meta) => {
-            const Icon = INTENT_ICON[meta.intent]
-            const activeChip = active?.intent === meta.intent
+        {/* Quick-access panels — instant open, no model call. */}
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK_PANELS.map((intent) => {
+            const meta = INTENT_BY_ID[intent]
+            const Icon = PANEL_ICON[intent]
+            if (!meta) return null
             return (
               <button
-                key={meta.intent}
+                key={intent}
                 type="button"
-                onClick={() => openIntent(meta.intent)}
-                disabled={routing}
+                onClick={() => openPanelDirect(intent)}
+                disabled={pending}
                 className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                  activeChip
+                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                  activePanel === intent
                     ? 'border-primary bg-primary/10 text-primary'
                     : 'border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground',
                 )}
@@ -228,65 +425,158 @@ export function AiConsole({
           })}
         </div>
       </Card>
-
-      {active ? (
-        <ActivePanelView
-          active={active}
-          settings={settings}
-          onSettingsChange={patchSettings}
-          lessons={lessons}
-          onLessonsChange={(next) => {
-            setLessons(next)
-            setLessonCount(next.length)
-          }}
-          onBack={() => {
-            setActive(null)
-            inputRef.current?.focus()
-          }}
-        />
-      ) : (
-        <IdleHints lessonCount={lessonCount} onPick={runCommand} />
-      )}
     </div>
   )
 }
 
-/* ------------------------------ Active panel ---------------------------- */
+/* ------------------------------ Message bubbles -------------------------- */
 
-function ActivePanelView({
-  active,
+function MessageBubble({ message }: { message: ChatMessage }) {
+  const isUser = message.role === 'user'
+  return (
+    <div
+      className={cn(
+        'flex gap-2.5 duration-300 animate-in fade-in slide-in-from-bottom-2',
+        isUser ? 'flex-row-reverse' : 'flex-row',
+      )}
+    >
+      <span
+        className={cn(
+          'mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full',
+          isUser
+            ? 'bg-muted text-muted-foreground'
+            : 'bg-primary/10 text-primary',
+        )}
+        aria-hidden="true"
+      >
+        {isUser ? (
+          <span className="text-xs font-semibold">Вы</span>
+        ) : (
+          <Sparkles className="size-4" />
+        )}
+      </span>
+      <div
+        className={cn(
+          'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm',
+          isUser
+            ? 'rounded-tr-sm bg-primary text-primary-foreground'
+            : 'rounded-tl-sm bg-muted text-foreground',
+        )}
+      >
+        {message.role === 'assistant' ? (
+          <AssistantText text={message.content} animate={!!message.animate} />
+        ) : (
+          <p className="whitespace-pre-wrap text-pretty leading-relaxed">
+            {message.content}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Typewriter reveal for assistant text (first mount only). */
+function AssistantText({
+  text,
+  animate,
+}: {
+  text: string
+  animate: boolean
+}) {
+  const [shown, setShown] = useState(animate ? '' : text)
+  useEffect(() => {
+    if (!animate) {
+      setShown(text)
+      return
+    }
+    let i = 0
+    const id = window.setInterval(() => {
+      i += 2
+      setShown(text.slice(0, i))
+      if (i >= text.length) window.clearInterval(id)
+    }, 12)
+    return () => window.clearInterval(id)
+  }, [text, animate])
+  return (
+    <p className="whitespace-pre-wrap text-pretty leading-relaxed">{shown}</p>
+  )
+}
+
+/** The "thinking" placeholder while the agent runs. */
+function ThinkingBubble() {
+  return (
+    <div className="flex items-center gap-2.5 duration-300 animate-in fade-in">
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+        <Sparkles className="size-4" />
+      </span>
+      <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-muted px-4 py-3">
+        <Dot delay="0ms" />
+        <Dot delay="150ms" />
+        <Dot delay="300ms" />
+      </div>
+    </div>
+  )
+}
+
+function Dot({ delay }: { delay: string }) {
+  return (
+    <span
+      className="size-1.5 animate-bounce rounded-full bg-muted-foreground/60"
+      style={{ animationDelay: delay }}
+    />
+  )
+}
+
+/** Receipts for the concrete mutations performed during a turn. */
+function ActionReceipts({ actions }: { actions: ExecutedAction[] }) {
+  return (
+    <div className="ml-9 flex flex-wrap gap-1.5 duration-300 animate-in fade-in">
+      {actions.map((a, i) => {
+        const Icon = ACTION_ICON[a.kind]
+        return (
+          <span
+            key={i}
+            className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs font-medium text-primary"
+          >
+            <Check className="size-3.5" />
+            <Icon className="size-3.5" />
+            {a.label}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ------------------------------ Inline panel ---------------------------- */
+
+function InlinePanel({
+  intent,
   settings,
   onSettingsChange,
   lessons,
   onLessonsChange,
-  onBack,
+  onClose,
 }: {
-  active: ActivePanel
+  intent: ConsoleIntent
   settings: AiAssistSettings
   onSettingsChange: (s: AiAssistSettings) => void
   lessons: AiAssistLesson[]
   onLessonsChange: (l: AiAssistLesson[]) => void
-  onBack: () => void
+  onClose: () => void
 }) {
-  const meta = INTENT_BY_ID[active.intent]
-  const Icon = INTENT_ICON[active.intent]
-
+  const meta = INTENT_BY_ID[intent]
+  const Icon = PANEL_ICON[intent]
   return (
-    <div className="flex flex-col gap-3">
-      {/* Acknowledgement + back control. */}
+    <Card className="ml-9 flex flex-col gap-3 border-primary/20 p-4 duration-300 animate-in fade-in slide-in-from-top-1">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2">
           <span className="mt-0.5 rounded-md bg-primary/10 p-1.5 text-primary">
             <Icon className="size-4" />
           </span>
           <div>
-            <p className="text-sm font-medium text-pretty">{active.reply}</p>
-            {active.lowConfidence ? (
-              <p className="text-xs text-muted-foreground">
-                Не был уверен — если это не то, выберите нужное ниже или
-                переформулируйте.
-              </p>
-            ) : meta ? (
+            <p className="text-sm font-medium">{meta?.label}</p>
+            {meta ? (
               <p className="text-xs text-muted-foreground">{meta.description}</p>
             ) : null}
           </div>
@@ -294,22 +584,21 @@ function ActivePanelView({
         <Button
           variant="ghost"
           size="sm"
-          onClick={onBack}
+          onClick={onClose}
           className="shrink-0 gap-1.5"
         >
-          <ArrowLeft className="size-4" />
-          Назад
+          <X className="size-4" />
+          Закрыть
         </Button>
       </div>
-
       <PanelBody
-        intent={active.intent}
+        intent={intent}
         settings={settings}
         onSettingsChange={onSettingsChange}
         lessons={lessons}
         onLessonsChange={onLessonsChange}
       />
-    </div>
+    </Card>
   )
 }
 
@@ -353,63 +642,55 @@ function PanelBody({
   }
 }
 
-/* ------------------------------ Idle hints ------------------------------ */
+/* ------------------------------ Empty hero ------------------------------ */
 
-/**
- * Shown when nothing is open: a friendly nudge plus example commands the admin
- * can click to run through the router (so they learn the natural-language way).
- */
-function IdleHints({
+function EmptyHero({
   lessonCount,
   onPick,
 }: {
   lessonCount: number
   onPick: (text: string) => void
 }) {
-  // One representative example per intent (first example), deduped for variety.
-  const examples = INTENT_CATALOGUE.map((m) => ({
-    intent: m.intent,
-    text: m.examples[0],
-    icon: INTENT_ICON[m.intent],
-  }))
-
   return (
-    <Card className="flex flex-col gap-4 p-4">
-      <div>
-        <p className="font-medium text-pretty">
-          Просто напишите, что нужно — я открою нужный раздел
-        </p>
-        <p className="text-sm text-muted-foreground text-pretty">
-          Больше нет вкладок. Опишите задачу своими словами, а я пойму и покажу
-          результат.
+    <Card className="flex flex-col gap-5 p-6 duration-500 animate-in fade-in">
+      <div className="flex flex-col items-center gap-2 text-center">
+        <span className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <Sparkles className="size-6" />
+        </span>
+        <h2 className="text-lg font-semibold text-pretty">
+          Ассистент ИИ-менеджера
+        </h2>
+        <p className="max-w-md text-sm text-muted-foreground text-pretty">
+          Просто скажите, что нужно — я включу и настрою ИИ-менеджера, добавлю
+          факты и уроки, объясню, как всё устроено, или открою нужный раздел.
           {lessonCount > 0
             ? ` В обучении уже ${lessonCount} ${pluralLessons(lessonCount)}.`
             : ''}
         </p>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Примеры команд
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {examples.map((ex) => {
-            const Icon = ex.icon
-            return (
-              <button
-                key={ex.intent}
-                type="button"
-                onClick={() => onPick(ex.text)}
-                className="flex items-center gap-2 rounded-lg border border-border p-3 text-left text-sm transition-colors hover:bg-muted/60"
-              >
-                <span className="rounded-md bg-muted p-1.5 text-muted-foreground">
-                  <Icon className="size-4" />
-                </span>
-                <span className="text-pretty">«{ex.text}»</span>
-              </button>
-            )
-          })}
-        </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {PROMPT_GROUPS.map((group) => {
+          const GroupIcon = group.icon
+          return (
+            <div key={group.title} className="flex flex-col gap-2">
+              <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <GroupIcon className="size-3.5" />
+                {group.title}
+              </p>
+              {group.prompts.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => onPick(p)}
+                  className="rounded-lg border border-border p-2.5 text-left text-sm text-pretty transition-colors hover:border-primary/40 hover:bg-muted/60"
+                >
+                  «{p}»
+                </button>
+              ))}
+            </div>
+          )
+        })}
       </div>
     </Card>
   )
@@ -422,4 +703,100 @@ function pluralLessons(n: number): string {
   if (mod10 === 1 && mod100 !== 11) return 'урок'
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'урока'
   return 'уроков'
+}
+
+/* ------------------------------ Voice input ----------------------------- */
+
+interface SpeechInput {
+  supported: boolean
+  listening: boolean
+  toggle: () => void
+}
+
+/**
+ * Thin wrapper over the Web Speech API (ru-RU). Auto-submits the recognised
+ * phrase on a final result so it feels like talking to Siri. Degrades to
+ * `supported: false` where the API is missing (e.g. Firefox), and the mic button
+ * is simply not rendered.
+ */
+function useSpeechInput(onFinal: (text: string) => void): SpeechInput {
+  const [supported, setSupported] = useState(false)
+  const [listening, setListening] = useState(false)
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const onFinalRef = useRef(onFinal)
+  onFinalRef.current = onFinal
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const Ctor =
+      (window as WindowWithSpeech).SpeechRecognition ||
+      (window as WindowWithSpeech).webkitSpeechRecognition
+    if (!Ctor) return
+    setSupported(true)
+
+    const rec = new Ctor()
+    rec.lang = 'ru-RU'
+    rec.interimResults = false
+    rec.maxAlternatives = 1
+    rec.onresult = (e: SpeechRecognitionEventLike) => {
+      const transcript = e.results?.[0]?.[0]?.transcript?.trim()
+      if (transcript) onFinalRef.current(transcript)
+    }
+    rec.onend = () => setListening(false)
+    rec.onerror = () => setListening(false)
+    recognitionRef.current = rec
+
+    return () => {
+      try {
+        rec.stop()
+      } catch {
+        /* ignore */
+      }
+      recognitionRef.current = null
+    }
+  }, [])
+
+  const toggle = useCallback(() => {
+    const rec = recognitionRef.current
+    if (!rec) return
+    if (listening) {
+      try {
+        rec.stop()
+      } catch {
+        /* ignore */
+      }
+      setListening(false)
+      return
+    }
+    try {
+      rec.start()
+      setListening(true)
+    } catch {
+      setListening(false)
+    }
+  }, [listening])
+
+  return useMemo(
+    () => ({ supported, listening, toggle }),
+    [supported, listening, toggle],
+  )
+}
+
+/* Minimal typings for the non-standard Web Speech API (avoids `any`). */
+interface SpeechRecognitionLike {
+  lang: string
+  interimResults: boolean
+  maxAlternatives: number
+  start: () => void
+  stop: () => void
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null
+  onend: (() => void) | null
+  onerror: (() => void) | null
+}
+interface SpeechRecognitionEventLike {
+  results: ArrayLike<ArrayLike<{ transcript: string }>>
+}
+interface WindowWithSpeech extends Window {
+  SpeechRecognition?: new () => SpeechRecognitionLike
+  webkitSpeechRecognition?: new () => SpeechRecognitionLike
 }
