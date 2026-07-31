@@ -225,6 +225,7 @@ export async function simAdoptConversationsAction(input: {
     tone: settings.tone,
     minDelaySec: 20,
     maxDelaySec: spread * 60,
+    personaCfg: settings.contentConfig?.persona,
   })
 
   // A restart-safe engine picks these up on its next tick; make sure it's
@@ -287,16 +288,19 @@ export async function simTestStartAction(input: {
   await guard()
   // Roll a fresh character each rehearsal so the sandbox mirrors the swarm's
   // "everyone is different" behaviour rather than a single fixed voice.
+  const settings = await getSimSettings()
   const aggression =
     input.aggression !== undefined
       ? clampInt(input.aggression, 0, 100, 60)
       : Math.round((Math.random() * 100 + Math.random() * 100) / 2)
   const tone = input.tone ?? SIM_TONES[Math.floor(Math.random() * SIM_TONES.length)]
-  const persona = makePersona(input.channelType, aggression, tone)
+  const contentConfig = settings.contentConfig ?? null
+  const persona = makePersona(input.channelType, aggression, tone, contentConfig?.persona)
   const opening = await generateReply({
     persona,
     history: [],
     behavior: 'open',
+    contentConfig,
   })
   // No template fallback — surface the failure so the UI shows a clear toast.
   if (!opening) {

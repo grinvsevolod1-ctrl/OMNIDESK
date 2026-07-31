@@ -13,6 +13,7 @@ import {
 } from '@/lib/types'
 import {
   type SimPersona,
+  type SimPersonaConfig,
   type SimTone,
 } from '../types'
 import {
@@ -253,6 +254,8 @@ export async function adoptConversations(
     tone: SimTone
     minDelaySec?: number
     maxDelaySec?: number
+    /** Persona pools from sim_settings.content_config.persona — optional, falls back to hardcoded defaults. */
+    personaCfg?: SimPersonaConfig | null
   },
 ): Promise<AdoptResult> {
   const ids = [...new Set(conversationIds)].filter(Boolean)
@@ -304,7 +307,7 @@ export async function adoptConversations(
       skipped += 1
       continue
     }
-    const persona = makePersona(s.channel_type, opts.aggression, opts.tone)
+    const persona = makePersona(s.channel_type, opts.aggression, opts.tone, opts.personaCfg)
     // Pin identity to the real contact so it reads as the same person.
     if (s.contact_name) persona.name = s.contact_name
     if (s.contact_handle) persona.handle = s.contact_handle

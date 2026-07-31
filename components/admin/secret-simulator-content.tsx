@@ -206,7 +206,11 @@ interface ContentForm {
   scheduleTypes: string[]
   matchPctMin: number
   matchPctMax: number
-  // Persona tab
+  // Persona tab — name pools
+  maleFirstNames: string[]
+  femaleFirstNames: string[]
+  lastNames: string[]
+  // Persona tab — trait pools
   tempers: string[]
   occupations: string[]
   motivations: string[]
@@ -214,6 +218,7 @@ interface ContentForm {
   quirks: string[]
   goals: string[]
   openerTemplates: string[]
+  emojiPictures: string[]
 }
 
 function formToConfig(f: ContentForm): SimContentConfig {
@@ -225,6 +230,9 @@ function formToConfig(f: ContentForm): SimContentConfig {
     matchPctMin: f.matchPctMin,
     matchPctMax: f.matchPctMax,
     persona: {
+      maleFirstNames: f.maleFirstNames,
+      femaleFirstNames: f.femaleFirstNames,
+      lastNames: f.lastNames,
       tempers: f.tempers,
       occupations: f.occupations,
       motivations: f.motivations,
@@ -232,6 +240,7 @@ function formToConfig(f: ContentForm): SimContentConfig {
       quirks: f.quirks,
       goals: f.goals,
       openerTemplates: f.openerTemplates,
+      emojiPictures: f.emojiPictures,
     },
   }
 }
@@ -245,6 +254,9 @@ function configToForm(cfg: SimContentConfig | null): ContentForm {
     scheduleTypes: (cfg?.scheduleTypes && cfg.scheduleTypes.length > 0) ? cfg.scheduleTypes : d.scheduleTypes,
     matchPctMin: cfg?.matchPctMin ?? d.matchPctMin,
     matchPctMax: cfg?.matchPctMax ?? d.matchPctMax,
+    maleFirstNames: cfg?.persona?.maleFirstNames ?? [],
+    femaleFirstNames: cfg?.persona?.femaleFirstNames ?? [],
+    lastNames: cfg?.persona?.lastNames ?? [],
     tempers: cfg?.persona?.tempers ?? [],
     occupations: cfg?.persona?.occupations ?? [],
     motivations: cfg?.persona?.motivations ?? [],
@@ -252,6 +264,7 @@ function configToForm(cfg: SimContentConfig | null): ContentForm {
     quirks: cfg?.persona?.quirks ?? [],
     goals: cfg?.persona?.goals ?? [],
     openerTemplates: cfg?.persona?.openerTemplates ?? [],
+    emojiPictures: cfg?.persona?.emojiPictures ?? [],
   }
 }
 
@@ -481,6 +494,24 @@ export function SecretSimulatorContent() {
           {(
             [
               {
+                key: 'maleFirstNames',
+                label: 'Мужские имена',
+                placeholder: 'Александр\nДмитрий\nМаксим',
+                rows: 6,
+              },
+              {
+                key: 'femaleFirstNames',
+                label: 'Женские имена',
+                placeholder: 'Анна\nМария\nОльга',
+                rows: 6,
+              },
+              {
+                key: 'lastNames',
+                label: 'Фамилии',
+                placeholder: 'Иванов\nСмирнов\nКузнецов',
+                rows: 6,
+              },
+              {
                 key: 'tempers',
                 label: 'Черты характера',
                 placeholder: 'нетерпеливый\nподозрительный\nнаглый',
@@ -521,6 +552,12 @@ export function SecretSimulatorContent() {
                 label: 'Шаблоны приветствий (LLM-путь)',
                 placeholder: 'здравствуйте нашёл у вас {hook} ещё актуально\nпривет по поводу {hook} можно узнать',
                 rows: 6,
+              },
+              {
+                key: 'emojiPictures',
+                label: 'Эмодзи-аватары',
+                placeholder: '🧔\n👩\n👴\n👩‍🦱',
+                rows: 4,
               },
             ] as const
           ).map(({ key, label, placeholder, rows }) => (
