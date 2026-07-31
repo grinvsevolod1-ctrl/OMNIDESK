@@ -24,7 +24,7 @@ import {
   ScrollText,
   Settings2,
   ShieldAlert,
-  Sparkles,
+  BrainCircuit,
   Square,
   Undo2,
   Volume2,
@@ -96,13 +96,13 @@ const PANEL_ICON: Record<ConsoleIntent, LucideIcon> = {
   corrections: Highlighter,
   dialogs: MessagesSquare,
   logs: ScrollText,
-  help: Sparkles,
+  help: BrainCircuit,
 }
 
 /** Icon per executed-action receipt category. */
 const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
   enabled: Power,
-  tone: Sparkles,
+  tone: BrainCircuit,
   persona: Settings2,
   aggressiveness: Flame,
   model: Settings2,
@@ -855,7 +855,7 @@ function StatusStrip({
         label={settings.enabled ? 'ИИ включён' : 'ИИ выключен'}
       />
       <StatusChip
-        icon={Sparkles}
+        icon={BrainCircuit}
         tone="neutral"
         label={TONE_LABEL[settings.tone] ?? settings.tone}
       />
@@ -947,7 +947,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         {isUser ? (
           <span className="text-xs font-semibold">Вы</span>
         ) : (
-          <Sparkles className="size-4" />
+          <BrainCircuit className="size-4" />
         )}
       </span>
       <div
@@ -1295,7 +1295,7 @@ function EmptyHero() {
   return (
     <div className="flex min-h-[42vh] flex-col items-center justify-center gap-6 py-8 text-center duration-500 animate-in fade-in">
       <span className="flex size-16 items-center justify-center rounded-3xl bg-primary/10 text-primary">
-        <Sparkles className="size-8" />
+        <BrainCircuit className="size-8" />
       </span>
       <h2 className="max-w-xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
         Чем помочь с ИИ-менеджером?

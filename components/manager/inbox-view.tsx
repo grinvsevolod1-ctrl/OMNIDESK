@@ -20,7 +20,7 @@ import {
   History,
   Info,
   Loader2,
-  Sparkles,
+  BrainCircuit,
   MessageCircle,
   MoreVertical,
   Reply,
@@ -1079,7 +1079,7 @@ export function InboxView({
           className="flex shrink-0 items-center gap-2.5 border-b border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-left text-sm text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-300"
         >
           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-emerald-50">
-            <Sparkles className="size-3.5" />
+            <BrainCircuit className="size-3.5" />
           </span>
           <span className="flex-1 font-medium">
             {pendingHandoffs.length === 1
@@ -1619,7 +1619,7 @@ export function InboxView({
                     aiButtonPulse && 'animate-shake ring-2 ring-primary',
                   )}
                 >
-                  <Sparkles className="size-4" />
+                  <BrainCircuit className="size-4" />
                   <span className="hidden sm:inline">
                     {activeAiLed ? 'ИИ ведёт' : 'ИИ'}
                   </span>

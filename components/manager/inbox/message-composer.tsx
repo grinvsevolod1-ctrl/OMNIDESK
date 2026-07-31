@@ -20,7 +20,7 @@ import {
   Loader2,
   Paperclip,
   SendHorizonal,
-  Sparkles,
+  BrainCircuit,
   Zap,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -192,7 +192,7 @@ export const MessageComposer = memo(function MessageComposer({
           disabled={statusPending}
           className="flex w-full items-center gap-2 border-b border-primary/20 bg-primary/10 px-4 py-2 text-left text-xs font-medium text-primary transition-colors hover:bg-primary/15"
         >
-          <Sparkles className="size-3.5 shrink-0" />
+          <BrainCircuit className="size-3.5 shrink-0" />
           <span className="flex-1">
             ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.
           </span>

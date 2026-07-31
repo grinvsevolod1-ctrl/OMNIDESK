@@ -13,7 +13,6 @@ import {
   Loader2,
   RefreshCw,
   Send,
-  Sparkles,
   Trash2,
 } from 'lucide-react'
 import {
@@ -265,7 +264,7 @@ function ManualTrainer({
       >
         <span className="flex items-center gap-3">
           <span className="rounded-md bg-muted p-2 text-muted-foreground">
-            <Sparkles className="size-5" />
+            <BrainCircuit className="size-5" />
           </span>
           <span>
             <span className="block font-medium">Ручная тренировка</span>
@@ -345,7 +344,7 @@ function ManualTrainer({
                     {suggesting ? (
                       <Loader2 className="size-4 animate-spin" />
                     ) : (
-                      <Sparkles className="size-4" />
+                      <BrainCircuit className="size-4" />
                     )}
                     Предложить
                   </Button>

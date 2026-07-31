@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { toast } from 'sonner'
-import { Loader2, Play, RotateCcw, Send, Sparkles } from 'lucide-react'
+import { Loader2, Play, RotateCcw, Send, BrainCircuit } from 'lucide-react'
 import {
   simTestReplyAction,
   simTestStartAction,
@@ -103,7 +103,7 @@ export function SecretSimulatorTest() {
     <Card className="flex flex-col gap-4 p-5">
       <div className="flex items-start gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
-          <Sparkles className="size-4 text-foreground" />
+          <BrainCircuit className="size-4 text-foreground" />
         </div>
         <div>
           <h3 className="font-semibold tracking-tight">Тестовый диалог</h3>

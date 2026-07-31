@@ -17,7 +17,7 @@ import {
   MessagesSquare,
   Plus,
   Sliders,
-  Sparkles,
+  BrainCircuit,
   Trash2,
 } from 'lucide-react'
 import {
@@ -432,7 +432,7 @@ function AdvancedSettings({
           {settings.playbook.length > 0 ? (
             <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
               <div className="flex items-center gap-2">
-                <Sparkles className="size-4 text-primary" />
+                <BrainCircuit className="size-4 text-primary" />
                 <p className="text-sm font-medium">Плейбук (выведен из обучения)</p>
               </div>
               <ul className="ml-1 flex list-inside list-disc flex-col gap-1 text-sm text-muted-foreground">

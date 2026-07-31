@@ -12,7 +12,7 @@ import {
   CheckCircle2,
   Eraser,
   Loader2,
-  Sparkles,
+  BrainCircuit,
   TriangleAlert,
   Zap,
 } from 'lucide-react'
@@ -121,7 +121,7 @@ export function MassImportTab({
       <Card className="flex flex-col gap-6 p-5">
         <div className="flex items-start gap-3">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/40">
-            <Sparkles className="size-5 text-foreground" />
+            <BrainCircuit className="size-5 text-foreground" />
           </div>
           <div>
             <h3 className="font-semibold tracking-tight">Массовое создание диалогов</h3>
