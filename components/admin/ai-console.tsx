@@ -51,7 +51,6 @@ import {
 } from '@/lib/ai-console/assistant'
 import {
   CONSOLE_PRESETS,
-  getPreset,
   presetSummary,
   type ConsolePreset,
 } from '@/lib/ai-console/presets'
@@ -141,6 +140,8 @@ interface ChatMessage {
   source?: AssistantResult['source']
   /** A guarded change awaiting the admin's Confirm/Cancel (rendered as a card). */
   pending?: PendingConfirmation | null
+  /** A high-impact preset awaiting confirmation (rendered as a card). */
+  presetConfirm?: ConsolePreset | null
   /** True while tokens are still streaming into this bubble (no typewriter). */
   streaming?: boolean
   /** Assistant bubbles typewriter-reveal on first mount only. */
@@ -249,19 +250,22 @@ export function AiConsole({
   const bottomRef = useRef<HTMLDivElement>(null)
   // Monotonic token: a Stop or a newer request invalidates in-flight replies.
   const reqRef = useRef(0)
+  // Aborts the in-flight streaming fetch on Stop / new request.
+  const abortRef = useRef<AbortController | null>(null)
 
   const closePanel = useCallback(() => {
     setActivePanel(null)
     setActivePanelMsgId(null)
   }, [])
 
-  // Proactive briefing: fetch the live health check (best-effort, non-blocking).
+  // Proactive briefing + weekly stats: fetch both in parallel (best-effort).
   const loadBriefing = useCallback(async () => {
-    try {
-      setBriefing(await aiConsoleBriefingAction())
-    } catch {
-      /* non-fatal — the hero still shows example prompts */
-    }
+    const [b, w] = await Promise.allSettled([
+      aiConsoleBriefingAction(),
+      aiWeeklySummaryAction(),
+    ])
+    if (b.status === 'fulfilled') setBriefing(b.value)
+    if (w.status === 'fulfilled') setWeekly(w.value)
   }, [])
 
   // Keep settings/lessons in sync after the agent mutates them server-side.
@@ -324,52 +328,154 @@ export function AiConsole({
       }))
 
       const token = ++reqRef.current
+      const asstId = nextId()
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      // Pre-insert an empty assistant bubble that fills in as tokens stream.
+      setMessages((prev) => [
+        ...prev,
+        { id: asstId, role: 'assistant', content: '', streaming: true },
+      ])
+
+      const applyResult = async (res: AssistantResult) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === asstId
+              ? {
+                  ...m,
+                  content: res.reply,
+                  actions: res.actions,
+                  openPanel: res.openPanel,
+                  source: res.source,
+                  pending: res.pending ?? null,
+                  streaming: false,
+                }
+              : m,
+          ),
+        )
+        if (res.openPanel) {
+          setActivePanel(res.openPanel)
+          setActivePanelMsgId(asstId)
+        }
+        if (res.settingsChanged) await refreshSettings()
+        if (res.actions.some((a) => a.kind === 'lesson')) await refreshLessons()
+        speak(res.reply)
+      }
+
       ;(async () => {
         try {
-          const res = await aiAssistantAction(historyTurns)
-          if (reqRef.current !== token) return // stopped or superseded
-          const asstMsg: ChatMessage = {
-            id: nextId(),
-            role: 'assistant',
-            content: res.reply,
-            actions: res.actions,
-            openPanel: res.openPanel,
-            source: res.source,
-            animate: true,
-          }
-          setMessages((prev) => [...prev, asstMsg])
+          const resp = await fetch('/api/admin/ai-console/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ history: historyTurns }),
+            signal: controller.signal,
+          })
+          if (!resp.ok || !resp.body) throw new Error('stream failed')
 
-          if (res.openPanel) {
-            setActivePanel(res.openPanel)
-            setActivePanelMsgId(asstMsg.id)
+          const reader = resp.body.getReader()
+          const decoder = new TextDecoder()
+          let buffer = ''
+          let streamed = ''
+          let meta: Omit<AssistantResult, 'reply'> | null = null
+
+          for (;;) {
+            const { value, done } = await reader.read()
+            if (done) break
+            if (reqRef.current !== token) {
+              await reader.cancel()
+              return
+            }
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() ?? ''
+            for (const line of lines) {
+              const trimmed = line.trim()
+              if (!trimmed.startsWith('data:')) continue
+              const payload = trimmed.slice(5).trim()
+              if (!payload || payload === '[DONE]') continue
+              try {
+                const evt = JSON.parse(payload) as
+                  | { t: 'delta'; v: string }
+                  | { t: 'meta'; v: Omit<AssistantResult, 'reply'> }
+                  | { t: 'error' }
+                if (evt.t === 'delta') {
+                  streamed += evt.v
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === asstId ? { ...m, content: streamed } : m,
+                    ),
+                  )
+                } else if (evt.t === 'meta') {
+                  meta = evt.v
+                } else if (evt.t === 'error') {
+                  throw new Error('generation error')
+                }
+              } catch {
+                /* ignore malformed line */
+              }
+            }
           }
-          if (res.settingsChanged) await refreshSettings()
-          if (res.actions.some((a) => a.kind === 'lesson')) await refreshLessons()
-          speak(res.reply)
-        } catch {
+
           if (reqRef.current !== token) return
-          toast.error('Не удалось получить ответ. Попробуйте ещё раз.')
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: nextId(),
-              role: 'assistant',
-              content: 'Что-то пошло не так со связью. Попробуйте ещё раз.',
-              animate: true,
-            },
-          ])
+          await applyResult({
+            reply: streamed.trim() || 'Готово.',
+            actions: meta?.actions ?? [],
+            openPanel: meta?.openPanel ?? null,
+            settingsChanged: meta?.settingsChanged ?? false,
+            pending: meta?.pending ?? null,
+            source: meta?.source ?? 'ai',
+          })
+        } catch (err) {
+          if (
+            reqRef.current !== token ||
+            (err instanceof DOMException && err.name === 'AbortError')
+          ) {
+            return
+          }
+          // Streaming failed — fall back to the one-shot server action so the
+          // console never dead-ends (also covers no-JS-stream environments).
+          try {
+            const res = await aiAssistantAction(historyTurns)
+            if (reqRef.current !== token) return
+            await applyResult(res)
+          } catch {
+            if (reqRef.current !== token) return
+            toast.error('Не удалось получить ответ. Попробуйте ещё раз.')
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === asstId
+                  ? {
+                      ...m,
+                      content:
+                        'Что-то пошло не так со связью. Попробуйте ещё раз.',
+                      streaming: false,
+                    }
+                  : m,
+              ),
+            )
+          }
         } finally {
-          if (reqRef.current === token) setLoading(false)
+          if (reqRef.current === token) {
+            setLoading(false)
+            abortRef.current = null
+          }
         }
       })()
     },
     [messages, loading, refreshSettings, refreshLessons, speak],
   )
 
-  // Stop a running generation: invalidate the in-flight token and drop loading.
+  // Stop a running generation: invalidate the in-flight token, abort the fetch,
+  // and drop loading. The half-streamed bubble stays as-is.
   const stop = useCallback(() => {
     reqRef.current++
+    abortRef.current?.abort()
+    abortRef.current = null
     setLoading(false)
+    setMessages((prev) =>
+      prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+    )
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel()
     }
@@ -407,6 +513,115 @@ export function AiConsole({
       }
     },
     [refreshSettings],
+  )
+
+  // Confirm a guarded high-impact action (disable / max aggressiveness). On
+  // success the pending card collapses and the change is applied server-side.
+  const confirmPending = useCallback(
+    async (msgId: string, pending: PendingConfirmation) => {
+      try {
+        const res = await aiConfirmPendingAction(pending)
+        if (!res.ok) {
+          toast.error('Не удалось применить изменение.')
+          return
+        }
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId
+              ? {
+                  ...m,
+                  pending: null,
+                  actions: [
+                    ...(m.actions ?? []),
+                    ...(res.action ? [res.action] : []),
+                  ],
+                }
+              : m,
+          ),
+        )
+        await refreshSettings()
+        toast.success('Готово.')
+      } catch {
+        toast.error('Не удалось применить изменение.')
+      }
+    },
+    [refreshSettings],
+  )
+
+  // Dismiss a pending confirmation without applying it.
+  const dismissPending = useCallback((msgId: string) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, pending: null } : m)),
+    )
+  }, [])
+
+  // Dismiss a preset confirmation card without applying it.
+  const dismissPresetConfirm = useCallback((msgId: string) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, presetConfirm: null } : m)),
+    )
+  }, [])
+
+  // Apply a one-tap preset (e.g. «Режим распродажи») — batches several settings
+  // in one server call, then shows a receipt turn with an Undo.
+  const applyPreset = useCallback(
+    async (preset: ConsolePreset, confirmed = false) => {
+      if (loading) return
+
+      // High-impact presets («Максимальный дожим») ask first, mirroring the
+      // guarded agent actions — no silent jump to maximum pressure.
+      if (preset.confirm && !confirmed) {
+        setMessages((prev) => [
+          ...prev,
+          { id: nextId(), role: 'user', content: `Включи «${preset.name}»` },
+          {
+            id: nextId(),
+            role: 'assistant',
+            content: `«${preset.name}» — это предельный дожим до документов. Подтвердите, что включаем.`,
+            presetConfirm: preset,
+          },
+        ])
+        return
+      }
+
+      const msgId = nextId()
+      setMessages((prev) => [
+        ...prev,
+        { id: nextId(), role: 'user', content: `Включи «${preset.name}»` },
+        {
+          id: msgId,
+          role: 'assistant',
+          content: `Применяю пресет «${preset.name}»…`,
+          streaming: true,
+        },
+      ])
+      try {
+        const res = await aiApplyPresetAction(preset.id)
+        if (!res.ok) {
+          toast.error('Не удалось применить пресет.')
+          setMessages((prev) => prev.filter((m) => m.id !== msgId))
+          return
+        }
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId
+              ? {
+                  ...m,
+                  content: `Готово — включил «${preset.name}». ${presetSummary(preset)}`,
+                  actions: res.actions,
+                  streaming: false,
+                }
+              : m,
+          ),
+        )
+        await refreshSettings()
+        toast.success(`Пресет «${preset.name}» применён.`)
+      } catch {
+        toast.error('Не удалось применить пресет.')
+        setMessages((prev) => prev.filter((m) => m.id !== msgId))
+      }
+    },
+    [loading, refreshSettings],
   )
 
   // Instant panel open from a quick chip — no model call, added as a turn so the
@@ -496,6 +711,26 @@ export function AiConsole({
           {messages.map((m) => (
             <div key={m.id} className="flex flex-col gap-3">
               <MessageBubble message={m} />
+              {m.pending ? (
+                <PendingCard
+                  detail={m.pending.detail}
+                  label={m.pending.label}
+                  onConfirm={() => confirmPending(m.id, m.pending!)}
+                  onDismiss={() => dismissPending(m.id)}
+                />
+              ) : null}
+              {m.presetConfirm ? (
+                <PendingCard
+                  detail={presetSummary(m.presetConfirm)}
+                  label={`Включить «${m.presetConfirm.name}»`}
+                  onConfirm={() => {
+                    const preset = m.presetConfirm!
+                    dismissPresetConfirm(m.id)
+                    void applyPreset(preset, true)
+                  }}
+                  onDismiss={() => dismissPresetConfirm(m.id)}
+                />
+              ) : null}
               {m.actions && m.actions.length > 0 ? (
                 <ActionReceipts
                   actions={m.actions}
@@ -519,7 +754,6 @@ export function AiConsole({
               ) : null}
             </div>
           ))}
-          {loading ? <ThinkingBubble /> : null}
           {suggestions.length > 0 ? (
             <Suggestions items={suggestions} onPick={send} />
           ) : null}
@@ -529,7 +763,9 @@ export function AiConsole({
         <EmptyHero
           lessonCount={lessonCount}
           briefing={briefing}
+          weekly={weekly}
           onPick={send}
+          onApplyPreset={applyPreset}
         />
       )}
 
@@ -782,7 +1018,24 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           )}
         >
           {message.role === 'assistant' ? (
-            <AssistantText text={message.content} animate={!!message.animate} />
+            message.streaming ? (
+              // Live token stream: render raw text with a blinking caret; a
+              // still-empty stream shows animated dots so it never looks stuck.
+              message.content ? (
+                <p className="whitespace-pre-wrap text-pretty leading-relaxed">
+                  {message.content}
+                  <span className="ml-0.5 inline-block h-4 w-0.5 -translate-y-px animate-pulse bg-foreground/70 align-middle" />
+                </p>
+              ) : (
+                <span className="flex gap-1" aria-label="Печатает">
+                  <Dot delay="0ms" />
+                  <Dot delay="150ms" />
+                  <Dot delay="300ms" />
+                </span>
+              )
+            ) : (
+              <AssistantText text={message.content} animate={!!message.animate} />
+            )
           ) : (
             <p className="whitespace-pre-wrap text-pretty leading-relaxed">
               {message.content}
@@ -837,22 +1090,6 @@ function AssistantText({
   }, [text, animate])
   return (
     <p className="whitespace-pre-wrap text-pretty leading-relaxed">{shown}</p>
-  )
-}
-
-/** The "thinking" placeholder while the agent runs. */
-function ThinkingBubble() {
-  return (
-    <div className="flex items-center gap-2.5 duration-300 animate-in fade-in">
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <Sparkles className="size-4" />
-      </span>
-      <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-muted px-4 py-3">
-        <Dot delay="0ms" />
-        <Dot delay="150ms" />
-        <Dot delay="300ms" />
-      </div>
-    </div>
   )
 }
 
@@ -1105,14 +1342,147 @@ function BriefingCard({
   )
 }
 
+/** 7-day activity snapshot of the AI manager. */
+function WeeklyCard({ weekly }: { weekly: AiWeeklyStats }) {
+  const items: { label: string; value: number; hint?: boolean }[] = [
+    { label: 'ответов', value: weekly.repliesSent },
+    { label: 'диалогов', value: weekly.activeDialogs },
+    { label: 'передач менеджеру', value: weekly.handoffs },
+    { label: 'эскалаций', value: weekly.escalations },
+    { label: 'ошибок', value: weekly.errors, hint: weekly.errors > 0 },
+  ]
+  const empty = items.every((i) => i.value === 0)
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-muted/40 p-3.5">
+      <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <BarChart3 className="size-3.5" />
+        ИИ-менеджер за 7 дней
+      </p>
+      {empty ? (
+        <p className="text-sm text-muted-foreground text-pretty">
+          За последнюю неделю ИИ-менеджер ещё не работал с диалогами.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          {items.map((i) => (
+            <div
+              key={i.label}
+              className="flex flex-col items-center gap-0.5 rounded-lg border border-border bg-card p-2.5 text-center"
+            >
+              <span
+                className={cn(
+                  'text-xl font-semibold tabular-nums',
+                  i.hint ? 'text-amber-500' : 'text-foreground',
+                )}
+              >
+                {i.value}
+              </span>
+              <span className="text-[11px] leading-tight text-muted-foreground">
+                {i.label}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One-tap presets that batch several settings into a named mode. */
+function PresetRow({ onApply }: { onApply: (preset: ConsolePreset) => void }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <Gauge className="size-3.5" />
+        Быстрые режимы
+      </p>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {CONSOLE_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            onClick={() => onApply(preset)}
+            className="flex flex-col gap-1 rounded-lg border border-border p-2.5 text-left transition-colors hover:border-primary/40 hover:bg-muted/60"
+          >
+            <span className="text-sm font-medium text-pretty">
+              {preset.name}
+            </span>
+            <span className="text-xs text-muted-foreground text-pretty">
+              {preset.description}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Confirm/Cancel card for a guarded high-impact action the assistant proposed
+ * but won't run until approved (disable AI, max aggressiveness).
+ */
+function PendingCard({
+  detail,
+  label,
+  onConfirm,
+  onDismiss,
+}: {
+  detail: string
+  label: string
+  onConfirm: () => void
+  onDismiss: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="ml-9 flex flex-col gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3.5 duration-300 animate-in fade-in slide-in-from-top-1">
+      <p className="flex items-start gap-2 text-sm text-pretty">
+        <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-500" />
+        <span>{detail}</span>
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          onClick={() => {
+            setBusy(true)
+            onConfirm()
+          }}
+          disabled={busy}
+          className="gap-1.5"
+        >
+          {busy ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Check className="size-4" />
+          )}
+          {label}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onDismiss}
+          disabled={busy}
+          className="gap-1.5"
+        >
+          <X className="size-4" />
+          Отмена
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function EmptyHero({
   lessonCount,
   briefing,
+  weekly,
   onPick,
+  onApplyPreset,
 }: {
   lessonCount: number
   briefing: ConsoleBriefing | null
+  weekly: AiWeeklyStats | null
   onPick: (text: string) => void
+  onApplyPreset: (preset: ConsolePreset) => void
 }) {
   return (
     <Card className="flex flex-col gap-5 p-6 duration-500 animate-in fade-in">
@@ -1133,6 +1503,10 @@ function EmptyHero({
       </div>
 
       {briefing ? <BriefingCard briefing={briefing} onPick={onPick} /> : null}
+
+      {weekly ? <WeeklyCard weekly={weekly} /> : null}
+
+      <PresetRow onApply={onApplyPreset} />
 
       <div className="grid gap-3 sm:grid-cols-3">
         {PROMPT_GROUPS.map((group) => {
