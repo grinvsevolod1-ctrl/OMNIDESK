@@ -149,32 +149,6 @@ export interface SimPersona {
   goal?: string
 }
 
-/**
- * Distilled knowledge the AI extracted from real conversations when the admin
- * pressed "Изучить все диалоги". Doubles as the report shown in the panel AND
- * as extra guidance injected into the generator's prompt.
- */
-export interface LearnedProfile {
-  /** ISO timestamp of the analysis. */
-  learnedAt: string
-  /** How many real dialogues were sampled. */
-  dialogueCount: number
-  /** How many real messages were read. */
-  messageCount: number
-  /** Channel types present in the sample. */
-  channels: string[]
-  /** 2–4 sentence plain-language summary of what was understood. */
-  summary: string
-  /** Observations about tone / emotion of real clients. */
-  toneNotes: string[]
-  /** What clients typically ask about or bring up. */
-  commonTopics: string[]
-  /** Concrete, actionable writing pointers for imitating the real voice. */
-  stylePointers: string[]
-  /** A handful of representative real phrases (anonymised, short). */
-  samplePhrases: string[]
-}
-
 /** Singleton control row (mirrors sim_settings). */
 export interface SimSettings {
   enabled: boolean
@@ -207,8 +181,6 @@ export interface SimSettings {
   repliesTotal: number
   startedAt: string | null
   updatedAt: string
-  /** Latest AI-learned style profile, or null if never run. */
-  learnedProfile: LearnedProfile | null
 
   /* ----------------------------- campaign ------------------------------- */
   /**

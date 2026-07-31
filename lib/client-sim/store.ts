@@ -36,10 +36,6 @@ export {
   deleteSimCorrection,
   countSimCorrections,
   getSimDialogForReview,
-  sampleRealClientLines,
-  sampleRealDialogues,
-  saveLearnedProfile,
-  getLearnedPointersCached,
   invalidateSimCorrectionsCache,
   getSimCorrectionRulesCached,
 } from './learning'

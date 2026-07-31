@@ -1,6 +1,5 @@
 import { query } from '@/lib/db'
 import type {
-  LearnedProfile,
   SimOutcome,
   SimPersona,
   SimSettings,
@@ -36,7 +35,6 @@ export interface SettingsRow {
   replies_total: number
   started_at: string | Date | null
   updated_at: string | Date
-  learned_profile: LearnedProfile | null
   tone: SimTone
   dialogs_per_day: number
   max_concurrent: number
@@ -63,7 +61,6 @@ export function mapSettings(r: SettingsRow): SimSettings {
     repliesTotal: r.replies_total,
     startedAt: r.started_at ? new Date(r.started_at).toISOString() : null,
     updatedAt: new Date(r.updated_at).toISOString(),
-    learnedProfile: r.learned_profile ?? null,
     tone: r.tone ?? 'mixed',
     campaignActive: r.campaign_active ?? false,
     campaignTarget: r.campaign_target ?? 0,
@@ -81,11 +78,9 @@ export function mapSettings(r: SettingsRow): SimSettings {
 export const SETTINGS_COLS_BASE = `enabled, channel_ids, aggression, max_threads,
   spawn_min_sec, spawn_max_sec, reply_min_sec, reply_max_sec,
   next_spawn_at, spawned_total, replies_total, started_at, updated_at`
-// Columns added by later, optional migrations (050: learned_profile,
-// 051: tone, 055: dialogs_per_day, 061: max_concurrent). They may not exist
-// yet on a given DB.
+// Columns added by later, optional migrations (051: tone, 055: dialogs_per_day,
+// 061: max_concurrent). They may not exist yet on a given DB.
 export const OPTIONAL_SETTINGS_COLS = [
-  'learned_profile',
   'tone',
   'dialogs_per_day',
   'max_concurrent',

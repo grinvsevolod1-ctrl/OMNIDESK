@@ -191,7 +191,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     '',
     'ЖЁСТКИЕ ПРАВИЛА ЛИЧНОСТИ (нарушать нельзя):',
     '- Ты ЧЕЛОВЕК. Ты НИКОГДА и ни при каких условиях не признаёшься, что ты бот, ИИ, нейросеть, ассистент или программа.',
-    '- Если клиент прямо спрашивает «ты бот?/это робот?/ты человек?/ии?» — спокойн�� и уверенно отвечай, что ты живой сотрудник (например: «Живой-живой, менеджер компании 🙂 Чем помочь?»), и сразу продолжай вести диалог по делу. Не оправдывайся, не уходи в объяснения.',
+    '- Если клиент прямо спрашивает «ты бот?/это робот?/ты человек?/ии?» — споко��н���� и уверенно отвечай, что ты живой сотрудник (например: «Живой-живой, менеджер компании 🙂 Чем помочь?»), и сразу продолжай вести диалог по делу. Не оправдывайся, не уходи в объяснения.',
     '- Не пиши как робот: без списков-инструкций, без «как я могу помочь вам сегодня», без официоза. Пиши так, как переписываются живые люди.',
     '',
     'КАК ПИСАТЬ (чтобы тебя невозможно было принять за ИИ):',
@@ -894,136 +894,6 @@ export async function detectEscalation(
   }
 }
 
-/** Result of scoring how the AI manager handled one dialogue. */
-export interface ManagerScorecard {
-  /** Overall grade 0..100. */
-  score: number
-  /** One-line verdict. */
-  summary: string
-  /** Bullet lines: what the manager did well. */
-  strengths: string[]
-  /** Bullet lines: what the manager did poorly / missed. */
-  weaknesses: string[]
-  /**
-   * One concrete, reusable lesson distilled from the biggest weakness, ready to
-   * feed back into the brain as a correction. Empty when nothing to learn.
-   */
-  lesson: { situation: string; corrected: string } | null
-}
-
-/**
- * Grade how the AI MANAGER handled a finished dialogue, from the point of view
- * of a demanding sales coach. Produces a 0..100 score, concrete strengths and
- * weaknesses, and ONE distilled lesson from the top weakness that the caller
- * can persist so the brain improves next time (the self-play learning loop).
- * Returns null on any failure so the caller simply skips scoring this dialogue.
- * Dependency-free (raw gateway fetch); model is caller-provided via BrainConfig.
- */
-export async function scoreManagerDialog(
-  history: BrainMessage[],
-  outcome: string,
-  log?: BrainLog,
-  config?: BrainConfig,
-): Promise<ManagerScorecard | null> {
-  const key = process.env.AI_GATEWAY_API_KEY
-  if (!key) return null
-  // Need a real back-and-forth to judge; a one-liner isn't scorable.
-  if (history.filter((m) => m.role === 'manager').length < 2) return null
-
-  const transcript = history
-    .map((m) => `${m.role === 'client' ? 'Клиент' : 'Менеджер'}: ${m.body}`)
-    .join('\n')
-  const model = resolveModel(config)
-
-  try {
-    const res = await fetch(GATEWAY_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Ты строгий тренер по продажам. Ниже переписка менеджера с клиентом (это тренажёр). ' +
-              'Оцени РАБОТУ МЕНЕДЖЕРА: насколько он вёл клиента к цели, отрабатывал возражения, ' +
-              'звучал по-человечески, не сливал и не спугнул. Верни СТРОГО JSON без пояснений: ' +
-              '{"score": <0-100>, "summary": "<одна строка вердикта>", "strengths": ["..."], ' +
-              '"weaknesses": ["..."], "lesson": {"situation": "<когда так происходит>", ' +
-              '"corrected": "<как правильно ответить в следующий раз>"}}. ' +
-              'lesson выведи из САМОГО крупного промаха; если промахов нет — верни "lesson": null. ' +
-              'Пиши по-русски, кратко и конкретно.',
-          },
-          {
-            role: 'user',
-            content: `Исход диалога: ${outcome}\n\nПереписка:\n${transcript}`,
-          },
-        ],
-        temperature: 0.2,
-        max_tokens: 500,
-      }),
-    })
-    if (!res.ok) {
-      log?.({
-        level: 'warn',
-        event: 'score.http_error',
-        message: `Оценка менеджера: HTTP ${res.status}${gatewayStatusHint(res.status)}`,
-        meta: { status: res.status },
-      })
-      return null
-    }
-    const data = (await res.json()) as GatewayResponse
-    const raw = (data.choices?.[0]?.message?.content ?? '').trim()
-    // Tolerate ```json fences the model sometimes adds.
-    const jsonText = raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim()
-    const parsed = JSON.parse(jsonText) as {
-      score?: unknown
-      summary?: unknown
-      strengths?: unknown
-      weaknesses?: unknown
-      lesson?: { situation?: unknown; corrected?: unknown } | null
-    }
-
-    const clampScore = Math.max(
-      0,
-      Math.min(100, Math.round(Number(parsed.score) || 0)),
-    )
-    const toLines = (v: unknown): string[] =>
-      Array.isArray(v)
-        ? v.map((x) => String(x).trim()).filter(Boolean).slice(0, 8)
-        : []
-    const lessonSituation = String(parsed.lesson?.situation ?? '').trim()
-    const lessonCorrected = String(parsed.lesson?.corrected ?? '').trim()
-
-    const card: ManagerScorecard = {
-      score: clampScore,
-      summary: String(parsed.summary ?? '').trim(),
-      strengths: toLines(parsed.strengths),
-      weaknesses: toLines(parsed.weaknesses),
-      lesson:
-        lessonSituation && lessonCorrected
-          ? { situation: lessonSituation, corrected: lessonCorrected }
-          : null,
-    }
-    log?.({
-      level: 'info',
-      event: 'score.done',
-      message: `Оценка менеджера: ${card.score}/100 — ${card.summary || 'без вердикта'}`,
-      meta: { score: card.score },
-    })
-    return card
-  } catch (err) {
-    console.warn(
-      '[manager-brain] scoring failed:',
-      err instanceof Error ? err.message : String(err),
-    )
-    return null
-  }
-}
-
 /**
  * Learn an account's real selling STYLE from full manager↔client transcripts
  * and distill it into a compact bullet-point playbook (how this account's
@@ -1058,7 +928,7 @@ export async function distillPlaybookFromDialogs(
           {
             role: 'system',
             content:
-              'Ты изучаешь реальные переписки менеджеров этой компании с клиентами и выводишь свод ' +
+              'Ты изучаешь реальные переписки менеджеров этой ��омпании с клиентами и выводишь свод ' +
               'правил (плейбук), КАК менеджеры ведут клиента к сделке. Сосредоточься на: как ' +
               'открывают диалог, какие вопросы задают, как отрабатывают возражения и сомнения, как ' +
               'настойчиво (но по-человечески) доводят клиента до готовности прислать документы/данные, ' +

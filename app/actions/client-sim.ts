@@ -12,7 +12,6 @@ import {
 import { getSimStatus } from '@/lib/client-sim/status'
 import { makePersona } from '@/lib/client-sim/content'
 import { generateReply } from '@/lib/client-sim/generate'
-import { analyzeDialogues, LearnError } from '@/lib/client-sim/learn'
 import {
   addSimCorrection,
   adoptConversations,
@@ -28,7 +27,6 @@ import {
   listUsableChannels,
   releaseConversations,
   resetSimulation,
-  sampleRealClientLines,
   startCampaign,
   stopCampaign,
   updateSettings,
@@ -43,7 +41,7 @@ import {
   type AiLogLevel,
   type AiLogRow,
 } from '@/lib/data/ai-log'
-import type { LearnedProfile, SimPersona, SimStatus, SimTone } from '@/lib/client-sim/types'
+import type { SimPersona, SimStatus, SimTone } from '@/lib/client-sim/types'
 import type { ChannelType } from '@/lib/types'
 
 /**
@@ -181,32 +179,6 @@ export async function simStopCampaignAction(input?: {
   }
 }
 
-/* ----------------------------- learning -------------------------------- */
-
-export type SimLearnResult =
-  | { ok: true; profile: LearnedProfile }
-  | { ok: false; error: string }
-
-/**
- * Analyze all real dialogues and persist a learned style profile. Returns a
- * tagged result so the UI can show a friendly message instead of a thrown
- * error (e.g. "not enough dialogues" / "no AI key").
- */
-export async function simLearnAction(): Promise<SimLearnResult> {
-  await guard()
-  try {
-    const profile = await analyzeDialogues()
-    revalidatePath(ADMIN_PATH)
-    return { ok: true, profile }
-  } catch (err) {
-    if (err instanceof LearnError) return { ok: false, error: err.message }
-    return {
-      ok: false,
-      error: `Не удалось изучить диалоги: ${err instanceof Error ? err.message : String(err)}`,
-    }
-  }
-}
-
 /* -------------------- adopt existing / real dialogues ------------------- */
 /*
  * The simulator normally only continues conversations it created itself. These
@@ -319,12 +291,10 @@ export async function simTestStartAction(input: {
       : Math.round((Math.random() * 100 + Math.random() * 100) / 2)
   const tone = input.tone ?? SIM_TONES[Math.floor(Math.random() * SIM_TONES.length)]
   const persona = makePersona(input.channelType, aggression, tone)
-  const referenceLines = await sampleRealClientLines(input.channelType)
   const opening = await generateReply({
     persona,
     history: [],
     behavior: 'open',
-    referenceLines,
   })
   // No template fallback — surface the failure so the UI shows a clear toast.
   if (!opening) {
@@ -347,8 +317,7 @@ export async function simTestReplyAction(input: {
     persona.style.profanity,
     clientTurns,
   )
-  const referenceLines = await sampleRealClientLines(persona.channelType)
-  const reply = await generateReply({ persona, history, behavior, referenceLines })
+  const reply = await generateReply({ persona, history, behavior })
   // No template fallback — surface the failure so the UI shows a clear toast.
   if (!reply) {
     throw new Error('AI unavailable: не удалось сгенерировать реплику клиента')

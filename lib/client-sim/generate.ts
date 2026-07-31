@@ -4,7 +4,6 @@ import { applyStyle } from './content'
 import {
   getGlobalRecentLines,
   getGlobalRecentOpeners,
-  getLearnedPointersCached,
   getSimCorrectionRulesCached,
   rememberGlobalLine,
 } from './store'
@@ -66,10 +65,6 @@ interface GenArgs {
   persona: SimPersona
   history: Array<{ role: 'manager' | 'client'; body: string }>
   behavior: Behavior
-  /** Real client lines sampled from past dialogues, used as a style reference. */
-  referenceLines?: string[]
-  /** Distilled pointers from the "learn from all dialogues" run. */
-  learnedPointers?: string[]
   /**
    * Live one-line mood/state description computed by the engine from the
    * conversation so far (e.g. «раздражён: менеджер тянет и просит предоплату»).
@@ -82,29 +77,8 @@ interface GenArgs {
    * callers that don't have them fall back to the cached loader.
    */
   corrections?: string[]
-}
-
-function referenceBlock(lines: string[] | undefined): string {
-  if (!lines || lines.length === 0) return ''
-  // A handful of real examples is enough to anchor the voice without letting
-  // the model copy them verbatim.
-  const sample = lines.slice(0, 10).map((l) => `- ${l}`).join('\n')
-  return [
-    '',
-    'ВОТ КАК РЕАЛЬНЫЕ ЛЮДИ ПИСАЛИ В ЭТОТ КАНАЛ (это образец ТОЛЬКО ЖИВОГО СТИЛЯ — впитай манеру, длину, тон, ошибки; НЕ копируй дословно, НЕ повторяй эти фразы):',
-    sample,
-    'ВАЖНО: бери отсюда ТОЛЬКО стиль и манеру письма. О ЧЁМ эти примеры — НЕ ВАЖНО и к тебе не относится. НЕ перенимай их тему: твой разговор всегда только про работу/вакансию, на которую ты откликнулся, а не про то, что случайно обсуждали в этих примерах.',
-  ].join('\n')
-}
-
-function learnedBlock(pointers: string[] | undefined): string {
-  if (!pointers || pointers.length === 0) return ''
-  const list = pointers.slice(0, 12).map((p) => `- ${p}`).join('\n')
-  return [
-    '',
-    'ВЫВОДЫ ИЗ АНАЛИЗА РЕАЛЬНЫХ ДИАЛОГОВ (это про ��АНЕРУ и ПОВЕДЕНИЕ — следуй им, чтобы звучать правдоподобно; тему разговора они НЕ задают):',
-    list,
-  ].join('\n')
+  /** Content pool config (vacancies, cities, etc.) — from sim_settings. */
+  contentConfig?: SimContentConfig
 }
 
 function avoidBlock(avoidLines: string[] | undefined): string {
@@ -268,7 +242,7 @@ function mediaBlock(channelType: string): string {
   const voice = channelType === 'livechat' ? '' : ', иногда голосовые'
   return [
     '',
-    'ПРО ВЛОЖ��НИЯ (ты в обычном мессенджере, но файлы прикреплять не умеешь — только текст): если по ходу разговора это уместно, ЕСТЕСТВЕННО упомяни медиа словами, как живой человек — например «скинул фото паспорта в лс», «щас пришлю скрин», «не могу голосовое сейчас слушать, я на работе», «а можешь фоткой показать?». Не делай этого в каждом сообщении и не описывай несуществующие картинки — только короткое живое упоминание там, где это к месту' +
+    'ПРО ВЛ��Ж��НИЯ (ты в обычном мессенджере, но файлы прикреплять не умеешь — только текст): если по ходу разговора это уместно, ЕСТЕСТВЕННО упомяни медиа словами, как живой человек — например «скинул фото паспорта в лс», «щас пришлю скрин», «не могу голосовое сейчас слушать, я на работе», «а можешь фоткой показать?». Не делай этого в каждом сообщении и не описывай несуществующие картинки — только короткое живое упоминание там, где это к месту' +
       voice +
       '.',
   ].join('\n')
@@ -328,8 +302,6 @@ function timeBlock(): string {
 function systemPrompt(
   persona: SimPersona,
   behavior: Behavior,
-  referenceLines?: string[],
-  learnedPointers?: string[],
   ownLines?: string[],
   moodHint?: string,
   lengthHint?: string,
@@ -389,8 +361,6 @@ function systemPrompt(
     soft
       ? 'Менеджер часто предлагает сомнительную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ, в рамках своего характера: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежливый отказ — но всегда корректно, без грубости и мата.'
       : 'Менеджер часто предлагает сомнительную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ, в рамках своего характера: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
-    referenceBlock(referenceLines),
-    learnedBlock(learnedPointers),
     avoidBlock(ownLines),
     openersBlock(swarmOpeners),
     '',
@@ -538,120 +508,103 @@ function stripSelfCorrection(text: string): string {
  * duplicate output triggers a hotter retry before we accept it.
  */
 /* -----------------------------------------------------------------------
- * Web-form opening template (80 % of first messages)
+ * Web-form opening template
  * -----------------------------------------------------------------------
- * Real traffic to this product largely comes from job-site lead-capture
- * forms: a visitor fills in their data, an AI matcher picks a vacancy, and
- * the platform sends the result to a messenger. The opening message that
- * arrives to the manager therefore has a very specific structure, shown in
- * the sample below. Reproducing this template 80 % of the time makes the
- * simulator mirror the actual traffic distribution instead of inventing a
- * free-form first line every single time.
+ * Every simulated client opens with EXACTLY this template — matching the
+ * real AI-match notification Thunders Group sends to a messenger after the
+ * candidate fills in the web form. Only vacancy title, city, salary, work
+ * schedule, age and match-% vary. The template is never passed through
+ * applyStyle: the opening message must arrive clean and error-free, exactly
+ * like the real platform notification. The remaining 20 % of opens fall
+ * through to the LLM path for natural variety.
  *
- * The remaining 20 % falls through to the normal LLM path so the swarm
- * doesn't become 100 % identical in its openers.
+ * All content pools (vacancies, cities, schedule types, match range) are
+ * driven by SimContentConfig so they can be edited from the god-panel.
  * -----------------------------------------------------------------------
  */
 
-const WF_SITES = [
-  'Thunders Group',
-  'JobFlow',
-  'WorkMatch',
-  'CareerScan',
-  'ProfiJob',
-  'RapidHire',
-  'SmartRecruit',
-]
+export interface WFVacancy {
+  title: string
+  salary: string
+}
 
-const WF_VACANCIES: Array<{ title: string; salary: string; schedule: string }> = [
-  { title: 'Кладовщик-комплектовщик',     salary: 'от 75 000 ₽',  schedule: 'Сменный график' },
-  { title: 'Оператор склада',              salary: 'от 68 000 ₽',  schedule: '5/2' },
-  { title: 'Грузчик-экспедитор',           salary: 'от 65 000 ₽',  schedule: '2/2' },
-  { title: 'Комплектовщик заказов',        salary: 'от 72 000 ₽',  schedule: 'Сменный график' },
-  { title: 'Водитель-курьер',              salary: 'от 85 000 ₽',  schedule: 'Гибкий' },
-  { title: 'Упаковщик',                   salary: 'от 58 000 ₽',  schedule: '2/2' },
-  { title: 'Оператор сортировочной линии', salary: 'от 70 000 ₽',  schedule: 'Сменный' },
-  { title: 'Стикеровщик-упаковщик',        salary: 'до 80 000 ₽',  schedule: '5/2' },
-  { title: 'Приёмщик товара',             salary: 'от 74 000 ₽',  schedule: '2/2' },
-  { title: 'Менеджер по продажам',         salary: 'от 90 000 ₽',  schedule: 'Офис 5/2' },
-  { title: 'Специалист поддержки',         salary: 'от 62 000 ₽',  schedule: 'Удалённо' },
-  { title: 'Торговый представитель',       salary: 'от 80 000 ₽',  schedule: 'Разъездной' },
-  { title: 'Разнорабочий',                salary: 'от 60 000 ₽',  schedule: '2/2' },
-  { title: 'Помощник повара',              salary: 'от 55 000 ₽',  schedule: 'Сменный' },
-  { title: 'Фасовщик',                    salary: 'от 60 000 ₽',  schedule: '2/2' },
-]
+/** Content config — driven from sim_settings.content_config (god-panel). */
+export interface SimContentConfig {
+  siteName: string
+  vacancies: WFVacancy[]
+  cities: string[]
+  /** Allowed work-schedule labels, e.g. ["Удалённо", "Полный день", "Сменный"] */
+  scheduleTypes: string[]
+  matchPctMin: number
+  matchPctMax: number
+}
 
-const WF_CITIES = [
-  'Москва', 'Санкт-Петербург', 'Екатеринбург', 'Новосибирск', 'Казань',
-  'Нижний Новгород', 'Челябинск', 'Краснодар', 'Ростов-на-Дону', 'Пермь',
-  'Красноярск', 'Самара', 'Уфа', 'Воронеж', 'Омск',
-]
-
-/** Variants for different tones / registers — picked by persona tone. */
-const WF_TEMPLATES: Array<(
-  site: string, name: string, age: number,
-  vacancy: string, city: string, salary: string, schedule: string,
-  match: number,
-) => string> = [
-  // Formal / polite
-  (site, _name, age, vacancy, city, salary, schedule, match) =>
-    `Здравствуйте! Я прошёл ИИ-подбор на сайте ${site}. Мне ${age} лет. Для меня подобрали вакансию: «${vacancy}» (${city}, ${salary}, ${schedule}). Совпадение — ${match}%. Подскажите, пожалуйста, детали — вакансия ещё актуальна?`,
-
-  // Slightly shorter / neutral
-  (site, _name, age, vacancy, city, salary, schedule, match) =>
-    `Добрый день. Прошёл подбор на ${site}, мне ${age}. Вакансия «${vacancy}», ${city}, ${salary}. Совпадение ${match}%. Актуально?`,
-
-  // Casual
-  (site, _name, age, vacancy, city, salary, schedule, match) =>
-    `Привет! Заполнял анкету на ${site}, мне ${age}. Подобрали «${vacancy}» — ${city}, ${salary}, ${schedule}. Совпадение ${match}%. Ещё берёте?`,
-
-  // Very short / rushed
-  (_site, _name, age, vacancy, city, salary, _schedule, match) =>
-    `Здравствуйте. Мне ${age}, прошёл ии-подбор, вакансия ${vacancy} (${city}, ${salary}), совпадение ${match}%. Актуально?`,
-
-  // With name mention
-  (site, name, age, vacancy, city, salary, schedule, match) =>
-    `Здравствуйте, меня зовут ${name}. Прошёл подбор на сайте ${site}, мне ${age} лет. Предложили «${vacancy}» в ${city} (${salary}, ${schedule}), совпадение ${match}%. Интересует, напишите подробнее.`,
-
-  // More conversational / informal
-  (site, _name, age, vacancy, city, salary, _schedule, match) =>
-    `Привет! Мне ${age}, заполнял форму на ${site}. Показали вакансию «${vacancy}» в ${city}, ${salary}, совпадение ${match}%. Расскажите подробнее, актуально ещё?`,
-]
+/** Fallback used when no DB config is present yet. */
+export const SIM_CONTENT_DEFAULTS: SimContentConfig = {
+  siteName: 'Thunders Group',
+  vacancies: [
+    { title: 'Менеджер по продажам',              salary: 'от 90 000 ₽' },
+    { title: 'Специалист технической поддержки',  salary: 'от 90 000 ₽' },
+    { title: 'Торговый представитель',            salary: 'от 80 000 ₽' },
+    { title: 'Кладовщик-комплектовщик',           salary: 'от 75 000 ₽' },
+    { title: 'Оператор склада',                   salary: 'от 68 000 ₽' },
+    { title: 'Грузчик-экспедитор',                salary: 'от 65 000 ₽' },
+    { title: 'Водитель-курьер',                   salary: 'от 85 000 ₽' },
+    { title: 'Помощник менеджера',                salary: 'от 60 000 ₽' },
+    { title: 'Приёмщик товара',                   salary: 'от 74 000 ₽' },
+    { title: 'Разнорабочий',                      salary: 'от 60 000 ₽' },
+  ],
+  cities: [
+    'Москва', 'Санкт-Петербург', 'Екатеринбург', 'Новосибирск', 'Казань',
+    'Нижний Новгород', 'Челябинск', 'Краснодар', 'Ростов-на-Дону', 'Пермь',
+    'Красноярск', 'Самара', 'Уфа', 'Воронеж', 'Омск',
+  ],
+  scheduleTypes: ['Удалённо', 'Полный день', 'Сменный график'],
+  matchPctMin: 85,
+  matchPctMax: 97,
+}
 
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
 /**
- * Returns a filled-in web-form style opening message, already processed
- * through applyStyle so it picks up the persona's casing / punctuation /
- * typo profile. Returns null when the 20 % LLM path was rolled.
+ * Returns a filled-in web-form opening message using the single canonical
+ * Thunders Group template. The message is returned verbatim — no applyStyle,
+ * no typos, no casing mangling. Returns null for the 20 % LLM-path roll.
  */
-function rollWebFormOpening(persona: SimPersona): string | null {
+function rollWebFormOpening(
+  persona: SimPersona,
+  cfg: SimContentConfig = SIM_CONTENT_DEFAULTS,
+): string | null {
   // 20 % → fall through to LLM generation
   if (Math.random() > 0.80) return null
 
-  const site    = pick(WF_SITES)
-  const vac     = pick(WF_VACANCIES)
-  const city    = pick(WF_CITIES)
-  const match   = 85 + Math.floor(Math.random() * 13)   // 85–97 %
-  const tpl     = pick(WF_TEMPLATES)
-  const raw     = tpl(site, persona.name, persona.age, vac.title, city, vac.salary, vac.schedule, match)
+  const vac      = pick(cfg.vacancies)
+  const city     = pick(cfg.cities)
+  const schedule = pick(cfg.scheduleTypes)
+  const match    = cfg.matchPctMin + Math.floor(
+    Math.random() * (cfg.matchPctMax - cfg.matchPctMin + 1),
+  )
 
-  // Run through the persona's style (casing, typos, punctuation) so the
-  // template doesn't stand out as "too clean" compared to later messages.
-  return applyStyle(raw, persona.style)
+  return (
+    `Здравствуйте! Я прошёл ИИ-подбор на сайте ${cfg.siteName}. ` +
+    `Мне ${persona.age} лет. ` +
+    `Для меня подобрали вакансию: «${vac.title}» (${city}, ${vac.salary}, ${schedule}). ` +
+    `Совпадение — ${match}%. ` +
+    `Подскажите, пожалуйста, детали — вакансия ещё актуальна?`
+  )
 }
 
 export async function generateReply(args: GenArgs): Promise<string | null> {
-  const { persona, history, behavior, referenceLines } = args
+  const { persona, history, behavior } = args
 
   // ------------------------------------------------------------------
   // Web-form opening: 80 % of first messages use the lead-capture
   // template instead of LLM generation (mirrors real traffic pattern).
   // ------------------------------------------------------------------
   if (behavior === 'open' && history.length === 0) {
-    const tplOpening = rollWebFormOpening(persona)
+    const tplOpening = rollWebFormOpening(persona, args.contentConfig)
     if (tplOpening) {
       rememberGlobalLine(tplOpening)
       return tplOpening
@@ -684,10 +637,6 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
 
   if (aiConfigured()) {
     try {
-      // Pull in whatever the last "learn" run distilled (cached, cheap). Falls
-      // back to the caller-provided pointers if present.
-      const learnedPointers =
-        args.learnedPointers ?? (await getLearnedPointersCached())
       // Strict admin corrections (cached, cheap). Always applied.
       const corrections =
         args.corrections ?? (await getSimCorrectionRulesCached())
@@ -711,8 +660,6 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
       const system = systemPrompt(
         persona,
         behavior,
-        referenceLines,
-        learnedPointers,
         avoidLines,
         args.moodHint,
         lengthHint,

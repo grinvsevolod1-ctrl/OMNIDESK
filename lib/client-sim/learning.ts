@@ -1,14 +1,10 @@
 /**
- * Simulator learning & training-data layer, extracted from the client-sim store
- * monolith and re-exported from it for backward compatibility. Covers admin
- * 'here you're wrong' corrections, real-dialogue style sampling, the learning
- * corpus, and the learned-profile / correction-rule in-process caches consumed
- * by the generator. Depends only on the DB layer and shared types.
+ * Simulator corrections layer. Covers admin 'here you're wrong' corrections
+ * and the correction-rule in-process cache consumed by the generator.
+ * Depends only on the DB layer and shared types.
  */
 
 import { query } from '@/lib/db'
-import type { ChannelType } from '@/lib/types'
-import type { LearnedProfile } from './types'
 
 /* ---------------------- simulator training corrections ------------------ */
 /*
@@ -163,159 +159,6 @@ export async function getSimDialogForReview(
     body: r.body,
     createdAt: new Date(r.created_at).toISOString(),
   }))
-}
-
-/* ----------------------- real-dialogue style reference ------------------ */
-/*
- * The bot studies how ACTUAL people wrote to managers and mimics that voice.
- * We sample short, genuine inbound lines per channel — explicitly excluding the
- * bot's own threads (sim_threads) so it never learns from itself — and cache
- * them in-process so generation stays cheap.
- */
-
-const REF_TTL_MS = 10 * 60_000
-const refCache = new Map<string, { lines: string[]; expires: number }>()
-
-/**
- * Return up to `limit` real client message samples for a channel type, freshly
- * randomised and cached for a few minutes. Filters out media placeholders,
- * links, over-long paragraphs and anything from a simulated thread.
- */
-export async function sampleRealClientLines(
-  channelType: ChannelType,
-  limit = 12,
-): Promise<string[]> {
-  const key = `${channelType}:${limit}`
-  const hit = refCache.get(key)
-  if (hit && hit.expires > Date.now()) return hit.lines
-
-  let lines: string[] = []
-  try {
-    const rows = await query<{ body: string }>(
-      `SELECT m.body
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-        WHERE m.direction = 'in'
-          AND c.channel_type = $1
-          AND char_length(m.body) BETWEEN 2 AND 160
-          AND m.body !~ '^\\['              -- skip "[фото]" / "[файл]" placeholders
-          AND m.body !~* 'https?://'        -- skip links
-          AND m.conversation_id NOT IN (SELECT conversation_id FROM sim_threads)
-        ORDER BY random()
-        LIMIT $2`,
-      [channelType, Math.max(1, limit)],
-    )
-    lines = rows.map((r) => r.body.replace(/\s+/g, ' ').trim()).filter(Boolean)
-  } catch (err) {
-    console.log(
-      '[client-sim] reference sampling failed:',
-      err instanceof Error ? err.message : String(err),
-    )
-  }
-
-  refCache.set(key, { lines, expires: Date.now() + REF_TTL_MS })
-  return lines
-}
-
-/* --------------------------- learning corpus ---------------------------- */
-/*
- * "Изучить все диалоги": read whole real dialogues (client + manager turns) so
- * the analyzer can understand not just isolated phrases but the flow of a real
- * conversation. Bot-driven threads are excluded so it only studies humans.
- */
-
-export interface CorpusDialogue {
-  channelType: string
-  lines: Array<{ role: 'client' | 'manager'; body: string }>
-}
-
-/**
- * Sample up to `maxDialogues` real conversations that have at least a couple of
- * messages, returning their transcripts (trimmed to `maxLinesPerDialogue`).
- */
-export async function sampleRealDialogues(
-  maxDialogues = 40,
-  maxLinesPerDialogue = 12,
-): Promise<CorpusDialogue[]> {
-  const convs = await query<{ id: string; channel_type: string }>(
-    `SELECT c.id, c.channel_type
-       FROM conversations c
-      WHERE c.id NOT IN (SELECT conversation_id FROM sim_threads)
-        AND EXISTS (
-          SELECT 1 FROM messages m
-           WHERE m.conversation_id = c.id AND m.direction = 'in'
-        )
-      ORDER BY c.last_message_at DESC NULLS LAST
-      LIMIT $1`,
-    [Math.max(1, maxDialogues)],
-  )
-  if (convs.length === 0) return []
-
-  const out: CorpusDialogue[] = []
-  for (const c of convs) {
-    const msgs = await query<{ direction: 'in' | 'out'; body: string }>(
-      `SELECT direction, body
-         FROM messages
-        WHERE conversation_id = $1
-          AND char_length(body) BETWEEN 1 AND 400
-          AND body !~ '^\\['
-        ORDER BY created_at ASC
-        LIMIT $2`,
-      [c.id, Math.max(2, maxLinesPerDialogue)],
-    )
-    const lines = msgs
-      .map((m) => ({
-        role: (m.direction === 'in' ? 'client' : 'manager') as 'client' | 'manager',
-        body: m.body.replace(/\s+/g, ' ').trim(),
-      }))
-      .filter((l) => l.body)
-    if (lines.some((l) => l.role === 'client')) {
-      out.push({ channelType: c.channel_type, lines })
-    }
-  }
-  return out
-}
-
-/** Persist the latest learned profile onto the singleton settings row. */
-export async function saveLearnedProfile(profile: LearnedProfile): Promise<void> {
-  await query(
-    `UPDATE sim_settings
-        SET learned_profile = $1::jsonb, updated_at = now()
-      WHERE id = true`,
-    [JSON.stringify(profile)],
-  )
-  // Refresh the generator cache immediately.
-  learnedCache = { pointers: buildPointers(profile), expires: Date.now() + LEARN_TTL_MS }
-}
-
-/* -------- learned-profile cache consumed by the generator ---------------- */
-
-const LEARN_TTL_MS = 5 * 60_000
-let learnedCache: { pointers: string[]; expires: number } | null = null
-
-function buildPointers(p: LearnedProfile | null): string[] {
-  if (!p) return []
-  // The most directly actionable signals for imitation.
-  return [...p.stylePointers, ...p.toneNotes].filter(Boolean).slice(0, 12)
-}
-
-/**
- * Style pointers distilled by the last "learn" run, for injection into the
- * generator prompt. Cached in-process and refreshed lazily from the DB.
- */
-export async function getLearnedPointersCached(): Promise<string[]> {
-  if (learnedCache && learnedCache.expires > Date.now()) return learnedCache.pointers
-  let pointers: string[] = []
-  try {
-    const rows = await query<{ learned_profile: LearnedProfile | null }>(
-      `SELECT learned_profile FROM sim_settings WHERE id = true LIMIT 1`,
-    )
-    pointers = buildPointers(rows[0]?.learned_profile ?? null)
-  } catch {
-    pointers = []
-  }
-  learnedCache = { pointers, expires: Date.now() + LEARN_TTL_MS }
-  return pointers
 }
 
 // Admin corrections change rarely; a short cache keeps them out of the hot
