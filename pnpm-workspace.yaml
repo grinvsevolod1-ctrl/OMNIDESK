@@ -1,3 +1,7 @@
+packages:
+  - .
+  - worker
+
 # pnpm 10.16+ reads build-allow settings from here, not from package.json.
 # These native packages are permitted to run their install/build scripts.
 onlyBuiltDependencies:
@@ -5,7 +9,5 @@ onlyBuiltDependencies:
   - bufferutil
   - utf-8-validate
   - esbuild
-  - protobufjs
   - es5-ext
   - msw
-  - "@whiskeysockets/baileys"

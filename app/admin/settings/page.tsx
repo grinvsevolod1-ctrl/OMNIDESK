@@ -1,186 +1,143 @@
-import {
-  Database,
-  KeyRound,
-  Lock,
-  Server,
-  ShieldCheck,
-  Wifi,
-} from 'lucide-react'
+import { LogOut, Mail, ShieldCheck, User, Layers } from 'lucide-react'
 import { PageHeader } from '@/components/page-parts'
 import { Card } from '@/components/ui/card'
-import { ADMIN_EMAIL } from '@/lib/auth'
-import { checkDbConnection } from '@/lib/db'
-import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { requireAdmin } from '@/lib/auth'
+import { logoutAction } from '@/app/actions/auth'
+
+const PANEL_VERSION = '0.1.0'
+
+function initials(name: string): string {
+  return name
+    .split(' ')
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+}
 
 export default async function AdminSettingsPage() {
-  const db = await checkDbConnection()
-  const workerOk = isWorkerConfigured ? await workerHealth() : false
+  const user = await requireAdmin()
+  const login = user.email.split('@')[0] || user.email
 
-  // Живые статусы ключевых сервисов системы.
-  const services: {
-    icon: typeof Server
-    label: string
-    ok: boolean
-    okText: string
-    failText: string
-  }[] = [
-    {
-      icon: Database,
-      label: 'База данных',
-      ok: db.ok,
-      okText: 'Подключена (PostgreSQL)',
-      failText: 'Нет подключения',
-    },
-    {
-      icon: Wifi,
-      label: 'Воркер',
-      ok: workerOk,
-      okText: 'На связи',
-      failText: isWorkerConfigured
-        ? 'Не отвечает'
-        : 'Не настроен (WORKER_SECRET)',
-    },
-  ]
-
-  // Статус обязательных переменных окружения (без раскрытия значений).
-  const config: {
-    icon: typeof Server
-    label: string
-    ok: boolean
-    value: string
-  }[] = [
-    {
-      icon: ShieldCheck,
-      label: 'Учётная запись администратора',
-      ok: Boolean(ADMIN_EMAIL),
-      value: ADMIN_EMAIL || 'Не задана (ADMIN_EMAIL / ADMIN_PASSWORD)',
-    },
-    {
-      icon: KeyRound,
-      label: 'Секрет сессий',
-      ok: Boolean(process.env.AUTH_SECRET),
-      value: process.env.AUTH_SECRET
-        ? 'Настроен'
-        : 'Небезопасный дефолт — задайте AUTH_SECRET',
-    },
-    {
-      icon: Lock,
-      label: 'Ключ шифрования',
-      ok: Boolean(process.env.ENCRYPTION_KEY),
-      value: process.env.ENCRYPTION_KEY
-        ? 'Настроен'
-        : 'Не задан — нужен для сессий (ENCRYPTION_KEY)',
-    },
+  const details = [
+    { icon: User, label: 'Имя', value: user.name },
+    { icon: Mail, label: 'Email', value: user.email },
+    { icon: ShieldCheck, label: 'Логин', value: login, mono: true },
   ]
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title="Система"
-        description="Состояние и конфигурация этого self-hosted развёртывания."
+        title="Настройки"
+        description="Данные вашего аккаунта администратора и сведения о панели."
       />
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {services.map((s) => {
-          const Icon = s.icon
-          return (
-            <Card key={s.label} className="flex items-center gap-3 p-4">
-              <div className="flex size-10 items-center justify-center rounded-lg border border-border bg-muted/40">
-                <Icon className="size-5 text-muted-foreground" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">{s.label}</p>
-                <p
-                  className={
-                    s.ok
-                      ? 'text-xs text-success'
-                      : 'text-xs text-muted-foreground'
-                  }
-                >
-                  {s.ok ? s.okText : s.failText}
-                </p>
-              </div>
-              <span
-                className={
-                  s.ok
-                    ? 'size-2.5 shrink-0 rounded-full bg-success'
-                    : 'size-2.5 shrink-0 rounded-full bg-muted-foreground/40'
-                }
-                aria-hidden
-              />
-            </Card>
-          )
-        })}
-      </div>
-
-      <Card className="divide-y divide-border">
-        {config.map((r) => {
-          const Icon = r.icon
-          return (
-            <div
-              key={r.label}
-              className="flex items-center justify-between gap-3 px-5 py-4"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex size-9 items-center justify-center rounded-lg border border-border bg-muted/40">
-                  <Icon className="size-4 text-muted-foreground" />
-                </div>
-                <span className="text-sm font-medium">{r.label}</span>
-              </div>
-              <span
-                className={
-                  r.ok
-                    ? 'text-right text-sm text-muted-foreground'
-                    : 'text-right text-sm text-warning'
-                }
-              >
-                {r.value}
-              </span>
+      {/* ── Account ── */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          Аккаунт
+        </h2>
+        <Card className="overflow-hidden">
+          {/* Identity header */}
+          <div className="flex items-center gap-4 border-b border-border bg-muted/30 p-5">
+            <Avatar className="size-14">
+              <AvatarFallback className="bg-secondary text-lg font-semibold text-secondary-foreground">
+                {initials(user.name)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0">
+              <p className="truncate text-lg font-semibold">{user.name}</p>
+              <p className="truncate text-sm text-muted-foreground">
+                {user.email}
+              </p>
             </div>
-          )
-        })}
-      </Card>
-
-      <Card className="p-5">
-        <div className="flex items-center gap-2">
-          <Server className="size-4 text-muted-foreground" />
-          <h2 className="font-medium">Развёртывание</h2>
-        </div>
-        <div className="mt-3 space-y-3 text-sm text-muted-foreground">
-          <p>
-            Приложение работает целиком на вашем VPS с PostgreSQL — без внешних
-            сервисов. Настройте следующие переменные окружения:
-          </p>
-          <ul className="space-y-2">
-            {[
-              ['DATABASE_URL', 'Строка подключения к PostgreSQL'],
-              ['ADMIN_EMAIL', 'Email для входа администратора'],
-              ['ADMIN_PASSWORD', 'Пароль администратора'],
-              ['AUTH_SECRET', 'Случайный секрет для подписи сессий'],
-              ['ENCRYPTION_KEY', 'Шифрует сессии и секреты (совпадает с воркером)'],
-              ['WORKER_SECRET', 'Общий секрет для API панель ↔ воркер'],
-              ['WORKER_URL', 'Адрес воркера (по умолчанию http://127.0.0.1:4000)'],
-            ].map(([key, desc]) => (
-              <li
-                key={key}
-                className="flex flex-col gap-1 rounded-lg border border-border bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <code className="font-mono text-xs text-foreground">{key}</code>
-                <span className="text-xs">{desc}</span>
-              </li>
-            ))}
-          </ul>
-          <div
-            className={
-              db.ok
-                ? 'rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-xs text-success'
-                : 'rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning'
-            }
-          >
-            {db.message}
+            <Badge
+              variant="outline"
+              className="ml-auto shrink-0 gap-1 border-primary/30 bg-primary/5 text-primary"
+            >
+              <ShieldCheck className="size-3" />
+              Администратор
+            </Badge>
           </div>
-        </div>
-      </Card>
+
+          {/* Details */}
+          <div className="divide-y divide-border">
+            {details.map((d) => {
+              const Icon = d.icon
+              return (
+                <div
+                  key={d.label}
+                  className="flex items-center gap-3 px-5 py-3.5"
+                >
+                  <Icon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    {d.label}
+                  </span>
+                  <span
+                    className={
+                      'ml-auto truncate text-sm font-medium' +
+                      (d.mono ? ' font-mono' : '')
+                    }
+                  >
+                    {d.value}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+
+        <p className="text-xs text-muted-foreground">
+          Учётные данные администратора задаются при развёртывании и меняются на
+          сервере. Обратитесь к администратору сервера, чтобы сменить пароль.
+        </p>
+      </section>
+
+      {/* ── Session ── */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          Сессия
+        </h2>
+        <Card className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium">Выйти из аккаунта</p>
+            <p className="text-sm text-muted-foreground">
+              Завершить текущую сессию на этом устройстве.
+            </p>
+          </div>
+          <form action={logoutAction} className="shrink-0">
+            <Button type="submit" variant="outline" size="sm">
+              <LogOut className="size-4" />
+              Выйти
+            </Button>
+          </form>
+        </Card>
+      </section>
+
+      {/* ── About panel ── */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          О панели
+        </h2>
+        <Card className="flex items-center gap-3 p-5">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
+            <Layers className="size-5 text-muted-foreground" />
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Версия панели</p>
+            <p className="text-base font-semibold tabular-nums">
+              {PANEL_VERSION}
+            </p>
+          </div>
+          <span className="ml-auto font-mono text-xs text-muted-foreground">
+            omnidesk-panel
+          </span>
+        </Card>
+      </section>
     </div>
   )
 }

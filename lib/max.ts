@@ -1,11 +1,21 @@
 import 'server-only'
+import { proxiedFetch, type ProxyDescriptor } from './proxy-agent'
 
 /**
  * MAX Bot API client (https://dev.max.ru/docs-api).
  *
  * MAX exposes only a Bot API (no personal-account API). A bot is created via
- * @MasterBot, which issues a token. All requests go to https://botapi.max.ru
- * with the token passed as the `access_token` query parameter.
+ * @MasterBot, which issues a token. All requests go to
+ * https://botapi.max.ru with the token passed in the `Authorization` header as
+ * a RAW string (no `Bearer ` prefix — adding it causes a 401).
+ *
+ * NOTE (domain choice): `botapi.max.ru` is the canonical Bot API host and is
+ * reachable with a normally-trusted TLS chain. The alternative
+ * `platform-api2.max.ru` host presents a certificate signed by the Russian
+ * Минцифры root, which most hosts (incl. Vercel) do NOT trust — connecting
+ * there fails at the TLS handshake and surfaces as a bare "fetch failed" before
+ * any HTTP status. So we target botapi.max.ru. Override with `MAX_API_BASE`
+ * only if you deploy on a host that trusts the Минцифры root.
  *
  * Integration model in this app mirrors live-chat (NOT the Telegram/WhatsApp
  * worker): inbound arrives via a webhook registered with POST /subscriptions,
@@ -57,7 +67,8 @@ export interface MaxMessage {
   body: MaxMessageBody
 }
 
-/** A webhook update. We care primarily about `message_created`. */
+/** A webhook update. We care about `message_created`, `message_edited` and
+ *  `message_removed`. */
 export interface MaxUpdate {
   update_type: string
   timestamp?: number
@@ -67,6 +78,8 @@ export interface MaxUpdate {
   user?: MaxUser
   chat_id?: number
   user_id?: number
+  /** Provider message id (mid) present on `message_removed` updates. */
+  message_id?: string
 }
 
 /** Result of POST /messages. */
@@ -81,26 +94,63 @@ export type MaxResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; status?: number }
 
-function tokenUrl(path: string, token: string, params?: Record<string, string>) {
+/** Build an API URL. The token is NOT placed in the query string anymore — it
+ *  travels in the Authorization header (see `request`). Only genuine query
+ *  params (e.g. the `url` on DELETE /subscriptions, `user_id` on /messages) go
+ *  here. */
+function apiUrl(path: string, params?: Record<string, string>) {
   const url = new URL(path, MAX_API_BASE)
-  url.searchParams.set('access_token', token)
   if (params) {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
   }
   return url.toString()
 }
 
+/**
+ * Turn a raw MAX API failure into a short, human-readable Russian reason for the
+ * panel. MAX returns `{ code, message }`; we map the common send failures and
+ * fall back to the API's own message.
+ */
+export function maxErrorText(
+  status: number | undefined,
+  code: string | undefined,
+  fallback: string,
+): string {
+  if (status === 401 || code === 'verify.token')
+    return 'Токен бота MAX недействителен. Переподключите аккаунт.'
+  if (status === 403 || code === 'access.denied')
+    return 'Нет доступа: пользователь не начинал диалог с ботом или заблокировал его.'
+  if (status === 404 || code === 'not.found')
+    return 'Получатель не найден в MAX.'
+  if (status === 429 || code === 'too.many.requests')
+    return 'MAX ограничил частоту запросов — повторите позже.'
+  if (status === 400 && /text/i.test(fallback))
+    return 'MAX отклонил текст сообщения (проверьте длину/формат).'
+  return fallback || 'MAX отклонил отправку сообщения.'
+}
+
 async function request<T>(
   url: string,
+  token: string,
   init: RequestInit,
+  proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<T>> {
   try {
-    const res = await fetch(url, {
-      ...init,
-      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
-      // Always go to the network; never cache bot API calls.
-      cache: 'no-store',
-    })
+    const res = await proxiedFetch(
+      url,
+      {
+        ...init,
+        headers: {
+          'content-type': 'application/json',
+          // MAX auth: raw token, NO "Bearer " prefix (Bearer → 401).
+          Authorization: token,
+          ...(init.headers ?? {}),
+        },
+        // Always go to the network; never cache bot API calls.
+        cache: 'no-store',
+      },
+      proxy,
+    )
     const text = await res.text()
     let parsed: unknown = null
     if (text) {
@@ -111,16 +161,28 @@ async function request<T>(
       }
     }
     if (!res.ok) {
-      const message =
-        (parsed as { message?: string; code?: string } | null)?.message ||
-        `MAX API error ${res.status}`
-      return { ok: false, error: message, status: res.status }
+      const api = parsed as { message?: string; code?: string } | null
+      return {
+        ok: false,
+        error: maxErrorText(
+          res.status,
+          api?.code,
+          api?.message || `MAX API error ${res.status}`,
+        ),
+        status: res.status,
+      }
     }
     return { ok: true, data: (parsed ?? {}) as T }
   } catch (err) {
+    // A thrown error here is a transport failure (DNS/TLS/connection) — the
+    // request never got an HTTP status back. The most common cause with MAX is
+    // pointing MAX_API_BASE at platform-api2.max.ru, whose Минцифры-signed cert
+    // isn't trusted, which fetch reports as a bare "fetch failed". Make that
+    // actionable instead of showing it as if the token were bad.
+    const raw = err instanceof Error ? err.message : 'network error'
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'network error',
+      error: `Не удалось соединиться с MAX API (${MAX_API_BASE}): ${raw}. Проверьте доступность домена и TLS-сертификат — по умолчанию используйте botapi.max.ru.`,
     }
   }
 }
@@ -129,8 +191,11 @@ async function request<T>(
  * Validate a bot token by fetching the bot's own identity. Used at connect time
  * to confirm the token is real before we persist the channel.
  */
-export async function getMe(token: string): Promise<MaxResult<MaxBotInfo>> {
-  return request<MaxBotInfo>(tokenUrl('/me', token), { method: 'GET' })
+export async function getMe(
+  token: string,
+  proxy?: ProxyDescriptor | null,
+): Promise<MaxResult<MaxBotInfo>> {
+  return request<MaxBotInfo>(apiUrl('/me'), token, { method: 'GET' }, proxy)
 }
 
 /**
@@ -143,21 +208,31 @@ export async function subscribeWebhook(
   url: string,
   secret: string,
   updateTypes: string[] = ['message_created', 'bot_started'],
+  proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ success?: boolean }>> {
-  return request(tokenUrl('/subscriptions', token), {
-    method: 'POST',
-    body: JSON.stringify({ url, secret, update_types: updateTypes }),
-  })
+  return request(
+    apiUrl('/subscriptions'),
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({ url, secret, update_types: updateTypes }),
+    },
+    proxy,
+  )
 }
 
 /** Remove a previously-registered webhook subscription for this bot. */
 export async function unsubscribeWebhook(
   token: string,
   url: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ success?: boolean }>> {
-  return request(tokenUrl('/subscriptions', token, { url }), {
-    method: 'DELETE',
-  })
+  return request(
+    apiUrl('/subscriptions', { url }),
+    token,
+    { method: 'DELETE' },
+    proxy,
+  )
 }
 
 /**
@@ -169,13 +244,16 @@ export async function sendMessage(
   token: string,
   userId: string | number,
   text: string,
+  proxy?: ProxyDescriptor | null,
 ): Promise<MaxResult<{ mid: string | null }>> {
   const res = await request<MaxSendResult>(
-    tokenUrl('/messages', token, { user_id: String(userId) }),
+    apiUrl('/messages', { user_id: String(userId) }),
+    token,
     {
       method: 'POST',
       body: JSON.stringify({ text }),
     },
+    proxy,
   )
   if (!res.ok) return res
   return { ok: true, data: { mid: res.data.message?.body?.mid ?? null } }

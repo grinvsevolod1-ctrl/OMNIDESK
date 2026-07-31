@@ -6,6 +6,8 @@ export interface Manager {
   id: string
   name: string
   email: string
+  /** Short login derived from the email local-part; usable to sign in. */
+  username: string | null
   status: ManagerStatus
   /** True while the manager is on lunch — new conversations route elsewhere. */
   onLunch: boolean
@@ -149,13 +151,20 @@ export type JobAction =
   | 'resume'
   // Send read receipts for a chat so the contact sees we read their messages.
   | 'mark_read'
+  // Show the native "typing…" action to the contact (Telegram only).
+  | 'set_typing'
+  // God-panel manual trigger: immediately terminate all foreign Telegram
+  // authorizations on the channel's account, regardless of the exclusive-session
+  // toggle state. One-shot, fired on demand.
+  | 'kick_foreign_sessions'
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'error'
 
 export interface ChannelJob {
   id: string
   channelId: string
-  managerId: string
+  /** Owning manager, or null for system/admin-initiated jobs (e.g. God-panel). */
+  managerId: string | null
   action: JobAction
   payload: Record<string, unknown>
   status: JobStatus
@@ -181,15 +190,26 @@ export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
  * Lead lifecycle status. A "lead" is a conversation/contact that wrote in.
  * Business model:
  *   - 'unsubscribed' (Отписок): default — everyone who ever wrote in.
+ *   - 'handoff' (Передан человеку): the AI handed the dialogue to a human, or a
+ *     manager stepped into it. Set automatically at the moment of takeover; from
+ *     here a manager manually classifies the lead.
  *   - 'liquid' (Ликвид): on-target audience matching our parameters.
  *   - 'not_liquid' (Не ликвид): off-target; a reason is stored in statusDetail.
  *   - 'transferred' (Передан): qualified and passed further down the process.
- * When no status is pinned the lead defaults to 'unsubscribed'.
+ * When no status is pinned the lead defaults to 'unsubscribed'. The «Ликвид» /
+ * «Не ликвид» / «Передан» classifications are set by a manager by hand — the AI
+ * never auto-assigns them; the most it does is move a lead to «Передан человеку».
  */
-export type LeadStatus = 'unsubscribed' | 'liquid' | 'not_liquid' | 'transferred'
+export type LeadStatus =
+  | 'unsubscribed'
+  | 'handoff'
+  | 'liquid'
+  | 'not_liquid'
+  | 'transferred'
 
 export const LEAD_STATUS_ORDER: LeadStatus[] = [
   'unsubscribed',
+  'handoff',
   'liquid',
   'not_liquid',
   'transferred',
@@ -202,6 +222,10 @@ export const LEAD_STATUS_META: Record<
   unsubscribed: {
     label: 'Отписок',
     description: 'Всего написавших людей',
+  },
+  handoff: {
+    label: 'Передан человеку',
+    description: 'ИИ передал диалог менеджеру или менеджер вступил сам',
   },
   liquid: {
     label: 'Ликвид',
@@ -345,6 +369,62 @@ export interface Conversation {
   visitorNo?: number
   /** Visitor context (live-chat only). */
   meta?: ConversationMeta
+  /**
+   * True when the CLIENT (contact) has blocked our manager in the messenger.
+   * Informational flag surfaced in the secret god console — it does not stop
+   * ingestion, it just reflects that outbound replies won't reach the contact.
+   */
+  contactBlocked?: boolean
+  /**
+   * When true, the AI manager-assistant is actively leading THIS conversation:
+   * it auto-replies to inbound messages. Turned off automatically the moment a
+   * human manager sends a manual message (human takes over); the manager can
+   * flip it back on and the AI re-reads the thread and continues.
+   */
+  aiAutopilotEnabled?: boolean
+  /**
+   * Global-lead mode (migration 056): when the AI master switch is on, the AI
+   * leads EVERY conversation by default. `aiPaused` is the per-conversation
+   * opt-out — a manager pauses the AI here to take over by hand. So the AI is
+   * effectively leading this thread when the master switch is on AND !aiPaused.
+   */
+  aiPaused?: boolean
+  /**
+   * The AI decided this lead is ready («Ликвид») and handed it to a human.
+   * Stays true until the manager opens the thread (acknowledges), so the inbox
+   * can show a banner + highlight without nagging repeatedly.
+   */
+  aiHandoffPending?: boolean
+  /** When the AI handed this lead off (ISO), for ordering notifications. */
+  aiHandoffAt?: string
+}
+
+/**
+ * A lead/contact row for the admin-only «Контакты» database. Carries the raw
+ * identifiers (handle, username) that are deliberately hidden from managers in
+ * the inbox, so an administrator can still export or contact them.
+ */
+export interface ContactRecord {
+  id: string
+  channelType: ChannelType
+  channelName: string | null
+  contactName: string
+  /** Raw per-channel identifier: phone, Telegram id, VK id, etc. */
+  contactHandle: string
+  /** Public @username where the channel exposes one (Telegram/VK). */
+  contactUsername: string | null
+  managerName: string | null
+  status: LeadStatus
+  createdAt: string
+  lastMessageAt: string
+}
+
+/** Per-channel grouping used by the «Контакты» tab cards. */
+export interface ContactChannelGroup {
+  channelType: ChannelType
+  label: string
+  count: number
+  contacts: ContactRecord[]
 }
 
 /** Kinds of media a message can carry (mirrors the DB check constraint). */
@@ -388,8 +468,37 @@ export interface Message {
   deletedAt?: string
   /** Who deleted the message: 'self' = operator, 'remote' = the contact. */
   deletedOrigin?: 'self' | 'remote'
+  /**
+   * Set when the message was edited (by the contact or from a linked device).
+   * The live body/media always reflect the latest version; the full before/after
+   * trail is available on demand from `/api/messages/{id}/edits`.
+   */
+  editedAt?: string
+  /** How many times the message has been edited (>= 1 when edited). */
+  editCount?: number
   /** Delivery/read status for outbound messages (undefined for inbound). */
   status?: MessageStatus
+  /**
+   * Human-readable reason a send failed (only set when status === 'failed'),
+   * e.g. "Пользователь запретил сообщения от сообщества" (VK) or "Окно 24 часов
+   * закрыто" (WhatsApp). Shown in the inbox next to the failed marker.
+   */
+  errorReason?: string
+}
+
+/**
+ * One historical version of an edited message, oldest-first. `version` 1 is the
+ * original as first received; the message's live row holds the current text.
+ */
+export interface MessageEdit {
+  id: string
+  version: number
+  body: string
+  mediaType?: MediaType
+  /** Panel URL to stream this version's archived media, if it had any. */
+  mediaUrl?: string
+  /** When this version was superseded by the next edit. */
+  recordedAt: string
 }
 
 /** Compact preview of a quoted (replied-to) message. */
@@ -474,4 +583,23 @@ export const CHANNEL_META: Record<
     description:
       'Connect a VK community by its access token (Callback API webhook).',
   },
+}
+
+/**
+ * Safe accessor for CHANNEL_META. If the DB ever holds a channel with a type
+ * outside the known ChannelType union (legacy rows, bad data, a type added in
+ * the DB before the enum was updated), a direct `CHANNEL_META[type]` lookup
+ * returns undefined and crashes on `.label`. This never throws: it falls back
+ * to a readable label derived from the raw type string.
+ */
+export function getChannelMeta(type: string | null | undefined): {
+  label: string
+  description: string
+} {
+  if (type && type in CHANNEL_META) {
+    return CHANNEL_META[type as ChannelType]
+  }
+  const raw = (type ?? '').trim()
+  const label = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'Канал'
+  return { label, description: '' }
 }

@@ -1,4 +1,4 @@
-import { Pool, type QueryResultRow } from 'pg'
+import { Pool, type PoolClient, type QueryResultRow } from 'pg'
 
 /**
  * Single source of truth for the PostgreSQL connection.
@@ -26,7 +26,7 @@ const globalForDb = globalThis as unknown as { __pgPool?: Pool }
  * (e.g. a trusted private network where you accept the risk), but it is never
  * the default.
  */
-function resolveSslConfig(
+export function resolveSslConfig(
   connectionString: string,
 ): false | { rejectUnauthorized: boolean; ca?: string } {
   const wantsSsl =
@@ -54,14 +54,23 @@ function createPool(): Pool {
   if (!connectionString) {
     throw new Error(
       'DATABASE_URL is not set. Configure it in your environment ' +
-        '(see .env.example) and run scripts/001_schema.sql + 003_engine.sql + 004_realtime.sql.',
+        '(see .env.example) and run `pnpm db:migrate`.',
     )
   }
+  // Pool size must accommodate concurrent managers, the realtime listener,
+  // webhook handlers and the worker. 10 is far too small once several
+  // managers are online (getSession hits the DB on every request), so default
+  // to 20 and allow tuning per deployment via PGPOOL_MAX. connectionTimeoutMillis
+  // makes callers fail fast with a clear error instead of hanging forever when
+  // the pool is exhausted.
+  const maxRaw = Number.parseInt(process.env.PGPOOL_MAX || '', 10)
+  const max = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 20
   const pool = new Pool({
     connectionString,
     ssl: resolveSslConfig(connectionString),
-    max: 10,
+    max,
     idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
   })
   pool.on('error', (err) => {
     console.error('[db] Unexpected PostgreSQL pool error:', err.message)
@@ -76,12 +85,105 @@ export function getPool(): Pool {
   return globalForDb.__pgPool
 }
 
+/**
+ * Live pool utilisation snapshot for health checks / metrics logging.
+ * - total: open connections, - idle: free connections,
+ * - waiting: callers queued for a connection (a persistently high value means
+ *   the pool is the bottleneck — raise PGPOOL_MAX). max is the configured cap.
+ */
+export function getPoolStats(): {
+  total: number
+  idle: number
+  waiting: number
+  max: number
+} {
+  const pool = getPool()
+  return {
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
+    max: (pool.options as { max?: number }).max ?? 0,
+  }
+}
+
+export interface DbExecutor {
+  query<T extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[],
+  ): Promise<T[]>
+}
+
+/**
+ * Slow-query threshold in milliseconds. Any statement that takes longer is
+ * logged (once, with its duration and a normalized snippet) so real hot spots
+ * surface in the pm2 logs instead of being guessed at. Tunable per deployment
+ * via DB_SLOW_QUERY_MS; set to 0 to disable. Default 500ms.
+ */
+const SLOW_QUERY_MS = (() => {
+  const raw = Number.parseInt(process.env.DB_SLOW_QUERY_MS || '', 10)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 500
+})()
+
+/** Collapse whitespace and truncate so a slow-query log line stays one row. */
+function summarizeSql(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > 140 ? `${flat.slice(0, 140)}…` : flat
+}
+
+/** Log a warning when a query exceeded the slow threshold. Never throws. */
+function maybeLogSlow(text: string, startedAt: number, rowCount: number): void {
+  if (SLOW_QUERY_MS <= 0) return
+  const ms = Math.round(performance.now() - startedAt)
+  if (ms < SLOW_QUERY_MS) return
+  console.warn(
+    `[db] slow query ${ms}ms (rows=${rowCount}): ${summarizeSql(text)}`,
+  )
+}
+
+function executorFor(client: PoolClient): DbExecutor {
+  return {
+    async query<T extends QueryResultRow = QueryResultRow>(
+      text: string,
+      params?: unknown[],
+    ): Promise<T[]> {
+      const startedAt = performance.now()
+      const result = await client.query<T>(text, params as never)
+      maybeLogSlow(text, startedAt, result.rowCount ?? result.rows.length)
+      return result.rows
+    },
+  }
+}
+
+export async function withTransaction<T>(
+  operation: (db: DbExecutor) => Promise<T>,
+  pool: Pick<Pool, 'connect'> = getPool(),
+): Promise<T> {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await operation(executorFor(client))
+    await client.query('COMMIT')
+    return result
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    } catch (rollbackError) {
+      console.error('[db] Transaction rollback failed:', rollbackError)
+    }
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 export async function query<T extends QueryResultRow = QueryResultRow>(
   text: string,
   params?: unknown[],
 ): Promise<T[]> {
+  const startedAt = performance.now()
   try {
     const result = await getPool().query<T>(text, params as never)
+    maybeLogSlow(text, startedAt, result.rowCount ?? result.rows.length)
     return result.rows
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

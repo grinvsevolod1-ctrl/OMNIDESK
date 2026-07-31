@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { invalidateAnalytics } from '@/lib/analytics-cache'
 import { requireManager } from '@/lib/auth'
 import {
   dismissReplyReminder,
@@ -87,6 +88,10 @@ export async function setLeadStatusAction(
   )
   if (!ok) return { ok: false, message: 'Диалог не найден.' }
 
+  // Lead status drives getLeadAnalytics / getResourceLeadCounts rollups; drop
+  // the analytics cache so the dashboard reflects this change immediately
+  // instead of waiting out the TTL.
+  invalidateAnalytics()
   revalidatePath('/app/inbox')
   revalidatePath('/app')
   return { ok: true, message: 'Статус обновлён.' }

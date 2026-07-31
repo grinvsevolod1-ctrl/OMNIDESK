@@ -1,5 +1,6 @@
 import { query, one } from './db.js'
 import { decrypt, encrypt } from './crypto.js'
+import { embedText, toVectorLiteral } from '../../lib/ai/manager-brain.js'
 
 export type SessionStatus =
   | 'idle'
@@ -39,7 +40,8 @@ export interface ChannelRecord {
 export interface JobRecord {
   id: string
   channel_id: string
-  manager_id: string
+  /** Null for system/admin-initiated jobs (e.g. God-panel kick). */
+  manager_id: string | null
   action: string
   payload: Record<string, unknown>
   status: string
@@ -52,6 +54,32 @@ export interface ProxyConfig {
   username?: string
   password?: string
   secret?: string
+}
+
+/* ----------------------------- Settings ----------------------------- */
+
+/**
+ * Whether Telegram "exclusive session" enforcement is enabled (default ON).
+ * Read from the shared `app_settings` table so the God-panel toggle in the
+ * Next.js app and the worker agree on the same source of truth. Any error /
+ * missing row / unexpected shape falls back to ON — the safe default is to keep
+ * the account under our exclusive control.
+ */
+export async function getTelegramExclusiveSetting(): Promise<boolean> {
+  try {
+    const row = await one<{ value: unknown }>(
+      `SELECT value FROM app_settings WHERE key = 'telegram_exclusive_session'`,
+    )
+    const v = row?.value
+    if (v === undefined || v === null) return true
+    if (typeof v === 'boolean') return v
+    if (typeof v === 'object' && 'enabled' in (v as object)) {
+      return Boolean((v as { enabled?: unknown }).enabled)
+    }
+    return true
+  } catch {
+    return true
+  }
 }
 
 /* ------------------------------- Jobs ------------------------------- */
@@ -100,19 +128,26 @@ export async function finishJob(
 
 /* ----------------------------- Channels ----------------------------- */
 
+// Explicit column list mirroring ChannelRecord. Selecting these instead of `*`
+// keeps the query in lockstep with the type and stops a future column addition
+// from silently widening every channel read the worker performs.
+const CHANNEL_COLUMNS =
+  'id, manager_id, type, name, detail, status, session_status, phone, proxy_id, ingest_paused, config'
+
 export async function getChannel(id: string): Promise<ChannelRecord | null> {
-  return one<ChannelRecord>('SELECT * FROM channels WHERE id = $1', [id])
+  return one<ChannelRecord>(
+    `SELECT ${CHANNEL_COLUMNS} FROM channels WHERE id = $1`,
+    [id],
+  )
 }
 
 export async function listLiveChannels(): Promise<ChannelRecord[]> {
-  // Cloud API WhatsApp channels (config.provider = 'cloud') are served by the
-  // Next.js webhook, not this worker — exclude them so no Baileys socket is
-  // ever opened for them. Telegram and any legacy Baileys WhatsApp stay.
+  // Only Telegram runs in this worker. WhatsApp (Cloud API), VK and MAX are all
+  // served by the Next.js app, so we never open a session for them here.
   return query<ChannelRecord>(
-    `SELECT * FROM channels
-     WHERE type IN ('telegram', 'whatsapp')
-       AND session_status IN ('online', 'offline', 'starting')
-       AND COALESCE(config->>'provider', '') <> 'cloud'`,
+    `SELECT ${CHANNEL_COLUMNS} FROM channels
+     WHERE type = 'telegram'
+       AND session_status IN ('online', 'offline', 'starting')`,
   )
 }
 
@@ -197,7 +232,8 @@ interface SecretRow {
 
 export async function getTgSession(channelId: string): Promise<string> {
   const row = await one<SecretRow>(
-    'SELECT * FROM channel_secrets WHERE channel_id = $1',
+    `SELECT channel_id, tg_session_enc, wa_state_enc, token_enc
+       FROM channel_secrets WHERE channel_id = $1`,
     [channelId],
   )
   if (!row?.tg_session_enc) return ''
@@ -218,33 +254,6 @@ export async function saveTgSession(
   )
 }
 
-/**
- * WhatsApp/Baileys auth state is stored as a BufferJSON-serialized string
- * (handled by the caller) and encrypted as an opaque blob here.
- */
-export async function getWaState(channelId: string): Promise<string | null> {
-  const row = await one<SecretRow>(
-    'SELECT * FROM channel_secrets WHERE channel_id = $1',
-    [channelId],
-  )
-  if (!row?.wa_state_enc) return null
-  return decrypt(row.wa_state_enc)
-}
-
-export async function saveWaState(
-  channelId: string,
-  serialized: string,
-): Promise<void> {
-  const enc = encrypt(serialized)
-  await query(
-    `INSERT INTO channel_secrets (channel_id, wa_state_enc, updated_at)
-     VALUES ($1, $2, now())
-     ON CONFLICT (channel_id)
-     DO UPDATE SET wa_state_enc = $2, updated_at = now()`,
-    [channelId, enc],
-  )
-}
-
 export async function clearSecrets(channelId: string): Promise<void> {
   await query('DELETE FROM channel_secrets WHERE channel_id = $1', [channelId])
 }
@@ -259,6 +268,13 @@ interface ProxyRow {
   username_enc: string | null
   password_enc: string | null
   secret_enc: string | null
+}
+
+// Explicit column list mirroring ProxyRow. The `alias` param lets it serve both
+// the bare `FROM proxies` read and the joined `FROM proxies p` read below.
+function proxyCols(alias = ''): string {
+  const p = alias ? `${alias}.` : ''
+  return `${p}id, ${p}kind, ${p}host, ${p}port, ${p}username_enc, ${p}password_enc, ${p}secret_enc`
 }
 
 function rowToProxyConfig(row: ProxyRow): ProxyConfig {
@@ -276,7 +292,7 @@ export async function getProxyForChannel(
   channelId: string,
 ): Promise<ProxyConfig | null> {
   const row = await one<ProxyRow>(
-    `SELECT p.* FROM proxies p
+    `SELECT ${proxyCols('p')} FROM proxies p
      JOIN channels c ON c.proxy_id = p.id
      WHERE c.id = $1`,
     [channelId],
@@ -287,7 +303,10 @@ export async function getProxyForChannel(
 
 /** Load a proxy config directly by its id (used by the admin health check). */
 export async function getProxyById(id: string): Promise<ProxyConfig | null> {
-  const row = await one<ProxyRow>('SELECT * FROM proxies WHERE id = $1', [id])
+  const row = await one<ProxyRow>(
+    `SELECT ${proxyCols()} FROM proxies WHERE id = $1`,
+    [id],
+  )
   if (!row) return null
   return rowToProxyConfig(row)
 }
@@ -310,6 +329,12 @@ export async function markProxy(
 export interface IngestResult {
   /** Conversation the message belongs to (created or existing). */
   conversationId: string
+  /**
+   * Id of the message row for this ingest — the freshly inserted row, or the
+   * existing row when this was a dedup replay. Null only if it couldn't be
+   * resolved. Lets the caller attach stored media bytes to the exact message.
+   */
+  messageId: string | null
   /** True only when a NEW message row was actually written (false on a dedup). */
   wrote: boolean
   /**
@@ -342,7 +367,7 @@ async function resolveLunchManager(ownerId: string): Promise<string> {
     // Owner away — gather available substitutes, deterministically ordered.
     const subs = await query<{ id: string }>(
       `SELECT id FROM managers
-        WHERE status = 'active' AND on_lunch = false AND id <> $1
+        WHERE status = 'active' AND on_lunch = false AND id <> $1::uuid
         ORDER BY id ASC`,
       [ownerId],
     )
@@ -509,9 +534,27 @@ export async function ingestInbound(input: {
     ],
   )
 
-  // Duplicate of an already-stored message on an existing conversation: stop.
-  if (!inserted && conversationExisted)
-    return { conversationId, wrote: false, isFirstInbound: false }
+  // Duplicate of an already-stored message on an existing conversation: stop
+  // updating counters, but still resolve the existing message id so the caller
+  // can back-fill stored media bytes for a row that predates media storage.
+  if (!inserted && conversationExisted) {
+    let existingMessageId: string | null = null
+    if (providerId) {
+      const row = await one<{ id: string }>(
+        `SELECT id FROM messages
+          WHERE conversation_id = $1 AND provider_message_id = $2
+          LIMIT 1`,
+        [conversationId, providerId],
+      )
+      existingMessageId = row?.id ?? null
+    }
+    return {
+      conversationId,
+      messageId: existingMessageId,
+      wrote: false,
+      isFirstInbound: false,
+    }
+  }
 
   // Refresh the conversation only for an existing thread (a freshly created one
   // was already seeded above). The preview only moves forward in time, so an
@@ -540,10 +583,31 @@ export async function ingestInbound(input: {
     )
   }
 
+  // Manual human takeover from the operator's own device: a real outbound
+  // (mirrored fromMe message) that we did NOT generate ourselves hands the
+  // conversation back to the human, so PAUSE AI-lead for this thread (global-
+  // lead opt-out). Autopilot/AI sends carry is_autopilot=true and must NOT
+  // pause it. Only stamp a freshly written row (skip replays) on an existing
+  // thread. The legacy flag is cleared too so old/new readers agree.
+  if (
+    inserted &&
+    conversationExisted &&
+    direction === 'out' &&
+    input.isAutopilot !== true
+  ) {
+    await query(
+      `UPDATE conversations
+          SET ai_paused = true, ai_autopilot_enabled = false
+        WHERE id = $1 AND ai_paused = false`,
+      [conversationId],
+    )
+  }
+
   // A first inbound is one that just created the conversation with an inbound
   // message (not an operator's own fromMe echo, not a history backfill).
   return {
     conversationId,
+    messageId: inserted?.id ?? null,
     wrote: !!inserted,
     isFirstInbound: !conversationExisted && direction === 'in',
   }
@@ -712,10 +776,15 @@ export async function setMessageStatusByProviderId(
   channelId: string,
   providerMessageId: string,
   status: MessageStatus,
+  reason?: string | null,
 ): Promise<void> {
+  // On 'failed' we also record the human-readable reason; on any forward step
+  // (sent/delivered/read) we clear a stale reason so a message that ultimately
+  // succeeded doesn't keep showing an old error.
   await query(
     `UPDATE messages m
-        SET status = $3
+        SET status = $3,
+            error_reason = CASE WHEN $3 = 'failed' THEN $4 ELSE NULL END
        FROM conversations c
       WHERE m.conversation_id = c.id
         AND c.channel_id = $1
@@ -729,23 +798,27 @@ export async function setMessageStatusByProviderId(
              < CASE $3 WHEN 'read' THEN 3 WHEN 'delivered' THEN 2
                        WHEN 'sent' THEN 1 ELSE 0 END
         )`,
-    [channelId, providerMessageId, status],
+    [channelId, providerMessageId, status, reason ?? null],
   )
 }
 
 /**
  * Set the delivery status of a single message directly by its row id. Used to
- * flag a send as 'failed' when the provider rejects it (e.g. WhatsApp 463 / not
- * a WhatsApp number), since at that point there's no provider id to match on.
+ * flag a send as 'failed' when the provider rejects it, since at that point
+ * there's often no provider id to match on. When `reason` is given it is stored
+ * on error_reason so the panel shows WHY the send failed next to the "!" marker.
  */
 export async function setMessageStatus(
   messageId: string,
   status: MessageStatus,
+  reason?: string | null,
 ): Promise<void> {
   await query(
-    `UPDATE messages SET status = $2
+    `UPDATE messages
+        SET status = $2,
+            error_reason = CASE WHEN $2 = 'failed' THEN $3 ELSE NULL END
        WHERE id = $1 AND direction = 'out'`,
-    [messageId, status],
+    [messageId, status, reason ?? null],
   )
 }
 
@@ -839,202 +912,9 @@ export async function getOutboundTarget(
   return { contactHandle: row.contact_handle, channelId: row.channel_id }
 }
 
-/**
- * Resolve everything needed to re-download a message's media: which channel /
- * session owns it, the media kind/mime/name and the provider `ref` JSON. Used
- * by the worker's GET /media endpoint.
- */
-export async function getMessageMedia(messageId: string): Promise<{
-  channelId: string
-  channelType: 'telegram' | 'whatsapp' | 'livechat'
-  mediaType: string | null
-  mediaMime: string | null
-  mediaName: string | null
-  mediaRef: unknown
-} | null> {
-  const row = await one<{
-    channel_id: string
-    type: 'telegram' | 'whatsapp' | 'livechat'
-    media_type: string | null
-    media_mime: string | null
-    media_name: string | null
-    media_ref: unknown
-  }>(
-    `SELECT c.channel_id, ch.type,
-            m.media_type, m.media_mime, m.media_name, m.media_ref
-       FROM messages m
-       JOIN conversations c ON c.id = m.conversation_id
-       JOIN channels ch ON ch.id = c.channel_id
-      WHERE m.id = $1`,
-    [messageId],
-  )
-  if (!row) return null
-  return {
-    channelId: row.channel_id,
-    channelType: row.type,
-    mediaType: row.media_type,
-    mediaMime: row.media_mime,
-    mediaName: row.media_name,
-    // pg returns jsonb already parsed; pass through as-is.
-    mediaRef: row.media_ref,
-  }
-}
-
-/* ------------------------------ Autopilot ----------------------------- */
-
-/** Raw autopilot rule row (worker view; matcher normalizes the config). */
-export interface AutopilotRuleRow {
-  id: string
-  manager_id: string
-  name: string
-  enabled: boolean
-  sort_order: number
-  event: string
-  config: unknown
-}
-
-/** Is the manager's autopilot master switch on? Defaults to OFF when no row. */
-export async function autopilotEnabled(managerId: string): Promise<boolean> {
-  const row = await one<{ enabled: boolean }>(
-    `SELECT enabled FROM autopilot_settings WHERE manager_id = $1`,
-    [managerId],
-  )
-  return !!row?.enabled
-}
-
-/** Active rules for a manager, priority order (sort_order asc, then created). */
-export async function listEnabledAutopilotRules(
-  managerId: string,
-): Promise<AutopilotRuleRow[]> {
-  return query<AutopilotRuleRow>(
-    `SELECT id, manager_id, name, enabled, sort_order, event, config
-       FROM autopilot_rules
-      WHERE manager_id = $1 AND enabled = true
-      ORDER BY sort_order ASC, created_at ASC`,
-    [managerId],
-  )
-}
-
-/**
- * Atomically claim the first fire of a rule on a conversation. Returns true if
- * THIS call recorded it (rule had not fired before), false if already fired.
- * Mirrors the panel-side tryRecordFire so dedupe is consistent across runtimes.
- */
-export async function tryRecordAutopilotFire(
-  ruleId: string,
-  conversationId: string,
-): Promise<boolean> {
-  const rows = await query<{ id: string }>(
-    `INSERT INTO autopilot_fires (rule_id, conversation_id)
-     VALUES ($1, $2)
-     ON CONFLICT (rule_id, conversation_id) DO NOTHING
-     RETURNING id`,
-    [ruleId, conversationId],
-  )
-  return rows.length > 0
-}
-
-/** Remove a fire record (used to roll back a claim when the send fails). */
-export async function clearAutopilotFire(
-  ruleId: string,
-  conversationId: string,
-): Promise<void> {
-  await query(
-    `DELETE FROM autopilot_fires WHERE rule_id = $1 AND conversation_id = $2`,
-    [ruleId, conversationId],
-  )
-}
-
-/**
- * Count autopilot sends on a channel within a trailing window (minutes). Used
- * to enforce per-channel anti-ban rate caps for messengers.
- */
-export async function countAutopilotSends(
-  channelId: string,
-  withinMinutes: number,
-): Promise<number> {
-  const row = await one<{ n: string }>(
-    `SELECT COUNT(*)::int AS n
-       FROM messages m
-       JOIN conversations c ON c.id = m.conversation_id
-      WHERE c.channel_id = $1
-        AND m.direction = 'out'
-        AND m.is_autopilot = true
-        AND m.created_at > now() - ($2 || ' minutes')::interval`,
-    [channelId, String(withinMinutes)],
-  )
-  return Number(row?.n ?? 0)
-}
-
-/**
- * Conversations with an inbound that hasn't been answered for >= N minutes and
- * where the manager's autopilot is on. Drives the 'no_response' scheduler.
- * Only returns the data the matcher/sender needs; dedupe is checked per rule.
- */
-export async function findNoResponseConversations(maxMinutes: number): Promise<
-  Array<{
-    conversationId: string
-    channelId: string
-    managerId: string
-    channelType: 'telegram' | 'whatsapp' | 'livechat'
-    contactHandle: string
-    lastInboundText: string
-    minutesSilent: number
-  }>
-> {
-  const rows = await query<{
-    conversation_id: string
-    channel_id: string
-    manager_id: string
-    channel_type: 'telegram' | 'whatsapp' | 'livechat'
-    contact_handle: string
-    last_inbound_text: string
-    minutes_silent: number
-  }>(
-    `WITH last_in AS (
-       SELECT DISTINCT ON (m.conversation_id)
-              m.conversation_id, m.body, m.created_at
-         FROM messages m
-        WHERE m.direction = 'in'
-        ORDER BY m.conversation_id, m.created_at DESC
-     ),
-     last_out AS (
-       SELECT m.conversation_id, MAX(m.created_at) AS created_at
-         FROM messages m
-        WHERE m.direction = 'out'
-        GROUP BY m.conversation_id
-     )
-     SELECT c.id AS conversation_id, c.channel_id, c.manager_id,
-            c.channel_type, c.contact_handle,
-            li.body AS last_inbound_text,
-            EXTRACT(EPOCH FROM (now() - li.created_at)) / 60 AS minutes_silent
-       FROM conversations c
-       JOIN last_in li ON li.conversation_id = c.id
-       JOIN autopilot_settings s ON s.manager_id = c.manager_id AND s.enabled = true
-       LEFT JOIN last_out lo ON lo.conversation_id = c.id
-      WHERE (lo.created_at IS NULL OR lo.created_at < li.created_at)
-        AND li.created_at < now() - '1 minute'::interval
-        AND li.created_at > now() - ($1 || ' minutes')::interval`,
-    [String(maxMinutes)],
-  )
-  return rows.map((r) => ({
-    conversationId: r.conversation_id,
-    channelId: r.channel_id,
-    managerId: r.manager_id,
-    channelType: r.channel_type,
-    contactHandle: r.contact_handle,
-    lastInboundText: r.last_inbound_text,
-    minutesSilent: Number(r.minutes_silent),
-  }))
-}
-
-/** Working-hours JSON for a channel (any type), for the matcher's WH condition. */
-export async function getChannelWorkingHours(
-  channelId: string,
-): Promise<unknown | null> {
-  const row = await one<{ config: { widget?: { workingHours?: unknown } } | null }>(
-    `SELECT config FROM channels WHERE id = $1`,
-    [channelId],
-  )
-  return row?.config?.widget?.workingHours ?? null
-}
+/* --------------------------------------------------------------------------
+ * Domain re-exports. Message-media and AI/autopilot concerns were split into
+ * focused sibling modules; consumers keep importing them via `repo.*`.
+ * ------------------------------------------------------------------------ */
+export * from './repo-media.js'
+export * from './repo-ai.js'

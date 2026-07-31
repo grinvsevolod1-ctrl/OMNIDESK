@@ -22,6 +22,7 @@ export function CreateManagerDialog() {
   const [open, setOpen] = useState(false)
   const [pending, startTransition] = useTransition()
   const [createdPassword, setCreatedPassword] = useState<string | null>(null)
+  const [createdUsername, setCreatedUsername] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   function handleSubmit(formData: FormData) {
@@ -29,6 +30,7 @@ export function CreateManagerDialog() {
       const res = await createManagerAction(formData)
       if (res.ok) {
         toast.success(res.message)
+        if (res.username) setCreatedUsername(res.username)
         if (res.password) setCreatedPassword(res.password)
       } else {
         toast.error(res.message)
@@ -38,6 +40,7 @@ export function CreateManagerDialog() {
 
   function reset() {
     setCreatedPassword(null)
+    setCreatedUsername(null)
     setCopied(false)
   }
 
@@ -67,6 +70,16 @@ export function CreateManagerDialog() {
                 только один раз.
               </DialogDescription>
             </DialogHeader>
+            {createdUsername ? (
+              <div className="rounded-lg border border-border bg-muted/40 p-4">
+                <Label className="text-xs text-muted-foreground">Логин</Label>
+                <div className="mt-2">
+                  <code className="rounded-md bg-background px-3 py-2 font-mono text-sm">
+                    {createdUsername}
+                  </code>
+                </div>
+              </div>
+            ) : null}
             <div className="rounded-lg border border-border bg-muted/40 p-4">
               <Label className="text-xs text-muted-foreground">
                 Временный пароль
@@ -133,6 +146,25 @@ export function CreateManagerDialog() {
                   placeholder="ivan@company.com"
                   required
                 />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="username">
+                  Логин{' '}
+                  <span className="font-normal text-muted-foreground">
+                    (необязательно)
+                  </span>
+                </Label>
+                <Input
+                  id="username"
+                  name="username"
+                  type="text"
+                  autoComplete="off"
+                  placeholder="Оставьте пустым — возьмём из email"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Можно входить и по email, и по логину. По умолчанию логин —
+                  часть email до «@».
+                </p>
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="password">

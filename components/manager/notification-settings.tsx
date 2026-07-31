@@ -58,6 +58,8 @@ export function NotificationSettings() {
   }, [])
 
   useEffect(() => {
+    // Sync notification permission/subscription state from the browser on mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh()
   }, [refresh])
 

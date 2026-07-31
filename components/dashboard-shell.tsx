@@ -2,11 +2,18 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useEffect, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import {
   BarChart3,
   Bot,
   BookOpen,
+  ChevronDown,
   ChevronLeft,
   Inbox,
   LayoutDashboard,
@@ -15,17 +22,25 @@ import {
   MessageCircle,
   MessageSquareText,
   PanelLeft,
-  Phone,
   Plug,
   Radio,
   Server,
   Settings,
+  BrainCircuit,
   Users,
+  Wallet,
   X,
-  type LucideIcon,
 } from 'lucide-react'
+import type { ComponentType } from 'react'
 import { logoutAction } from '@/app/actions/auth'
 import { BrandMark } from '@/components/brand'
+import {
+  MaxIcon,
+  TelegramIcon,
+  TelemostIcon,
+  VkIcon,
+  WhatsappIcon,
+} from '@/components/channel-icons'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
@@ -41,6 +56,9 @@ export type NavIcon =
   | 'managers'
   | 'channels'
   | 'whatsapp'
+  | 'telegram'
+  | 'vk'
+  | 'max'
   | 'connections'
   | 'inbox'
   | 'proxies'
@@ -48,14 +66,20 @@ export type NavIcon =
   | 'analytics'
   | 'quickReplies'
   | 'autopilot'
+  | 'ai'
+  | 'telemost'
+  | 'finance'
   | 'docs'
   | 'settings'
 
-const ICONS: Record<NavIcon, LucideIcon> = {
+const ICONS: Record<NavIcon, ComponentType<{ className?: string }>> = {
   overview: LayoutDashboard,
   managers: Users,
   channels: Radio,
-  whatsapp: Phone,
+  whatsapp: WhatsappIcon,
+  telegram: TelegramIcon,
+  vk: VkIcon,
+  max: MaxIcon,
   connections: Plug,
   inbox: Inbox,
   proxies: Server,
@@ -63,6 +87,9 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   analytics: BarChart3,
   quickReplies: MessageSquareText,
   autopilot: Bot,
+  ai: BrainCircuit,
+  telemost: TelemostIcon,
+  finance: Wallet,
   docs: BookOpen,
   settings: Settings,
 }
@@ -71,6 +98,8 @@ export interface NavItem {
   href: string
   label: string
   icon: NavIcon
+  /** When present, this item becomes a collapsible group of sub-links. */
+  children?: NavItem[]
 }
 
 interface DashboardShellProps {
@@ -94,6 +123,30 @@ function initials(name: string): string {
     .toUpperCase()
 }
 
+function collectHrefs(nav: NavItem[]): string[] {
+  const out: string[] = []
+  for (const item of nav) {
+    out.push(item.href)
+    if (item.children) for (const c of item.children) out.push(c.href)
+  }
+  return out
+}
+
+/**
+ * Resolve the single active nav href using longest-prefix matching. This keeps
+ * exactly one item highlighted even when hrefs nest (e.g. "/admin/accounts" vs
+ * "/admin/accounts/telegram").
+ */
+function computeActiveHref(pathname: string, nav: NavItem[]): string | null {
+  let best: string | null = null
+  for (const href of collectHrefs(nav)) {
+    if (pathname === href || pathname.startsWith(href + '/')) {
+      if (!best || href.length > best.length) best = href
+    }
+  }
+  return best
+}
+
 function NavLinks({
   nav,
   pathname,
@@ -105,46 +158,224 @@ function NavLinks({
   collapsed?: boolean
   onNavigate?: () => void
 }) {
-  return (
-    <nav className="flex flex-col gap-1">
-      {nav.map((item) => {
-        const active =
-          pathname === item.href || pathname.startsWith(item.href + '/')
-        const Icon = ICONS[item.icon]
-        const link = (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={onNavigate}
-            aria-label={item.label}
-            className={cn(
-              'group relative flex items-center gap-2.5 rounded-lg text-sm font-medium transition-colors',
-              collapsed ? 'justify-center px-0 py-2.5' : 'px-3 py-2',
-              active
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
-            )}
-          >
-            {active ? (
-              <span
-                className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-foreground"
-                aria-hidden
-              />
-            ) : null}
-            <Icon className="size-4 shrink-0" />
-            {!collapsed ? item.label : null}
-          </Link>
-        )
-        if (collapsed) {
-          return (
-            <Tooltip key={item.href}>
-              <TooltipTrigger render={link} aria-label={item.label} />
-              <TooltipContent side="right">{item.label}</TooltipContent>
-            </Tooltip>
-          )
+  const navRef = useRef<HTMLElement>(null)
+  const activeRef = useRef<HTMLAnchorElement | null>(null)
+  // Position/size of the sliding "liquid" highlight behind the active item.
+  // Null until measured on the client so SSR doesn't render a misplaced pill.
+  const [pill, setPill] = useState<{ top: number; height: number } | null>(null)
+  // Which groups are expanded. A group auto-opens when it owns the active route.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+
+  const activeHref = useMemo(
+    () => computeActiveHref(pathname, nav),
+    [pathname, nav],
+  )
+  const groupOwnsActive = (item: NavItem) =>
+    !!item.children && item.children.some((c) => c.href === activeHref)
+
+  // True when the active route lives inside a group the user has collapsed. In
+  // the expanded rail its row is clipped to height 0, so the highlight must be
+  // hidden entirely instead of floating at a stale offset (the "съезжает вниз
+  // хотя вкладка закрыта" bug).
+  const activeHiddenInGroup = useMemo(() => {
+    if (collapsed) return false // collapsed rail flattens groups; child is shown
+    for (const item of nav) {
+      if (item.children?.some((c) => c.href === activeHref)) {
+        const open = openGroups[item.href] ?? groupOwnsActive(item)
+        return !open
+      }
+    }
+    return false
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav, activeHref, openGroups, collapsed])
+
+  // Auto-open the group that contains the active route whenever it changes.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    setOpenGroups((prev) => {
+      const next = { ...prev }
+      for (const item of nav) {
+        if (item.children && item.children.some((c) => c.href === activeHref))
+          next[item.href] = true
+      }
+      return next
+    })
+  }, [activeHref, nav])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    // Hide the pill outright when the active item is inside a collapsed group —
+    // otherwise it would sit at the clipped (0-height) row's stale offset.
+    if (activeHiddenInGroup) {
+      setPill(null)
+      return
+    }
+
+    let raf = 0
+    let stopAt = 0
+
+    function measure() {
+      const nav = navRef.current
+      const el = activeRef.current
+      if (!nav || !el) {
+        setPill(null)
+        return
+      }
+      // Measure via bounding rects relative to the nav so the value is correct
+      // even mid-transition (offsetTop can lag while parents animate height).
+      const navRect = nav.getBoundingClientRect()
+      const elRect = el.getBoundingClientRect()
+      const top = elRect.top - navRect.top + nav.scrollTop
+      setPill((prev) => {
+        const next = { top, height: elRect.height }
+        if (prev && prev.top === next.top && prev.height === next.height) {
+          return prev
         }
-        return link
-      })}
+        return next
+      })
+    }
+
+    // Group expand/collapse and sidebar width both animate ~300ms; poll on rAF
+    // for that window so the pill follows the item to its final resting place
+    // instead of snapping to a pre-animation position (the "криво/не ту вкладку"
+    // bugs). Then settle and stop.
+    function tick() {
+      measure()
+      if (performance.now() < stopAt) {
+        raf = requestAnimationFrame(tick)
+      }
+    }
+    stopAt = performance.now() + 360
+    tick()
+
+    // Keep tracking on layout changes (font load, scrollbar, container resize).
+    const ro = new ResizeObserver(() => measure())
+    if (navRef.current) ro.observe(navRef.current)
+    window.addEventListener('resize', measure)
+
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+    // Re-run when the route changes, the sidebar collapses, or a group is
+    // expanded/collapsed, so the highlight re-tracks from the new state.
+  }, [pathname, collapsed, nav, openGroups, activeHiddenInGroup])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  function renderLink(
+    item: NavItem,
+    opts?: { nested?: boolean; hidden?: boolean },
+  ) {
+    const active = item.href === activeHref
+    const Icon = ICONS[item.icon]
+    const link = (
+      <Link
+        key={item.href}
+        href={item.href}
+        ref={active && !opts?.hidden ? activeRef : undefined}
+        onClick={onNavigate}
+        aria-label={item.label}
+        className={cn(
+          'group relative z-10 flex items-center gap-2.5 rounded-lg text-sm font-medium transition-colors duration-200',
+          collapsed ? 'justify-center px-0 py-2.5' : 'px-3 py-2',
+          opts?.nested && !collapsed && 'py-1.5 text-[13px]',
+          active
+            ? 'text-sidebar-accent-foreground'
+            : 'text-muted-foreground hover:text-foreground',
+        )}
+      >
+        <Icon
+          className={cn(
+            'size-4 shrink-0 transition-transform duration-200',
+            active && 'scale-110',
+          )}
+        />
+        {!collapsed ? item.label : null}
+      </Link>
+    )
+    if (collapsed) {
+      return (
+        <Tooltip key={item.href}>
+          <TooltipTrigger render={link} aria-label={item.label} />
+          <TooltipContent side="right">{item.label}</TooltipContent>
+        </Tooltip>
+      )
+    }
+    return link
+  }
+
+  function renderGroup(item: NavItem) {
+    const Icon = ICONS[item.icon]
+    const sectionActive = groupOwnsActive(item)
+    // Collapsed rail: no room for a disclosure, so flatten to tooltipped icons.
+    if (collapsed) {
+      return (
+        <div key={item.href} className="flex flex-col gap-1">
+          {item.children!.map((child) => renderLink(child))}
+        </div>
+      )
+    }
+    const open = openGroups[item.href] ?? sectionActive
+    return (
+      <div key={item.href} className="flex flex-col gap-1">
+        <button
+          type="button"
+          onClick={() => setOpenGroups((p) => ({ ...p, [item.href]: !open }))}
+          aria-expanded={open}
+          className={cn(
+            'group relative z-10 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200',
+            sectionActive
+              ? 'text-foreground'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <Icon className="size-4 shrink-0" />
+          {item.label}
+          <ChevronDown
+            className={cn(
+              'ml-auto size-4 shrink-0 text-muted-foreground transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+              open && 'rotate-180',
+            )}
+          />
+        </button>
+        {/* Grid-rows trick animates height from 0 → auto smoothly. */}
+        <div
+          className={cn(
+            'grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+            open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+          )}
+        >
+          <div className="overflow-hidden">
+            <div className="ml-4 flex flex-col gap-1 border-l border-sidebar-border pl-2">
+              {item.children!.map((child) =>
+                renderLink(child, { nested: true, hidden: !open }),
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <nav ref={navRef} className="relative flex flex-col gap-1">
+      {/* macOS-style sliding highlight: a single element that springs between
+          items instead of each item toggling its own background instantly. */}
+      {pill ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 z-0 rounded-lg bg-sidebar-accent transition-[transform,height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+          style={{
+            transform: `translateY(${pill.top}px)`,
+            height: pill.height,
+          }}
+        />
+      ) : null}
+      {nav.map((item) =>
+        item.children ? renderGroup(item) : renderLink(item),
+      )}
     </nav>
   )
 }
@@ -168,6 +399,7 @@ export function DashboardShell({
   // hydration mismatch, then persist any change the user makes.
   useEffect(() => {
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCollapsed(localStorage.getItem(COLLAPSE_KEY) === '1')
     } catch {
       /* ignore */
@@ -338,10 +570,26 @@ export function DashboardShell({
           </header>
 
           {fullBleed ? (
-            <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
+            <main className="min-h-0 flex-1 overflow-hidden">
+              {/* Keyed on the route so switching tabs replays a quick fade —
+                  the full-bleed inbox keeps its own height, so fade only. */}
+              <div
+                key={pathname}
+                className="flex h-full min-h-0 flex-col animate-in fade-in-0 duration-200 ease-out"
+              >
+                {children}
+              </div>
+            </main>
           ) : (
             <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-6 lg:px-8">
-              <div className="mx-auto w-full max-w-6xl">{children}</div>
+              {/* macOS-style page transition: fast fade + subtle rise, replayed
+                  on every route change via the pathname key. */}
+              <div
+                key={pathname}
+                className="mx-auto w-full max-w-6xl animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out"
+              >
+                {children}
+              </div>
             </main>
           )}
         </div>

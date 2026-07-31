@@ -210,6 +210,8 @@ function PeopleByDayChart({
   // Visible window over day indices — controls zoom (count) and pan (start).
   const [view, setView] = useState({ start: 0, count: len })
   useEffect(() => {
+    // Reset zoom/pan window when the number of days changes (new dataset).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setView({ start: 0, count: len })
   }, [len])
 
@@ -294,15 +296,15 @@ function PeopleByDayChart({
     return () => el.removeEventListener('wheel', onWheel)
   }, [len])
 
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      // Capture on the element that owns the handler (the <svg>), never on a
-      // child like <text>/<line> that may unmount on the next pan re-render.
-      e.currentTarget.setPointerCapture?.(e.pointerId)
-      dragRef.current = { x: e.clientX, start }
-    },
-    [start],
-  )
+  // Plain function: it mutates a ref from a reactive value (`start`), which the
+  // React Compiler can't preserve as a manual useCallback — so we let the
+  // compiler memoize it automatically instead.
+  const onPointerDown = (e: React.PointerEvent) => {
+    // Capture on the element that owns the handler (the <svg>), never on a
+    // child like <text>/<line> that may unmount on the next pan re-render.
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    dragRef.current = { x: e.clientX, start }
+  }
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -373,10 +375,7 @@ function PeopleByDayChart({
           <svg
             width={width}
             height={H}
-            className={cn(
-              'w-full touch-none',
-              dragRef.current ? 'cursor-grabbing' : 'cursor-grab',
-            )}
+            className={cn('w-full touch-none cursor-grab active:cursor-grabbing')}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={endDrag}

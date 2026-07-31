@@ -154,6 +154,7 @@ export function WidgetEditor({
   // Reset to the saved config whenever the dialog is (re)opened.
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setConfig(cloneConfig(initialConfig))
       setPreviewOff(false)
       readyRef.current = false
@@ -296,7 +297,7 @@ function EditorTabs({
 }) {
   return (
     <Tabs defaultValue="appearance" className="gap-4">
-      <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-muted/60">
+      <TabsList className="flex !h-auto w-full flex-wrap justify-start gap-1 bg-muted/60">
         <TabsTrigger value="appearance" className="flex-none gap-1.5 px-2.5">
           <Palette className="size-3.5" />
           Вид
@@ -825,9 +826,11 @@ function HoursTab({ config, patch }: TabProps) {
                     onClick={() =>
                       patch((draft) => {
                         const set = new Set(draft.workingHours.days)
-                        set.has(d.value)
-                          ? set.delete(d.value)
-                          : set.add(d.value)
+                        if (set.has(d.value)) {
+                          set.delete(d.value)
+                        } else {
+                          set.add(d.value)
+                        }
                         draft.workingHours.days = Array.from(set).sort(
                           (a, b) => a - b,
                         )

@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import {
   getLivechatChannelByApiKey,
   getLivechatConversationRef,
@@ -11,6 +12,7 @@ import {
   visitorHandle,
   visitorName,
 } from '@/lib/livechat'
+import { inputErrorResponse, readJson } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
 import { publishRealtime } from '@/lib/realtime'
 
@@ -19,6 +21,12 @@ export const dynamic = 'force-dynamic'
 
 const PRESENCE_STATES = ['open', 'minimized', 'away', 'left'] as const
 type PresenceState = (typeof PRESENCE_STATES)[number]
+const presenceSchema = z.object({
+  key: z.string().trim().min(1).max(256),
+  visitor: z.string().max(256).optional(),
+  name: z.string().max(200).optional(),
+  state: z.enum(PRESENCE_STATES),
+}).strict()
 
 function ok(cors: Record<string, string>): Response {
   return new Response(JSON.stringify({ ok: true }), {
@@ -47,25 +55,18 @@ export async function POST(request: Request): Promise<Response> {
   const cors = corsHeaders(origin)
 
   // Per-IP guard for this ephemeral heartbeat endpoint.
-  const ipGuard = rateLimit(`lc:presence:ip:${clientIp(request.headers)}`, 120, 60_000)
+  const ipGuard = await rateLimit(`lc:presence:ip:${clientIp(request.headers)}`, 120, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
-  let payload: {
-    key?: string
-    visitor?: string
-    name?: string
-    state?: string
-  }
+  let payload: z.infer<typeof presenceSchema>
   try {
-    payload = (await request.json()) as typeof payload
-  } catch {
-    return new Response('Bad Request', { status: 400, headers: cors })
+    payload = await readJson(request, presenceSchema, 2 * 1024)
+  } catch (error) {
+    const response = inputErrorResponse(error)
+    return new Response(response?.body, { status: response?.status ?? 400, headers: cors })
   }
 
-  const state = String(payload.state ?? '') as PresenceState
-  if (!PRESENCE_STATES.includes(state)) {
-    return new Response('Bad Request', { status: 400, headers: cors })
-  }
+  const state: PresenceState = payload.state
 
   const apiKey = String(payload.key ?? '').trim()
   const channel = apiKey ? await getLivechatChannelByApiKey(apiKey) : null

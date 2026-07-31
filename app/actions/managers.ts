@@ -1,29 +1,32 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { invalidateAnalytics } from '@/lib/analytics-cache'
 import { hashPassword, requireAdmin } from '@/lib/auth'
+import { generatePassword } from '@/lib/crypto'
 import {
   createManager,
   deleteManager,
   getManagerByEmail,
   getManagerById,
+  getManagerByIdentifier,
+  sanitizeUsername,
   updateManagerPassword,
   updateManagerStatus,
 } from '@/lib/data'
+import { isAdminIdentity } from '@/lib/data/shared'
 
 export interface ActionResult {
   ok: boolean
   message: string
   password?: string
+  username?: string
 }
 
+// Server-issued passwords use the CSPRNG-backed generator in lib/crypto so they
+// cannot be predicted (Math.random() is not cryptographically secure).
 function genPassword(): string {
-  const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  let out = ''
-  for (let i = 0; i < 12; i++) {
-    out += chars[Math.floor(Math.random() * chars.length)]
-  }
-  return out
+  return generatePassword(16)
 }
 
 export async function createManagerAction(
@@ -34,33 +37,57 @@ export async function createManagerAction(
   const email = String(formData.get('email') ?? '')
     .trim()
     .toLowerCase()
+  const usernameRaw = String(formData.get('username') ?? '').trim()
   let password = String(formData.get('password') ?? '')
 
   if (!name || !email) {
-    return { ok: false, message: 'Name and email are required.' }
+    return { ok: false, message: 'Укажите имя и email.' }
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return { ok: false, message: 'Enter a valid email address.' }
+    return { ok: false, message: 'Введите корректный email.' }
+  }
+  // A custom login is optional; when provided it must be a valid handle.
+  const username = usernameRaw ? sanitizeUsername(usernameRaw) : ''
+  if (usernameRaw && (!username || username.length < 3)) {
+    return {
+      ok: false,
+      message: 'Логин: минимум 3 символа (a-z, 0-9, точка, дефис, _).',
+    }
   }
   if (!password) {
     password = genPassword()
   } else if (password.length < 8) {
-    return { ok: false, message: 'Password must be at least 8 characters.' }
+    return { ok: false, message: 'Пароль должен быть не короче 8 символов.' }
   }
 
   const existing = await getManagerByEmail(email)
   if (existing) {
-    return { ok: false, message: 'A manager with this email already exists.' }
+    return { ok: false, message: 'Менеджер с таким email уже существует.' }
+  }
+  if (username) {
+    const takenBy = await getManagerByIdentifier(username)
+    if (takenBy) {
+      return { ok: false, message: 'Этот логин уже занят.' }
+    }
   }
 
   const passwordHash = await hashPassword(password)
-  await createManager({ name, email, passwordHash })
+  const created = await createManager({
+    name,
+    email,
+    passwordHash,
+    username: username || undefined,
+  })
+  // A new manager appears in getManagerPerformance rollups; drop the analytics
+  // cache so the dashboard lists them without waiting out the TTL.
+  invalidateAnalytics()
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   return {
     ok: true,
-    message: `Manager ${name} created.`,
+    message: `Менеджер ${name} создан.`,
     password,
+    username: created.username ?? undefined,
   }
 }
 
@@ -71,6 +98,11 @@ export async function setManagerStatusAction(
   await requireAdmin()
   const manager = await getManagerById(id)
   if (!manager) return { ok: false, message: 'Manager not found.' }
+  // The administrator is authenticated from env vars and is not a manager.
+  // Blocking it would be meaningless and could lock the panel — refuse.
+  if (isAdminIdentity(manager)) {
+    return { ok: false, message: 'Администратора нельзя блокировать.' }
+  }
   await updateManagerStatus(id, status)
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
@@ -100,7 +132,11 @@ export async function deleteManagerAction(id: string): Promise<ActionResult> {
   await requireAdmin()
   const manager = await getManagerById(id)
   if (!manager) return { ok: false, message: 'Manager not found.' }
+  if (isAdminIdentity(manager)) {
+    return { ok: false, message: 'Администратора нельзя удалить.' }
+  }
   await deleteManager(id)
+  invalidateAnalytics()
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   return { ok: true, message: `Manager ${manager.name} deleted.` }

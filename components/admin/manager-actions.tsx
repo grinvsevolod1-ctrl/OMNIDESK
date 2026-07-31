@@ -45,7 +45,11 @@ export function ManagerActions({ manager }: { manager: Manager }) {
     const next = manager.status === 'active' ? 'blocked' : 'active'
     startTransition(async () => {
       const res = await setManagerStatusAction(manager.id, next)
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
     })
   }
 

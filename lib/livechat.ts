@@ -29,16 +29,34 @@ export function originAllowed(
 
 /**
  * Best-effort client IP from the proxy headers. Used as a rate-limit key, never
- * trusted for anything security-critical (it can be spoofed unless the upstream
- * proxy is trusted — which on a VPS reverse-proxy setup it is).
+ * trusted for anything security-critical.
+ *
+ * These headers can be spoofed unless the upstream proxy is trusted — which on
+ * a typical VPS reverse-proxy setup (nginx/Caddy/Cloudflare) it is, so we trust
+ * them by default. Deployments that expose Node directly (no trusted proxy) can
+ * set `TRUST_PROXY=false` to stop honouring forwarded headers, preventing a
+ * client from spoofing its IP to sidestep per-IP throttling.
  */
 export function clientIp(headers: Headers): string {
-  return (
-    (headers.get('x-forwarded-for')?.split(',')[0] ?? '').trim() ||
-    headers.get('x-real-ip')?.trim() ||
-    headers.get('cf-connecting-ip')?.trim() ||
-    'unknown'
-  )
+  if (process.env.TRUST_PROXY === 'false') return 'unknown'
+
+  // Prefer headers a trusted proxy sets to the real TCP peer and that a client
+  // cannot forge end-to-end: Cloudflare's CF-Connecting-IP and nginx's
+  // X-Real-IP ($remote_addr).
+  const cf = headers.get('cf-connecting-ip')?.trim()
+  if (cf) return cf
+  const real = headers.get('x-real-ip')?.trim()
+  if (real) return real
+
+  // X-Forwarded-For fallback: with `$proxy_add_x_forwarded_for` the header is
+  // "<client-supplied>, <real-ip>", so the trustworthy address is the LAST hop
+  // appended by our proxy — never the first (client-controlled) entry.
+  const fwd = headers.get('x-forwarded-for')
+  if (fwd) {
+    const parts = fwd.split(',').map((p) => p.trim()).filter(Boolean)
+    if (parts.length) return parts[parts.length - 1]!
+  }
+  return 'unknown'
 }
 
 /** Standard 429 response for the live-chat endpoints. */

@@ -1,16 +1,10 @@
-import {
-  ArrowRight,
-  MessageCircle,
-  MessageSquare,
-  Phone,
-  Plug,
-  Send,
-  Server,
-  Users,
-} from 'lucide-react'
+import { ArrowRight, Plug, Server } from 'lucide-react'
 import Link from 'next/link'
 import { ChannelCard } from '@/components/manager/channel-card'
-import { ConnectWizard } from '@/components/manager/connect-wizard'
+import {
+  channelIcon,
+  type BrandIconComponent,
+} from '@/components/channel-icons'
 import { Button } from '@/components/ui/button'
 import { EmptyState, PageHeader } from '@/components/page-parts'
 import { requireManager } from '@/lib/auth'
@@ -18,13 +12,14 @@ import { listChannels, listProxies } from '@/lib/data'
 import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
 import { type Channel, type ChannelType } from '@/lib/types'
 
-const GROUPS: { type: ChannelType; label: string; icon: typeof Send }[] = [
-  { type: 'telegram', label: 'Telegram', icon: Send },
-  { type: 'whatsapp', label: 'WhatsApp', icon: Phone },
-  { type: 'livechat', label: 'Онлайн-чат', icon: MessageCircle },
-  { type: 'max', label: 'MAX', icon: MessageSquare },
-  { type: 'vk', label: 'VK', icon: Users },
-]
+const GROUPS: { type: ChannelType; label: string; icon: BrandIconComponent }[] =
+  [
+    { type: 'telegram', label: 'Telegram', icon: channelIcon('telegram') },
+    { type: 'whatsapp', label: 'WhatsApp', icon: channelIcon('whatsapp') },
+    { type: 'livechat', label: 'Онлайн-чат', icon: channelIcon('livechat') },
+    { type: 'max', label: 'MAX', icon: channelIcon('max') },
+    { type: 'vk', label: 'VK', icon: channelIcon('vk') },
+  ]
 
 export default async function ConnectionsPage() {
   const session = await requireManager()
@@ -41,8 +36,7 @@ export default async function ConnectionsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Подключения"
-        description="Подключайте личные аккаунты Telegram и WhatsApp, онлайн-чаты сайтов и направляйте их через прокси."
-        action={<ConnectWizard proxies={proxies} />}
+        description="Ваши аккаунты и их состояние. Новые аккаунты подключает администратор — при обрыве связи сессия переподключится автоматически."
       />
 
       {!isWorkerConfigured ? (
@@ -92,8 +86,7 @@ export default async function ConnectionsPage() {
         <EmptyState
           icon={Plug}
           title="Пока нет подключений"
-          description="Начните с подключения первого аккаунта. Telegram — по коду из СМС, WhatsApp — сканированием QR."
-          action={<ConnectWizard proxies={proxies} />}
+          description="Аккаунты подключает администратор и назначает их вам. Как только это произойдёт, они появятся здесь."
         />
       ) : (
         <div className="flex flex-col gap-7">

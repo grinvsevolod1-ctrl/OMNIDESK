@@ -2,6 +2,7 @@ import 'server-only'
 import {
   getLastInboundProviderId,
   getWhatsappCloudDispatchByConversationId,
+  isConversationSimulated,
   markMessageFailed,
   setMessageProviderId,
 } from './data'
@@ -18,8 +19,9 @@ import { markRead, sendText } from './whatsapp-cloud'
  * can never throw into the caller.
  *
  * Returns `true` when the conversation was a Cloud API WhatsApp channel (i.e.
- * this handled delivery), and `false` when it isn't — letting callers fall back
- * to the legacy worker transport for any remaining Baileys channels.
+ * this handled delivery), and `false` when it isn't a configured Cloud channel
+ * (token missing/broken). Baileys is gone, so callers must treat `false` as a
+ * hard failure and surface it — never leave the message stuck "sending".
  */
 export async function deliverWhatsappMessage(
   conversationId: string,
@@ -27,6 +29,10 @@ export async function deliverWhatsappMessage(
   body: string,
 ): Promise<boolean> {
   try {
+    // Never push a simulator dialog's reply to the real WhatsApp provider.
+    // Return true ("handled") so the caller doesn't treat it as a stuck/failed
+    // send — the message simply stays in our DB, unsent to any real contact.
+    if (await isConversationSimulated(conversationId)) return true
     const dispatch =
       await getWhatsappCloudDispatchByConversationId(conversationId)
     if (!dispatch) return false // not a Cloud API WhatsApp conversation
@@ -36,10 +42,11 @@ export async function deliverWhatsappMessage(
       dispatch.token,
       dispatch.contactHandle,
       body,
+      dispatch.proxy,
     )
     if (!res.ok) {
-      console.error('[v0] deliverWhatsappMessage: send failed:', res.error)
-      await markMessageFailed(messageId).catch(() => {})
+      console.error('deliverWhatsappMessage: send failed:', res.error)
+      await markMessageFailed(messageId, res.error).catch(() => {})
       return true
     }
     const mid = res.data.messages?.[0]?.id
@@ -48,8 +55,11 @@ export async function deliverWhatsappMessage(
     }
     return true
   } catch (err) {
-    console.error('[v0] deliverWhatsappMessage: unexpected error:', err)
-    await markMessageFailed(messageId).catch(() => {})
+    console.error('deliverWhatsappMessage: unexpected error:', err)
+    await markMessageFailed(
+      messageId,
+      err instanceof Error ? err.message : 'Ошибка отправки в WhatsApp.',
+    ).catch(() => {})
     return true
   }
 }
@@ -63,6 +73,7 @@ export async function markWhatsappConversationRead(
   conversationId: string,
 ): Promise<boolean> {
   try {
+    if (await isConversationSimulated(conversationId)) return false
     const dispatch =
       await getWhatsappCloudDispatchByConversationId(conversationId)
     if (!dispatch) return false
@@ -71,10 +82,15 @@ export async function markWhatsappConversationRead(
     // Still a Cloud conversation even if there's no inbound id to ack yet.
     if (!providerId) return true
 
-    await markRead(dispatch.phoneNumberId, dispatch.token, providerId)
+    await markRead(
+      dispatch.phoneNumberId,
+      dispatch.token,
+      providerId,
+      dispatch.proxy,
+    )
     return true
   } catch (err) {
-    console.error('[v0] markWhatsappConversationRead: unexpected error:', err)
+    console.error('markWhatsappConversationRead: unexpected error:', err)
     return true
   }
 }

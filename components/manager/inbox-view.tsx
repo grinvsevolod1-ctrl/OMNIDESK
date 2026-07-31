@@ -1,9 +1,7 @@
 'use client'
 
 import {
-  type ComponentPropsWithoutRef,
   Fragment,
-  forwardRef,
   useCallback,
   useEffect,
   useMemo,
@@ -12,48 +10,33 @@ import {
   useTransition,
 } from 'react'
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import {
-  AlertCircle,
   ArrowLeft,
   Bell,
   BellOff,
   Check,
-  CheckCheck,
-  ChevronDown,
-  Clock,
-  Copy,
-  Download,
-  ExternalLink,
-  FileText,
-  Globe,
+  ChevronUp,
+  History,
   Info,
-  Link2,
   Loader2,
-  MapPin,
+  BrainCircuit,
   MessageCircle,
-  MessageSquare,
-  Monitor,
   MoreVertical,
-  Paperclip,
-  Phone,
   Reply,
   Search,
-  Send,
-  SendHorizonal,
   SlidersHorizontal,
-  Smile,
-  Sticker,
   Tag,
   Trash2,
-  Users,
+  UserPlus,
   X,
-  Zap,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   markConversationReadAction,
   sendMessageAction,
   sendStickerAction,
+  sendVkMediaAction,
   sendWhatsappMediaAction,
 } from '@/app/actions/account'
 import {
@@ -61,13 +44,19 @@ import {
   reactMessageAction,
   deleteMessageAction,
   forwardMessageAction,
-  setAgentTypingAction,
+  toggleConversationAiAction,
+  acknowledgeAiHandoffAction,
+  loadOlderMessagesAction,
 } from '@/app/actions/messages'
 import {
   dismissReplyReminderAction,
   setConversationMutedAction,
   setLeadStatusAction,
 } from '@/app/actions/leads'
+import {
+  createMeetingAction,
+  transferConversationAction,
+} from '@/app/actions/conversations'
 import {
   MessageContextMenu,
   type ForwardTarget,
@@ -88,6 +77,14 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -99,23 +96,21 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
+import { Textarea } from '@/components/ui/textarea'
 import { AutopilotToggle } from '@/components/manager/autopilot-toggle'
+// Edit-history is opened on demand (message context menu), so defer its JS and
+// its SWR fetcher until an operator actually opens it — see the conditional
+// render below, which only mounts it once historyMessage is set.
+const EditHistoryDialog = dynamic(
+  () =>
+    import('@/components/manager/edit-history-dialog').then(
+      (m) => m.EditHistoryDialog,
+    ),
+  { ssr: false },
+)
+import { VirtualList } from '@/components/manager/virtual-list'
 import { cn } from '@/lib/utils'
 import {
-  APP_TIME_ZONE,
-  formatMskDateShort,
-  formatMskDateTime,
-  formatMskTime,
-  mskDayKey,
-  mskTodayKeys,
-} from '@/lib/time'
-import {
-  CHANNEL_META,
   LEAD_STATUS_META,
   LEAD_STATUS_OPTIONS,
   LEAD_STATUS_ORDER,
@@ -126,1360 +121,51 @@ import {
 import type {
   ChannelType,
   Conversation,
-  ConversationMeta,
   LeadStatus,
   Message,
   NotLiquidReason,
   QuickReply,
   StickerItem,
 } from '@/lib/types'
+import {
+  isMediaPlaceholder,
+  MessageMedia,
+} from '@/components/manager/inbox/message-media'
+import {
+  CHANNEL_VISUAL,
+  LEAD_STATUS_VISUAL,
+  FilterChip,
+  dayLabel,
+  listStamp,
+  sourceLabel,
+  timeShort,
+  visitorTag,
+  type SortMode,
+} from '@/components/manager/inbox/visual'
+import {
+  ContactAvatar,
+  DetailsPanel,
+  DeliveryTicks,
+  Highlight,
+  PresenceBadge,
+  PresenceDot,
+  SourceChip,
+  StatusChip,
+  StatusRadioItems,
+  SyncBadge,
+} from '@/components/manager/inbox/atoms'
+import { MessageComposer } from '@/components/manager/inbox/message-composer'
+import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
+import { filterAndSortConversations } from '@/components/manager/inbox/filtering'
 
-/* -------------------------------------------------------------------------- */
-/*  Visual identity                                                           */
-/* -------------------------------------------------------------------------- */
 
-/**
- * Per-source visual identity. Brand-tinted accents are intentional: a manager
- * should tell Telegram vs WhatsApp vs widget apart at a glance.
- */
-const CHANNEL_VISUAL: Record<
-  ChannelType,
-  { icon: typeof Send; short: string; badge: string; accentText: string; dot: string }
-> = {
-  telegram: {
-    icon: Send,
-    short: 'Telegram',
-    badge: 'bg-sky-500/10 text-sky-600 border-sky-500/20 dark:text-sky-400',
-    accentText: 'text-sky-600 dark:text-sky-400',
-    dot: 'bg-sky-500',
-  },
-  whatsapp: {
-    icon: Phone,
-    short: 'WhatsApp',
-    badge:
-      'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 dark:text-emerald-400',
-    accentText: 'text-emerald-600 dark:text-emerald-400',
-    dot: 'bg-emerald-500',
-  },
-  livechat: {
-    icon: MessageCircle,
-    short: 'Виджет',
-    badge: 'bg-muted text-muted-foreground border-border',
-    accentText: 'text-muted-foreground',
-    dot: 'bg-muted-foreground',
-  },
-  max: {
-    icon: MessageSquare,
-    short: 'MAX',
-    badge:
-      'bg-amber-500/10 text-amber-600 border-amber-500/20 dark:text-amber-400',
-    accentText: 'text-amber-600 dark:text-amber-400',
-    dot: 'bg-amber-500',
-  },
-  vk: {
-    icon: Users,
-    short: 'VK',
-    badge:
-      'bg-blue-500/10 text-blue-600 border-blue-500/20 dark:text-blue-400',
-    accentText: 'text-blue-600 dark:text-blue-400',
-    dot: 'bg-blue-500',
-  },
-}
 
-/** Lead-status visual identity (badge chip + dot). */
-const LEAD_STATUS_VISUAL: Record<LeadStatus, { badge: string; dot: string }> = {
-  unsubscribed: {
-    badge: 'bg-sky-500/10 text-sky-600 border-sky-500/20 dark:text-sky-400',
-    dot: 'bg-sky-500',
-  },
-  liquid: {
-    badge: 'bg-teal-500/10 text-teal-600 border-teal-500/20 dark:text-teal-400',
-    dot: 'bg-teal-500',
-  },
-  not_liquid: {
-    badge: 'bg-muted text-muted-foreground border-border',
-    dot: 'bg-muted-foreground',
-  },
-  transferred: {
-    badge:
-      'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 dark:text-emerald-400',
-    dot: 'bg-emerald-500',
-  },
-}
 
-/**
- * Live visitor presence on the website (live-chat widget only). Mirrors the
- * widget's reported state: 'open' = looking at the chat, 'minimized' = on the
- * page with the chat closed, 'away' = tab hidden, 'left' = navigated away (or
- * the heartbeat went stale). Emerald/sky/amber/muted keep within the palette.
- */
-type PresenceState = 'open' | 'minimized' | 'away' | 'left'
-
-const PRESENCE_VISUAL: Record<
-  PresenceState,
-  { label: string; dot: string; text: string; pulse: boolean }
-> = {
-  open: {
-    label: 'В чате',
-    dot: 'bg-emerald-500',
-    text: 'text-emerald-600 dark:text-emerald-400',
-    pulse: true,
-  },
-  minimized: {
-    label: 'На сайте',
-    dot: 'bg-sky-500',
-    text: 'text-sky-600 dark:text-sky-400',
-    pulse: false,
-  },
-  away: {
-    label: 'Отошёл',
-    dot: 'bg-amber-500',
-    text: 'text-amber-600 dark:text-amber-400',
-    pulse: false,
-  },
-  left: {
-    label: 'Покинул сайт',
-    dot: 'bg-muted-foreground',
-    text: 'text-muted-foreground',
-    pulse: false,
-  },
-}
-
-type SortMode = 'recent' | 'oldest' | 'unread' | 'status'
-
-/* -------------------------------------------------------------------------- */
-/*  Small helpers                                                             */
-/* -------------------------------------------------------------------------- */
-
-function initials(name: string): string {
-  return name
-    .split(' ')
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
-}
-
-/** Stable colour index for an avatar based on the contact name. */
-function avatarTint(name: string): string {
-  const palette = [
-    'bg-sky-500/15 text-sky-600 dark:text-sky-400',
-    'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-    'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-    'bg-rose-500/15 text-rose-600 dark:text-rose-400',
-    'bg-teal-500/15 text-teal-600 dark:text-teal-400',
-    'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400',
-  ]
-  let sum = 0
-  for (let i = 0; i < name.length; i++) sum = (sum + name.charCodeAt(i)) % 997
-  return palette[sum % palette.length]
-}
-
-/**
- * Per-account colour identity. A manager may have several Telegram / WhatsApp
- * accounts and several sites — the platform icon alone can't tell account #1
- * from account #2. We assign each connected source (keyed by its channelId) a
- * stable colour so every chip / avatar ring for that exact account looks the
- * same, and two accounts of the same platform look different. Purple/violet are
- * intentionally omitted per the design guidelines.
- */
-const SOURCE_PALETTE: { chip: string; ring: string; dot: string }[] = [
-  {
-    chip: 'bg-sky-500/10 text-sky-700 border-sky-500/25 dark:text-sky-300',
-    ring: 'ring-sky-500/50',
-    dot: 'bg-sky-500',
-  },
-  {
-    chip: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/25 dark:text-emerald-300',
-    ring: 'ring-emerald-500/50',
-    dot: 'bg-emerald-500',
-  },
-  {
-    chip: 'bg-amber-500/10 text-amber-700 border-amber-500/25 dark:text-amber-300',
-    ring: 'ring-amber-500/50',
-    dot: 'bg-amber-500',
-  },
-  {
-    chip: 'bg-rose-500/10 text-rose-700 border-rose-500/25 dark:text-rose-300',
-    ring: 'ring-rose-500/50',
-    dot: 'bg-rose-500',
-  },
-  {
-    chip: 'bg-teal-500/10 text-teal-700 border-teal-500/25 dark:text-teal-300',
-    ring: 'ring-teal-500/50',
-    dot: 'bg-teal-500',
-  },
-  {
-    chip: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/25 dark:text-indigo-300',
-    ring: 'ring-indigo-500/50',
-    dot: 'bg-indigo-500',
-  },
-  {
-    chip: 'bg-orange-500/10 text-orange-700 border-orange-500/25 dark:text-orange-300',
-    ring: 'ring-orange-500/50',
-    dot: 'bg-orange-500',
-  },
-  {
-    chip: 'bg-cyan-500/10 text-cyan-700 border-cyan-500/25 dark:text-cyan-300',
-    ring: 'ring-cyan-500/50',
-    dot: 'bg-cyan-500',
-  },
-]
-
-/** Stable palette slot for a connected source, hashed from its channelId. */
-function sourceAccent(channelId: string): {
-  chip: string
-  ring: string
-  dot: string
-} {
-  let sum = 0
-  for (let i = 0; i < channelId.length; i++)
-    sum = (sum * 31 + channelId.charCodeAt(i)) >>> 0
-  return SOURCE_PALETTE[sum % SOURCE_PALETTE.length]
-}
-
-function timeShort(iso: string): string {
-  return formatMskTime(iso)
-}
-
-/** Compact relative-ish label for list rows (time today, else short date). */
-function listStamp(iso: string): string {
-  const key = mskDayKey(iso)
-  const { today, yesterday } = mskTodayKeys()
-  if (key === today) return timeShort(iso)
-  if (key === yesterday) return 'Вчера'
-  return formatMskDateShort(iso)
-}
-
-function dayLabel(iso: string): string {
-  const key = mskDayKey(iso)
-  const { today, yesterday } = mskTodayKeys()
-  if (key === today) return 'Сегодня'
-  if (key === yesterday) return 'Вчера'
-  // Drop the year when it matches the current MSK year (keys are YYYY-MM-DD).
-  const sameYear = key.slice(0, 4) === today.slice(0, 4)
-  return new Date(iso).toLocaleDateString('ru-RU', {
-    day: 'numeric',
-    month: 'long',
-    year: sameYear ? undefined : 'numeric',
-    timeZone: APP_TIME_ZONE,
-  })
-}
-
-function sourceLabel(c: Conversation): string {
-  return c.channelName?.trim() || CHANNEL_META[c.channelType].label
-}
-
-/** Normalised "@username" for a contact, or null when they don't have one. */
-function contactUsernameTag(c: Conversation): string | null {
-  const u = c.contactUsername?.trim()
-  return u ? `@${u.replace(/^@/, '')}` : null
-}
-
-/**
- * Human-readable per-channel ordinal for an anonymous live-chat visitor
- * (e.g. "#7"), or null for messenger contacts / pre-migration rows. Lets a
- * manager tell several anonymous website visitors apart at a glance.
- */
-function visitorTag(c: Conversation): string | null {
-  return c.channelType === 'livechat' && c.visitorNo ? `#${c.visitorNo}` : null
-}
-
-/**
- * Trigger button for a multi-select filter menu. forwardRef so Base UI's
- * `render` prop can merge its own handlers/ref/aria onto the real element.
- * Shows a count badge when one or more options are selected.
- */
-const FilterChip = forwardRef<
-  HTMLButtonElement,
-  { label: string; count: number; active: boolean } & ComponentPropsWithoutRef<'button'>
->(function FilterChip({ label, count, active, className, ...props }, ref) {
-  return (
-    <button
-      ref={ref}
-      type="button"
-      data-active={active}
-      className={cn(
-        'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
-        active
-          ? 'bg-secondary text-secondary-foreground'
-          : 'text-muted-foreground hover:bg-muted',
-        className,
-      )}
-      {...props}
-    >
-      {label}
-      {count > 0 ? (
-        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold tabular-nums text-primary-foreground">
-          {count}
-        </span>
-      ) : null}
-      <ChevronDown className="size-3 opacity-60" aria-hidden />
-    </button>
-  )
-})
-
-/**
- * Public profile link for a contact's username (Telegram only — t.me/<user>).
- * Returns null when there's nothing meaningful to link to.
- */
-function contactProfileUrl(c: Conversation): string | null {
-  const u = c.contactUsername?.trim().replace(/^@/, '')
-  if (!u) return null
-  return c.channelType === 'telegram' ? `https://t.me/${u}` : null
-}
-
-function deviceLabel(ua: string): string {
-  const browser = /Edg/.test(ua)
-    ? 'Edge'
-    : /OPR|Opera/.test(ua)
-      ? 'Opera'
-      : /Chrome/.test(ua)
-        ? 'Chrome'
-        : /Firefox/.test(ua)
-          ? 'Firefox'
-          : /Safari/.test(ua)
-            ? 'Safari'
-            : ''
-  const os = /Windows/.test(ua)
-    ? 'Windows'
-    : /Android/.test(ua)
-      ? 'Android'
-      : /iPhone|iPad|iOS/.test(ua)
-        ? 'iOS'
-        : /Mac OS X|Macintosh/.test(ua)
-          ? 'macOS'
-          : /Linux/.test(ua)
-            ? 'Linux'
-            : ''
-  return [browser, os].filter(Boolean).join(' · ')
-}
-
-function dateTime(iso?: string): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return '—'
-  return formatMskDateTime(iso)
-}
-
-function shortUrl(url?: string): string {
-  if (!url) return ''
-  return url.replace(/^https?:\/\//, '').replace(/\/$/, '')
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Presentational atoms                                                      */
-/* -------------------------------------------------------------------------- */
-
-function StatusChip({
-  status,
-  detail,
-  auto,
-  className,
-}: {
-  status: LeadStatus
-  detail?: NotLiquidReason
-  auto?: boolean
-  className?: string
-}) {
-  const v = LEAD_STATUS_VISUAL[status]
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none',
-        v.badge,
-        className,
-      )}
-      title={auto ? 'Статус по умолчанию' : 'Статус задан вручную'}
-    >
-      <span className={cn('size-1.5 rounded-full', v.dot)} />
-      {LEAD_STATUS_META[status].label}
-      {detail ? (
-        <span className="opacity-70">· {NOT_LIQUID_REASON_META[detail].label}</span>
-      ) : null}
-      {auto ? <span className="opacity-60">· авто</span> : null}
-    </span>
-  )
-}
-
-/** Tiny presence dot (list rows): a coloured dot, pulsing while "in chat". */
-function PresenceDot({ state }: { state: PresenceState }) {
-  const v = PRESENCE_VISUAL[state]
-  return (
-    <span
-      className="relative flex size-2 shrink-0"
-      title={`Посетитель: ${v.label.toLowerCase()}`}
-      aria-label={`Посетитель ${v.label.toLowerCase()}`}
-    >
-      {v.pulse ? (
-        <span
-          className={cn(
-            'absolute inline-flex size-full animate-ping rounded-full opacity-60',
-            v.dot,
-          )}
-          aria-hidden
-        />
-      ) : null}
-      <span className={cn('relative inline-flex size-2 rounded-full', v.dot)} aria-hidden />
-    </span>
-  )
-}
-
-/** Presence dot + label (open-conversation header / details). */
-function PresenceBadge({
-  state,
-  className,
-}: {
-  state: PresenceState
-  className?: string
-}) {
-  const v = PRESENCE_VISUAL[state]
-  return (
-    <span
-      className={cn('inline-flex items-center gap-1.5 text-[11px] font-medium', v.text, className)}
-      role="status"
-      aria-live="polite"
-      title="Активность посетителя на сайте в реальном времени"
-    >
-      <PresenceDot state={state} />
-      {v.label}
-    </span>
-  )
-}
-
-/**
- * Canonical "where is this from" chip: platform icon (keeps Telegram/WhatsApp/
- * widget instantly recognisable) + the exact account/site name, tinted with the
- * source's stable per-account colour. This is the single, structured signal we
- * show in the list, the open-conversation header and the details panel so a
- * manager juggling several accounts always knows the origin at a glance.
- */
-function SourceChip({
-  conversation,
-  size = 'sm',
-  className,
-}: {
-  conversation: Conversation
-  size?: 'sm' | 'xs'
-  className?: string
-}) {
-  const v = CHANNEL_VISUAL[conversation.channelType]
-  const Icon = v.icon
-  const accent = sourceAccent(conversation.channelId)
-  return (
-    <span
-      className={cn(
-        'inline-flex min-w-0 items-center gap-1 rounded-full border font-medium leading-none',
-        size === 'xs' ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-[11px]',
-        accent.chip,
-        className,
-      )}
-      title={`${v.short} · ${sourceLabel(conversation)}`}
-    >
-      <Icon className={size === 'xs' ? 'size-2.5 shrink-0' : 'size-3 shrink-0'} />
-      <span className="truncate">{sourceLabel(conversation)}</span>
-    </span>
-  )
-}
-
-function SyncBadge({ state }: { state: 'connecting' | 'live' | 'offline' }) {
-  const cfg = {
-    live: {
-      label: 'Онлайн',
-      title: 'Синхронизация активна — новые сообщения приходят сразу',
-      dot: 'bg-emerald-500',
-      text: 'text-emerald-600 dark:text-emerald-400',
-      pulse: true,
-    },
-    connecting: {
-      label: 'Подключение',
-      title: 'Устанавливаем соединение для синхронизации',
-      dot: 'bg-amber-500',
-      text: 'text-amber-600 dark:text-amber-400',
-      pulse: true,
-    },
-    offline: {
-      label: 'Переподключение',
-      title:
-        'Соединение прервано. ��ереподключаемся — пропущенные сообщения подгрузятся автоматически.',
-      dot: 'bg-destructive',
-      text: 'text-destructive',
-      pulse: false,
-    },
-  }[state]
-  return (
-    <span
-      className={cn('inline-flex items-center gap-1.5 text-[11px] font-medium', cfg.text)}
-      title={cfg.title}
-      role="status"
-      aria-live="polite"
-    >
-      <span className="relative flex size-2">
-        {cfg.pulse ? (
-          <span
-            className={cn(
-              'absolute inline-flex size-full animate-ping rounded-full opacity-60',
-              cfg.dot,
-            )}
-            aria-hidden
-          />
-        ) : null}
-        <span className={cn('relative inline-flex size-2 rounded-full', cfg.dot)} aria-hidden />
-      </span>
-      {cfg.label}
-    </span>
-  )
-}
-
-function Highlight({ text, query }: { text: string; query: string }) {
-  const q = query.trim()
-  if (!q) return <>{text}</>
-  const idx = text.toLowerCase().indexOf(q.toLowerCase())
-  if (idx === -1) return <>{text}</>
-  return (
-    <>
-      {text.slice(0, idx)}
-      <mark className="rounded-sm bg-amber-300/50 px-0.5 text-foreground dark:bg-amber-400/30">
-        {text.slice(idx, idx + q.length)}
-      </mark>
-      {text.slice(idx + q.length)}
-    </>
-  )
-}
-
-/**
- * Avatar with a small platform badge in the corner. When `channelId` is given
- * we also draw a thin ring in that account's stable colour, so two accounts of
- * the same platform (e.g. two Telegram numbers) are visually distinct while the
- * corner icon still says which platform it is.
- */
-function ContactAvatar({
-  name,
-  channel,
-  channelId,
-  size = 'md',
-}: {
-  name: string
-  channel: ChannelType
-  channelId?: string
-  size?: 'md' | 'lg'
-}) {
-  const v = CHANNEL_VISUAL[channel]
-  const Icon = v.icon
-  const dim = size === 'lg' ? 'size-11' : 'size-10'
-  const accent = channelId ? sourceAccent(channelId) : null
-  return (
-    <div className="relative shrink-0">
-      <Avatar
-        className={cn(
-          dim,
-          accent && `ring-2 ring-offset-2 ring-offset-card ${accent.ring}`,
-        )}
-      >
-        <AvatarFallback className={cn('text-sm font-semibold', avatarTint(name))}>
-          {initials(name)}
-        </AvatarFallback>
-      </Avatar>
-      <span
-        className={cn(
-          'absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full border-2 border-card',
-          v.dot,
-        )}
-        aria-hidden
-      >
-        <Icon className="size-2 text-white" />
-      </span>
-    </div>
-  )
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Details panel (visitor / source context + status)                        */
-/* -------------------------------------------------------------------------- */
-
-function MetaRows({ meta }: { meta: ConversationMeta }) {
-  const device = meta.userAgent ? deviceLabel(meta.userAgent) : ''
-  const rows: { icon: typeof Globe; label: string; value: string }[] = []
-  if (meta.subject) rows.push({ icon: Tag, label: 'Тема', value: meta.subject })
-  if (meta.ip) rows.push({ icon: Globe, label: 'IP-адрес', value: meta.ip })
-  if (meta.timezone)
-    rows.push({ icon: MapPin, label: 'Часовой пояс', value: meta.timezone })
-  if (device || meta.screen)
-    rows.push({
-      icon: Monitor,
-      label: 'Устройство',
-      value: [device, meta.screen].filter(Boolean).join(', '),
-    })
-  if (meta.language)
-    rows.push({ icon: Globe, label: 'Язык', value: meta.language })
-  if (meta.page)
-    rows.push({ icon: Link2, label: 'Страница', value: shortUrl(meta.page) })
-  if (meta.referrer)
-    rows.push({
-      icon: Link2,
-      label: 'Источник перехода',
-      value: shortUrl(meta.referrer),
-    })
-  rows.push({ icon: Clock, label: 'Первый визит', value: dateTime(meta.firstSeen) })
-
-  return (
-    <dl className="flex flex-col gap-3">
-      {rows.map((r, i) => (
-        <div key={i} className="flex items-start gap-2.5 text-xs">
-          <r.icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-          <div className="min-w-0">
-            <dt className="text-muted-foreground">{r.label}</dt>
-            <dd className="mt-0.5 break-words font-medium text-foreground">
-              {r.value}
-            </dd>
-          </div>
-        </div>
-      ))}
-    </dl>
-  )
-}
-
-function DetailsPanel({
-  conversation,
-  onClose,
-  onStatus,
-  statusPending,
-}: {
-  conversation: Conversation
-  onClose: () => void
-  /** Receives an option value: 'auto', a status, or 'not_liquid:<reason>'. */
-  onStatus: (optionValue: string) => void
-  statusPending: boolean
-}) {
-  return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
-        <span className="flex items-center gap-2 text-sm font-semibold">
-          <Info className="size-4 text-muted-foreground" />
-          О контакте
-        </span>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={onClose}
-          aria-label="Закрыть панель"
-        >
-          <X className="size-4" />
-        </Button>
-      </div>
-
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="flex flex-col items-center gap-2 pb-4 text-center">
-          <ContactAvatar
-            name={conversation.contactName}
-            channel={conversation.channelType}
-            channelId={conversation.channelId}
-            size="lg"
-          />
-          <div>
-            <p className="flex items-center gap-2 text-sm font-semibold">
-              {conversation.contactName}
-              {visitorTag(conversation) ? (
-                <span className="shrink-0 rounded bg-muted px-1 text-[11px] font-medium tabular-nums text-muted-foreground">
-                  {visitorTag(conversation)}
-                </span>
-              ) : null}
-            </p>
-            {contactUsernameTag(conversation) ? (
-              contactProfileUrl(conversation) ? (
-                <a
-                  href={contactProfileUrl(conversation) as string}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
-                >
-                  {contactUsernameTag(conversation)}
-                </a>
-              ) : (
-                <p className="text-xs font-medium text-muted-foreground">
-                  {contactUsernameTag(conversation)}
-                </p>
-              )
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                {conversation.contactHandle}
-              </p>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-1.5">
-            <SourceChip conversation={conversation} />
-          </div>
-        </div>
-
-        {/* Status control */}
-        <div className="mb-4 rounded-lg border border-border bg-muted/30 p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <Tag className="size-3.5" />
-              Статус лида
-            </span>
-            {statusPending ? (
-              <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-            ) : (
-              <StatusChip
-                status={conversation.status}
-                detail={conversation.statusDetail}
-                auto={!conversation.statusManual}
-              />
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            <button
-              type="button"
-              onClick={() => onStatus('auto')}
-              disabled={statusPending}
-              className={cn(
-                'rounded-md border px-2 py-1.5 text-xs font-medium transition-colors',
-                !conversation.statusManual
-                  ? 'border-foreground/20 bg-card text-foreground shadow-sm'
-                  : 'border-transparent text-muted-foreground hover:bg-card/60',
-              )}
-            >
-              Авто
-            </button>
-            {LEAD_STATUS_OPTIONS.map((opt) => {
-              const current = conversation.statusManual
-                ? leadStatusOptionValue(
-                    conversation.status,
-                    conversation.statusDetail,
-                  )
-                : null
-              const activeStatus = current === opt.value
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => onStatus(opt.value)}
-                  disabled={statusPending}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors',
-                    activeStatus
-                      ? 'border-foreground/20 bg-card text-foreground shadow-sm'
-                      : 'border-transparent text-muted-foreground hover:bg-card/60',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'size-1.5 rounded-full',
-                      LEAD_STATUS_VISUAL[opt.status].dot,
-                    )}
-                  />
-                  {opt.label}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {conversation.meta ? (
-          <div>
-            <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Данные о переходе
-            </p>
-            <MetaRows meta={conversation.meta} />
-          </div>
-        ) : (
-          <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
-            Нет дополнительных данных об источнике для этого канала.
-          </p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Lead-status menu helpers (shared by context menu + header dropdown)       */
-/* -------------------------------------------------------------------------- */
-
-function StatusRadioItems({ Item }: { Item: typeof ContextMenuRadioItem }) {
-  return (
-    <>
-      <Item value="auto">
-        <span className="flex items-center gap-2">
-          <CheckCheck className="size-3.5 text-muted-foreground" />
-          Авто
-        </span>
-      </Item>
-      {LEAD_STATUS_OPTIONS.map((opt) => (
-        <Item key={opt.value} value={opt.value}>
-          <span className="flex items-center gap-2">
-            <span
-              className={cn(
-                'size-2 rounded-full',
-                LEAD_STATUS_VISUAL[opt.status].dot,
-              )}
-            />
-            {opt.label}
-          </span>
-        </Item>
-      ))}
-    </>
-  )
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Media rendering + emoji / sticker pickers                                  */
-/* -------------------------------------------------------------------------- */
-
-/** Placeholder labels we synthesise at ingest for media without a caption. */
-const MEDIA_PLACEHOLDERS = new Set([
-  '[Фото]',
-  '[Видео]',
-  '[Видеосообщение]',
-  '[Голосовое сообщение]',
-  '[Аудио]',
-  '[Стикер]',
-  '[Файл]',
-])
-
-/** True when `body` is just a synthetic media placeholder (so we hide it). */
-function isMediaPlaceholder(body: string): boolean {
-  const b = body.trim()
-  if (MEDIA_PLACEHOLDERS.has(b)) return true
-  if (b.startsWith('[Файл:') || b.startsWith('[Стикер]')) return true
-  // Sticker placeholders may be "😀 [Стикер]".
-  if (b.endsWith('[Стикер]')) return true
-  return false
-}
-
-/**
- * Force-download a media file rather than navigating to it. The bytes are
- * same-origin (`/api/media/{id}`), so we fetch them as a blob and click a
- * temporary anchor with a `download` attribute — this works even when the
- * server streams the file `inline`, and lets us set a sensible filename.
- */
-async function downloadMedia(url: string, filename: string): Promise<void> {
-  try {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`status ${res.status}`)
-    const blob = await res.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = objectUrl
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    // Revoke a tick later so the download has a chance to start.
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
-  } catch {
-    // Fall back to opening in a new tab so the user can still save manually.
-    window.open(url, '_blank', 'noopener,noreferrer')
-    toast.error('Не удалось скачать файл — открыли в новой вкладке')
-  }
-}
-
-/** Suggest a filename for a downloaded media item from its type/name. */
-function mediaFilename(message: Message): string {
-  if (message.mediaName) return message.mediaName
-  const ext =
-    message.mediaType === 'image'
-      ? 'jpg'
-      : message.mediaType === 'video' || message.mediaType === 'video_note'
-        ? 'mp4'
-        : message.mediaType === 'voice' || message.mediaType === 'audio'
-          ? 'ogg'
-          : 'bin'
-  return `media-${message.id.slice(0, 8)}.${ext}`
-}
-
-/**
- * Fullscreen viewer for an image or video, with download + open-in-new-tab.
- * Rendered as a fixed overlay (only one is ever open per message bubble).
- */
-function MediaLightbox({
-  message,
-  onClose,
-}: {
-  message: Message
-  onClose: () => void
-}) {
-  const url = message.mediaUrl
-  const isVideo =
-    message.mediaType === 'video' || message.mediaType === 'video_note'
-
-  // Close on Escape for keyboard users.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  if (!url) return null
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Просмотр вложения"
-      className="fixed inset-0 z-[100] flex flex-col bg-black/90"
-      onClick={onClose}
-    >
-      <div className="flex shrink-0 items-center justify-end gap-2 p-3">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={(e) => {
-            e.stopPropagation()
-            void downloadMedia(url, mediaFilename(message))
-          }}
-        >
-          <Download className="size-4" />
-          Скачать
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={(e) => {
-            e.stopPropagation()
-            window.open(url, '_blank', 'noopener,noreferrer')
-          }}
-        >
-          <ExternalLink className="size-4" />
-          Открыть
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          aria-label="Закрыть"
-          onClick={onClose}
-        >
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div
-        className="flex min-h-0 flex-1 items-center justify-center p-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {isVideo ? (
-          <video
-            src={url}
-            controls
-            autoPlay
-            className="max-h-full max-w-full rounded-lg"
-          />
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={url || '/placeholder.svg'}
-            alt={message.body || 'Изображение'}
-            className="max-h-full max-w-full rounded-lg object-contain"
-          />
-        )}
-      </div>
-    </div>
-  )
-}
-
-/**
- * Render a message's media. Streams bytes from `/api/media/{id}` via the panel
- * proxy. On error (e.g. expired WhatsApp media) falls back to a small notice.
- * Images and videos are clickable to open a fullscreen viewer where they can be
- * saved.
- */
-function MessageMedia({ message }: { message: Message }) {
-  const [failed, setFailed] = useState(false)
-  const [lightbox, setLightbox] = useState(false)
-  const url = message.mediaUrl
-  const type = message.mediaType
-
-  if (!type) return null
-
-  // Stickers degrade to their emoji when there's no streamable URL (e.g. our
-  // own optimistic outgoing sticker) or when the download fails.
-  if (type === 'sticker' && (!url || failed)) {
-    return <span className="text-5xl leading-none">{message.body || '🎯'}</span>
-  }
-
-  if (!url) return null
-
-  if (failed) {
-    return (
-      <div className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-        <Info className="size-3.5 shrink-0" />
-        Медиа недоступно
-      </div>
-    )
-  }
-
-  if (type === 'sticker') {
-    return (
-      <img
-        src={url || '/placeholder.svg'}
-        alt={message.body || 'Стикер'}
-        className="size-32 object-contain"
-        loading="lazy"
-        onError={() => setFailed(true)}
-      />
-    )
-  }
-
-  if (type === 'image') {
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => setLightbox(true)}
-          className="group relative block cursor-zoom-in overflow-hidden rounded-lg"
-          aria-label="Открыть изображение"
-        >
-          <img
-            src={url || '/placeholder.svg'}
-            alt={message.body || 'Изображение'}
-            className="max-h-80 max-w-full rounded-lg object-contain"
-            loading="lazy"
-            onError={() => setFailed(true)}
-          />
-        </button>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
-        ) : null}
-      </>
-    )
-  }
-
-  if (type === 'video_note') {
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => setLightbox(true)}
-          className="block cursor-zoom-in rounded-full"
-          aria-label="Открыть видео"
-        >
-          <video
-            src={url}
-            className="pointer-events-none size-48 rounded-full object-cover"
-            onError={() => setFailed(true)}
-          />
-        </button>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
-        ) : null}
-      </>
-    )
-  }
-
-  if (type === 'video') {
-    return (
-      <div className="flex flex-col gap-1">
-        <video
-          src={url}
-          controls
-          className="max-h-80 max-w-full rounded-lg"
-          onError={() => setFailed(true)}
-        />
-        <div className="flex items-center gap-3 text-xs">
-          <button
-            type="button"
-            onClick={() => setLightbox(true)}
-            className="flex items-center gap-1 opacity-70 hover:opacity-100"
-          >
-            <ExternalLink className="size-3.5" />
-            Открыть
-          </button>
-          <button
-            type="button"
-            onClick={() => void downloadMedia(url, mediaFilename(message))}
-            className="flex items-center gap-1 opacity-70 hover:opacity-100"
-          >
-            <Download className="size-3.5" />
-            Скачать
-          </button>
-        </div>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
-        ) : null}
-      </div>
-    )
-  }
-
-  if (type === 'voice' || type === 'audio') {
-    return (
-      <div className="flex flex-col gap-1">
-        <audio
-          src={url}
-          controls
-          className="w-56 max-w-full"
-          onError={() => setFailed(true)}
-        />
-        <button
-          type="button"
-          onClick={() => void downloadMedia(url, mediaFilename(message))}
-          className="flex items-center gap-1 text-xs opacity-70 hover:opacity-100"
-        >
-          <Download className="size-3.5" />
-          Скачать
-        </button>
-      </div>
-    )
-  }
-
-  // document
-  return (
-    <button
-      type="button"
-      onClick={() => void downloadMedia(url, mediaFilename(message))}
-      className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium hover:bg-muted"
-    >
-      <FileText className="size-4 shrink-0" />
-      <span className="truncate">{message.mediaName || 'Файл'}</span>
-      <Download className="size-3.5 shrink-0 opacity-70" />
-    </button>
-  )
-}
-
-/** Curated emoji set grouped by category. Plain text — no extra dependency. */
-const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
-  {
-    label: 'Смайлы',
-    emojis: [
-      '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
-      '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😋', '😎', '🤩',
-      '🥳', '😏', '😢', '😭', '😤', '😠', '😡', '🤔', '🤗', '🤭',
-      '😴', '😬', '🙄', '😱', '😳', '🤯', '😅', '😢',
-    ],
-  },
-  {
-    label: 'Жесты',
-    emojis: [
-      '👍', '👎', '👌', '✌️', '🤞', '🤝', '👏', '🙏', '💪', '🫶',
-      '👋', '🤙', '✋', '🖐️', '👊', '🤛', '🤜', '☝️', '👆', '👉',
-    ],
-  },
-  {
-    label: 'Сердца',
-    emojis: [
-      '❤️', '🧡', '���', '💚', '💙', '💜', '🖤', '🤍', '💔', '❣️',
-      '���', '💞', '💓', '💗', '💖', '💘', '💝', '✨', '🔥', '⭐',
-    ],
-  },
-  {
-    label: 'Объекты',
-    emojis: [
-      '🎉', '🎊', '🎁', '🏆', '✅', '❌', '⚡', '💡', '📌', '📎',
-      '💰', '📞', '📧', '📅', '⏰', '🚀', '👀', '💬', '❓', '❗',
-    ],
-  },
-]
-
-/** Emoji picker popover. Inserts the chosen emoji into the composer draft. */
-function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
-  return (
-    <Popover>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0 rounded-full text-muted-foreground"
-            aria-label="Эмодзи"
-          >
-            <Smile className="size-5" />
-          </Button>
-        }
-      />
-      <PopoverContent align="start" className="w-72 p-2">
-        <div className="scrollbar-thin max-h-64 overflow-y-auto">
-          {EMOJI_CATEGORIES.map((cat) => (
-            <div key={cat.label} className="mb-2 last:mb-0">
-              <p className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                {cat.label}
-              </p>
-              <div className="grid grid-cols-8 gap-0.5">
-                {cat.emojis.map((e, i) => (
-                  <button
-                    key={`${e}-${i}`}
-                    type="button"
-                    onClick={() => onPick(e)}
-                    className="flex size-8 items-center justify-center rounded-md text-xl leading-none hover:bg-muted"
-                    aria-label={`Вставить ${e}`}
-                  >
-                    {e}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-/**
- * Sticker picker (Telegram only). Lazily fetches the account's sticker palette
- * from `/api/stickers` the first time it opens, renders thumbnails, and sends
- * the chosen sticker on click.
- */
-function StickerPicker({
-  channelId,
-  onSend,
-}: {
-  channelId: string
-  onSend: (sticker: StickerItem) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [stickers, setStickers] = useState<StickerItem[] | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (!open || stickers !== null || loading) return
-    setLoading(true)
-    fetch(`/api/stickers?channelId=${encodeURIComponent(channelId)}`)
-      .then((r) => (r.ok ? r.json() : { stickers: [] }))
-      .then((data: { stickers: StickerItem[] }) =>
-        setStickers(data.stickers ?? []),
-      )
-      .catch(() => setStickers([]))
-      .finally(() => setLoading(false))
-  }, [open, channelId, stickers, loading])
-
-  function thumbUrl(s: StickerItem): string {
-    const qs = new URLSearchParams({
-      channelId,
-      id: s.id,
-      accessHash: s.accessHash,
-      fileReference: s.fileReference,
-    })
-    return `/api/stickers/thumb?${qs.toString()}`
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0 rounded-full text-muted-foreground"
-            aria-label="Стикеры"
-          >
-            <Sticker className="size-5" />
-          </Button>
-        }
-      />
-      <PopoverContent align="start" className="w-72 p-2">
-        {loading ? (
-          <div className="flex h-32 items-center justify-center">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : !stickers || stickers.length === 0 ? (
-          <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-            Нет доступных стикеров. Добавьте стикеры в избранное в Telegram, и
-            они появятся здесь.
-          </p>
-        ) : (
-          <div className="scrollbar-thin grid max-h-64 grid-cols-4 gap-1 overflow-y-auto">
-            {stickers.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => {
-                  onSend(s)
-                  setOpen(false)
-                }}
-                className="flex aspect-square items-center justify-center rounded-md p-1 hover:bg-muted"
-                aria-label={s.emoji ? `Стикер ${s.emoji}` : 'Стикер'}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={thumbUrl(s) || '/placeholder.svg'}
-                  alt={s.emoji || 'Стикер'}
-                  className="size-full object-contain"
-                  loading="lazy"
-                />
-              </button>
-            ))}
-          </div>
-        )}
-      </PopoverContent>
-    </Popover>
-  )
-}
 
 /* -------------------------------------------------------------------------- */
 /*  Main component                                                            */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Shape of a parsed `/api/stream` SSE payload we care about on the client.
- * Mirrors the server's RealtimeEvent but kept local so this client component
- * never imports the server-only realtime module (which pulls in `pg`).
- */
-interface RealtimeStreamEvent {
-  type?: 'message' | 'conversation' | 'channel' | 'typing'
-  event?: 'insert' | 'update'
-  conversationId?: string
-  id?: string
-  reactions?: Array<{ emoji: string; fromMe: boolean }> | null
-  deletedAt?: string | null
-  deletedOrigin?: 'self' | 'remote' | null
-  status?: string
-  // Typing pings (visitor → manager).
-  actor?: 'visitor' | 'agent'
-  typing?: boolean
-  draft?: string
-  // Presence pings (visitor → manager).
-  presence?: PresenceState
-  contactName?: string
-}
-
-/** Live "visitor is typing" state for a conversation. */
-interface VisitorTyping {
-  draft: string
-  name: string
-  /** Epoch ms when this ping arrived; used to auto-expire a stale indicator. */
-  at: number
-}
-
-/** Auto-clear a typing indicator if no fresh ping arrives within this window. */
-const TYPING_TTL_MS = 6_000
-
-/** Live "visitor presence" state for a conversation. */
-interface VisitorPresence {
-  state: PresenceState
-  /** Epoch ms of the last ping; a stale entry is downgraded to 'left'. */
-  at: number
-}
-
-/**
- * If no presence ping (incl. the widget's 25s heartbeat) arrives within this
- * window, the visitor is treated as gone — covers crashes / network loss where
- * the 'left' beacon never fired.
- */
-const PRESENCE_TTL_MS = 60_000
-
-/**
- * Messenger-style delivery ticks for an outbound message:
- *   sent → single check, delivered → double check, read → blue double check,
- *   failed → warning. Legacy rows (no status) fall back to a single check.
- */
-function DeliveryTicks({ status }: { status?: Message['status'] }) {
-  if (status === 'failed') {
-    return (
-      <AlertCircle className="size-3 text-destructive" aria-label="Не доставлено" />
-    )
-  }
-  if (status === 'read') {
-    return <CheckCheck className="size-3 text-sky-400" aria-label="Прочитано" />
-  }
-  if (status === 'delivered') {
-    return <CheckCheck className="size-3" aria-label="Доставлено" />
-  }
-  return <Check className="size-3" aria-label="Отправлено" />
-}
 
 export function InboxView({
   conversations: rawConversations,
@@ -1487,7 +173,10 @@ export function InboxView({
   currentUser,
   quickReplies = [],
   autopilot,
+  aiMasterEnabled = false,
   ownedChannelIds = [],
+  transferTargets = [],
+  telemostEnabled = false,
 }: {
   conversations: Conversation[]
   messagesByConversation: Record<string, Message[]>
@@ -1495,12 +184,22 @@ export function InboxView({
   quickReplies?: QuickReply[]
   autopilot?: { enabled: boolean; enabledCount: number }
   /**
+   * Global AI master switch (set on /admin/ai). When on, the AI leads every
+   * conversation by default; a manager pauses individual threads to reply by
+   * hand. Drives the blocked composer + "AI is leading" affordance.
+   */
+  aiMasterEnabled?: boolean
+  /**
    * Channel ids this manager actually owns. Leads routed in from a shared/pool
    * account (e.g. while another manager was on lunch) keep a foreign channel —
    * we must NOT expose that account's name. Such leads appear as ordinary leads
    * with a generic channel-type label instead.
    */
   ownedChannelIds?: string[]
+  /** Colleagues this manager can hand a conversation off to. */
+  transferTargets?: { id: string; name: string; onLunch: boolean }[]
+  /** Whether the Yandex Telemost video-meeting button is available. */
+  telemostEnabled?: boolean
 }) {
   const router = useRouter()
   // Hide foreign account names: blank the channel name for any lead whose
@@ -1513,9 +212,29 @@ export function InboxView({
     )
   }, [rawConversations, ownedChannelIds])
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [draft, setDraft] = useState('')
+  // Per-conversation composer drafts. Like Telegram, an unsent message is kept
+  // when you switch to another conversation and restored when you come back.
+  // Kept in a ref (not state) so the MessageComposer — which is keyed by
+  // conversation id and owns the live text in local state — can seed from and
+  // write back to it WITHOUT ever re-rendering this large parent on a keystroke.
+  const draftsRef = useRef<Record<string, string>>({})
+  const persistDraft = useCallback((id: string, text: string) => {
+    if (text) draftsRef.current[id] = text
+    else delete draftsRef.current[id]
+  }, [])
+  const getDraft = useCallback((id: string) => draftsRef.current[id] ?? '', [])
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
+  // Message whose edit history is open in the dialog (null = closed).
+  const [historyMessage, setHistoryMessage] = useState<Message | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // Conversation hand-off dialog state. `transferForId` holds the conversation
+  // being handed off (null = dialog closed); the picker/note drive the submit.
+  const [transferForId, setTransferForId] = useState<string | null>(null)
+  const [transferTo, setTransferTo] = useState('')
+  const [transferNote, setTransferNote] = useState('')
+  const [transferPending, setTransferPending] = useState(false)
+  // Telemost video-meeting creation in progress (disables the composer button).
+  const [meetingPending, setMeetingPending] = useState(false)
 
   const [search, setSearch] = useState('')
   // Multi-select filters. An empty Set means "no filter" (show everything),
@@ -1538,28 +257,44 @@ export function InboxView({
   const toggleType = useCallback((value: ChannelType) => {
     setTypeFilter((prev) => {
       const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
+      if (next.has(value)) {
+        next.delete(value)
+      } else {
+        next.add(value)
+      }
       return next
     })
   }, [])
   const toggleSource = useCallback((value: string) => {
     setSourceFilter((prev) => {
       const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
+      if (next.has(value)) {
+        next.delete(value)
+      } else {
+        next.add(value)
+      }
       return next
     })
   }, [])
   const toggleStatus = useCallback((value: LeadStatus) => {
     setStatusFilter((prev) => {
       const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
+      if (next.has(value)) {
+        next.delete(value)
+      } else {
+        next.add(value)
+      }
       return next
     })
   }, [])
   const toggleReason = useCallback((value: NotLiquidReason) => {
     setReasonFilter((prev) => {
       const next = new Set(prev)
-      next.has(value) ? next.delete(value) : next.add(value)
+      if (next.has(value)) {
+        next.delete(value)
+      } else {
+        next.add(value)
+      }
       return next
     })
   }, [])
@@ -1570,6 +305,48 @@ export function InboxView({
   const [localMessages, setLocalMessages] = useState<
     Record<string, Message[]>
   >(messagesByConversation)
+
+  // "Load older messages" state. Threads hydrate with only the most-recent
+  // slice (see MESSAGE_HISTORY_LIMIT server-side); this lets a manager pull
+  // older history on demand. `noOlder` marks threads with nothing left to load;
+  // the scroll container ref preserves the reading position across a prepend.
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [noOlder, setNoOlder] = useState<Record<string, boolean>>({})
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null)
+
+  const handleLoadOlder = useCallback(async () => {
+    if (!activeId || loadingOlder) return
+    const current = localMessages[activeId] ?? []
+    const oldest = current[0]
+    if (!oldest) return
+    setLoadingOlder(true)
+    const container = messagesScrollRef.current
+    const prevHeight = container?.scrollHeight ?? 0
+    try {
+      const before = new Date(oldest.createdAt).toISOString()
+      const res = await loadOlderMessagesAction(activeId, before)
+      if (res.ok && res.messages.length > 0) {
+        setLocalMessages((prev) => {
+          const existing = prev[activeId] ?? []
+          const known = new Set(existing.map((m) => m.id))
+          const older = res.messages.filter((m) => !known.has(m.id))
+          if (older.length === 0) return prev
+          return { ...prev, [activeId]: [...older, ...existing] }
+        })
+        // Keep the viewport anchored to the same message after older ones are
+        // prepended above it (otherwise the list would jump to the top).
+        requestAnimationFrame(() => {
+          const c = messagesScrollRef.current
+          if (c) c.scrollTop = c.scrollHeight - prevHeight
+        })
+      }
+      if (!res.hasMore) setNoOlder((p) => ({ ...p, [activeId]: true }))
+    } catch {
+      toast.error('Не удалось загрузить историю')
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [activeId, loadingOlder, localMessages])
 
   // Optimistic "no reply needed" dismissals (conversationId -> dismissal time in
   // ms). Lets the badge/sorting update instantly before the server round-trip,
@@ -1583,42 +360,25 @@ export function InboxView({
   const [mutedOverrides, setMutedOverrides] = useState<Record<string, boolean>>(
     {},
   )
+  // Optimistic per-conversation AI-lead state, keyed by conversation id.
+  const [aiOverrides, setAiOverrides] = useState<Record<string, boolean>>({})
+  // Handoffs already acknowledged this session (guards the ack effect against
+  // duplicate server calls). Not state: acknowledgement clears visually via the
+  // "exclude the active thread" rule, and the server flag drives everything else.
+  const ackedHandoffsRef = useRef<Record<string, boolean>>({})
+  // Set true briefly to shake the AI button — the hint shown when a manager
+  // tries to send while the AI is leading the thread.
+  const [aiButtonPulse, setAiButtonPulse] = useState(false)
+  const aiPulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pulseAiButton = useCallback(() => {
+    if (aiPulseTimer.current) clearTimeout(aiPulseTimer.current)
+    setAiButtonPulse(true)
+    aiPulseTimer.current = setTimeout(() => setAiButtonPulse(false), 600)
+  }, [])
   // Whether to reveal muted/silenced threads in the list (hidden by default).
   const [showMuted, setShowMuted] = useState(false)
 
-  const [syncState, setSyncState] = useState<'connecting' | 'live' | 'offline'>(
-    'connecting',
-  )
-
-  // Live "visitor is typing" state, keyed by conversation id. Patched by the
-  // SSE 'typing' handler and swept for staleness on an interval.
-  const [typingByConv, setTypingByConv] = useState<
-    Record<string, VisitorTyping>
-  >({})
-
-  // Live "visitor presence" state, keyed by conversation id. Patched by the SSE
-  // 'presence' handler; stale entries are downgraded to 'left' by the sweep.
-  const [presenceByConv, setPresenceByConv] = useState<
-    Record<string, VisitorPresence>
-  >({})
-
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
-  // Composer textarea, so quick replies / emoji insertion can grow + refocus it.
-  const composerRef = useRef<HTMLTextAreaElement | null>(null)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-
-  // Keep the auto-growing composer sized to its content (capped), called on
-  // every change and after programmatic inserts (quick replies, emoji).
-  const resizeComposer = useCallback(() => {
-    const el = composerRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-  }, [])
-
-  // Whether the quick-replies tray is expanded. Collapsed by default so it never
-  // crowds the composer; the manager taps to reveal their saved answers.
-  const [quickRepliesOpen, setQuickRepliesOpen] = useState(false)
 
   // Latest values for the reminder interval to read without re-subscribing, plus
   // a per-conversation throttle so we never spam the same unanswered thread.
@@ -1634,153 +394,13 @@ export function InboxView({
     lastReminded: new Map(),
   })
 
-  // Realtime: refresh on worker updates and track connection state.
-  useEffect(() => {
-    const es = new EventSource('/api/stream')
-    es.addEventListener('ready', () => setSyncState('live'))
-    es.onopen = () => setSyncState('live')
-    es.addEventListener('update', (e) => {
-      setSyncState('live')
-      let data: RealtimeStreamEvent | null = null
-      try {
-        data = JSON.parse((e as MessageEvent).data) as RealtimeStreamEvent
-      } catch {
-        data = null
-      }
-      // Message changed in place (reaction toggled / soft-deleted): patch just
-      // that message locally so the change appears instantly without a full
-      // server refetch (and without clobbering other optimistic state).
-      if (
-        data &&
-        data.type === 'message' &&
-        data.event === 'update' &&
-        data.conversationId &&
-        data.id
-      ) {
-        const convId = data.conversationId
-        const msgId = data.id
-        const deletedAt = data.deletedAt ?? null
-        const isDeleted = Boolean(deletedAt)
-        const deletedOrigin =
-          data.deletedOrigin === 'self' || data.deletedOrigin === 'remote'
-            ? data.deletedOrigin
-            : undefined
-        const reactions = Array.isArray(data.reactions)
-          ? data.reactions.filter((r) => r && typeof r.emoji === 'string')
-          : []
-        const nextStatus = data.status as Message['status'] | undefined
-        setLocalMessages((prev) => {
-          const list = prev[convId]
-          if (!list) return prev
-          return {
-            ...prev,
-            [convId]: list.map((m) =>
-              m.id === msgId
-                ? isDeleted
-                  ? {
-                      // Preserve the original content (body + media); just stamp
-                      // the deleted marker so nothing is lost in the thread.
-                      ...m,
-                      deletedAt: deletedAt ?? new Date().toISOString(),
-                      deletedOrigin: deletedOrigin ?? m.deletedOrigin,
-                    }
-                  : {
-                      ...m,
-                      reactions: reactions.length ? reactions : undefined,
-                      ...(nextStatus ? { status: nextStatus } : {}),
-                    }
-                : m,
-            ),
-          }
-        })
-        return
-      }
-      // Everything else (new inbound message, conversation/channel changes):
-      // pull fresh server data.
-      router.refresh()
-    })
-    // Ephemeral "visitor is typing" pings (with a live draft preview). Kept in
-    // local state only — never persisted, never trigger a refetch.
-    es.addEventListener('typing', (e) => {
-      let data: RealtimeStreamEvent | null = null
-      try {
-        data = JSON.parse((e as MessageEvent).data) as RealtimeStreamEvent
-      } catch {
-        data = null
-      }
-      if (!data || data.actor !== 'visitor' || !data.conversationId) return
-      const convId = data.conversationId
-      if (data.typing === false) {
-        setTypingByConv((prev) => {
-          if (!prev[convId]) return prev
-          const next = { ...prev }
-          delete next[convId]
-          return next
-        })
-        return
-      }
-      setTypingByConv((prev) => ({
-        ...prev,
-        [convId]: {
-          draft: data.draft ?? '',
-          name: data.contactName ?? 'Посетитель',
-          at: Date.now(),
-        },
-      }))
-    })
-    // Ephemeral visitor presence (on the site / in chat / away / left). Local
-    // state only — never persisted, never triggers a refetch.
-    es.addEventListener('presence', (e) => {
-      let data: RealtimeStreamEvent | null = null
-      try {
-        data = JSON.parse((e as MessageEvent).data) as RealtimeStreamEvent
-      } catch {
-        data = null
-      }
-      if (!data || data.actor !== 'visitor' || !data.conversationId) return
-      if (!data.presence) return
-      const convId = data.conversationId
-      const state = data.presence
-      setPresenceByConv((prev) => ({
-        ...prev,
-        [convId]: { state, at: Date.now() },
-      }))
-    })
-    es.onerror = () => setSyncState('offline')
-    // Sweep stale typing indicators (in case a "stopped" ping is ever lost).
-    const sweep = setInterval(() => {
-      setTypingByConv((prev) => {
-        const now = Date.now()
-        let changed = false
-        const next: Record<string, VisitorTyping> = {}
-        for (const [id, t] of Object.entries(prev)) {
-          if (now - t.at < TYPING_TTL_MS) next[id] = t
-          else changed = true
-        }
-        return changed ? next : prev
-      })
-      // Downgrade stale presence to 'left' (kept in place so the manager still
-      // sees the last-known status rather than it vanishing).
-      setPresenceByConv((prev) => {
-        const now = Date.now()
-        let changed = false
-        const next: Record<string, VisitorPresence> = {}
-        for (const [id, p] of Object.entries(prev)) {
-          if (p.state !== 'left' && now - p.at > PRESENCE_TTL_MS) {
-            next[id] = { state: 'left', at: p.at }
-            changed = true
-          } else {
-            next[id] = p
-          }
-        }
-        return changed ? next : prev
-      })
-    }, 1_000)
-    return () => {
-      es.close()
-      clearInterval(sweep)
-    }
-  }, [router])
+  // Realtime: single /api/stream subscription + typing/presence state, patching
+  // in-place message changes locally and debouncing everything else into one
+  // router.refresh(). See useInboxRealtime for the full wiring.
+  const { syncState, typingByConv, presenceByConv } = useInboxRealtime({
+    router,
+    setLocalMessages,
+  })
 
   const typeCounts = useMemo(() => {
     const counts: Record<ChannelType, number> = {
@@ -1797,6 +417,7 @@ export function InboxView({
   const statusCounts = useMemo(() => {
     const counts: Record<LeadStatus, number> = {
       unsubscribed: 0,
+      handoff: 0,
       liquid: 0,
       not_liquid: 0,
       transferred: 0,
@@ -1893,10 +514,13 @@ export function InboxView({
     [conversations, isMuted],
   )
 
-  // Keep the reminder interval's snapshot fresh on every render.
-  reminderRef.current.conversations = conversations
-  reminderRef.current.awaiting = awaitingReply
-  reminderRef.current.activeId = activeId
+  // Keep the reminder interval's snapshot fresh. Writing to the ref in an effect
+  // (instead of during render) keeps this a proper post-render side-effect.
+  useEffect(() => {
+    reminderRef.current.conversations = conversations
+    reminderRef.current.awaiting = awaitingReply
+    reminderRef.current.activeId = activeId
+  }, [conversations, awaitingReply, activeId])
 
   // Periodic nudge: if a contact's last message has gone unanswered for a while
   // and the manager isn't currently looking at that thread, pop a reminder toast.
@@ -1928,7 +552,7 @@ export function InboxView({
       const waitedMin = Math.max(1, Math.round((now - pick.since) / 60_000))
       const picked = pick
       toast.warning(`Чувак, ты не ответил: ${picked.name}`, {
-        description: `Сообщение ждёт ответа уже ${waitedMin} мин. Может, подни��ешь жопу?`,
+        description: `Сообщение ждёт ответа уже ${waitedMin} мин. Может, поднимешь жопу?`,
         duration: 10_000,
         action: {
           label: 'Открыть',
@@ -1941,84 +565,43 @@ export function InboxView({
     return () => clearInterval(timer)
   }, [])
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    const list = conversations.filter((c) => {
-      // Muted contacts are hidden by default; reveal them via the toggle. The
-      // currently-open thread always stays visible so it never vanishes mid-chat.
-      if (isMuted(c) && !showMuted && c.id !== activeId) return false
-  if (typeFilter.size > 0 && !typeFilter.has(c.channelType)) return false
-  if (sourceFilter.size > 0 && !sourceFilter.has(c.channelId)) return false
-  if (statusFilter.size > 0 && !statusFilter.has(c.status)) return false
-  if (
-    reasonFilter.size > 0 &&
-    (c.status !== 'not_liquid' ||
-      !c.statusDetail ||
-      !reasonFilter.has(c.statusDetail))
+  const filtered = useMemo(
+    () =>
+      filterAndSortConversations({
+        conversations,
+        search,
+        typeFilter,
+        sourceFilter,
+        statusFilter,
+        reasonFilter,
+        sortMode,
+        awaitingReply,
+        isMuted,
+        showMuted,
+        activeId,
+        localMessages,
+      }),
+    [
+      conversations,
+      search,
+      sourceFilter,
+      typeFilter,
+      statusFilter,
+      reasonFilter,
+      sortMode,
+      awaitingReply,
+      isMuted,
+      showMuted,
+      activeId,
+      localMessages,
+    ],
   )
-    return false
-  if (!q) return true
-      return (
-        c.contactName.toLowerCase().includes(q) ||
-        c.lastMessage.toLowerCase().includes(q) ||
-        sourceLabel(c).toLowerCase().includes(q) ||
-        (c.contactUsername?.toLowerCase().includes(q.replace(/^@/, '')) ??
-          false)
-      )
-    })
-    const byRecent = (a: Conversation, b: Conversation) => {
-      const timeDelta =
-        new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()
-      if (timeDelta !== 0) return timeDelta
-      return a.id.localeCompare(b.id)
-    }
-    const statusRank = (c: Conversation) => LEAD_STATUS_ORDER.indexOf(c.status)
-    // A thread "needs attention" when it has unread messages OR its last message
-    // is inbound (read but not yet answered). These always float to the very top,
-    // regardless of the chosen sort mode, so managers can't miss them.
-    const needsAttention = (c: Conversation) =>
-      c.unread > 0 || (awaitingReply.get(c.id)?.waiting ?? false)
-    return [...list].sort((a, b) => {
-      const attnDelta =
-        (needsAttention(b) ? 1 : 0) - (needsAttention(a) ? 1 : 0)
-      if (attnDelta !== 0) return attnDelta
-      switch (sortMode) {
-        case 'oldest':
-          return (
-            new Date(a.lastMessageAt).getTime() -
-              new Date(b.lastMessageAt).getTime() || a.id.localeCompare(b.id)
-          )
-        case 'unread': {
-          const d = b.unread - a.unread
-          return d !== 0 ? d : byRecent(a, b)
-        }
-        case 'status': {
-          const d = statusRank(a) - statusRank(b)
-          return d !== 0 ? d : byRecent(a, b)
-        }
-        case 'recent':
-        default:
-          return byRecent(a, b)
-      }
-    })
-  }, [
-    conversations,
-    search,
-    sourceFilter,
-    typeFilter,
-    statusFilter,
-    reasonFilter,
-    sortMode,
-    awaitingReply,
-    isMuted,
-    showMuted,
-    activeId,
-  ])
 
   // When the channel-type filter changes, drop any selected sources that no
   // longer belong to a visible type, so stale selections can't hide everything.
   useEffect(() => {
     if (typeFilter.size === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSourceFilter((prev) => {
       if (prev.size === 0) return prev
       const valid = new Set(
@@ -2043,6 +626,7 @@ export function InboxView({
       window.matchMedia('(min-width: 768px)').matches
     const stillVisible =
       activeId !== null && filtered.some((c) => c.id === activeId)
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (activeId !== null && !stillVisible) {
       setActiveId(isDesktop && filtered.length > 0 ? filtered[0].id : null)
       return
@@ -2050,6 +634,7 @@ export function InboxView({
     if (activeId === null && isDesktop && filtered.length > 0) {
       setActiveId(filtered[0].id)
     }
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [activeId, filtered])
 
   const [pending, startTransition] = useTransition()
@@ -2129,8 +714,94 @@ export function InboxView({
     })
   }
 
+  // Turn the AI manager-assistant on/off for the active conversation. When it's
+  // switched on, the assistant re-reads the thread and leads from the next
+  // inbound message; when the manager types a manual reply the server flips it
+  // back off automatically (human takeover).
+  function toggleAi(conversationId: string, enabled: boolean) {
+    setAiOverrides((prev) => ({ ...prev, [conversationId]: enabled }))
+    startStatusTransition(async () => {
+      const res = await toggleConversationAiAction(conversationId, enabled)
+      if (!res.ok) {
+        toast.error(res.message)
+        setAiOverrides((prev) => {
+          const next = { ...prev }
+          delete next[conversationId]
+          return next
+        })
+        return
+      }
+      toast.success(res.message)
+      router.refresh()
+    })
+  }
+
+  // Open the hand-off dialog for a conversation, resetting the picker/note.
+  function openTransfer(conversationId: string) {
+    setTransferForId(conversationId)
+    setTransferTo('')
+    setTransferNote('')
+  }
+
+  // Submit the hand-off. On success the thread leaves this manager's inbox, so
+  // we close it and refresh the server data.
+  function submitTransfer() {
+    if (!transferForId || !transferTo) {
+      toast.error('Выберите менеджера для передачи.')
+      return
+    }
+    const convId = transferForId
+    setTransferPending(true)
+    startStatusTransition(async () => {
+      const res = await transferConversationAction(
+        convId,
+        transferTo,
+        transferNote.trim() || undefined,
+      )
+      setTransferPending(false)
+      if (!res.ok) {
+        toast.error(res.message)
+        return
+      }
+      toast.success(res.message)
+      setTransferForId(null)
+      if (activeId === convId) setActiveId(null)
+      router.refresh()
+    })
+  }
+
+  // Create a Yandex Telemost meeting and send the join link into the active
+  // conversation via its own channel (handled server-side).
+  function startVideoMeeting() {
+    if (!activeId || meetingPending) return
+    const convId = activeId
+    setMeetingPending(true)
+    startStatusTransition(async () => {
+      const res = await createMeetingAction(convId)
+      setMeetingPending(false)
+      if (!res.ok) {
+        // If the meeting was created but delivery failed, offer the link so it
+        // isn't lost.
+        if (res.joinUrl) {
+          navigator.clipboard?.writeText(res.joinUrl).catch(() => {})
+          toast.error(`${res.message} Ссылка скопирована в буфер обмена.`)
+        } else {
+          toast.error(res.message)
+        }
+        return
+      }
+      toast.success(res.message)
+      router.refresh()
+    })
+  }
+
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLocalMessages(messagesByConversation)
+    // The fresh props carry only the most-recent slice again, so any previously
+    // loaded older history is gone — reset the "nothing older" flags so the
+    // load-older control reappears where applicable.
+    setNoOlder({})
   }, [messagesByConversation])
 
   const active = useMemo(
@@ -2138,6 +809,26 @@ export function InboxView({
     [conversations, activeId],
   )
   const thread = activeId ? (localMessages[activeId] ?? []) : []
+
+  // Is the AI currently leading the open thread? Under global-lead mode the AI
+  // leads whenever the master switch is on AND the thread isn't paused. An
+  // optimistic override (from the inbox toggle) wins so the UI reacts instantly.
+  const activeAiLed = useMemo(() => {
+    if (!active) return false
+    const override = aiOverrides[active.id]
+    if (override !== undefined) return override
+    return aiMasterEnabled && !active.aiPaused
+  }, [active, aiOverrides, aiMasterEnabled])
+
+  // Leads the AI just judged ready and handed off to a human («Ликвид»). Drives
+  // the inbox banner + list highlight until the manager opens each thread.
+  const pendingHandoffs = useMemo(
+    () =>
+      conversations.filter(
+        (c) => c.aiHandoffPending && c.id !== activeId,
+      ),
+    [conversations, activeId],
+  )
 
   // Auto-scroll the thread to the newest message (and as the visitor's live
   // typing draft grows, so the preview stays in view).
@@ -2147,44 +838,9 @@ export function InboxView({
     messagesEndRef.current?.scrollIntoView({ block: 'end' })
   }, [activeId, thread.length, activeTypingDraft])
 
-  // --- Outbound "agent is typing" → the live-chat visitor -------------------
-  // We only emit for live-chat threads (Telegram/WhatsApp would need provider
-  // support). A short stop-timer sends a "stopped" ping after the manager pauses
-  // so the visitor's indicator clears on its own.
-  const agentTyping = useRef<{ convId: string | null; stop: ReturnType<typeof setTimeout> | null }>(
-    { convId: null, stop: null },
-  )
-
-  const stopAgentTyping = useCallback(() => {
-    const s = agentTyping.current
-    if (s.stop) {
-      clearTimeout(s.stop)
-      s.stop = null
-    }
-    if (s.convId) {
-      const id = s.convId
-      s.convId = null
-      void setAgentTypingAction(id, false)
-    }
-  }, [])
-
-  const pingAgentTyping = useCallback(() => {
-    if (!active || active.channelType !== 'livechat') return
-    const s = agentTyping.current
-    if (s.convId !== active.id) {
-      // Switched threads while typing: stop the previous one first.
-      if (s.convId && s.stop) clearTimeout(s.stop)
-      s.convId = active.id
-      void setAgentTypingAction(active.id, true)
-    }
-    if (s.stop) clearTimeout(s.stop)
-    s.stop = setTimeout(stopAgentTyping, 3_000)
-  }, [active, stopAgentTyping])
-
-  // Stop emitting when the thread changes or the component unmounts.
-  useEffect(() => {
-    return () => stopAgentTyping()
-  }, [activeId, stopAgentTyping])
+  // NOTE: The outbound "agent is typing" indicator (a server action fired on
+  // every keystroke) was removed for performance - a network round-trip per
+  // character made the composer feel laggy. Typing is now purely local.
 
   // Live "visitor is typing" state for the open thread (auto-expired by sweep).
   const activeTyping =
@@ -2206,11 +862,31 @@ export function InboxView({
     void markConversationReadAction(activeId)
   }, [activeId, conversations])
 
-  function send() {
-    if (!activeId || !draft.trim()) return
-    // We're sending now — clear our "typing" indicator on the visitor's side.
-    stopAgentTyping()
-    const body = draft.trim()
+  // Opening a thread the AI handed off («Ликвид») acknowledges it. The banner
+  // and list highlight already exclude the active thread, so it clears visually
+  // the instant it's opened - here we only clear the SERVER flag so it doesn't
+  // return on refresh. A ref guard keeps this to one call per opened handoff.
+  useEffect(() => {
+    if (!activeId) return
+    const conv = conversations.find((c) => c.id === activeId)
+    if (!conv?.aiHandoffPending || ackedHandoffsRef.current[activeId]) return
+    ackedHandoffsRef.current[activeId] = true
+    void acknowledgeAiHandoffAction(activeId)
+  }, [activeId, conversations])
+
+  // Called by the composer with the trimmed text. The composer owns the draft
+  // and clears its own input after invoking this.
+  function handleSend(text: string) {
+    if (!activeId) return
+    const body = text.trim()
+    if (!body) return
+    // While the AI is leading this thread, manual sends are blocked. Nudge the
+    // manager to pause the AI first (the AI button vibrates as the hint).
+    if (activeAiLed) {
+      pulseAiButton()
+      toast.error('ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.')
+      return
+    }
     const replyTo = replyTarget
     const optimistic: Message = {
       id: `tmp_${Date.now()}`,
@@ -2235,38 +911,13 @@ export function InboxView({
       ...prev,
       [activeId]: [...(prev[activeId] ?? []), optimistic],
     }))
-    setDraft('')
     setReplyTarget(null)
-    // Collapse the auto-grown composer back to a single row after sending.
-    requestAnimationFrame(resizeComposer)
     startTransition(async () => {
       const res =
         replyTo && active?.channelType === 'telegram'
           ? await replyMessageAction(activeId, replyTo.id, body)
           : await sendMessageAction(activeId, body)
       if (!res.ok) toast.error(res.message)
-    })
-  }
-
-  /**
-   * Drop a quick reply into the draft. We append (with a separating space when
-   * the draft already has text) rather than overwrite, so the manager can chain
-   * a canned answer onto what they've already typed, then edit before sending.
-   */
-  function insertQuickReply(text: string) {
-    setDraft((prev) => {
-      const base = prev.trimEnd()
-      return base ? `${base} ${text}` : text
-    })
-    if (text.trim()) pingAgentTyping()
-    // Refocus + resize after the controlled value updates.
-    requestAnimationFrame(() => {
-      const el = composerRef.current
-      if (!el) return
-      el.focus()
-      const end = el.value.length
-      el.setSelectionRange(end, end)
-      resizeComposer()
     })
   }
 
@@ -2351,36 +1002,51 @@ export function InboxView({
     })
   }
 
-  // Attach + send a file on a WhatsApp conversation. The bytes are uploaded to
-  // WhatsApp server-side; on success the realtime insert (or refresh) shows the
-  // new message with its media bubble.
-  function sendMediaFile(file: File) {
+  // Attach + send a file on a WhatsApp or VK conversation. The bytes are
+  // uploaded provider-side (through the account's proxy); on success the realtime
+  // insert (or refresh) shows the new message with its media bubble.
+  function handleSendMediaFile(file: File, caption: string) {
     if (!activeId) return
-    const caption = draft.trim()
+    const channelType = active?.channelType
+    if (channelType !== 'whatsapp' && channelType !== 'vk') return
+    // Client-side guard so an over-large file fails with a clear message instead
+    // of blowing past the Server Action body limit (which returns an opaque
+    // framework error and would otherwise crash the inbox to the error page).
+    // 200 MB matches the app's largest server-side allowance (VK docs).
+    const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+    if (file.size > MAX_UPLOAD_BYTES) {
+      toast.error('Файл слишком большой (максимум 200 МБ).')
+      return
+    }
     const fd = new FormData()
     fd.append('file', file)
-    if (caption) fd.append('caption', caption)
-    setDraft('')
+    const trimmed = caption.trim()
+    if (trimmed) fd.append('caption', trimmed)
     startTransition(async () => {
-      const res = await sendWhatsappMediaAction(activeId, fd)
-      if (!res.ok) {
-        toast.error(res.message)
-      } else {
-        toast.success(res.message)
-        router.refresh()
+      try {
+        const res =
+          channelType === 'vk'
+            ? await sendVkMediaAction(activeId, fd)
+            : await sendWhatsappMediaAction(activeId, fd)
+        if (!res.ok) {
+          toast.error(res.message)
+        } else {
+          toast.success(res.message)
+          router.refresh()
+        }
+      } catch (err) {
+        // Any transport/framework failure (e.g. body limit, dropped connection)
+        // is contained here as a toast — never bubbled to the error boundary,
+        // which would replace the whole inbox with the crash page.
+        console.error('[v0] media upload failed:', err)
+        toast.error('Не удалось отправить файл. Попробуйте ещё раз.')
       }
     })
   }
 
-  function copyHandle(handle: string) {
-    navigator.clipboard
-      ?.writeText(handle)
-      .then(() => toast.success('Контакт скопирован'))
-      .catch(() => toast.error('Не удалось скопировать'))
-  }
-
   // Clear any pending reply when switching conversations.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReplyTarget(null)
   }, [activeId])
 
@@ -2418,7 +1084,32 @@ export function InboxView({
       : 'auto'
 
   return (
-    <div className="relative flex h-full overflow-hidden bg-card">
+    <div className="relative flex h-full flex-col overflow-hidden bg-card">
+      {/* ------------------------------------------------------------------ */}
+      {/* AI hand-off banner — leads the AI promoted to «Ликвид» and handed   */}
+      {/* to a human. Click to jump to the newest; opening a thread clears it. */}
+      {/* ------------------------------------------------------------------ */}
+      {pendingHandoffs.length > 0 ? (
+        <button
+          type="button"
+          onClick={() => setActiveId(pendingHandoffs[0].id)}
+          className="flex shrink-0 items-center gap-2.5 border-b border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-left text-sm text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-300"
+        >
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-emerald-50">
+            <BrainCircuit className="size-3.5" />
+          </span>
+          <span className="flex-1 font-medium">
+            {pendingHandoffs.length === 1
+              ? `ИИ передал лид «${pendingHandoffs[0].contactName}» — готов к работе (Ликвид).`
+              : `ИИ передал ${pendingHandoffs.length} лид(ов) — готовы к работе (Ликвид).`}
+          </span>
+          <span className="shrink-0 rounded-full bg-emerald-500 px-2.5 py-0.5 text-xs font-semibold text-emerald-50">
+            Открыть
+          </span>
+        </button>
+      ) : null}
+
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
       {/* ------------------------------------------------------------------ */}
       {/* Conversation list                                                  */}
       {/* ------------------------------------------------------------------ */}
@@ -2484,10 +1175,10 @@ export function InboxView({
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Поиск"
-              className="h-9 rounded-full border-transparent bg-muted pl-9 text-sm focus-visible:bg-card"
-              aria-label="Поиск по диалогам"
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Поиск по диалогам и сообщениям"
+                  className="h-9 rounded-full border-transparent bg-muted pl-9 text-sm focus-visible:bg-card"
+                  aria-label="Поиск по диалогам и сообщениям"
             />
             {search ? (
               <button
@@ -2689,16 +1380,22 @@ export function InboxView({
           </div>
         </div>
 
-        {/* List */}
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
-          {filtered.length === 0 ? (
+        {/* List (virtualized — only near-viewport rows are mounted; see VirtualList) */}
+        {filtered.length === 0 ? (
+          <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
             <p className="px-4 py-10 text-center text-sm text-muted-foreground">
               {conversations.length === 0
                 ? 'Пока нет диалогов.'
                 : 'Ничего не найдено по фильтрам.'}
             </p>
-          ) : (
-            filtered.map((c) => (
+          </div>
+        ) : (
+          <VirtualList
+            items={filtered}
+            getItemKey={(c) => c.id}
+            estimateSize={76}
+            className="scrollbar-thin min-h-0 flex-1 px-1.5 py-1.5"
+            renderItem={(c) => (
               <ContextMenu key={c.id}>
                 <ContextMenuTrigger
                   render={
@@ -2709,6 +1406,9 @@ export function InboxView({
                         'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors hover:bg-muted/60',
                         activeId === c.id
                           ? 'bg-secondary hover:bg-secondary'
+                          : '',
+                        c.aiHandoffPending && activeId !== c.id
+                          ? 'bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/40 hover:bg-emerald-500/15'
                           : '',
                       )}
                     />
@@ -2852,15 +1552,20 @@ export function InboxView({
                       Заглушить контакт
                     </ContextMenuItem>
                   )}
-                  <ContextMenuItem onClick={() => copyHandle(c.contactHandle)}>
-                    <Copy className="size-4" />
-                    Скопировать контакт
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
-            ))
-          )}
-        </div>
+                    {transferTargets.length > 0 ? (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onClick={() => openTransfer(c.id)}>
+                          <UserPlus className="size-4" />
+                          Передать менеджеру
+                        </ContextMenuItem>
+                      </>
+                    ) : null}
+                  </ContextMenuContent>
+                </ContextMenu>
+            )}
+          />
+        )}
       </div>
 
       {/* ------------------------------------------------------------------ */}
@@ -2910,32 +1615,32 @@ export function InboxView({
                   </p>
                   <div className="flex min-w-0 items-center gap-1.5">
                     <SourceChip conversation={active} size="xs" />
-                    {contactUsernameTag(active) ? (
-                      contactProfileUrl(active) ? (
-                        <a
-                          href={contactProfileUrl(active) as string}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="truncate text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
-                        >
-                          {contactUsernameTag(active)}
-                        </a>
-                      ) : (
-                        <span className="truncate text-xs font-medium text-muted-foreground">
-                          {contactUsernameTag(active)}
-                        </span>
-                      )
-                    ) : (
-                      <span className="truncate text-xs text-muted-foreground">
-                        {active.contactHandle}
-                      </span>
-                    )}
                   </div>
                 </div>
               </button>
 
               <div className="flex items-center gap-1.5">
+                <Button
+                  variant={activeAiLed ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => toggleAi(active.id, !activeAiLed)}
+                  disabled={statusPending}
+                  aria-pressed={activeAiLed}
+                  title={
+                    activeAiLed
+                      ? 'ИИ ведёт этот диалог. Нажмите, чтобы отключить и ответить самому.'
+                      : 'Включить ИИ: он проанализирует переписку и продолжит общение.'
+                  }
+                  className={cn(
+                    'gap-1.5',
+                    aiButtonPulse && 'animate-shake ring-2 ring-primary',
+                  )}
+                >
+                  <BrainCircuit className="size-4" />
+                  <span className="hidden sm:inline">
+                    {activeAiLed ? 'ИИ ведёт' : 'ИИ'}
+                  </span>
+                </Button>
                 <StatusChip
                   status={active.status}
                   auto={!active.statusManual}
@@ -2979,12 +1684,15 @@ export function InboxView({
                       <Info className="size-4" />
                       Данные и источник
                     </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => copyHandle(active.contactHandle)}
-                    >
-                      <Copy className="size-4" />
-                      Скопировать контакт
-                    </DropdownMenuItem>
+                    {transferTargets.length > 0 ? (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => openTransfer(active.id)}>
+                          <UserPlus className="size-4" />
+                          Передать менеджеру
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -2992,6 +1700,7 @@ export function InboxView({
 
             {/* Messages */}
             <div
+              ref={messagesScrollRef}
               className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-muted/20 px-3 py-4 sm:px-6"
               style={{
                 backgroundImage:
@@ -3000,6 +1709,26 @@ export function InboxView({
               }}
             >
               <div className="mx-auto flex max-w-3xl flex-col gap-1">
+                {/* Older-history loader: shown only when the thread was truncated
+                    to the most-recent slice and there may be more to fetch. */}
+                {activeId && thread.length >= 300 && !noOlder[activeId] ? (
+                  <div className="mb-2 flex justify-center">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleLoadOlder}
+                      disabled={loadingOlder}
+                      className="gap-1.5 text-xs text-muted-foreground"
+                    >
+                      {loadingOlder ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <ChevronUp className="size-3.5" />
+                      )}
+                      Загрузить ранние сообщения
+                    </Button>
+                  </div>
+                ) : null}
                 {thread.map((m, i) => {
                   const prev = thread[i - 1]
                   const showDay =
@@ -3141,6 +1870,22 @@ export function InboxView({
                                         : 'text-muted-foreground',
                                   )}
                                 >
+                                  {m.editedAt ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setHistoryMessage(m)}
+                                      title="Показать историю изменений"
+                                      className={cn(
+                                        'mr-0.5 flex items-center gap-0.5 rounded px-0.5 italic underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80',
+                                        isOut
+                                          ? 'text-primary-foreground/70'
+                                          : 'text-muted-foreground',
+                                      )}
+                                    >
+                                      <History className="size-2.5" />
+                                      изменено
+                                    </button>
+                                  ) : null}
                                   {timeShort(m.createdAt)}
                                   {isOut ? <DeliveryTicks status={m.status} /> : null}
                                 </span>
@@ -3254,132 +1999,35 @@ export function InboxView({
               </div>
             ) : null}
 
-            {/* Composer */}
-            <div
-              className={cn(
-                'bg-card',
-                replyTarget ? '' : 'border-t border-border',
-              )}
-            >
-              {/* Quick replies tray — manager's saved canned answers, one tap to
-                  insert into the draft. Collapsed by default to keep the
-                  composer uncluttered. */}
-              {quickReplies.length > 0 ? (
-                <div className="border-b border-border/60 px-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setQuickRepliesOpen((v) => !v)}
-                    className="flex items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-                    aria-expanded={quickRepliesOpen}
-                  >
-                    <Zap className="size-3.5" />
-                    Автоответы
-                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
-                      {quickReplies.length}
-                    </span>
-                    <ChevronDown
-                      className={cn(
-                        'size-3.5 transition-transform',
-                        quickRepliesOpen && 'rotate-180',
-                      )}
-                    />
-                  </button>
-                  {quickRepliesOpen ? (
-                    <div className="scrollbar-thin -mx-1 mt-2 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto px-1 pb-2">
-                      {quickReplies.map((qr) => (
-                        <button
-                          key={qr.id}
-                          type="button"
-                          onClick={() => insertQuickReply(qr.body)}
-                          title={qr.body}
-                          className="max-w-[15rem] truncate rounded-full border border-border bg-muted/60 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
-                        >
-                          {qr.title?.trim() || qr.body}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              <form
-                className="flex items-end gap-1.5 p-3"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  send()
-                }}
-              >
-                <EmojiPicker
-                  onPick={(e) => {
-                    setDraft((d) => d + e)
-                    requestAnimationFrame(resizeComposer)
-                  }}
-                />
-                {active.channelType === 'telegram' ? (
-                  <StickerPicker
-                    channelId={active.channelId}
-                    onSend={sendSticker}
-                  />
-                ) : null}
-                {active.channelType === 'whatsapp' ? (
-                  <>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      className="hidden"
-                      accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0]
-                        if (f) sendMediaFile(f)
-                        e.target.value = ''
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-                      disabled={pending}
-                      onClick={() => fileInputRef.current?.click()}
-                      aria-label="Прикрепить файл"
-                      title="Прикрепить файл (фото, видео, документ)"
-                    >
-                      <Paperclip className="size-4" />
-                    </Button>
-                  </>
-                ) : null}
-                <textarea
-                  ref={composerRef}
-                  value={draft}
-                  rows={1}
-                  onChange={(e) => {
-                    setDraft(e.target.value)
-                    resizeComposer()
-                    if (e.target.value.trim()) pingAgentTyping()
-                    else stopAgentTyping()
-                  }}
-                  onKeyDown={(e) => {
-                    // Enter sends, Shift+Enter inserts a newline (messenger UX).
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      send()
-                    }
-                  }}
-                  placeholder="Написать сообщение…"
-                  aria-label="Текст ответа"
-                  className="scrollbar-thin max-h-40 min-h-[40px] flex-1 resize-none rounded-2xl bg-muted px-4 py-2.5 text-sm leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/30"
-                />
-                <Button
-                  type="submit"
-                  size="icon"
-                  className="size-10 shrink-0 rounded-full"
-                  disabled={pending || !draft.trim()}
-                  aria-label="Отправить"
-                >
-                  <SendHorizonal className="size-4" />
-                </Button>
-              </form>
-            </div>
+            {/* Composer — isolated component so typing never re-renders the
+                whole inbox. Keyed by conversation id so each thread gets its own
+                local draft (persisted across switches via draftsRef). */}
+            <MessageComposer
+              key={active.id}
+              conversationId={active.id}
+              channelType={active.channelType}
+              channelId={active.channelId}
+              getInitialDraft={getDraft}
+              onPersistDraft={(text) => persistDraft(active.id, text)}
+              onSend={handleSend}
+              onSendSticker={sendSticker}
+              onSendMediaFile={handleSendMediaFile}
+              aiLed={activeAiLed}
+              onBlockedInteract={() => {
+                pulseAiButton()
+                toast.error(
+                  'ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.',
+                )
+              }}
+              onToggleAi={() => toggleAi(active.id, false)}
+              statusPending={statusPending}
+              pending={pending}
+              quickReplies={quickReplies}
+              telemostEnabled={telemostEnabled}
+              onStartMeeting={startVideoMeeting}
+              meetingPending={meetingPending}
+              replyActive={!!replyTarget}
+            />
           </>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
@@ -3425,6 +2073,104 @@ export function InboxView({
           />
         ) : null}
       </aside>
+      </div>
+
+      {/* Hand-off dialog: pick a colleague and optionally leave a note. */}
+      <Dialog
+        open={transferForId !== null}
+        onOpenChange={(open) => {
+          if (!open) setTransferForId(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Передать диалог</DialogTitle>
+            <DialogDescription>
+              Диалог перейдёт выбранному менеджеру и исчезнет из ваших входящих.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-2">
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-foreground">
+                Кому передать
+              </span>
+              <div className="scrollbar-thin flex max-h-56 flex-col gap-1 overflow-y-auto">
+                {transferTargets.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setTransferTo(t.id)}
+                    className={cn(
+                      'flex items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors',
+                      transferTo === t.id
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-border hover:bg-muted',
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Avatar className="size-6">
+                        <AvatarFallback className="text-[10px]">
+                          {t.name.slice(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      {t.name}
+                    </span>
+                    {t.onLunch ? (
+                      <span className="text-xs text-muted-foreground">
+                        на обеде
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-foreground">
+                Заметка для коллеги (необязательно)
+              </span>
+              <Textarea
+                value={transferNote}
+                onChange={(e) => setTransferNote(e.target.value)}
+                placeholder="Например: клиент ждёт расчёт по доставке"
+                maxLength={500}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setTransferForId(null)}
+              disabled={transferPending}
+            >
+              Отмена
+            </Button>
+            <Button
+              onClick={submitTransfer}
+              disabled={transferPending || !transferTo}
+            >
+              {transferPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <UserPlus className="size-4" />
+              )}
+              Передать
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {historyMessage && (
+        <EditHistoryDialog
+          messageId={historyMessage.id}
+          currentBody={historyMessage.body ?? ''}
+          currentMediaType={historyMessage.mediaType}
+          currentMediaUrl={historyMessage.mediaUrl}
+          onOpenChange={(open) => {
+            if (!open) setHistoryMessage(null)
+          }}
+        />
+      )}
     </div>
   )
 }

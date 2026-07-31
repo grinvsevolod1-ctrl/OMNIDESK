@@ -108,6 +108,11 @@ export default async function ManagersPage() {
                       <div className="text-xs text-muted-foreground">
                         {m.email}
                       </div>
+                      {m.username ? (
+                        <div className="mt-0.5 font-mono text-xs text-muted-foreground">
+                          @{m.username}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -140,6 +145,11 @@ export default async function ManagersPage() {
                     <p className="truncate text-xs text-muted-foreground">
                       {m.email}
                     </p>
+                    {m.username ? (
+                      <p className="truncate font-mono text-xs text-muted-foreground">
+                        @{m.username}
+                      </p>
+                    ) : null}
                   </div>
                   <ManagerActions manager={m} />
                 </div>

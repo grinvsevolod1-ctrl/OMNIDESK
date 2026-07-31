@@ -401,7 +401,11 @@ function NumbersCard({
         id,
         value === UNASSIGNED ? null : value,
       )
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
       setBusyId(null)
     })
   }
@@ -410,7 +414,11 @@ function NumbersCard({
     setBusyId(id)
     startTransition(async () => {
       const res = await deleteWhatsappNumberAction(id)
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
       setBusyId(null)
     })
   }

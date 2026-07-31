@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'crypto'
 import {
+  getWhatsappAppConfig,
   getWhatsappWebhookSecrets,
   recordWhatsappInbound,
   resolveWhatsappAgentId,
@@ -7,7 +8,10 @@ import {
   updateWhatsappMessageStatus,
 } from '@/lib/data'
 import type { MediaType } from '@/lib/types'
+import { whatsappErrorText } from '@/lib/whatsapp-cloud'
+import { archiveWhatsappMediaSoon } from '@/lib/media-archive-fetch'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
+import { HttpInputError, parseJsonBytes, readBodyBytes } from '@/lib/http/request'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -70,6 +74,13 @@ interface WaStatus {
   id?: string
   status?: string
   recipient_id?: string
+  /** Present on 'failed' statuses: the reason Meta rejected/couldn't deliver. */
+  errors?: {
+    code?: number
+    title?: string
+    message?: string
+    error_data?: { details?: string }
+  }[]
 }
 interface WaValue {
   metadata?: { phone_number_id?: string }
@@ -182,21 +193,47 @@ export async function POST(request: Request): Promise<Response> {
   const { verifyToken, appSecret } = await getWhatsappWebhookSecrets()
   if (!verifyToken) return json({ ok: false, error: 'not_configured' }, 503)
 
-  // Read the raw body so we can verify the signature byte-for-byte.
-  const raw = await request.text()
+  // Read bounded raw bytes so signature verification uses the exact payload.
+  let rawBytes: Uint8Array
+  try {
+    rawBytes = await readBodyBytes(request, 1024 * 1024)
+  } catch (error) {
+    return json(
+      { ok: false, error: error instanceof HttpInputError ? error.code : 'invalid_body' },
+      error instanceof HttpInputError ? error.status : 400,
+    )
+  }
+  const raw = new TextDecoder().decode(rawBytes)
 
   // Verify X-Hub-Signature-256 when an app secret is configured. Without one we
-  // can't verify, so we accept (admin opted out of signing).
+  // can't verify the payload really came from Meta.
   if (appSecret) {
     const sig = request.headers.get('x-hub-signature-256') ?? ''
     if (!verifySignature(raw, sig, appSecret)) {
       return json({ ok: false, error: 'bad_signature' }, 401)
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    // FAIL CLOSED in production: without an app secret we can't verify the
+    // payload, so anyone who learns this URL could inject inbound messages.
+    // Refuse rather than silently trusting it. The operator unlocks the webhook
+    // by adding the WhatsApp app secret under /admin/whatsapp.
+    console.error(
+      '[whatsapp-webhook] rejecting inbound: no app secret configured, cannot ' +
+        'verify X-Hub-Signature-256. Set the WhatsApp app secret in /admin/whatsapp.',
+    )
+    return json({ ok: false, error: 'signature_required' }, 401)
+  } else {
+    // Development only: accept unsigned payloads so local testing (ngrok, curl)
+    // works without wiring up the app secret — but make the gap loud.
+    console.warn(
+      '[whatsapp-webhook] accepting UNSIGNED payload (dev only) — no app secret ' +
+        'configured. This is rejected in production.',
+    )
   }
 
   let body: WaWebhookBody
   try {
-    body = JSON.parse(raw) as WaWebhookBody
+    body = parseJsonBytes(rawBytes) as WaWebhookBody
   } catch {
     return json({ ok: false, error: 'invalid_json' }, 400)
   }
@@ -214,11 +251,22 @@ export async function POST(request: Request): Promise<Response> {
       for (const s of value.statuses ?? []) {
         const st = mapStatus(s.status)
         if (!st || !s.id) continue
+        // On failure, map Meta's error code to a human-readable Russian reason
+        // (24h window closed, number not on WhatsApp, token expired, …) so the
+        // panel shows WHY next to the "!" marker instead of a bare failed tick.
+        let reason: string | null = null
+        if (st === 'failed') {
+          const e = s.errors?.[0]
+          reason = whatsappErrorText(
+            e?.code,
+            e?.error_data?.details || e?.message || e?.title || 'Сообщение не доставлено WhatsApp.',
+          )
+        }
         try {
-          await updateWhatsappMessageStatus(s.id, st)
+          await updateWhatsappMessageStatus(s.id, st, reason)
           handled++
         } catch (err) {
-          console.error('[v0] whatsapp webhook: status update failed:', err)
+          console.error('[whatsapp-webhook] status update failed:', err)
         }
       }
 
@@ -265,6 +313,25 @@ export async function POST(request: Request): Promise<Response> {
 
           handled++
 
+          // Archive the media bytes into Postgres immediately (fire-and-forget
+          // on the long-lived Node process) so a photo/voice/document survives
+          // the contact deleting it — before anyone opens the chat.
+          const waMediaId = (parsed.mediaRef as { waMediaId?: string } | null)
+            ?.waMediaId
+          if (message && parsed.mediaType && waMediaId) {
+            void (async () => {
+              const app = await getWhatsappAppConfig()
+              if (!app) return
+              await archiveWhatsappMediaSoon({
+                messageId: message.id,
+                waMediaId,
+                token: app.accessToken,
+                mime: parsed.mediaMime,
+                name: parsed.mediaName,
+              })
+            })()
+          }
+
           // Skip the autopilot for duplicate webhook deliveries and for media
           // (the autopilot replies to text; media has no text to act on).
           if (message && parsed.body && !parsed.mediaType) {
@@ -276,7 +343,7 @@ export async function POST(request: Request): Promise<Response> {
             })
           }
         } catch (err) {
-          console.error('[v0] whatsapp webhook: ingest failed:', err)
+          console.error('[whatsapp-webhook] ingest failed:', err)
         }
       }
     }

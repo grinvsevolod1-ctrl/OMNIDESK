@@ -1,5 +1,15 @@
 import { getSession } from '@/lib/auth'
-import { getMessageOwner, getWhatsappMediaDescriptor } from '@/lib/data'
+import {
+  getMessageOwner,
+  getStoredEditMediaBytes,
+  getStoredMediaBytes,
+  getUrlMediaDescriptor,
+  getWhatsappMediaDescriptor,
+  MEDIA_MAX_STORE_BYTES,
+  storeMessageMediaBytes,
+} from '@/lib/data'
+import { proxiedFetch } from '@/lib/proxy-agent'
+import { assertPublicHttpUrl } from '@/lib/ssrf-guard'
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp-cloud'
 import { isWorkerConfigured, streamFromWorker } from '@/lib/worker-client'
 
@@ -15,7 +25,7 @@ export const dynamic = 'force-dynamic'
  * provider and pipes the response straight through. Nothing binary is stored.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   const session = await getSession()
@@ -27,6 +37,23 @@ export async function GET(
   // Ownership check: the message must belong to a conversation this manager owns.
   const owner = await getMessageOwner(id, session.sub)
   if (!owner) return new Response('Not found', { status: 404 })
+
+  // Historical (pre-edit) version of the media, addressed by edit id. Ownership
+  // is already established via the message id above.
+  const editId = new URL(request.url).searchParams.get('edit')
+  if (editId) {
+    const hist = await getStoredEditMediaBytes(editId)
+    if (!hist) return new Response('Media unavailable', { status: 410 })
+    return bytesResponse(hist.bytes, hist.mime, true)
+  }
+
+  // Durable fast path: if we archived the bytes in Postgres at ingest (so the
+  // file survives the contact deleting/editing it), serve them straight from the
+  // database — no provider round-trip, and it works even after remote deletion.
+  const stored = await getStoredMediaBytes(id)
+  if (stored) {
+    return bytesResponse(stored.bytes, stored.mime, true)
+  }
 
   // WhatsApp Cloud has no worker: the panel resolves the media id and downloads
   // the bytes straight from the Graph API with the app access token, then pipes
@@ -44,18 +71,53 @@ export async function GET(
         status: upstream?.status || 502,
       })
     }
-    const headers = new Headers()
-    headers.set(
-      'content-type',
+    const mime =
       upstream.headers.get('content-type') ||
-        info.data.mime_type ||
-        desc.mime ||
-        'application/octet-stream',
-    )
-    const len = upstream.headers.get('content-length')
-    if (len) headers.set('content-length', len)
-    headers.set('cache-control', 'private, max-age=86400')
-    return new Response(upstream.body, { status: 200, headers })
+      info.data.mime_type ||
+      desc.mime ||
+      'application/octet-stream'
+    // Stream to the browser while archiving a bounded copy in the background so
+    // the file survives the contact deleting it later (never buffers an oversized
+    // file into memory — see serveAndArchive).
+    return serveAndArchive(id, upstream, mime, null)
+  }
+
+  // VK (like MAX/live-chat) has no worker: attachments carry a direct CDN url
+  // stored in media_ref. We stream those bytes through the account's proxy so
+  // the manager's browser never hits VK directly (consistent IP, no hotlink/CORS
+  // issues) and the raw url is never exposed to the client.
+  if (owner.channelType === 'vk') {
+    const desc = await getUrlMediaDescriptor(id)
+    if (!desc) return new Response('Media unavailable', { status: 404 })
+    // Defence-in-depth: the url comes from VK API responses (not the user), but
+    // refuse to fetch anything that isn't a public http(s) address so a stray
+    // value can't be used to probe internal services (loopback, worker port,
+    // RFC1918, cloud metadata, non-http schemes).
+    try {
+      assertPublicHttpUrl(desc.url)
+    } catch {
+      return new Response('Media unavailable', { status: 400 })
+    }
+    let upstream: Response
+    try {
+      upstream = await proxiedFetch(
+        desc.url,
+        { cache: 'no-store' },
+        desc.proxy,
+      )
+    } catch {
+      return new Response('Media unavailable', { status: 502 })
+    }
+    if (!upstream.ok || !upstream.body) {
+      return new Response('Media unavailable', { status: upstream.status || 502 })
+    }
+    const mime =
+      upstream.headers.get('content-type') ||
+      desc.mime ||
+      'application/octet-stream'
+    // Stream to the browser while archiving a bounded copy in the background so
+    // the file survives the contact deleting it later.
+    return serveAndArchive(id, upstream, mime, null)
   }
 
   if (!isWorkerConfigured) {
@@ -80,4 +142,99 @@ export async function GET(
   headers.set('cache-control', 'private, max-age=86400')
 
   return new Response(upstream.body, { status: 200, headers })
+}
+
+/** Serve a buffer we already hold in memory. `immutable` when it came from the
+ *  durable archive (content can never change), otherwise a normal day cache. */
+function bytesResponse(
+  bytes: Buffer,
+  mime: string | null,
+  immutable: boolean,
+): Response {
+  const headers = new Headers()
+  headers.set('content-type', mime || 'application/octet-stream')
+  headers.set('content-length', String(bytes.byteLength))
+  headers.set(
+    'cache-control',
+    immutable
+      ? 'private, max-age=31536000, immutable'
+      : 'private, max-age=86400',
+  )
+  return new Response(new Uint8Array(bytes), { status: 200, headers })
+}
+
+/**
+ * Stream an upstream media response straight to the browser while archiving a
+ * SIZE-BOUNDED copy in Postgres in the background, so the file survives the
+ * contact deleting/editing it.
+ *
+ * The body is `tee()`d into two independent streams: one is returned to the
+ * client untouched, the other is read by `archiveBounded` which stops (and
+ * skips the DB write) the moment it exceeds MEDIA_MAX_STORE_BYTES. This never
+ * reads a whole file into memory — the previous `arrayBuffer()` approach could
+ * OOM the panel when a provider omitted content-length on a multi-hundred-MB /
+ * multi-GB file (Telegram allows ~2GB). Serving is never blocked on the write.
+ */
+function serveAndArchive(
+  messageId: string,
+  upstream: Response,
+  mime: string,
+  name: string | null,
+): Response {
+  const body = upstream.body
+  if (!body) return new Response('Media unavailable', { status: 502 })
+
+  const headers = new Headers()
+  headers.set('content-type', mime)
+  const declaredLen = Number(upstream.headers.get('content-length'))
+  const hasLen = Number.isFinite(declaredLen) && declaredLen > 0
+  if (hasLen) headers.set('content-length', String(declaredLen))
+  headers.set('cache-control', 'private, max-age=86400')
+
+  // When the provider already advertises a size over the cap, don't bother
+  // teeing/archiving — just stream the original body straight through.
+  if (hasLen && declaredLen > MEDIA_MAX_STORE_BYTES) {
+    return new Response(body, { status: 200, headers })
+  }
+
+  const [clientStream, archiveStream] = body.tee()
+  void archiveBounded(messageId, archiveStream, mime, name)
+  return new Response(clientStream, { status: 200, headers })
+}
+
+/**
+ * Drain a tee'd media stream into memory ONLY up to MEDIA_MAX_STORE_BYTES, then
+ * archive it. If the stream exceeds the cap it cancels its branch and skips the
+ * write (the client branch keeps streaming unaffected). Fire-and-forget: never
+ * throws into the request path.
+ */
+async function archiveBounded(
+  messageId: string,
+  stream: ReadableStream<Uint8Array>,
+  mime: string | null,
+  name: string | null,
+): Promise<void> {
+  const reader = stream.getReader()
+  const chunks: Buffer[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > MEDIA_MAX_STORE_BYTES) {
+        // Too large to archive: release this branch so the tee stops buffering
+        // for it. The client branch is independent and keeps streaming.
+        await reader.cancel().catch(() => {})
+        return
+      }
+      chunks.push(Buffer.from(value))
+    }
+    if (total === 0) return
+    const buf = Buffer.concat(chunks, total)
+    await storeMessageMediaBytes(messageId, buf, mime, name).catch(() => {})
+  } catch {
+    await reader.cancel().catch(() => {})
+  }
 }

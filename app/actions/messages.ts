@@ -7,40 +7,21 @@ import {
   enqueueJob,
   getConversation,
   getMessageDispatch,
+  listMessagesBefore,
   markMessageDeleted,
+  setConversationAiAutopilot,
   setMessageReaction,
 } from '@/lib/data'
-import { publishRealtime } from '@/lib/realtime'
+import type { Message } from '@/lib/types'
+import { isBrainConfigured } from '@/lib/ai/manager-brain'
+import {
+  acknowledgeAiHandoff,
+  getAiAssistSettings,
+} from '@/lib/data/ai-assist'
 
 export interface SimpleResult {
   ok: boolean
   message: string
-}
-
-/**
- * Tell the website visitor that their assigned agent is typing (live-chat only).
- *
- * Ephemeral and best-effort: publishes a `typing` realtime event scoped to the
- * conversation's channel + visitor handle, which the widget's SSE stream relays
- * as "<name> печатает". Nothing is stored. No-ops for Telegram/WhatsApp, where
- * outbound typing would require provider support in the worker.
- */
-export async function setAgentTypingAction(
-  conversationId: string,
-  typing: boolean,
-): Promise<void> {
-  const session = await requireManager()
-  const conv = await getConversation(conversationId, session.sub)
-  if (!conv || conv.channelType !== 'livechat') return
-  await publishRealtime({
-    type: 'typing',
-    actor: 'agent',
-    channelId: conv.channelId,
-    conversationId,
-    contactHandle: conv.contactHandle,
-    authorName: session.name,
-    typing,
-  })
 }
 
 /**
@@ -217,4 +198,87 @@ export async function forwardMessageAction(
 
   revalidatePath('/app/inbox')
   return { ok: true, message: `Переслано: ${dest.contactName}` }
+}
+
+/**
+ * Turn the AI manager-assistant on/off for a single conversation (the per-thread
+ * toggle in the inbox). When switching ON, the AI will re-read the whole thread
+ * and continue leading from the next inbound message. Manager-scoped: you can
+ * only toggle conversations you own. Refuses to switch on when the global
+ * assistant is disabled or the AI Gateway key is missing.
+ */
+export async function toggleConversationAiAction(
+  conversationId: string,
+  enabled: boolean,
+): Promise<SimpleResult> {
+  const session = await requireManager()
+
+  if (enabled) {
+    if (!isBrainConfigured()) {
+      return {
+        ok: false,
+        message: 'ИИ не настроен: не задан ключ AI Gateway.',
+      }
+    }
+    const settings = await getAiAssistSettings()
+    if (!settings.enabled) {
+      return {
+        ok: false,
+        message: 'ИИ отключён администратором в разделе «ИИ-ассистент».',
+      }
+    }
+  }
+
+  const state = await setConversationAiAutopilot(
+    conversationId,
+    session.sub,
+    enabled,
+  )
+  if (state === null) return { ok: false, message: 'Диалог не найден.' }
+
+  revalidatePath('/app/inbox')
+  return {
+    ok: true,
+    message: state
+      ? 'ИИ ведёт этот диалог. Он проанализирует переписку и продолжит общение.'
+      : 'ИИ отключён для этого диалога.',
+  }
+}
+
+/**
+ * Manager acknowledges an AI→human handoff (opened the «Ликвид» thread): clears
+ * the pending-handoff flag so the inbox banner/highlight goes away. Manager-
+ * scoped and best-effort — a stale ack must never surface an error to the user.
+ */
+export async function acknowledgeAiHandoffAction(
+  conversationId: string,
+): Promise<void> {
+  const session = await requireManager()
+  await acknowledgeAiHandoff(conversationId, session.sub).catch(() => {})
+  revalidatePath('/app/inbox')
+}
+
+/**
+ * Fetch an older page of a thread's history (messages created before `before`,
+ * an ISO timestamp). Used by the inbox "load older messages" control for threads
+ * that were truncated to the most-recent slice on first load. Manager-scoped, so
+ * a foreign conversation id just returns an empty page. `hasMore` reflects
+ * whether a full page came back (i.e. there is probably still older history).
+ */
+export async function loadOlderMessagesAction(
+  conversationId: string,
+  before: string,
+): Promise<{ ok: boolean; messages: Message[]; hasMore: boolean }> {
+  const session = await requireManager()
+  if (!conversationId || !before) {
+    return { ok: false, messages: [], hasMore: false }
+  }
+  const PAGE = 100
+  const messages = await listMessagesBefore(
+    conversationId,
+    session.sub,
+    before,
+    PAGE,
+  )
+  return { ok: true, messages, hasMore: messages.length >= PAGE }
 }

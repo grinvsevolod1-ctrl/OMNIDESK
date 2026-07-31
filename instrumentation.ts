@@ -1,12 +1,17 @@
 /**
  * Next.js instrumentation hook — runs once when the server process boots.
  *
- * We use it to start the push dispatcher (lib/push-dispatcher) so inbound
- * messages generate Web Push notifications regardless of whether a browser tab
- * is open. Guarded to the Node.js runtime so it never runs on the Edge runtime.
+ * Next.js compiles this file for BOTH the Node.js and Edge runtimes, so it must
+ * NOT reference any Node-only API (process.on, process.exit, timers, the pg
+ * pool) in its static body — doing so fails the build with "A Node.js API is
+ * used … not supported in the Edge Runtime", even behind a runtime `if`.
+ *
+ * All the real startup work (push dispatcher, simulator resume, shutdown hooks)
+ * therefore lives in ./instrumentation-node, which we import DYNAMICALLY only
+ * when running under Node. The Edge bundle of this file stays free of Node APIs.
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
-  const { startPushDispatcher } = await import('./lib/push-dispatcher')
-  startPushDispatcher()
+  const { registerNode } = await import('./instrumentation-node')
+  await registerNode()
 }

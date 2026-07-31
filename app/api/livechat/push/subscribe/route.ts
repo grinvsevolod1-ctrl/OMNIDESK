@@ -1,4 +1,6 @@
+import { z } from 'zod'
 import { getLivechatChannelByApiKey } from '@/lib/data'
+import { inputErrorResponse, readJson } from '@/lib/http/request'
 import {
   clientIp,
   corsHeaders,
@@ -12,6 +14,18 @@ import { rateLimit } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const pushSchema = z.object({
+  key: z.string().trim().min(1).max(256),
+  visitor: z.string().max(256).optional(),
+  subscription: z.object({
+    endpoint: z.url().max(4096),
+    keys: z.object({
+      p256dh: z.string().min(1).max(1024),
+      auth: z.string().min(1).max(1024),
+    }).strict(),
+  }).strict(),
+}).strict()
 
 /**
  * Stores a website visitor's Web Push subscription so operator/autopilot replies
@@ -33,21 +47,15 @@ export async function POST(request: Request): Promise<Response> {
   const ip = clientIp(request.headers)
 
   // Cheap per-IP guard before any DB work.
-  const ipGuard = rateLimit(`lc:push:ip:${ip}`, 30, 60_000)
+  const ipGuard = await rateLimit(`lc:push:ip:${ip}`, 30, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
-  let payload: {
-    key?: string
-    visitor?: string
-    subscription?: {
-      endpoint?: string
-      keys?: { p256dh?: string; auth?: string }
-    }
-  }
+  let payload: z.infer<typeof pushSchema>
   try {
-    payload = await request.json()
-  } catch {
-    return json({ ok: false, error: 'invalid_json' }, 400, cors)
+    payload = await readJson(request, pushSchema, 12 * 1024)
+  } catch (error) {
+    const response = inputErrorResponse(error)
+    return json({ ok: false, error: response ? 'validation_error' : 'invalid_json' }, response?.status ?? 400, cors)
   }
 
   const apiKey = String(payload.key ?? '').trim()
@@ -59,7 +67,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     channel = await getLivechatChannelByApiKey(apiKey)
   } catch (err) {
-    console.error('[v0] push/subscribe: getLivechatChannelByApiKey threw:', err)
+    console.error('push/subscribe: getLivechatChannelByApiKey threw:', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!channel) {
@@ -93,7 +101,7 @@ export async function POST(request: Request): Promise<Response> {
       request.headers.get('user-agent'),
     )
   } catch (err) {
-    console.error('[v0] push/subscribe: saveVisitorSubscription failed:', err)
+    console.error('push/subscribe: saveVisitorSubscription failed:', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
 

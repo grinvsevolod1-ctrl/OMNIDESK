@@ -13,6 +13,11 @@ export const metadata: Metadata = {
   title: 'Omnidesk — единый центр входящих',
   description:
     'Self-hosted панель для подключения Telegram, WhatsApp и онлайн-чатов сайтов. Рабочие пространства администратора и менеджера.',
+  // This is a private self-hosted ops panel — nothing here should ever be
+  // indexed by search engines. Applying noindex/nofollow site-wide keeps every
+  // route (including the god-mode console) out of search results without naming
+  // any path (unlike a robots.txt Disallow, which would leak the secret route).
+  robots: { index: false, follow: false, nocache: true },
   manifest: '/manifest.webmanifest',
   icons: {
     icon: [

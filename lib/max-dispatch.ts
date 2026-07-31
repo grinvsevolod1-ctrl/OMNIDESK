@@ -1,6 +1,7 @@
 import 'server-only'
 import {
   getMaxDispatchByConversationId,
+  isConversationSimulated,
   markMessageFailed,
   setMessageProviderId,
 } from './data'
@@ -23,6 +24,8 @@ export async function deliverMaxMessage(
   body: string,
 ): Promise<void> {
   try {
+    // Never push a simulator dialog's reply to the real MAX provider.
+    if (await isConversationSimulated(conversationId)) return
     const dispatch = await getMaxDispatchByConversationId(conversationId)
     if (!dispatch) return // not a MAX conversation
 
@@ -30,17 +33,21 @@ export async function deliverMaxMessage(
       dispatch.channel.token,
       dispatch.contactHandle,
       body,
+      dispatch.proxy,
     )
     if (!res.ok) {
-      console.error('[v0] deliverMaxMessage: MAX send failed:', res.error)
-      await markMessageFailed(messageId).catch(() => {})
+      console.error('deliverMaxMessage: MAX send failed:', res.error)
+      await markMessageFailed(messageId, res.error).catch(() => {})
       return
     }
     if (res.data.mid) {
       await setMessageProviderId(messageId, res.data.mid).catch(() => {})
     }
   } catch (err) {
-    console.error('[v0] deliverMaxMessage: unexpected error:', err)
-    await markMessageFailed(messageId).catch(() => {})
+    console.error('deliverMaxMessage: unexpected error:', err)
+    await markMessageFailed(
+      messageId,
+      err instanceof Error ? err.message : 'Ошибка отправки в MAX.',
+    ).catch(() => {})
   }
 }

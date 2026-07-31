@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+// PM2 loads this file as CommonJS (module.exports), so require() is mandatory
+// here and cannot be replaced with ESM import syntax.
+//
 // pm2 process config for self-hosting Omnidesk on a VPS.
 //
 //   pnpm install && pnpm build          # build the Next.js panel
@@ -5,26 +9,69 @@
 //   pm2 start ecosystem.config.js
 //   pm2 save && pm2 startup             # persist across reboots
 //
+// IMPORTANT — updating an already-running deploy:
+//   `pm2 restart` and `pm2 reload` REUSE the process definition PM2 first saved
+//   (mode, script, args). If the app was ever started differently — e.g.
+//   `pm2 start pnpm -i max -- start` (cluster) or `pm2 start npm -- start`
+//   (which runs `next start 3000`) — a plain restart keeps that broken
+//   definition forever. Always recreate from this file after a code update:
+//     rm -rf .next && pnpm install && pnpm build
+//     pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads \
+//       omnidesk-cron-retry-dead-letters omnidesk-log-reporter
+//     pm2 start ecosystem.config.js
+//     pm2 save
+//
 // Both processes read the same .env (DATABASE_URL + ENCRYPTION_KEY must match).
+const path = require('path')
+
+// PM2 does NOT read the repo's .env by itself, and each app below runs with a
+// DIFFERENT cwd (the worker runs from ./worker), so a plain `dotenv/config`
+// inside a process would look for the wrong .env. Load the single root .env
+// here, once, and inject it into every app's `env` so all three processes get
+// an identical, complete environment regardless of their working directory.
+// This is what makes the worker (DATABASE_URL/ENCRYPTION_KEY/WORKER_SECRET) and
+// the cron (CRON_SECRET) actually see their required vars.
+const rootEnv =
+  require('dotenv').config({ path: path.join(__dirname, '.env') }).parsed || {}
+
 module.exports = {
   apps: [
     {
       name: 'omnidesk-panel',
       script: 'node_modules/next/dist/bin/next',
-      args: 'start -p 3000',
+      args: 'start',
       cwd: __dirname,
       instances: 1,
+      // MUST be fork, never cluster. `next start` is a self-contained HTTP
+      // server; running it under PM2 cluster mode spawns multiple workers that
+      // each hold a DIFFERENT Server Action manifest / RSC encryption context.
+      // Requests then land on a worker that didn't render the page, producing:
+      //   - "Failed to find Server Action "x""
+      //   - "Expected RSC response, got text/plain"
+      //   - "The router state header ... could not be parsed"
+      // Pinning fork mode here guarantees a single consistent instance even if
+      // PM2 previously remembered a cluster definition.
+      exec_mode: 'fork',
       autorestart: true,
       max_memory_restart: '512M',
       env: {
+        ...rootEnv,
         NODE_ENV: 'production',
+        // Bind to all interfaces so nginx (or a remote reverse proxy) can reach
+        // the panel. `next start` already defaults to 0.0.0.0, but some hosts
+        // default HOST to 127.0.0.1 in the environment; set it explicitly.
+        HOST: '0.0.0.0',
       },
     },
     {
       name: 'omnidesk-worker',
-      script: 'node_modules/.bin/tsx',
-      args: 'src/index.ts',
-      cwd: __dirname + '/worker',
+      // Runs TypeScript via the worker's OWN locally-installed tsx (installed by
+      // `cd worker && pnpm install`). We invoke it as the interpreter with an
+      // absolute path so it resolves no matter what cwd PM2 uses — do NOT
+      // hardcode a global path like /usr/bin/tsx (there is no global tsx).
+      script: path.join(__dirname, 'worker', 'src', 'index.ts'),
+      interpreter: path.join(__dirname, 'worker', 'node_modules', '.bin', 'tsx'),
+      cwd: path.join(__dirname, 'worker'),
       instances: 1,
       autorestart: true,
       max_memory_restart: '512M',
@@ -52,6 +99,72 @@ module.exports = {
       exp_backoff_restart_delay: 500,
       max_restarts: 10,
       env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
+      // Self-hosted replacement for Vercel Cron: periodically triggers the
+      // ad-sync endpoint on the local panel. Runs as a scheduled one-shot
+      // (autorestart disabled, launched by cron_restart) instead of a
+      // long-lived process. Requires CRON_SECRET in the shared .env.
+      name: 'omnidesk-cron-sync-ads',
+      script: 'scripts/cron-sync-ads.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '0 */6 * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
+      // Self-hosted replacement for Vercel Cron: replays the inbound webhook
+      // dead-letter queue (webhook_dead_letter). Runs every minute as a
+      // scheduled one-shot; the per-row exponential backoff lives in the DB, so
+      // frequent runs only pick up rows that are actually due. Requires
+      // CRON_SECRET in the shared .env.
+      //
+      // NOTE: if you update an already-running deploy, remember to include this
+      // app in the `pm2 delete ...` line (see the header) before re-starting
+      // from this file, otherwise PM2 keeps the old process list.
+      name: 'omnidesk-cron-retry-dead-letters',
+      script: 'scripts/cron-retry-dead-letters.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '* * * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
+      // Runtime log reporter: watches PM2 status + every process's error/out
+      // logs, redacts secrets, and pushes a compact report to the dedicated
+      // `runtime-logs` git branch (via a separate git worktree so it never
+      // collides with `deploy.sh`'s `git pull`). Pushes immediately on a new
+      // error/crash and periodically when the report changes. Long-lived; keeps
+      // running for the life of the deploy.
+      //
+      // NOTE: PATH/HOME are inherited from the PM2 daemon so `git` and `pm2`
+      // resolve. Pushing requires the repo's origin to have write credentials
+      // (the same token/SSH key used for deploys). If push fails it is logged
+      // and retried next cycle — the local commit is never lost.
+      name: 'omnidesk-log-reporter',
+      script: 'scripts/log-reporter.mjs',
+      cwd: __dirname,
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      max_memory_restart: '256M',
+      // Treat a start as stable only after 20s; back off on repeated early
+      // exits (e.g. transient git failures) instead of hammering.
+      min_uptime: 20000,
+      restart_delay: 10000,
+      exp_backoff_restart_delay: 1000,
+      max_restarts: 10,
+      env: {
+        ...rootEnv,
         NODE_ENV: 'production',
       },
     },

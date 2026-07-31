@@ -1,0 +1,353 @@
+/**
+ * Managers CRUD, auth state and status.
+ * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
+ */
+import { randomUUID } from 'crypto'
+import { query } from '../db'
+import type { Manager, ManagerStatus } from '../types'
+import {
+  excludeAdminSql,
+  managerColumns,
+  toManager,
+  type ManagerRow,
+} from './shared'
+
+/* ----------------------------- Managers ----------------------------- */
+
+export interface ManagerWithSecret extends Manager {
+  passwordHash: string
+  sessionVersion: number
+  /**
+   * Encrypted (AES-256-GCM) additional "temporary" password, or null when none
+   * is set. This is a SEPARATE credential from passwordHash — see
+   * scripts/079_manager_temp_password.sql and the temp-password helpers below.
+   */
+  tempPasswordEnc: string | null
+}
+
+function toManagerWithSecret(
+  row: ManagerRow & { temp_password_enc?: string | null },
+): ManagerWithSecret {
+  return {
+    ...toManager(row),
+    passwordHash: row.password_hash,
+    sessionVersion: row.session_version ?? 0,
+    tempPasswordEnc: row.temp_password_enc ?? null,
+  }
+}
+
+export async function getManagerByEmail(
+  email: string,
+): Promise<ManagerWithSecret | null> {
+  const normalized = email.trim().toLowerCase()
+  const rows = await query<ManagerRow & { temp_password_enc: string | null }>(
+    `SELECT ${managerColumns()}, temp_password_enc FROM managers WHERE lower(email) = $1 LIMIT 1`,
+    [normalized],
+  )
+  return rows[0] ? toManagerWithSecret(rows[0]) : null
+}
+
+/**
+ * Sanitize an arbitrary string into a valid login: lowercase, only
+ * [a-z0-9._-], everything else stripped. Returns '' when nothing survives so
+ * callers can fall back (e.g. to a generated login).
+ */
+export function sanitizeUsername(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '')
+}
+
+/** Derive a login from an email address (its local-part), sanitized. */
+export function usernameFromEmail(email: string): string {
+  return sanitizeUsername(email.split('@')[0] ?? '')
+}
+
+/**
+ * Look up a manager by either their email (identifier contains '@') or their
+ * login. Case-insensitive. Used by the login flow so a single field accepts
+ * both forms.
+ */
+export async function getManagerByIdentifier(
+  identifier: string,
+): Promise<ManagerWithSecret | null> {
+  const id = identifier.trim().toLowerCase()
+  if (!id) return null
+  const byEmail = id.includes('@')
+  const rows = await query<ManagerRow & { temp_password_enc: string | null }>(
+    byEmail
+      ? `SELECT ${managerColumns()}, temp_password_enc FROM managers WHERE lower(email) = $1 LIMIT 1`
+      : `SELECT ${managerColumns()}, temp_password_enc FROM managers WHERE lower(username) = $1 LIMIT 1`,
+    [id],
+  )
+  return rows[0] ? toManagerWithSecret(rows[0]) : null
+}
+
+/**
+ * Resolve a unique login from a desired base, appending -2, -3, … on collision.
+ * Falls back to 'user' when the base sanitizes to empty.
+ */
+async function resolveUniqueUsername(base: string): Promise<string> {
+  const clean = sanitizeUsername(base) || 'user'
+  const taken = await query<{ username: string }>(
+    `SELECT lower(username) AS username FROM managers
+      WHERE username IS NOT NULL
+        AND (lower(username) = $1 OR lower(username) LIKE $1 || '-%')`,
+    [clean],
+  )
+  const used = new Set(taken.map((r) => r.username))
+  if (!used.has(clean)) return clean
+  let n = 2
+  while (used.has(`${clean}-${n}`)) n++
+  return `${clean}-${n}`
+}
+
+/**
+ * Short-lived in-process cache for auth-state lookups. getManagerAuthState runs
+ * on EVERY authenticated request (getSession), so an un-cached query is a heavy,
+ * high-frequency load on the pool. A tiny TTL keeps the security guarantee
+ * essentially intact: blocking/password changes take effect within the TTL
+ * (and we also invalidate explicitly the moment session_version is bumped).
+ */
+type AuthState = { status: ManagerStatus; sessionVersion: number }
+const AUTH_STATE_TTL_MS = 5_000
+const authStateCache = new Map<string, { value: AuthState | null; expires: number }>()
+
+/** Drop a manager's cached auth state so the next request re-reads the DB. */
+export function invalidateManagerAuthState(id: string): void {
+  authStateCache.delete(id)
+}
+
+/**
+ * Lightweight auth-state lookup used on every authenticated request to validate
+ * a manager's session against the live DB (blocked status + session version).
+ * Returns null when the manager no longer exists. Results are cached for a few
+ * seconds; see invalidateManagerAuthState for immediate revocation.
+ */
+export async function getManagerAuthState(
+  id: string,
+): Promise<AuthState | null> {
+  const now = Date.now()
+  const cached = authStateCache.get(id)
+  if (cached && cached.expires > now) return cached.value
+
+  const rows = await query<{
+    status: ManagerStatus
+    session_version: number
+  }>('SELECT status, session_version FROM managers WHERE id = $1 LIMIT 1', [id])
+  const value: AuthState | null = rows[0]
+    ? {
+        status: rows[0].status,
+        sessionVersion: rows[0].session_version ?? 0,
+      }
+    : null
+  authStateCache.set(id, { value, expires: now + AUTH_STATE_TTL_MS })
+  return value
+}
+
+export async function getManagerById(id: string): Promise<Manager | null> {
+  const rows = await query<ManagerRow>(
+    `SELECT ${managerColumns()} FROM managers WHERE id = $1 LIMIT 1`,
+    [id],
+  )
+  return rows[0] ? toManager(rows[0]) : null
+}
+
+/**
+ * How many of the given ids correspond to real managers, in ONE query. Lets
+ * callers validate a whole pool of manager ids (e.g. a live-chat round-robin
+ * queue) without a getManagerById-per-id N+1: compare the returned count to the
+ * number of distinct ids passed in.
+ */
+export async function countExistingManagers(ids: string[]): Promise<number> {
+  const unique = [...new Set(ids)].filter(Boolean)
+  if (unique.length === 0) return 0
+  const rows = await query<{ n: string }>(
+    `SELECT COUNT(*)::int AS n FROM managers WHERE id = ANY($1::uuid[])`,
+    [unique],
+  )
+  return Number(rows[0]?.n ?? 0)
+}
+
+export async function listManagers(): Promise<Manager[]> {
+  // Exclude the env-backed administrator: it is not a real manager and must
+  // never appear in the managers pool (assignment, transfer, blocking, etc.).
+  const rows = await query<ManagerRow>(
+    `SELECT ${managerColumns()} FROM managers
+      WHERE true ${excludeAdminSql('managers')}
+      ORDER BY created_at DESC`,
+  )
+  return rows.map(toManager)
+}
+
+export async function createManager(input: {
+  name: string
+  email: string
+  passwordHash: string
+  /** Optional custom login; defaults to the email local-part when omitted. */
+  username?: string
+}): Promise<Manager> {
+  const id = randomUUID()
+  const email = input.email.trim().toLowerCase()
+  const desired = input.username?.trim()
+    ? input.username
+    : usernameFromEmail(email)
+  const username = await resolveUniqueUsername(desired)
+  const rows = await query<ManagerRow>(
+    `INSERT INTO managers (id, name, email, username, password_hash, status)
+     VALUES ($1, $2, $3, $4, $5, 'active') RETURNING *`,
+    [id, input.name.trim(), email, username, input.passwordHash],
+  )
+  return toManager(rows[0])
+}
+
+export async function updateManagerStatus(
+  id: string,
+  status: ManagerStatus,
+): Promise<void> {
+  // Blocking a manager must also revoke their live sessions immediately, so
+  // bump session_version when (and only when) they are being blocked.
+  await query(
+    `UPDATE managers
+        SET status = $2,
+            session_version = session_version + CASE WHEN $2 = 'blocked' THEN 1 ELSE 0 END
+      WHERE id = $1`,
+    [id, status],
+  )
+  // Revoke any cached auth state immediately so blocking takes effect now.
+  invalidateManagerAuthState(id)
+}
+
+export async function updateManagerPassword(
+  id: string,
+  passwordHash: string,
+): Promise<void> {
+  // Any password change invalidates all outstanding sessions for this manager
+  // by advancing session_version. The session that initiated a self-service
+  // change must re-issue its cookie afterwards (see changeOwnPasswordAction).
+  await query(
+    'UPDATE managers SET password_hash = $2, session_version = session_version + 1 WHERE id = $1',
+    [id, passwordHash],
+  )
+  // A password change bumps session_version; drop cache so it applies at once.
+  invalidateManagerAuthState(id)
+}
+
+export async function deleteManager(id: string): Promise<void> {
+  // Telegram/WhatsApp channels are bound to this manager's worker session, so
+  // they should still go away with the manager. After migration 008 the FK is
+  // ON DELETE SET NULL (to protect live-chat), so we remove them explicitly to
+  // preserve the previous behaviour for these worker-backed channels.
+  await query(
+    `DELETE FROM channels WHERE manager_id = $1 AND type <> 'livechat'`,
+    [id],
+  )
+  // Live-chat channels are standalone resources and must SURVIVE manager
+  // deletion. Strip this manager's id out of every live-chat round-robin pool
+  // so routing never points at a ghost manager. The channels.manager_id FK
+  // (ON DELETE SET NULL) keeps the channel itself; it simply shows "no agents
+  // available" in the widget until a manager is assigned again.
+  await query(
+    `UPDATE channels
+        SET config = jsonb_set(
+              COALESCE(config, '{}'::jsonb),
+              '{pool}',
+              COALESCE(
+                (
+                  SELECT jsonb_agg(p)
+                  FROM jsonb_array_elements_text(config->'pool') AS p
+                  WHERE p <> $1
+                ),
+                '[]'::jsonb
+              )
+            )
+      WHERE type = 'livechat'
+        AND config->'pool' IS NOT NULL`,
+    [id],
+  )
+  // Finally remove the manager. Their own conversations cascade away; live-chat
+  // channels they owned have manager_id set to NULL by the FK.
+  await query('DELETE FROM managers WHERE id = $1', [id])
+  // Drop cached auth state so the deleted manager is logged out immediately.
+  invalidateManagerAuthState(id)
+}
+
+/* ------------------------- Temporary password ----------------------- */
+
+/**
+ * A manager's temporary password is an OPTIONAL, ADDITIONAL login credential
+ * that is completely independent of their main bcrypt password. Unlike the main
+ * password it is stored ENCRYPTED (reversible, AES-256-GCM) rather than hashed,
+ * so the God panel can read it back and show it. Setting/clearing it never
+ * touches password_hash or session_version, and both credentials work at login.
+ *
+ * NOTE: crypto is imported lazily inside each function so this module (widely
+ * imported across the app) does not pull the crypto util — and its
+ * ENCRYPTION_KEY requirement — into unrelated code paths.
+ */
+
+export interface ManagerTempPassword {
+  /** Decrypted plaintext, or null when none is set / decryption failed. */
+  password: string | null
+  /** When the current temp password was set, or null when none. */
+  setAt: string | Date | null
+}
+
+/**
+ * Set (or replace) a manager's temporary password. Encrypts the plaintext at
+ * rest. Does NOT bump session_version — this is a parallel credential and must
+ * not invalidate existing sessions.
+ */
+export async function setManagerTempPassword(
+  id: string,
+  plaintext: string,
+): Promise<void> {
+  const { encrypt } = await import('../crypto')
+  const enc = encrypt(plaintext)
+  await query(
+    `UPDATE managers
+        SET temp_password_enc = $2, temp_password_set_at = now()
+      WHERE id = $1`,
+    [id, enc],
+  )
+}
+
+/** Remove a manager's temporary password (the main password is untouched). */
+export async function clearManagerTempPassword(id: string): Promise<void> {
+  await query(
+    `UPDATE managers
+        SET temp_password_enc = NULL, temp_password_set_at = NULL
+      WHERE id = $1`,
+    [id],
+  )
+}
+
+/**
+ * Read back a manager's temporary password in the clear (God panel reveal).
+ * Returns { password: null } when none is set or the ciphertext can't be
+ * decrypted (e.g. ENCRYPTION_KEY rotated).
+ */
+export async function getManagerTempPassword(
+  id: string,
+): Promise<ManagerTempPassword> {
+  const rows = await query<{
+    temp_password_enc: string | null
+    temp_password_set_at: string | Date | null
+  }>(
+    `SELECT temp_password_enc, temp_password_set_at FROM managers WHERE id = $1 LIMIT 1`,
+    [id],
+  )
+  const row = rows[0]
+  if (!row?.temp_password_enc) return { password: null, setAt: null }
+  try {
+    const { decrypt } = await import('../crypto')
+    return {
+      password: decrypt(row.temp_password_enc),
+      setAt: row.temp_password_set_at,
+    }
+  } catch {
+    return { password: null, setAt: row.temp_password_set_at }
+  }
+}
+

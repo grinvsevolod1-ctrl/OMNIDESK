@@ -1,5 +1,5 @@
 import { Client } from 'pg'
-import { query } from './db'
+import { query, resolveSslConfig } from './db'
 
 /**
  * Shared realtime hub.
@@ -66,6 +66,8 @@ export interface RealtimeEvent {
    * disambiguated by `type`.
    */
   status?: string
+  /** Failure reason for a message event whose status is 'failed'. */
+  errorReason?: string | null
   sessionStatus?: string
   lastMessage?: string
   unread?: number
@@ -110,14 +112,20 @@ function scheduleReconnect(h: Hub): void {
 async function connect(h: Hub): Promise<void> {
   if (h.client || h.connecting) return
   if (!process.env.DATABASE_URL) return
+  // Guard against a reconnect timer firing after the last subscriber left:
+  // without this we could open a LISTEN connection that nobody would ever
+  // tear down (teardown only runs on unsubscribe), leaking it until the next
+  // event. If there are no subscribers, there is nothing to fan out to.
+  if (h.subscribers.size === 0) return
   h.connecting = true
 
   const connectionString = process.env.DATABASE_URL
   const client = new Client({
     connectionString,
-    ssl: connectionString.includes('sslmode=require')
-      ? { rejectUnauthorized: false }
-      : undefined,
+    // Reuse the panel's single source of truth for TLS so the realtime
+    // listener validates the server certificate exactly like every other
+    // connection (see resolveSslConfig in ./db) instead of blindly trusting it.
+    ssl: resolveSslConfig(connectionString),
   })
 
   client.on('notification', (msg) => {

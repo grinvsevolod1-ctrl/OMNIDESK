@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import {
   getLivechatChannelByApiKey,
   getLivechatConversationRef,
@@ -16,10 +17,27 @@ import {
   visitorHandle,
   visitorName,
 } from '@/lib/livechat'
+import { inputErrorResponse, readJson } from '@/lib/http/request'
 import { rateLimit } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const optionalMeta = z.string().max(2048).optional()
+const ingestSchema = z.object({
+  key: z.string().trim().min(1).max(256),
+  visitor: z.string().max(256).optional(),
+  name: z.string().max(200).optional(),
+  message: z.string().min(1).max(10_000),
+  meta: z.object({
+    language: z.string().max(32).optional(),
+    timezone: z.string().max(128).optional(),
+    screen: z.string().max(64).optional(),
+    page: optionalMeta,
+    referrer: optionalMeta,
+    subject: z.string().max(500).optional(),
+  }).strict().optional(),
+}).strict()
 
 /**
  * Inbound endpoint for website live-chat widgets.
@@ -38,27 +56,19 @@ export async function POST(request: Request): Promise<Response> {
 
   // Cheap per-IP guard FIRST, before any DB work, so a flood can't hammer the
   // database. Generous enough for real users behind shared NAT.
-  const ipGuard = rateLimit(`lc:ingest:ip:${ip}`, 60, 60_000)
+  const ipGuard = await rateLimit(`lc:ingest:ip:${ip}`, 60, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
-  let payload: {
-    key?: string
-    visitor?: string
-    name?: string
-    message?: string
-    meta?: {
-      language?: string
-      timezone?: string
-      screen?: string
-      page?: string
-      referrer?: string
-      subject?: string
-    }
-  }
+  let payload: z.infer<typeof ingestSchema>
   try {
-    payload = await request.json()
-  } catch {
-    return json({ ok: false, error: 'invalid_json' }, 400, cors)
+    payload = await readJson(request, ingestSchema, 16 * 1024)
+  } catch (error) {
+    const response = inputErrorResponse(error)
+    return json(
+      { ok: false, error: response ? 'validation_error' : 'invalid_json' },
+      response?.status ?? 400,
+      cors,
+    )
   }
 
   const apiKey = String(payload.key ?? '').trim()
@@ -70,7 +80,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     channel = await getLivechatChannelByApiKey(apiKey)
   } catch (err) {
-    console.error('[v0] ingest: getLivechatChannelByApiKey threw (DB error?):', err)
+    console.error('ingest: getLivechatChannelByApiKey threw (DB error?):', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!channel) {
@@ -97,7 +107,7 @@ export async function POST(request: Request): Promise<Response> {
 
   // Per-visitor message throttle: stops a single (possibly spoofed) visitor id
   // from spamming one channel's inbox while staying well above human typing.
-  const visitorGuard = rateLimit(
+  const visitorGuard = await rateLimit(
     `lc:ingest:v:${channel.id}:${handle}`,
     20,
     60_000,
@@ -112,11 +122,11 @@ export async function POST(request: Request): Promise<Response> {
   try {
     existingRef = await getLivechatConversationRef(channel.id, handle)
   } catch (err) {
-    console.error('[v0] ingest: getLivechatConversationRef threw:', err)
+    console.error('ingest: getLivechatConversationRef threw:', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!existingRef) {
-    const newConvGuard = rateLimit(`lc:newconv:${ip}`, 6, 10 * 60_000)
+    const newConvGuard = await rateLimit(`lc:newconv:${ip}`, 6, 10 * 60_000)
     if (!newConvGuard.allowed) return tooMany(cors, newConvGuard.retryAfterSec)
   }
 
@@ -128,7 +138,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     agentId = await resolveLivechatAgentId(channel)
   } catch (err) {
-    console.error('[v0] ingest: resolveLivechatAgentId threw (DB error?):', err)
+    console.error('ingest: resolveLivechatAgentId threw (DB error?):', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
   if (!agentId) {
@@ -205,7 +215,7 @@ export async function POST(request: Request): Promise<Response> {
       cors,
     )
   } catch (err) {
-    console.error('[v0] ingest: recordLivechatInbound failed:', err)
+    console.error('ingest: recordLivechatInbound failed:', err)
     return json({ ok: false, error: 'server_error' }, 500, cors)
   }
 }

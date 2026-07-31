@@ -84,7 +84,11 @@ export function ProxiesManager({
     setBusyId(id)
     startTransition(async () => {
       const res = await checkManagerProxyAction(id)
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
       setBusyId(null)
     })
   }
@@ -93,7 +97,11 @@ export function ProxiesManager({
     setBusyId(id)
     startTransition(async () => {
       const res = await deleteManagerProxyAction(id)
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
       setBusyId(null)
     })
   }

@@ -4,6 +4,7 @@ import { startHttpServer } from './http.js'
 import { processJob, drainQueue } from './jobs.js'
 import { registry } from './registry.js'
 import { runNoResponseSweep } from './autopilot.js'
+import { captureException, initErrorReporter } from './error-reporter.js'
 
 /** How often the autopilot 'no_response' scheduler scans for silent threads. */
 const NO_RESPONSE_SWEEP_MS = 60_000
@@ -12,6 +13,9 @@ let noResponseTimer: NodeJS.Timeout | null = null
 
 async function main(): Promise<void> {
   logger.info('Omnidesk worker starting')
+
+  // 0. Optional error reporting (Sentry). No-op unless SENTRY_DSN is set.
+  await initErrorReporter()
 
   // 1. Internal HTTP API (QR + health)
   startHttpServer()
@@ -56,14 +60,17 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on('SIGINT', () => void shutdown('SIGINT'))
 process.on('SIGTERM', () => void shutdown('SIGTERM'))
-process.on('unhandledRejection', (reason) =>
-  logger.error({ reason }, 'unhandledRejection'),
-)
-process.on('uncaughtException', (err) =>
-  logger.error({ err }, 'uncaughtException'),
-)
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, 'unhandledRejection')
+  captureException(reason, { scope: 'process.unhandledRejection' })
+})
+process.on('uncaughtException', (err) => {
+  logger.error({ err }, 'uncaughtException')
+  captureException(err, { scope: 'process.uncaughtException' })
+})
 
 main().catch((err) => {
   logger.error({ err }, 'Worker failed to start')
+  captureException(err, { scope: 'main' })
   process.exit(1)
 })

@@ -7,18 +7,40 @@ import { requireManager } from '@/lib/auth'
 import {
   listChannels,
   listConversations,
-  listMessages,
+  listMessagesForConversations,
   listQuickReplies,
+  listTransferTargets,
 } from '@/lib/data'
+import { getAiAssistSettings } from '@/lib/data/ai-assist'
+import { isTelemostConfigured } from '@/lib/telemost'
 import type { Message } from '@/lib/types'
 
 export default async function InboxPage() {
   const session = await requireManager()
-  const [conversations, channels, quickReplies] = await Promise.all([
-    listConversations(session.sub),
-    listChannels(session.sub),
-    listQuickReplies(session.sub),
-  ])
+  const [conversations, channels, quickReplies, transferTargets] =
+    await Promise.all([
+      listConversations(session.sub),
+      listChannels(session.sub),
+      listQuickReplies(session.sub),
+      // Colleagues this manager can hand a conversation off to. Best-effort:
+      // never let a transfer-target lookup take down the inbox.
+      listTransferTargets(session.sub).catch(() => []),
+    ])
+
+  // Whether the Yandex Telemost video-meeting button should appear in the
+  // composer (only when the admin has configured and enabled it).
+  const telemostEnabled = await isTelemostConfigured()
+
+  // Global AI master switch: when on, the AI leads every conversation by default
+  // (managers pause individual threads to take over). Drives the inbox's blocked
+  // composer + "AI is leading" affordance. Best-effort: default off if the
+  // ai_assist tables (migration 054) aren't applied yet.
+  let aiMasterEnabled = false
+  try {
+    aiMasterEnabled = (await getAiAssistSettings()).enabled
+  } catch (err) {
+    console.error('inbox: AI settings unavailable:', err)
+  }
 
   // Personal accounts whose session is degraded/paused — surfaced as a banner in
   // the inbox so the operator knows live sync may be affected for those sources,
@@ -40,12 +62,17 @@ export default async function InboxPage() {
       lastError: c.lastError,
     }))
 
-  const messagesByConversation: Record<string, Message[]> = {}
-  await Promise.all(
-    conversations.map(async (c) => {
-      messagesByConversation[c.id] = await listMessages(c.id, session.sub)
-    }),
+  // Recent transcript for every visible thread in ONE query (window-function
+  // batch) instead of a per-conversation N+1. Threads with no messages are
+  // absent from the map, so default them to an empty list for the client.
+  const batched = await listMessagesForConversations(
+    conversations.map((c) => c.id),
+    session.sub,
   )
+  const messagesByConversation: Record<string, Message[]> = {}
+  for (const c of conversations) {
+    messagesByConversation[c.id] = batched[c.id] ?? []
+  }
 
   // Autopilot status for the inbox toolbar toggle. Wrapped in try/catch with
   // safe defaults: if migration 030 (autopilot tables) hasn't been applied yet,
@@ -54,7 +81,7 @@ export default async function InboxPage() {
   try {
     autopilot = await getAutopilotStatusAction()
   } catch (err) {
-    console.error('[v0] inbox: autopilot status unavailable:', err)
+    console.error('inbox: autopilot status unavailable:', err)
   }
 
   return (
@@ -80,7 +107,10 @@ export default async function InboxPage() {
             currentUser={session.name}
             quickReplies={quickReplies}
             autopilot={autopilot}
+            aiMasterEnabled={aiMasterEnabled}
             ownedChannelIds={channels.map((c) => c.id)}
+            transferTargets={transferTargets}
+            telemostEnabled={telemostEnabled}
           />
         </div>
       )}

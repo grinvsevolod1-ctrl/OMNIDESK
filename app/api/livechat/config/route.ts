@@ -36,7 +36,7 @@ export async function GET(request: Request): Promise<Response> {
 
   // Polled by every open widget (~every 15s). Guard per IP against a tight
   // polling loop hammering the DB.
-  const ipGuard = rateLimit(`lc:config:ip:${clientIp(request.headers)}`, 120, 60_000)
+  const ipGuard = await rateLimit(`lc:config:ip:${clientIp(request.headers)}`, 120, 60_000)
   if (!ipGuard.allowed) return tooMany(cors, ipGuard.retryAfterSec)
 
   const apiKey = (url.searchParams.get('key') ?? '').trim()

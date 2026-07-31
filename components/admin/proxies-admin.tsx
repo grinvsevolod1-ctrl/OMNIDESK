@@ -116,7 +116,11 @@ export function ProxiesAdmin({
     setBusyId(id)
     startTransition(async () => {
       const res = await assignProxyAction(id, value === UNASSIGNED ? null : value)
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
       setBusyId(null)
     })
   }
@@ -125,7 +129,11 @@ export function ProxiesAdmin({
     setBusyId(id)
     startTransition(async () => {
       const res = await checkProxyAction(id)
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
       setBusyId(null)
     })
   }
@@ -134,7 +142,11 @@ export function ProxiesAdmin({
     setBusyId(id)
     startTransition(async () => {
       const res = await deleteProxyAction(id)
-      res.ok ? toast.success(res.message) : toast.error(res.message)
+      if (res.ok) {
+        toast.success(res.message)
+      } else {
+        toast.error(res.message)
+      }
       setBusyId(null)
     })
   }

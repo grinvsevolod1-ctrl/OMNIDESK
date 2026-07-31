@@ -1,9 +1,16 @@
 import { logger } from './logger.js'
-import { TelegramSession } from './telegram.js'
-import { WhatsAppSession } from './whatsapp.js'
+import { TelegramSession, telegramSendFailureReason } from './telegram.js'
 import * as repo from './repo.js'
 
-type AnySession = TelegramSession | WhatsAppSession
+/**
+ * The worker only drives Telegram (MTProto) sessions. WhatsApp is served
+ * entirely by the official Cloud API through the Next.js webhook — there is no
+ * Baileys/WhatsApp Web socket here anymore. VK and MAX are likewise webhook /
+ * long-poll based and live in the Next.js app. Any job that somehow targets a
+ * non-Telegram channel is treated as a safe no-op so a stale queue entry can
+ * never crash the worker.
+ */
+type AnySession = TelegramSession
 
 /**
  * Holds every live session keyed by channelId and routes job actions to the
@@ -15,10 +22,7 @@ class Registry {
   private ensure(channel: repo.ChannelRecord): AnySession {
     let s = this.sessions.get(channel.id)
     if (s) return s
-    s =
-      channel.type === 'telegram'
-        ? new TelegramSession(channel.id, channel.manager_id)
-        : new WhatsAppSession(channel.id, channel.manager_id)
+    s = new TelegramSession(channel.id, channel.manager_id)
     this.sessions.set(channel.id, s)
     return s
   }
@@ -27,26 +31,25 @@ class Registry {
     return this.sessions.get(channelId)
   }
 
-  /** Latest WhatsApp QR data-url, if the channel is waiting for a scan. */
-  getQr(channelId: string): string | null {
-    const s = this.sessions.get(channelId)
-    return s instanceof WhatsAppSession ? s.qrDataUrl : null
-  }
-
-  /** Latest WhatsApp pairing code, if the channel is linking by phone number. */
-  getPairingCode(channelId: string): string | null {
-    const s = this.sessions.get(channelId)
-    return s instanceof WhatsAppSession ? s.pairingCode : null
+  /**
+   * True for channels this worker is responsible for. Only Telegram runs here;
+   * everything else (WhatsApp Cloud, VK, MAX, livechat) is owned by Next.js.
+   */
+  private isWorkerManaged(channel: repo.ChannelRecord): boolean {
+    return channel.type === 'telegram'
   }
 
   async handleJob(job: repo.JobRecord): Promise<Record<string, unknown>> {
     const channel = await repo.getChannel(job.channel_id)
     if (!channel) throw new Error('Channel not found')
-    // Cloud API WhatsApp channels are handled entirely by the Next.js webhook;
-    // the worker must never open a Baileys socket for them. Defensive no-op in
-    // case a stale job slips through.
-    if (channel.type === 'whatsapp' && channel.config?.provider === 'cloud') {
-      return { skipped: 'cloud-managed channel' }
+    // Non-Telegram channels are not driven by this worker. Defensive no-op in
+    // case a stale job slips through (e.g. a WhatsApp Cloud / VK / MAX job).
+    if (!this.isWorkerManaged(channel)) {
+      logger.warn(
+        { channelId: channel.id, type: channel.type, action: job.action },
+        'Ignoring job for non-Telegram channel (not worker-managed)',
+      )
+      return { skipped: `non-telegram channel (${channel.type})` }
     }
     const session = this.ensure(channel)
     const payload = job.payload || {}
@@ -58,15 +61,10 @@ class Registry {
     switch (job.action) {
       case 'start':
       case 'request_qr': {
-        if (session instanceof TelegramSession) {
-          return session.start(
-            (payload.phone as string) || channel.phone || undefined,
-            typeof payload.attemptId === 'string' ? payload.attemptId : undefined,
-          )
-        }
-        return session.start({
-          phone: (payload.phone as string) || channel.phone || undefined,
-        })
+        return session.start(
+          (payload.phone as string) || channel.phone || undefined,
+          typeof payload.attemptId === 'string' ? payload.attemptId : undefined,
+        )
       }
       case 'pause': {
         // Keep the session connected; only stop writing inbound to the inbox.
@@ -80,16 +78,10 @@ class Registry {
         return { paused: false }
       }
       case 'send_code': {
-        if (session instanceof TelegramSession) {
-          return session.submitCode(String(payload.code ?? ''))
-        }
-        throw new Error('send_code is only valid for Telegram')
+        return session.submitCode(String(payload.code ?? ''))
       }
       case 'send_password': {
-        if (session instanceof TelegramSession) {
-          return session.submitPassword(String(payload.password ?? ''))
-        }
-        throw new Error('send_password is only valid for Telegram')
+        return session.submitPassword(String(payload.password ?? ''))
       }
       case 'send_message': {
         const target = String(payload.target ?? '')
@@ -120,10 +112,12 @@ class Registry {
           return { sent: true }
         } catch (err) {
           // Surface the failure on the message row so the panel shows a failed
-          // tick instead of a silent "sent" that never arrived (e.g. WA 463 /
-          // number not on WhatsApp).
+          // tick WITH a human-readable reason (flood wait, blocked, privacy…)
+          // instead of a silent "sent" that never arrived.
           if (dbMessageId) {
-            await repo.setMessageStatus(dbMessageId, 'failed').catch(() => {})
+            await repo
+              .setMessageStatus(dbMessageId, 'failed', telegramSendFailureReason(err))
+              .catch(() => {})
           }
           throw err
         }
@@ -147,10 +141,23 @@ class Registry {
           }
         }
       }
-      case 'react_message': {
-        if (!(session instanceof TelegramSession)) {
-          throw new Error('react_message is only valid for Telegram')
+      case 'set_typing': {
+        const target = String(payload.target ?? '')
+        if (!target) throw new Error('set_typing requires target')
+        // Typing indicators are purely cosmetic and Telegram expires them
+        // quickly, so a failure here must never surface as a failed job.
+        try {
+          await session.setTyping(target)
+          return { typing: true }
+        } catch (err) {
+          logger.warn(
+            { err, channelId: channel.id },
+            'set_typing failed (non-fatal)',
+          )
+          return { typing: false }
         }
+      }
+      case 'react_message': {
         const target = String(payload.target ?? '')
         const providerMessageId = Number(payload.providerMessageId ?? 0)
         if (!target || !providerMessageId) {
@@ -164,9 +171,6 @@ class Registry {
         return { reacted: true }
       }
       case 'delete_message': {
-        if (!(session instanceof TelegramSession)) {
-          throw new Error('delete_message is only valid for Telegram')
-        }
         const target = String(payload.target ?? '')
         const providerMessageId = Number(payload.providerMessageId ?? 0)
         if (!target || !providerMessageId) {
@@ -176,9 +180,6 @@ class Registry {
         return { deleted: true }
       }
       case 'forward_message': {
-        if (!(session instanceof TelegramSession)) {
-          throw new Error('forward_message is only valid for Telegram')
-        }
         const fromTarget = String(payload.fromTarget ?? '')
         const toTarget = String(payload.toTarget ?? '')
         const providerMessageId = Number(payload.providerMessageId ?? 0)
@@ -199,9 +200,6 @@ class Registry {
         return { forwarded: true }
       }
       case 'send_sticker': {
-        if (!(session instanceof TelegramSession)) {
-          throw new Error('send_sticker is only valid for Telegram')
-        }
         const target = String(payload.target ?? '')
         await session.sendSticker(target, {
           id: String(payload.documentId ?? ''),
@@ -212,10 +210,7 @@ class Registry {
       }
       case 'restart': {
         await session.stop()
-        if (session instanceof TelegramSession) {
-          return session.start(channel.phone || undefined)
-        }
-        return session.start({ phone: channel.phone || undefined })
+        return session.start(channel.phone || undefined)
       }
       case 'stop': {
         await session.stop()
@@ -226,22 +221,28 @@ class Registry {
         this.sessions.delete(channel.id)
         return { loggedOut: true }
       }
+      case 'kick_foreign_sessions': {
+        // Manual God-panel trigger: runs the same enforcement logic as the
+        // periodic sweep, but unconditionally (ignores the exclusive-session
+        // toggle). Returns counts so the action result is informative.
+        const kicked = await session.kickForeignSessionsNow()
+        return { kicked }
+      }
       default:
         throw new Error(`Unknown action: ${job.action}`)
     }
   }
 
   /**
-   * On startup, resume sessions that were online/offline before restart.
+   * On startup, resume Telegram sessions that were online/offline before the
+   * restart.
    *
    * Sessions are started with a STAGGERED delay (plus jitter) rather than all at
    * once. A simultaneous burst of reconnects after a worker restart looks like
-   * coordinated bot activity to WhatsApp/Telegram and can get accounts flagged
-   * — especially dangerous because a single restart would otherwise hit every
-   * account at the exact same instant. Spacing them out keeps each account's
-   * behaviour independent and human-like. Accounts in a cooled-down state
-   * (`rate_limited`, `error`, `logged_out`) are intentionally NOT auto-resumed
-   * here (see listLiveChannels) so we never resume hammering a restricted one.
+   * coordinated bot activity to Telegram and can get accounts flagged — spacing
+   * them out keeps each account's behaviour independent and human-like. Accounts
+   * in a cooled-down state (`rate_limited`, `error`, `logged_out`) are
+   * intentionally NOT auto-resumed here (see listLiveChannels).
    */
   async restore(): Promise<void> {
     const channels = await repo.listLiveChannels()
@@ -250,8 +251,6 @@ class Registry {
     channels.forEach((channel, i) => {
       // Idempotency on boot: if drainQueue already (re)started this channel via
       // a queued start/restart job, a session is already registered for it.
-      // Starting it again here would open a second socket for the same device
-      // and trip a multi-device 401 — so skip channels we're already handling.
       if (this.sessions.has(channel.id)) return
       const delay = i * STAGGER_MS + Math.floor(Math.random() * STAGGER_MS)
       setTimeout(() => {
@@ -262,11 +261,7 @@ class Registry {
           const session = this.ensure(channel)
           // Preserve the soft-pause state across worker restarts.
           session.setIngestPaused(Boolean(channel.ingest_paused))
-          if (session instanceof TelegramSession) {
-            void session.start(channel.phone || undefined)
-          } else {
-            void session.start({ phone: channel.phone || undefined })
-          }
+          void session.start(channel.phone || undefined)
         } catch (err) {
           logger.error(
             { err, channelId: channel.id },

@@ -1,15 +1,6 @@
 import Link from 'next/link'
-import {
-  CheckCheck,
-  Inbox,
-  MessageCircle,
-  MessageSquare,
-  Phone,
-  Plug,
-  Plus,
-  Send,
-  Users,
-} from 'lucide-react'
+import { CheckCheck, Inbox, MessageCircle, Plug, Plus, Users } from 'lucide-react'
+import { channelIcon, type BrandIconComponent } from '@/components/channel-icons'
 import { ManagerActivityChart } from '@/components/analytics/manager-activity-chart'
 import { LeadStatusBoard } from '@/components/manager/lead-status-board'
 import {
@@ -22,14 +13,14 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { requireManager } from '@/lib/auth'
 import { getLeadAnalytics, getManagerStats, listChannels } from '@/lib/data'
-import { CHANNEL_META, type ChannelType } from '@/lib/types'
+import { getChannelMeta, type ChannelType } from '@/lib/types'
 
-const ICONS: Record<ChannelType, typeof Send> = {
-  telegram: Send,
-  whatsapp: Phone,
-  livechat: MessageCircle,
-  max: MessageSquare,
-  vk: Users,
+const ICONS: Record<ChannelType, BrandIconComponent> = {
+  telegram: channelIcon('telegram'),
+  whatsapp: channelIcon('whatsapp'),
+  livechat: channelIcon('livechat'),
+  max: channelIcon('max'),
+  vk: channelIcon('vk'),
 }
 
 export default async function ManagerOverviewPage() {
@@ -148,7 +139,7 @@ export default async function ManagerOverviewPage() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{c.name}</p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {CHANNEL_META[c.type].label} · {c.detail}
+                        {getChannelMeta(c.type).label} · {c.detail}
                       </p>
                     </div>
                   </div>

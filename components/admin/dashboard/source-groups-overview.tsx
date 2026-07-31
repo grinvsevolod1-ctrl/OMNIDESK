@@ -1,18 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
+import dynamic from 'next/dynamic'
+import useSWR from 'swr'
 import { useRouter } from 'next/navigation'
-import {
-  Check,
-  Layers,
-  Loader2,
-  MessageCircle,
-  Phone,
-  Plus,
-  Send,
-  Trash2,
-  Users,
-} from 'lucide-react'
+import { Check, Layers, Loader2, Plus, Trash2, Users } from 'lucide-react'
+import { channelIcon } from '@/components/channel-icons'
 import { toast } from 'sonner'
 import {
   createSourceGroupAction,
@@ -20,7 +13,17 @@ import {
   getGroupAnalyticsAction,
   updateSourceGroupAction,
 } from '@/app/actions/groups'
-import { ActivityChart } from '@/components/analytics/activity-chart'
+// Rendered only once group analytics are fetched client-side, so defer the
+// heavy canvas chart out of the admin overview's initial bundle. ssr:false —
+// nothing to render before the client fetch resolves.
+const ActivityChart = dynamic(
+  () =>
+    import('@/components/analytics/activity-chart').then((m) => m.ActivityChart),
+  {
+    ssr: false,
+    loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
+  },
+)
 import { PageHeader, StatCard } from '@/components/page-parts'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -111,8 +114,44 @@ export function SourceGroupsOverview({
     ymd(rangeFromPreset('7d').from),
   )
   const [customTo, setCustomTo] = useState(() => ymd(startOfDay(new Date())))
-  const [analytics, setAnalytics] = useState<GroupAnalytics | null>(null)
-  const [pending, startTransition] = useTransition()
+  // Committed query that actually drives the report fetch. Handlers update it
+  // (group change, preset change, custom "Показать"), so editing the custom
+  // date inputs never refetches on every keystroke — only on apply. Seeded with
+  // "today" for the initial group so the default report loads immediately.
+  const [reportQuery, setReportQuery] = useState<
+    { groupId: string; from: string; to: string } | null
+  >(() => {
+    if (!initialGroupId) return null
+    const r = rangeFromPreset('today')
+    return {
+      groupId: initialGroupId,
+      from: r.from.toISOString(),
+      to: r.to.toISOString(),
+    }
+  })
+
+  // Report data via SWR, keyed by the committed query so switching back to a
+  // previously viewed range is instant (cached). The browser's timezone offset
+  // is sent so the server buckets days by the admin's local clock, not UTC —
+  // which is also why we don't render analytics on the server.
+  const { data: analytics = null, isValidating: pending } = useSWR(
+    reportQuery
+      ? ['group-analytics', reportQuery.groupId, reportQuery.from, reportQuery.to]
+      : null,
+    async ([, gid, from, to]) => {
+      const tz = new Date().getTimezoneOffset()
+      const res = await getGroupAnalyticsAction(gid, from, to, tz)
+      if (res.ok && res.data) return res.data
+      throw new Error(res.message ?? 'Не удалось загрузить отчёт.')
+    },
+    {
+      revalidateOnFocus: false,
+      onError: (e: unknown) =>
+        toast.error(
+          e instanceof Error ? e.message : 'Не удалось загрузить отчёт.',
+        ),
+    },
+  )
 
   function currentRange(p: Preset): { from: string; to: string } {
     if (p === 'custom') {
@@ -126,38 +165,23 @@ export function SourceGroupsOverview({
     return { from: r.from.toISOString(), to: r.to.toISOString() }
   }
 
-  function load(nextGroupId: string | null, p: Preset) {
+  function runReport(nextGroupId: string | null, p: Preset) {
     if (!nextGroupId) {
-      setAnalytics(null)
+      setReportQuery(null)
       return
     }
     const { from, to } = currentRange(p)
-    // The browser knows the admin's timezone; the server buckets days with it
-    // so "today" matches the local clock instead of the server's UTC date.
-    const tz = new Date().getTimezoneOffset()
-    startTransition(async () => {
-      const res = await getGroupAnalyticsAction(nextGroupId, from, to, tz)
-      if (res.ok && res.data) setAnalytics(res.data)
-      else toast.error(res.message ?? 'Не удалось загрузить отчёт.')
-    })
+    setReportQuery({ groupId: nextGroupId, from, to })
   }
-
-  // Load the default report ("today") once on mount, using the client's real
-  // timezone. We deliberately don't render analytics on the server because it
-  // would compute "today" in UTC and be off by a day for the admin.
-  useEffect(() => {
-    if (initialGroupId) load(initialGroupId, 'today')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   function onGroupChange(id: string | null) {
     if (!id) return
     setGroupId(id)
-    load(id, preset)
+    runReport(id, preset)
   }
   function onPresetChange(p: Preset) {
     setPreset(p)
-    if (p !== 'custom') load(groupId, p)
+    if (p !== 'custom') runReport(groupId, p)
   }
 
   return (
@@ -274,7 +298,7 @@ export function SourceGroupsOverview({
                 </div>
                 <Button
                   size="sm"
-                  onClick={() => load(groupId, 'custom')}
+                  onClick={() => runReport(groupId, 'custom')}
                   disabled={pending}
                 >
                   Показать
@@ -302,6 +326,24 @@ export function SourceGroupsOverview({
 }
 
 function Report({ analytics }: { analytics: GroupAnalytics }) {
+  // Блоки по типам мессенджеров больше не захардкожены под Telegram/WhatsApp/
+  // Онлайн-чат: строим их из фактических данных и сортируем по убыванию лидов.
+  // «Всего написали» закреплён первым, дальше — три самых активных канала.
+  const CHANNEL_TYPES: ChannelType[] = [
+    'telegram',
+    'whatsapp',
+    'livechat',
+    'max',
+    'vk',
+  ]
+  const topTypes = CHANNEL_TYPES.map((type) => ({
+    type,
+    people: analytics.byType[type].people,
+    messages: analytics.byType[type].messages,
+  }))
+    .sort((a, b) => b.people - a.people)
+    .slice(0, 3)
+
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -311,24 +353,15 @@ function Report({ analytics }: { analytics: GroupAnalytics }) {
           icon={Users}
           hint={`${analytics.totalMessages} сообщений`}
         />
-        <StatCard
-          label="Telegram"
-          value={analytics.byType.telegram.people}
-          icon={Send}
-          hint={`${analytics.byType.telegram.messages} сообщений`}
-        />
-        <StatCard
-          label="WhatsApp"
-          value={analytics.byType.whatsapp.people}
-          icon={Phone}
-          hint={`${analytics.byType.whatsapp.messages} сообщений`}
-        />
-        <StatCard
-          label="Онлайн-чат"
-          value={analytics.byType.livechat.people}
-          icon={MessageCircle}
-          hint={`${analytics.byType.livechat.messages} сообщений`}
-        />
+        {topTypes.map((t) => (
+          <StatCard
+            key={t.type}
+            label={TYPE_LABEL[t.type]}
+            value={t.people}
+            icon={channelIcon(t.type)}
+            hint={`${t.messages} сообщений`}
+          />
+        ))}
       </div>
 
       <ActivityChart byDay={analytics.byDay} byHour={analytics.byHour} />
@@ -339,52 +372,65 @@ function Report({ analytics }: { analytics: GroupAnalytics }) {
 }
 
 function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
+  // byChannel уже отсортирован сервером по убыванию людей. Доля считается от
+  // самого активного канала, чтобы нарисовать сравнительную полоску.
+  const peak = Math.max(1, ...analytics.byChannel.map((c) => c.people))
+
   return (
     <Card className="p-5">
       <h2 className="font-medium">Куда писали</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Разбивка обращений по каждому каналу источника.
+        Разбивка обращений по каждому каналу источника — от самого активного.
       </p>
       {analytics.byChannel.length === 0 ? (
         <p className="mt-6 text-sm text-muted-foreground">
           В источнике нет каналов.
         </p>
       ) : (
-        <ul className="mt-4 divide-y divide-border">
-          {analytics.byChannel.map((c) => (
-            <li
-              key={c.channelId}
-              className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
-            >
-              <div className="flex min-w-0 items-center gap-2.5">
-                <span
-                  className={cn('size-2.5 shrink-0 rounded-full', TYPE_DOT[c.type])}
-                  aria-hidden
-                />
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{c.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {TYPE_LABEL[c.type]}
-                  </p>
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-6 text-right">
-                <div>
-                  <p className="text-base font-semibold tabular-nums">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {analytics.byChannel.map((c) => {
+            const Icon = channelIcon(c.type)
+            const pct = Math.round((c.people / peak) * 100)
+            return (
+              <div
+                key={c.channelId}
+                className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span
+                      className={cn(
+                        'flex size-8 shrink-0 items-center justify-center rounded-lg text-primary-foreground',
+                        TYPE_DOT[c.type],
+                      )}
+                    >
+                      <Icon className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{c.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {TYPE_LABEL[c.type]}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="shrink-0 text-2xl font-semibold tabular-nums">
                     {c.people}
                   </p>
-                  <p className="text-[11px] text-muted-foreground">человек</p>
                 </div>
-                <div>
-                  <p className="text-base font-semibold tabular-nums">
-                    {c.messages}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">сообщений</p>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className={cn('h-full rounded-full', TYPE_DOT[c.type])}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                  <span>{c.people} чел.</span>
+                  <span>{c.messages} сообщений</span>
                 </div>
               </div>
-            </li>
-          ))}
-        </ul>
+            )
+          })}
+        </div>
       )}
     </Card>
   )
@@ -453,6 +499,12 @@ function ManageGroupsDialog({
   }
 
   function remove(id: string) {
+    // Источник теперь единая сущность: удаление снесёт и его финансы (кабинеты,
+    // расходы, хранилище) в «Учёте», а не только привязку каналов. Предупреждаем.
+    const ok = window.confirm(
+      'Удалить источник целиком?\n\nВместе с ним из «Учёта» удалятся все рекламные кабинеты, расходы и данные хранилища этого источника. Это действие необратимо.',
+    )
+    if (!ok) return
     startTransition(async () => {
       const res = await deleteSourceGroupAction(id)
       if (res.ok) {

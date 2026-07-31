@@ -14,6 +14,10 @@ dist/
 # Logs
 *.log
 
+# Runtime log reporter worktree (checkout of the runtime-logs branch).
+# Kept out of the code branch so it never shows as untracked / conflicts.
+.runtime-logs/
+
 # OS / editor
 .DS_Store
 
@@ -24,3 +28,7 @@ dist/
 __v0_runtime_loader.js
 __v0_devtools.tsx
 __v0_jsx-dev-runtime.ts
+# Server/ops backups — NEVER commit. Contains pm2 dumps (which serialize the
+# full process env, including DATABASE_URL and secrets), SSL private keys, and
+# raw DB dumps. Keep the whole directory out of the repo.
+backup/
