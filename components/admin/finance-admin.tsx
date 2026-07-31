@@ -4,18 +4,10 @@ import { useMemo, useState, useTransition } from 'react'
 import dynamic from 'next/dynamic'
 import {
   ArrowLeft,
-  ArrowRight,
-  Archive,
   BarChart3,
-  ChevronRight,
-  CreditCard,
-  Layers,
-  MousePointerClick,
   Pencil,
   Plus,
-  Target,
   TrendingDown,
-  Users,
   Vault,
   Wallet,
   type LucideIcon,
@@ -46,13 +38,11 @@ import {
 } from '@/app/actions/finance'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { EmptyState, StatCard } from '@/components/page-parts'
+import { EmptyState } from '@/components/page-parts'
 import { cn } from '@/lib/utils'
 import {
   type UsdRates,
-  type AdStatus,
   type FinanceAdAccount,
   type FinanceEntry,
   type FinanceResource,
@@ -60,16 +50,11 @@ import {
   type VaultItem,
 } from '@/lib/finance-types'
 import {
-  AD_STATUS_META,
-  PLATFORM_META,
   RatesContext,
-  accountMetrics,
   formatInt,
-  formatPct,
   formatUsd,
   summarizeAds,
-  useRates,
-  type ResourceAdSummary,
+  type SubTab,
 } from '@/components/admin/finance/finance-utils'
 // The Vault lives behind its own tab and pulls a ~1k-line subtree (panel +
 // editor dialog). Load it on demand so the default Finance view (overview/ads/
@@ -96,6 +81,8 @@ import {
 } from '@/components/admin/finance/finance-dialogs'
 import { ExpensesPanel } from '@/components/admin/finance/expenses-panel'
 import { AdsPanel } from '@/components/admin/finance/ads-panel'
+import { GlobalDashboard } from '@/components/admin/finance/global-dashboard'
+import { OverviewPanel } from '@/components/admin/finance/overview-panel'
 
 /* ================================================================== */
 /* Meta, formatters and aggregation live in ./finance/finance-utils    */
@@ -162,12 +149,6 @@ function SourceTabCard({
     </TabsTrigger>
   )
 }
-
-/* ================================================================== */
-/* Table controls types                                                */
-/* ================================================================== */
-
-type SubTab = 'overview' | 'ads' | 'expenses' | 'vault'
 
 /* ================================================================== */
 /* Main                                                                */
@@ -648,437 +629,5 @@ export function FinanceAdmin({
       />
     </div>
     </RatesContext.Provider>
-  )
-}
-
-/* ================================================================== */
-/* Global dashboard (all resources)                                    */
-/* ================================================================== */
-
-interface CabinetCard {
-  account: FinanceAdAccount
-  resourceId: string
-  resourceName: string
-  balance: number
-  topups: number
-  spend: number
-  leads: number
-  blocked: boolean
-}
-
-interface SourceRow {
-  resource: FinanceResource
-  leads: number
-  balance: number
-  activeAccounts: number
-  totalAccounts: number
-}
-
-/** Статусы, при которых кабинет считаем заблокированным/проблемным. */
-const BLOCKED_AD_STATUSES = new Set<AdStatus>(['banned', 'no_funds'])
-
-function GlobalDashboard({
-  resources,
-  adAccounts,
-  leadCountByResource,
-  onOpenResource,
-  onCreateResource,
-}: {
-  resources: FinanceResource[]
-  adAccounts: FinanceAdAccount[]
-  entries: FinanceEntry[]
-  vaultItems: VaultItem[]
-  leadCountByResource: Map<string, number>
-  onOpenResource: (id: string, tab?: SubTab) => void
-  onCreateResource: () => void
-}) {
-  const rates = useRates()
-
-  const { cabinets, sources } = useMemo(() => {
-    const nameById = new Map(resources.map((r) => [r.id, r.name]))
-    const cabinets: CabinetCard[] = []
-    const sourceAgg = new Map<string, { balance: number; active: number; total: number }>()
-
-    for (const a of adAccounts) {
-      if (a.status === 'archived') continue
-      const m = accountMetrics(a, rates)
-      cabinets.push({
-        account: a,
-        resourceId: a.resourceId,
-        resourceName: nameById.get(a.resourceId) ?? '—',
-        balance: m.balance,
-        topups: m.topups,
-        spend: m.spend,
-        leads: m.leads,
-        blocked: BLOCKED_AD_STATUSES.has(a.status),
-      })
-      const agg = sourceAgg.get(a.resourceId) ?? { balance: 0, active: 0, total: 0 }
-      agg.balance += m.balance
-      agg.total += 1
-      if (a.status === 'active') agg.active += 1
-      sourceAgg.set(a.resourceId, agg)
-    }
-
-    // Проблемные кабинеты — вперёд, затем по возрастанию баланса.
-    cabinets.sort((a, b) => {
-      if (a.blocked !== b.blocked) return a.blocked ? -1 : 1
-      return a.balance - b.balance
-    })
-
-    const sources: SourceRow[] = resources.map((resource) => {
-      const agg = sourceAgg.get(resource.id)
-      return {
-        resource,
-        leads: leadCountByResource.get(resource.id) ?? 0,
-        balance: agg?.balance ?? 0,
-        activeAccounts: agg?.active ?? 0,
-        totalAccounts: agg?.total ?? 0,
-      }
-    })
-    sources.sort((a, b) => b.leads - a.leads)
-
-    return { cabinets, sources }
-  }, [resources, adAccounts, rates, leadCountByResource])
-
-  return (
-    <div className="flex flex-col gap-6">
-      {/* Балансы подключённых кабинетов */}
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Wallet className="size-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Балансы подключённых кабинетов</h3>
-          <span className="text-xs text-muted-foreground">· в USD</span>
-        </div>
-        {cabinets.length === 0 ? (
-          <Card className="p-6 text-center text-sm text-muted-foreground">
-            Пока нет подключённых кабинетов. Откройте источник лидов и добавьте
-            рекламный кабинет.
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {cabinets.map((c) => {
-              const meta = AD_STATUS_META[c.account.status]
-              return (
-                <button
-                  key={c.account.id}
-                  type="button"
-                  onClick={() => onOpenResource(c.resourceId, 'ads')}
-                  className={cn(
-                    'group flex flex-col gap-3 rounded-xl border p-4 text-left transition-colors',
-                    c.blocked
-                      ? 'border-destructive/50 bg-destructive/5 hover:bg-destructive/10'
-                      : 'border-border bg-card hover:bg-muted/50',
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{c.account.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {c.resourceName}
-                      </p>
-                    </div>
-                    <span
-                      className={cn(
-                        'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
-                        meta.className,
-                      )}
-                    >
-                      <span className={cn('size-1.5 rounded-full', meta.dot)} />
-                      {meta.label}
-                    </span>
-                  </div>
-                  <div>
-                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                      Баланс
-                    </p>
-                    <p
-                      className={cn(
-                        'text-2xl font-semibold tabular-nums',
-                        c.balance <= 0 ? 'text-destructive' : 'text-foreground',
-                      )}
-                    >
-                      {formatUsd(c.balance)}
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>Пополнено {formatUsd(c.topups)}</span>
-                    <span className="inline-flex items-center gap-1 text-primary opacity-0 transition-opacity group-hover:opacity-100">
-                      Подробнее <ArrowRight className="size-3.5" />
-                    </span>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* Источники лидов */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Layers className="size-4 text-muted-foreground" />
-            <h3 className="text-sm font-semibold">Источники лидов</h3>
-          </div>
-          <Button size="sm" className="gap-1.5" onClick={onCreateResource}>
-            <Plus className="size-4" /> Новый источник лидов
-          </Button>
-        </div>
-        {sources.length === 0 ? (
-          <Card className="p-6 text-center text-sm text-muted-foreground">
-            Пока нет источников лидов.
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {sources.map((s) => (
-              <button
-                key={s.resource.id}
-                type="button"
-                onClick={() => onOpenResource(s.resource.id)}
-                className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 text-left transition-colors hover:bg-muted/50"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{s.resource.name}</span>
-                  {s.resource.archived ? (
-                    <Archive className="size-3.5 shrink-0 text-muted-foreground" />
-                  ) : null}
-                </div>
-                <div className="flex items-end justify-between gap-2">
-                  <div>
-                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                      Лиды
-                    </p>
-                    <p className="text-xl font-semibold tabular-nums">
-                      {formatInt(s.leads)}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                      Баланс
-                    </p>
-                    <p
-                      className={cn(
-                        'text-sm font-semibold tabular-nums',
-                        s.totalAccounts > 0 && s.balance <= 0
-                          ? 'text-destructive'
-                          : 'text-foreground',
-                      )}
-                    >
-                      {s.totalAccounts > 0 ? formatUsd(s.balance) : '—'}
-                    </p>
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Кабинетов: {s.activeAccounts}/{s.totalAccounts}
-                </p>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  )
-}
-
-/* ================================================================== */
-/* Overview panel                                                      */
-/* ================================================================== */
-
-function OverviewPanel({
-  summary,
-  accounts,
-  entries,
-  onGoAds,
-  onGoExpenses,
-}: {
-  summary: ResourceAdSummary
-  accounts: FinanceAdAccount[]
-  entries: FinanceEntry[]
-  resource: FinanceResource
-  onGoAds: () => void
-  onGoExpenses: () => void
-}) {
-  const rates = useRates()
-  const expenseTotal = entries
-    .filter((e) => e.status !== 'cancelled')
-    .reduce((s, e) => s + e.amount, 0)
-  const unpaid = entries.filter(
-    (e) => e.status === 'planned' || e.status === 'in_progress',
-  ).length
-
-  return (
-    <div className="flex flex-col gap-5">
-      {summary.lowBalance.length > 0 ? (
-        <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4">
-          <TrendingDown className="mt-0.5 size-5 shrink-0 text-destructive" />
-          <div className="text-sm">
-            <p className="font-medium text-destructive">
-              Заканчивается баланс: {summary.lowBalance.length}
-            </p>
-            <p className="text-muted-foreground">
-              {summary.lowBalance.map((a) => a.name).join(', ')} — пополните
-              баланс, чтобы реклама не остановилась.
-            </p>
-          </div>
-        </Card>
-      ) : null}
-
-      {/* KPI row (unit-less metrics — safe to sum across currencies) */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard
-          label="Лиды"
-          value={formatInt(summary.leads)}
-          icon={Users}
-          hint="Из статистики кабинетов"
-        />
-        <StatCard
-          label="Клики"
-          value={formatInt(summary.clicks)}
-          icon={MousePointerClick}
-          hint={`CTR ${formatPct(summary.ctr)}`}
-        />
-        <StatCard
-          label="Конверсия в лид"
-          value={formatPct(summary.cr)}
-          icon={Target}
-          hint={`${formatInt(summary.impressions)} показов`}
-        />
-        <StatCard
-          label="Кабинеты"
-          value={`${summary.activeAccounts}/${summary.totalAccounts}`}
-          icon={Wallet}
-          hint="Активные / всего"
-        />
-      </div>
-
-      {/* Balance (USD) */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Баланс рекламы</h3>
-          <Button variant="ghost" size="sm" onClick={onGoAds}>
-            Кабинеты <ChevronRight className="size-4" />
-          </Button>
-        </div>
-        {summary.totalAccounts === 0 ? (
-          <Card className="p-6 text-center text-sm text-muted-foreground">
-            Ещё нет рекламных кабинетов.
-          </Card>
-        ) : (
-          (() => {
-            const t = summary.totals
-            const cpl = t.leads > 0 ? t.spend / t.leads : null
-            const low = t.balance <= 0
-            return (
-              <Card className="p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">
-                    Общий баланс
-                  </span>
-                  <Wallet className="size-4 text-muted-foreground" />
-                </div>
-                <div
-                  className={cn(
-                    'mt-2 text-2xl font-semibold tabular-nums',
-                    low ? 'text-destructive' : 'text-foreground',
-                  )}
-                >
-                  {formatUsd(t.balance)}
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
-                  <Metric label="Пополнено" value={formatUsd(t.topups)} />
-                  <Metric label="Расход" value={formatUsd(t.spend)} />
-                  <Metric label="Лиды" value={formatInt(t.leads)} />
-                  <Metric
-                    label="CPL"
-                    value={cpl == null ? '—' : formatUsd(cpl)}
-                  />
-                </div>
-              </Card>
-            )
-          })()
-        )}
-      </div>
-
-      {/* Accounts quick list */}
-      {accounts.length > 0 ? (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold">Кабинеты</h3>
-          <Card className="divide-y divide-border p-0">
-            {accounts.map((a) => {
-              const m = accountMetrics(a, rates)
-              return (
-                <div
-                  key={a.id}
-                  className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3"
-                >
-                  <div className="flex min-w-[160px] flex-1 items-center gap-2">
-                    <span
-                      className={cn(
-                        'size-2 rounded-full',
-                        AD_STATUS_META[a.status].dot,
-                      )}
-                    />
-                    <span className="truncate font-medium">{a.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {PLATFORM_META[a.platform]}
-                    </span>
-                  </div>
-                  <div className="tabular-nums text-sm">
-                    <span className="text-muted-foreground">Баланс: </span>
-                    <span
-                      className={cn(
-                        'font-semibold',
-                        m.balance <= 0 && 'text-destructive',
-                      )}
-                    >
-                      {formatUsd(m.balance)}
-                    </span>
-                  </div>
-                  <div className="tabular-nums text-sm text-muted-foreground">
-                    {formatInt(m.leads)} лид. ·{' '}
-                    {m.cpl === Number.POSITIVE_INFINITY
-                      ? 'CPL —'
-                      : `CPL ${formatUsd(m.cpl)}`}
-                  </div>
-                </div>
-              )
-            })}
-          </Card>
-        </div>
-      ) : null}
-
-      {/* Expenses summary */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Прочие расходы</h3>
-          <Button variant="ghost" size="sm" onClick={onGoExpenses}>
-            Открыть <ChevronRight className="size-4" />
-          </Button>
-        </div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          <StatCard
-            label="Всего расходов"
-            value={formatUsd(expenseTotal)}
-            icon={TrendingDown}
-            hint={`${entries.length} записей`}
-          />
-          <StatCard
-            label="Не оплачено"
-            value={formatInt(unpaid)}
-            icon={CreditCard}
-            hint="Запланировано / в работе"
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col">
-      <span className="text-[11px] uppercase tracking-wide">{label}</span>
-      <span className="font-medium tabular-nums text-foreground">{value}</span>
-    </div>
   )
 }

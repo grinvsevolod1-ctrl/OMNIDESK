@@ -36,6 +36,13 @@ import {
   type VaultCategory,
 } from '@/lib/finance-types'
 
+/**
+ * Which sub-tab of a resource view is active. Shared here (rather than declared
+ * inside finance-admin) so the extracted panels — e.g. GlobalDashboard's
+ * `onOpenResource(id, tab?)` — can reference the same union type.
+ */
+export type SubTab = 'overview' | 'ads' | 'expenses' | 'vault'
+
 /* ================================================================== */
 /* Meta                                                                */
 /* ================================================================== */
