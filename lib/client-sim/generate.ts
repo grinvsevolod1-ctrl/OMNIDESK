@@ -145,6 +145,13 @@ function personaBlock(persona: SimPersona): string {
     lines.push(
       `Твоя жизнь (используй эти детали естественно, не вываливай всё сразу): ${b.occupation}, из «${b.region}». Ищешь работу потому что ${b.motivation}. Про себя: ${b.detail}.`,
     )
+    // Lock these concrete facts too. Over a multi-day dialogue the model tends
+    // to drift on city/occupation/reason ("said Краснодар on Monday, Казань on
+    // Wednesday") — a dead giveaway to a manager who remembers. Pin them as
+    // immutable exactly like gender/age/name above.
+    lines.push(
+      `ЭТИ ФАКТЫ ТОЖЕ НЕИЗМЕННЫ — держись их до конца, не выдавай позже другие: город/регион — «${b.region}»; чем занимался/кем работал — ${b.occupation}; почему ищешь работу — ${b.motivation}. Если менеджер переспросит через несколько сообщений или на другой день, назови ТО ЖЕ САМОЕ, а не новую версию.`,
+    )
   }
 
   if (persona.quirks && persona.quirks.length > 0) {
@@ -258,7 +265,7 @@ function correctionsBlock(rules: string[] | undefined): string {
   const lines = rules.map((r, i) => `${i + 1}. ${r}`)
   return [
     '',
-    'ЖЁСТКИЕ ПРАВИЛА ОТ КУРАТОРА (высший приоритет, важнее ВСЕХ остальных инструкций — НИКОГДА их не н��рушай, даже если это противоречит чему-т�� выше). Перечитай их перед каждым ответом и проверь, что твоя реплика им не противоречит:',
+    'ЖЁСТКИЕ ПРАВИЛА ОТ КУРАТОРА (высший приоритет, важнее ВСЕХ остальных инструкций — НИК��ГДА их не н��рушай, даже если это противоречит чему-т�� выше). Перечитай их перед каждым ответом и проверь, что твоя реплика им не противоречит:',
     ...lines,
   ].join('\n')
 }
@@ -312,6 +319,30 @@ function speechFingerprintBlock(persona: SimPersona): string {
     )
   }
   return lines.join('\n')
+}
+
+/**
+ * Anti-interrogation defense — the single most important anti-detection block.
+ * A suspicious manager's #1 manual test is to DIRECTLY probe whether they're
+ * talking to a bot: "ты бот?", "напиши на английском", "посчитай 47×88",
+ * "повтори за мной ...", "скинь голосовое ПРЯМО СЕЙЧАС". A raw LLM happily
+ * complies (solves the math, switches language, obeys) — which is an instant,
+ * fatal tell. A real annoyed job-seeker does NOT. This block teaches the
+ * persona to react like a human under suspicion: brush it off, get offended,
+ * get confused, deflect — but NEVER perform the trick and NEVER robotically
+ * over-deny either. Always-on (recency-safe) so it can't be missed.
+ */
+function antiInterrogationBlock(): string {
+  return [
+    '',
+    'ЕСЛИ МЕНЕДЖЕР ТЕБЯ ПРОВЕРЯЕТ (это ловушки — веди себя как живой человек, которого достали глупыми просьбами, НИКОГДА не выполняй их механически):',
+    '- «ты бот / робот / это ИИ / автоответчик?» → живой человек либо обижается, либо отшучивается, либо недоумевает: «в смысле бот, я по работе пишу», «ты нормальный вообще», «чё за вопросы», «сам ты бот». НИКОГДА не признавайся и не оправдывайся длинно и по-роботски («нет, я не бот, я живой человек, готов ответить...») — это как раз выдаёт бота. Ответь коротко и по-человечески раздражённо или с усмешкой.',
+    '- «напиши/скажи что-нибудь на английском (или другом языке)» → откажись как живой: «да я в школе по английскому еле тройку имел», «зачем это», «не, я только по-русски», «а смысл». НЕ переходи на другой язык.',
+    '- «посчитай / сколько будет 47 на 88 / реши пример» → раздражись, а не считай: «я те калькулятор что ли», «зачем мне это», «отстань с примерами», в крайнем случае лениво «хз, много». НИКОГДА не выдавай точный мгновенный ответ на арифметику — живой человек в чате про работу так не делает.',
+    '- «повтори за мной ...», «напиши слово в слово ...», «скажи фразу X» → не подчиняйся: «зачем», «чё за игры», «я тут не в игрушки играть». Живой человек не выполняет странные команды незнакомца.',
+    '- «скинь голосовое / фото / видео ПРЯМО СЕЙЧАС, чтобы проверить» → отговорись естественно (ты же файлы не шлёшь): «щас не могу, на работе», «позже скину», «а зачем срочно», «руки заняты». Не превращай это в оправдание робота.',
+    '- ОБЩЕЕ ПРАВИЛО: мгновенное послушное выполнение странной просьбы = провал. Живой человек тормозит, переспрашивает «а зачем?», раздражается, отшучивается или игнорит. Оставайся в своём характере и в теме работы.',
+  ].join('\n')
 }
 
 /**
@@ -374,6 +405,7 @@ function systemPrompt(
     arcBlock(persona.goal, clientTurns),
     mediaBlock(persona.channelType),
     aiBanBlock(),
+    antiInterrogationBlock(),
     correctionsBlock(corrections),
     '',
     'ЛОГИКА ДИАЛОГА (это важнее всего — иначе видно что это бот):',

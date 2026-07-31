@@ -1,4 +1,4 @@
-import type { SimOutcome, SimSettings, SimThreadRow, SimTone } from './types'
+import type { SimOutcome, SimPersona, SimSettings, SimThreadRow, SimTone } from './types'
 import {
   chance,
   humanizeBubbles,
@@ -30,7 +30,7 @@ import {
   updateThread,
   type SimChannel,
 } from './store'
-import { pick } from './content'
+import { impatientPoke, pick } from './content'
 import { computeMood, type MoodResult } from './mood'
 import { logAi } from '@/lib/data/ai-log'
 import { runLivechatAutopilot } from '@/lib/autopilot/runtime'
@@ -608,6 +608,70 @@ const BACKLOG_BATCH = 12
  * again. The manager's own single-flight + AI-led guards make repeat nudges
  * safe (a duplicate never produces a double reply).
  */
+// Impatience poke tuning. Only consider poking once the manager has been silent
+// well beyond the normal stale window, and cap how many times one dialogue ever
+// gets a client double-text so it never turns into spam.
+const POKE_MIN_WAIT_SEC = 25 * 60 // 25 min of manager silence before any poke
+const POKE_MAX_ATTEMPTS = 2 // at most 2 client pokes over a dialogue's life
+
+/** True when the client's last line already looks like a bare poke, so we don't
+ *  stack «ну что?» on top of «ну что?». */
+function looksLikePoke(body: string): boolean {
+  const t = body.trim().toLowerCase().replace(/[^\p{L}\p{N}?]/gu, '')
+  if (t.length <= 2) return true // "?", "ну", "ау"
+  return /^(ну|ау|ало|алло|эй|чо|чё)/.test(t) && t.length < 18
+}
+
+/**
+ * Maybe send a short human "impatience" poke for a stuck dialogue. Returns true
+ * when a poke was actually inserted (so the caller hands the manager a fresh
+ * inbound). Heavily gated so it reads human, not spammy:
+ *  - manager silent long enough (POKE_MIN_WAIT_SEC),
+ *  - we've nudged at least once already (manager genuinely unresponsive),
+ *  - the client's last line wasn't itself a poke,
+ *  - under the per-dialogue poke cap,
+ *  - a temperament-weighted die roll (impatient/terse personas poke more).
+ */
+async function maybeSendImpatiencePoke(c: {
+  conversationId: string
+  lastClientBody: string
+  persona: SimPersona
+  nudgeAttempts: number
+  waitedSeconds: number
+}): Promise<boolean> {
+  if (c.waitedSeconds < POKE_MIN_WAIT_SEC) return false
+  if (c.nudgeAttempts < 1 || c.nudgeAttempts > POKE_MAX_ATTEMPTS) return false
+  if (looksLikePoke(c.lastClientBody)) return false
+
+  // Base 25% impatience, pushed up by terseness/profanity (hot-heads poke),
+  // pulled down for polite personas. Clamped to a sane 8–55% band.
+  const s = c.persona.style
+  const heat = (s.terseness ?? 0.5) * 0.3 + (s.profanity ?? 0) * 0.2
+  const polite = c.persona.tone === 'polite' ? -0.12 : 0
+  const p = Math.max(0.08, Math.min(0.55, 0.25 + heat + polite))
+  if (!chance(p)) return false
+
+  try {
+    const poke = impatientPoke(c.persona)
+    if (!poke) return false
+    await insertInboundMessage(c.conversationId, c.persona.name, poke)
+    await bumpRepliesTotal()
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: 'backlog.impatience',
+      message: `Клиент занервничал и написал вдогонку: «${poke}»`,
+    })
+    return true
+  } catch (err) {
+    console.log(
+      '[client-sim] impatience poke failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return false
+  }
+}
+
 async function sweepBacklog(): Promise<void> {
   const stuck = await findConversationsAwaitingManager(BACKLOG_BATCH)
   if (stuck.length === 0) return
@@ -618,6 +682,20 @@ async function sweepBacklog(): Promise<void> {
     message: `Догоняю ${stuck.length} «зависших» диалогов — прошу ИИ-менеджера ответить.`,
   })
   for (const c of stuck) {
+    // Human impatience: a real job-seeker whose message went unanswered for a
+    // long while double-texts a short poke («ну что там?», «алло», «?») instead
+    // of waiting in perfect silence. A pure LLM sim never does this, so adding
+    // it removes a subtle "too patient = bot" tell. Gated hard so it stays rare
+    // and human: only after the FIRST nudge already failed (so the manager has
+    // genuinely gone quiet), only once the wait is long enough, never if the
+    // client's own last line was already a poke, and weighted by temperament
+    // (impatient/terse personas poke more, calm ones rarely).
+    if (await maybeSendImpatiencePoke(c)) {
+      // The poke is now the latest inbound line — hand THAT to the manager.
+      await triggerManagerReply(c.conversationId, c.lastClientBody)
+      await bumpNudgeBackoff(c.conversationId)
+      continue
+    }
     await triggerManagerReply(c.conversationId, c.lastClientBody)
     // Exponential per-conversation backoff (90s → 3m → 9m … capped ~2h) so a
     // manager that never answers this particular dialogue isn't poked every

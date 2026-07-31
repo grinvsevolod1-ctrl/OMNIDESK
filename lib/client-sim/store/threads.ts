@@ -7,6 +7,7 @@ import {
 } from '@/lib/db'
 import {
   type SimOutcome,
+  type SimPersona,
   type SimState,
   type SimThreadRow,
 } from '../types'
@@ -238,6 +239,12 @@ export async function findThreadsAwaitingReaction(
 export interface StuckConversation {
   conversationId: string
   lastClientBody: string
+  /** Persona JSONB — used to gate human "impatience" pokes by temperament. */
+  persona: SimPersona
+  /** How many times we've already nudged the manager for this dialogue. */
+  nudgeAttempts: number
+  /** Seconds since the client's last (unanswered) message. */
+  waitedSeconds: number
 }
 
 export async function findConversationsAwaitingManager(
@@ -247,13 +254,23 @@ export async function findConversationsAwaitingManager(
   // Per-conversation backoff: once 061 is applied, skip a dialogue until its
   // nudge_next_at arrives so a manager that never answers (e.g. master switch
   // off) isn't poked every tick forever.
-  const backoffClause = (await hasThreadRealismCols())
+  const hasRealism = await hasThreadRealismCols()
+  const backoffClause = hasRealism
     ? 'AND (t.nudge_next_at IS NULL OR t.nudge_next_at <= now())'
     : ''
+  const attemptsSel = hasRealism ? 't.nudge_attempts' : '0'
   // Skip dialogues the operator has taken over (paused). No-op on pre-073 DB.
   const pauseClause = (await hasThreadPauseCol()) ? 'AND t.paused = false' : ''
-  const rows = await query<{ conversation_id: string; body: string }>(
-    `SELECT t.conversation_id, m.body
+  const rows = await query<{
+    conversation_id: string
+    body: string
+    persona: SimPersona
+    nudge_attempts: number
+    waited_seconds: number
+  }>(
+    `SELECT t.conversation_id, m.body, t.persona,
+            ${attemptsSel} AS nudge_attempts,
+            EXTRACT(EPOCH FROM (now() - m.created_at))::int AS waited_seconds
        FROM sim_threads t
        JOIN LATERAL (
          SELECT direction, body, created_at
@@ -274,6 +291,9 @@ export async function findConversationsAwaitingManager(
   return rows.map((r) => ({
     conversationId: r.conversation_id,
     lastClientBody: r.body,
+    persona: r.persona,
+    nudgeAttempts: r.nudge_attempts ?? 0,
+    waitedSeconds: r.waited_seconds ?? 0,
   }))
 }
 

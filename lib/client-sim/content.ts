@@ -511,6 +511,57 @@ export function applyStyle(text: string, style: SimStyle): string {
   return out.slice(0, 500)
 }
 
+/**
+ * Short human "impatience" poke sent when the manager has gone quiet for a
+ * while — a real job-seeker double-texts «ну что там?», «алло», «?» instead of
+ * waiting forever in silence. A pure LLM sim never does this, so the absence of
+ * any follow-up nudge from the CLIENT side is itself a subtle bot tell. Tone is
+ * picked from the persona: calm/polite people poke softly, hot-tempered ones
+ * get irritated. Styled through applyStyle so it matches the persona's casing
+ * and punctuation habits.
+ */
+const POKE_SOFT = [
+  'ну что там?',
+  'есть новости?',
+  'алло, вы тут?',
+  'ответите?',
+  'ждууу ответ',
+  'подскажете?',
+  'так что по работе?',
+  'ну как?',
+]
+const POKE_NEUTRAL = [
+  'ау',
+  '?',
+  'ну?',
+  'и?',
+  'чё молчите',
+  'долго ещё ждать',
+  'вы там пропали?',
+  'так что в итоге',
+]
+const POKE_HOT = [
+  'долго ещё?',
+  'вы там уснули?',
+  'ну и где ответ',
+  'че игнорите',
+  'сколько можно ждать',
+  'отвечать будете или нет',
+  'ало я жду вообще-то',
+]
+
+export function impatientPoke(persona: SimPersona): string {
+  const tone = persona.tone ?? 'mixed'
+  const aggr = persona.style.profanity + persona.style.terseness
+  const pool =
+    tone === 'polite'
+      ? POKE_SOFT
+      : tone === 'rough' || aggr > 1.1
+        ? POKE_HOT
+        : POKE_NEUTRAL
+  return applyStyle(pick(pool), persona.style)
+}
+
 /* ========================================================================= */
 /*  Human "sбои" — accidental early sends and double-tap duplicates only.     */
 /*  Applied at DELIVERY time (per bubble) so they read as separate messages.  */
