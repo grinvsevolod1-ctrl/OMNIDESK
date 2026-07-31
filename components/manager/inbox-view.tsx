@@ -1009,20 +1009,37 @@ export function InboxView({
     if (!activeId) return
     const channelType = active?.channelType
     if (channelType !== 'whatsapp' && channelType !== 'vk') return
+    // Client-side guard so an over-large file fails with a clear message instead
+    // of blowing past the Server Action body limit (which returns an opaque
+    // framework error and would otherwise crash the inbox to the error page).
+    // 200 MB matches the app's largest server-side allowance (VK docs).
+    const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+    if (file.size > MAX_UPLOAD_BYTES) {
+      toast.error('Файл слишком большой (максимум 200 МБ).')
+      return
+    }
     const fd = new FormData()
     fd.append('file', file)
     const trimmed = caption.trim()
     if (trimmed) fd.append('caption', trimmed)
     startTransition(async () => {
-      const res =
-        channelType === 'vk'
-          ? await sendVkMediaAction(activeId, fd)
-          : await sendWhatsappMediaAction(activeId, fd)
-      if (!res.ok) {
-        toast.error(res.message)
-      } else {
-        toast.success(res.message)
-        router.refresh()
+      try {
+        const res =
+          channelType === 'vk'
+            ? await sendVkMediaAction(activeId, fd)
+            : await sendWhatsappMediaAction(activeId, fd)
+        if (!res.ok) {
+          toast.error(res.message)
+        } else {
+          toast.success(res.message)
+          router.refresh()
+        }
+      } catch (err) {
+        // Any transport/framework failure (e.g. body limit, dropped connection)
+        // is contained here as a toast — never bubbled to the error boundary,
+        // which would replace the whole inbox with the crash page.
+        console.error('[v0] media upload failed:', err)
+        toast.error('Не удалось отправить файл. Попробуйте ещё раз.')
       }
     })
   }

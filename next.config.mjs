@@ -57,6 +57,16 @@ const nextConfig = {
     // route pulled in far more of it than it used. This tree-shakes it to just
     // the pieces each file imports. lucide-react is optimized by default.
     optimizePackageImports: ['recharts'],
+    serverActions: {
+      // Chat media (video "кружочки", WhatsApp videos up to 16 MB, VK docs up to
+      // 200 MB) is uploaded through Server Actions as multipart FormData. Next's
+      // default request-body cap is only 1 MB, so any video was rejected by the
+      // framework BEFORE the action ran — surfacing as the opaque "An unexpected
+      // response was received from the server" error and crashing the inbox to
+      // the error boundary. Raise the cap to comfortably cover the app's own
+      // largest allowed upload (VK 200 MB) plus multipart/form-data overhead.
+      bodySizeLimit: '210mb',
+    },
   },
   images: {
     unoptimized: true,
