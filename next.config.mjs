@@ -44,6 +44,20 @@ const nextConfig = {
   distDir: process.env.NEXT_DIST_DIR || '.next',
   // Do not advertise the framework in response headers (X-Powered-By: Next.js).
   poweredByHeader: false,
+  // React Compiler (stable in Next 16, React 19.2). The codebase is written for
+  // it — VirtualList is deliberately isolated so its non-memoizable TanStack
+  // hook doesn't opt the giant realtime parents (InboxView, AI console) out of
+  // compilation. Turning it on lets the compiler auto-memoize those components,
+  // cutting wasted re-renders on every SSE tick / poll without hand-written
+  // memo()/useMemo noise. Costs extra build time only; runtime is pure win.
+  reactCompiler: true,
+  experimental: {
+    // recharts is a large barrel import (used by the analytics/finance charts)
+    // and is NOT in Next's default optimizePackageImports list, so every chart
+    // route pulled in far more of it than it used. This tree-shakes it to just
+    // the pieces each file imports. lucide-react is optimized by default.
+    optimizePackageImports: ['recharts'],
+  },
   images: {
     unoptimized: true,
   },
