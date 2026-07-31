@@ -6,31 +6,57 @@ export const metadata: Metadata = {
   title: 'Вход — Omnidesk',
 }
 
+// The proxy (middleware) emits a per-request CSP nonce with an enforcing
+// 'strict-dynamic' policy. A statically prerendered page can't receive that
+// per-request nonce, so under 'strict-dynamic' the browser blocks every one of
+// its script tags (the script-src-elem violations previously seen only on
+// /login). Rendering this route dynamically lets Next apply the live nonce to
+// its scripts, so the policy passes.
+export const dynamic = 'force-dynamic'
+
 export default function LoginPage() {
   return (
-    <main className="relative flex min-h-dvh flex-col items-center justify-center px-4 py-10">
+    <main className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden px-4 py-10">
+      {/* Ambient monochrome depth — a soft glow from above and a diffuse halo
+          behind the card. Purely decorative, nothing loud. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_-10%,oklch(0.2_0_0),transparent)]"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_55%_at_50%_-15%,oklch(0.28_0_0),transparent_70%)]"
       />
-      <div className="relative w-full max-w-sm">
-        <div className="mb-8 flex flex-col items-center gap-3 text-center">
-          <div className="flex size-11 items-center justify-center rounded-xl border border-border bg-card">
-            <BrandMark className="size-5 text-foreground" />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-40 left-1/2 size-[38rem] -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,oklch(0.32_0_0/0.5),transparent)] blur-3xl"
+      />
+
+      <div className="relative w-full max-w-md duration-700 animate-in fade-in slide-in-from-bottom-4">
+        {/* Brand */}
+        <div className="mb-10 flex flex-col items-center gap-5 text-center">
+          <div className="relative flex size-16 items-center justify-center rounded-3xl border border-border bg-card shadow-lg shadow-black/40">
+            {/* Subtle top sheen on the logo tile, like a physical key/badge. */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 rounded-3xl bg-[linear-gradient(180deg,oklch(1_0_0/0.08),transparent_60%)]"
+            />
+            <BrandMark className="size-7 text-foreground" />
           </div>
-          <div className="space-y-1">
-            <h1 className="text-xl font-semibold tracking-tight">
+          <div className="space-y-2">
+            <h1 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
               Вход в Omnidesk
             </h1>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-base text-muted-foreground text-pretty">
               Единый центр входящих для вашей команды
             </p>
           </div>
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+        {/* Card */}
+        <div className="rounded-3xl border border-border bg-card/80 p-7 shadow-2xl shadow-black/40 backdrop-blur-xl transition-colors duration-300 focus-within:border-ring/60 sm:p-8">
           <LoginForm />
         </div>
+
+        <p className="mt-8 text-center text-xs text-muted-foreground">
+          Защищённый вход · только для сотрудников
+        </p>
       </div>
     </main>
   )
