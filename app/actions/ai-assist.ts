@@ -95,6 +95,7 @@ export async function aiUpdateSettingsAction(patch: {
   model?: string
   temperature?: number
   maxTokens?: number
+  aggressiveness?: number
 }): Promise<AiAssistSettings> {
   await requireAdmin()
   // Clamp tuning to the same bounds the DB constraints enforce, so a bad UI
@@ -105,6 +106,9 @@ export async function aiUpdateSettingsAction(patch: {
   }
   if (typeof clamped.maxTokens === 'number') {
     clamped.maxTokens = Math.max(50, Math.min(4000, Math.round(clamped.maxTokens)))
+  }
+  if (typeof clamped.aggressiveness === 'number') {
+    clamped.aggressiveness = Math.max(0, Math.min(3, Math.round(clamped.aggressiveness)))
   }
   const next = await updateAiAssistSettings(clamped)
   revalidatePath(AI_PATH)
@@ -490,6 +494,7 @@ export async function aiSuggestReplyAction(input: {
       tone: settings.tone,
       playbook: settings.playbook,
       lessons,
+      aggressiveness: settings.aggressiveness,
       history: input.history,
     },
     undefined,

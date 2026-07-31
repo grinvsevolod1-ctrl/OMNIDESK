@@ -1,5 +1,5 @@
 import { PageHeader } from '@/components/page-parts'
-import { AiAssistAdmin } from '@/components/admin/ai-assist-admin'
+import { AiConsole } from '@/components/admin/ai-console'
 import { requireAdmin } from '@/lib/auth'
 import { isBrainConfigured } from '@/lib/ai/manager-brain'
 import {
@@ -22,9 +22,9 @@ export default async function AiAssistPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="ИИ-ассистент"
-        description="Обучаемый помощник, который ведёт переписку с клиентами вместо менеджера. Настройте тон и контекст, обучите на реальных диалогах — знания общие для всех менеджеров."
+        description="Обучаемый продавец, который ведёт переписку с клиентами вместо менеджера. Просто напишите, что нужно сделать — консоль поймёт и откроет нужный раздел."
       />
-      <AiAssistAdmin
+      <AiConsole
         initialSettings={settings}
         initialLessons={lessons}
         initialLessonCount={lessonCount}

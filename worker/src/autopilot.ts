@@ -349,6 +349,7 @@ async function fireAiLead(params: {
         corrections,
         memory: memory.summary,
         knowledge,
+        aggressiveness: config.aggressiveness,
         history,
       },
       log,

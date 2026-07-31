@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   useTransition,
 } from 'react'
@@ -11,6 +12,7 @@ import {
   BookOpen,
   Bot,
   ChevronDown,
+  Flame,
   Loader2,
   MessagesSquare,
   Plus,
@@ -30,6 +32,7 @@ import {
 } from '@/lib/data/ai-assist'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -68,9 +71,12 @@ const MODEL_OPTIONS = [
 export function SettingsTab({
   settings,
   onChange,
+  focus = null,
 }: {
   settings: AiAssistSettings
   onChange: (s: AiAssistSettings) => void
+  /** When 'aggressiveness', scroll to + highlight the persuasion dial on mount. */
+  focus?: 'aggressiveness' | null
 }) {
   const [persona, setPersona] = useState(settings.persona)
   const [tone, setTone] = useState(settings.tone)
@@ -83,6 +89,7 @@ export function SettingsTab({
     model?: string
     temperature?: number
     maxTokens?: number
+    aggressiveness?: number
   }) => {
     startTransition(async () => {
       try {
@@ -191,12 +198,156 @@ export function SettingsTab({
         </div>
       </Card>
 
-      {/* 3. Facts the AI must quote exactly. */}
+      {/* 3. How hard the "god of sales" pushes — the persuasion dial. */}
+      <AggressivenessCard
+        value={settings.aggressiveness}
+        pending={pending}
+        focus={focus === 'aggressiveness'}
+        onSave={(aggressiveness) => save({ aggressiveness })}
+      />
+
+      {/* 4. Facts the AI must quote exactly. */}
       <KnowledgeBaseCard />
 
-      {/* 4. Everything advanced is tucked away so the page stays calm. */}
+      {/* 5. Everything advanced is tucked away so the page stays calm. */}
       <AdvancedSettings settings={settings} onSave={save} pending={pending} />
     </div>
+  )
+}
+
+/* ----------------------- Persuasion intensity dial ---------------------- */
+
+const AGGRESSIVENESS_LEVELS: {
+  value: number
+  label: string
+  short: string
+  description: string
+}[] = [
+  {
+    value: 0,
+    label: 'Мягкий',
+    short: 'Информирует',
+    description:
+      'Отвечает и мягко предлагает шаг, но не давит. Отступает, если клиент явно отказывается.',
+  },
+  {
+    value: 1,
+    label: 'Спокойный',
+    short: 'Лёгкие касания',
+    description:
+      'Отрабатывает возражения с эмпатией, делает одну мягкую попытку вернуть к цели.',
+  },
+  {
+    value: 2,
+    label: 'Настойчивый',
+    short: 'По умолчанию',
+    description:
+      'Не соглашается с возражениями, всегда возвращает к предложению и завершает шагом.',
+  },
+  {
+    value: 3,
+    label: 'Максимальный дожим',
+    short: 'Бог продаж',
+    description:
+      'Предельно упорно ведёт к цели: заходит с новых углов, комбинирует приёмы, почти не отпускает — в рамках этики.',
+  },
+]
+
+/**
+ * The persuasion-intensity dial ("god of sales"). Discrete 0..3 segmented
+ * control — clearer than a slider for labelled levels. Saves immediately on
+ * pick. When `focus` is set (opened via the console's "агрессивность" intent),
+ * it scrolls into view and pulses once so the admin lands exactly here.
+ */
+function AggressivenessCard({
+  value,
+  pending,
+  focus,
+  onSave,
+}: {
+  value: number
+  pending: boolean
+  focus: boolean
+  onSave: (value: number) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [highlight, setHighlight] = useState(false)
+
+  useEffect(() => {
+    if (!focus) return
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setHighlight(true)
+    const t = setTimeout(() => setHighlight(false), 1600)
+    return () => clearTimeout(t)
+  }, [focus])
+
+  const current =
+    AGGRESSIVENESS_LEVELS.find((l) => l.value === value) ??
+    AGGRESSIVENESS_LEVELS[2]
+
+  return (
+    <Card
+      ref={ref}
+      className={cn(
+        'flex flex-col gap-4 p-4 transition-shadow',
+        highlight && 'ring-2 ring-primary ring-offset-2 ring-offset-background',
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 rounded-md bg-primary/10 p-2 text-primary">
+          <Flame className="size-5" />
+        </div>
+        <div>
+          <p className="font-medium">Агрессивность продаж</p>
+          <p className="text-sm text-muted-foreground">
+            Насколько жёстко ИИ дожимает клиента до цели. Этические ограничения
+            соблюдаются на любом уровне: без лжи, угроз и фальшивой срочности.
+          </p>
+        </div>
+      </div>
+
+      <div
+        role="radiogroup"
+        aria-label="Уровень агрессивности продаж"
+        className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+      >
+        {AGGRESSIVENESS_LEVELS.map((level) => {
+          const active = level.value === value
+          return (
+            <button
+              key={level.value}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              disabled={pending || active}
+              onClick={() => onSave(level.value)}
+              className={cn(
+                'flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors',
+                active
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border hover:bg-muted/50',
+                'disabled:cursor-default',
+              )}
+            >
+              <span className="flex w-full items-center justify-between gap-1">
+                <span className="text-sm font-medium">{level.label}</span>
+                {active ? (
+                  <Badge variant="secondary" className="shrink-0">
+                    Выбрано
+                  </Badge>
+                ) : null}
+              </span>
+              <span className="text-xs text-muted-foreground">{level.short}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+        <span className="font-medium text-foreground">{current.label}.</span>{' '}
+        {current.description}
+      </p>
+    </Card>
   )
 }
 
@@ -381,7 +532,7 @@ function TuningFields({
  * embedded server-side and retrieved by semantic similarity at reply time, so
  * the AI quotes real facts instead of hallucinating.
  */
-function KnowledgeBaseCard() {
+export function KnowledgeBaseCard() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([])
   const [loading, startLoad] = useTransition()
   const [saving, startSave] = useTransition()

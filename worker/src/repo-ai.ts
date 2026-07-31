@@ -85,6 +85,8 @@ export interface AiAssistConfig {
   model: string
   temperature: number
   maxTokens: number
+  /** Persuasion intensity 0..3 (default 2 = assertive). */
+  aggressiveness: number
 }
 
 /** One correction lesson in the shape the pure brain expects. */
@@ -106,11 +108,13 @@ export async function getAiAssistConfig(): Promise<AiAssistConfig> {
     model: string | null
     temperature: number | string | null
     max_tokens: number | string | null
+    aggressiveness: number | string | null
   }>(
     `SELECT enabled, tone, persona, playbook,
             COALESCE(model, '')      AS model,
             COALESCE(temperature, 0.7) AS temperature,
-            COALESCE(max_tokens, 400)  AS max_tokens
+            COALESCE(max_tokens, 400)  AS max_tokens,
+            COALESCE(aggressiveness, 2) AS aggressiveness
        FROM ai_assist_settings WHERE id = true`,
   ).catch(async () =>
     // Fallback for pre-migration schema without the new columns.
@@ -122,9 +126,11 @@ export async function getAiAssistConfig(): Promise<AiAssistConfig> {
       model: null
       temperature: null
       max_tokens: null
+      aggressiveness: null
     }>(
       `SELECT enabled, tone, persona, playbook,
-              NULL AS model, NULL AS temperature, NULL AS max_tokens
+              NULL AS model, NULL AS temperature, NULL AS max_tokens,
+              NULL AS aggressiveness
          FROM ai_assist_settings WHERE id = true`,
     ),
   )
@@ -136,6 +142,10 @@ export async function getAiAssistConfig(): Promise<AiAssistConfig> {
     model: row?.model ?? '',
     temperature: row?.temperature == null ? 0.7 : Number(row!.temperature),
     maxTokens: row?.max_tokens == null ? 400 : Number(row!.max_tokens),
+    aggressiveness:
+      row?.aggressiveness == null
+        ? 2
+        : Math.max(0, Math.min(3, Math.round(Number(row!.aggressiveness)))),
   }
 }
 

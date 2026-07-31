@@ -267,6 +267,7 @@ async function runLivechatAiLead(input: {
         corrections,
         memory: memory.summary,
         knowledge,
+        aggressiveness: settings.aggressiveness,
         history,
       },
       log,
