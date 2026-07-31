@@ -50,6 +50,7 @@ export interface ExecutedAction {
     | 'lesson'
     | 'directive'
     | 'followup'
+    | 'dialog'
   /** Short human summary, e.g. «Включил ИИ» or «Агрессивность → Максимум». */
   label: string
   /**

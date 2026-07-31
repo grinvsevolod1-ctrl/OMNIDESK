@@ -14,11 +14,17 @@ import {
   updateAiAssistSettings,
   listKnowledge,
   upsertKnowledge,
+  deleteKnowledge,
   addLesson,
+  deleteLesson,
   listBrainLessons,
   listLessons,
   countLessons,
   listAiEnrolledConversations,
+  listEnrollableConversations,
+  enrollConversationAi,
+  unenrollConversationAi,
+  getAiModelStats,
   retrieveKnowledge,
 } from '@/lib/data/ai-assist'
 import {
@@ -367,6 +373,72 @@ export async function prepareAssistantRun(
       },
     }),
 
+    listKnowledge: tool({
+      description:
+        'Показать всё, что сейчас лежит в базе знаний ИИ-менеджера (факты, цены, ответы на частые вопросы). Вызывай, когда админ просит «что ты знаешь», «покажи базу знаний», «какие факты сохранены», или перед тем как что-то изменить/удалить — чтобы взять id нужной записи.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const items = await listKnowledge()
+        return {
+          ok: true,
+          count: items.length,
+          items: items.map((k) => ({
+            id: k.id,
+            title: k.title,
+            content: truncate(k.content, 200),
+            enabled: k.enabled,
+          })),
+        }
+      },
+    }),
+
+    updateKnowledge: tool({
+      description:
+        'Изменить существующий факт в базе знаний: поправить текст, заголовок или временно выключить/включить его. Сначала возьми id через listKnowledge. Передай id и то, что меняешь (title / content / enabled).',
+      inputSchema: z.object({
+        id: z.string().min(1),
+        title: z.string().min(1).max(200).optional(),
+        content: z.string().min(1).max(4000).optional(),
+        enabled: z.boolean().optional(),
+      }),
+      execute: async ({ id, title, content, enabled }) => {
+        const current = await listKnowledge()
+        const entry = current.find((k) => k.id === id)
+        if (!entry) return { ok: false, reason: 'not_found' }
+        await upsertKnowledge({
+          id,
+          title: (title ?? entry.title).trim(),
+          content: (content ?? entry.content).trim(),
+          enabled: enabled ?? entry.enabled,
+        })
+        actions.push({
+          kind: 'knowledge',
+          label:
+            enabled === false
+              ? `Выключил факт: «${truncate(title ?? entry.title, 50)}»`
+              : `Обновил факт: «${truncate(title ?? entry.title, 50)}»`,
+        })
+        return { ok: true }
+      },
+    }),
+
+    deleteKnowledge: tool({
+      description:
+        'Удалить факт из базы знаний навсегда. Сначала возьми id через listKnowledge и убедись, что админ действительно хочет удалить именно эту запись. Передай id.',
+      inputSchema: z.object({ id: z.string().min(1) }),
+      execute: async ({ id }) => {
+        const current = await listKnowledge()
+        const entry = current.find((k) => k.id === id)
+        if (!entry) return { ok: false, reason: 'not_found' }
+        await deleteKnowledge(id)
+        actions.push({
+          kind: 'knowledge',
+          label: `Удалил факт: «${truncate(entry.title, 50)}»`,
+        })
+        return { ok: true }
+      },
+    }),
+
     addLesson: tool({
       description:
         'Добавить обучающий урок — как ИИ должен отвечать в определённой ситуации. situation — ситуация/запрос клиента, corrected — правильный ответ, note — короткое пояснение почему.',
@@ -383,6 +455,42 @@ export async function prepareAssistantRun(
           note: (note ?? '').trim(),
         })
         actions.push({ kind: 'lesson', label: 'Добавил урок в обучение' })
+        return { ok: true }
+      },
+    }),
+
+    listLessons: tool({
+      description:
+        'Показать сохранённые обучающие уроки ИИ-менеджера (ситуация клиента → правильный ответ). Вызывай, когда админ просит «покажи уроки», «чему ты научен», или перед удалением урока — чтобы взять его id.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const items = await listLessons(50)
+        return {
+          ok: true,
+          count: items.length,
+          items: items.map((l) => ({
+            id: l.id,
+            situation: truncate(l.situation, 140),
+            corrected: truncate(l.corrected, 200),
+            note: l.note,
+          })),
+        }
+      },
+    }),
+
+    deleteLesson: tool({
+      description:
+        'Удалить обучающий урок навсегда. Сначала возьми id через listLessons и убедись, что админ хочет убрать именно его. Передай id.',
+      inputSchema: z.object({ id: z.string().min(1) }),
+      execute: async ({ id }) => {
+        const items = await listLessons(200)
+        const lesson = items.find((l) => l.id === id)
+        if (!lesson) return { ok: false, reason: 'not_found' }
+        await deleteLesson(id)
+        actions.push({
+          kind: 'lesson',
+          label: `Удалил урок: «${truncate(lesson.situation, 50)}»`,
+        })
         return { ok: true }
       },
     }),
@@ -576,6 +684,72 @@ export async function prepareAssistantRun(
       },
     }),
 
+    listDialogs: tool({
+      description:
+        'Показать диалоги: какие сейчас ведёт ИИ и какие можно ему поручить. Вызывай, когда админ спрашивает «какие диалоги на ИИ», «кого ведёт бот», «подключи ИИ к диалогу с …» (сначала найди нужный), «покажи переписки». Без search и с scope=enrolled — вернёт диалоги под управлением ИИ; со scope=all или строкой поиска — доступные для подключения (можно искать по имени контакта). Бери conversationId отсюда для attachAi/detachAi.',
+      inputSchema: z.object({
+        scope: z.enum(['enrolled', 'all']).optional(),
+        search: z.string().max(120).optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      }),
+      execute: async ({ scope, search, limit }) => {
+        const cap = limit ?? 30
+        const items =
+          scope === 'all' || (search && search.trim())
+            ? await listEnrollableConversations(search ?? '', cap)
+            : await listAiEnrolledConversations(cap)
+        return {
+          ok: true,
+          count: items.length,
+          dialogs: items.map((d) => ({
+            conversationId: d.conversationId,
+            contact: d.contactName,
+            channel: d.channelType,
+            lastMessage: d.lastMessage,
+            aiLed: d.enrolled,
+          })),
+        }
+      },
+    }),
+
+    attachAi: tool({
+      description:
+        'Подключить ИИ-менеджера к конкретному диалогу — дальше бот сам ведёт клиента (с текущего момента, старую переписку не переигрывает). Сначала найди нужный диалог через listDialogs и возьми conversationId. Вызывай, когда админ говорит «подключи ИИ к диалогу с …», «пусть бот ведёт этого клиента».',
+      inputSchema: z.object({ conversationId: z.string().min(1) }),
+      execute: async ({ conversationId }) => {
+        const ok = await enrollConversationAi(conversationId)
+        if (!ok) return { ok: false, reason: 'not_found' }
+        settingsChanged = true
+        actions.push({ kind: 'dialog', label: 'Подключил ИИ к диалогу' })
+        return { ok: true }
+      },
+    }),
+
+    detachAi: tool({
+      description:
+        'Отключить ИИ от диалога — человек полностью забирает переписку себе. Сначала возьми conversationId через listDialogs (scope=enrolled). Вызывай, когда админ говорит «убери бота из диалога», «дальше веду сам», «отключи ИИ от этого клиента».',
+      inputSchema: z.object({ conversationId: z.string().min(1) }),
+      execute: async ({ conversationId }) => {
+        const ok = await unenrollConversationAi(conversationId)
+        if (!ok) return { ok: false, reason: 'not_found' }
+        settingsChanged = true
+        actions.push({ kind: 'dialog', label: 'Отключил ИИ от диалога' })
+        return { ok: true }
+      },
+    }),
+
+    getCostStats: tool({
+      description:
+        'Показать расход на ИИ: по каждой модели — сколько запросов, доля успешных, средняя задержка и средний размер ответа в токенах. Вызывай, когда админ спрашивает «сколько тратим на ИИ», «расход токенов», «какая модель работает», «насколько быстро отвечает бот». Передай days (по умолчанию 7).',
+      inputSchema: z.object({
+        days: z.number().int().min(1).max(90).optional(),
+      }),
+      execute: async ({ days }) => {
+        const stats = await getAiModelStats(days ?? 7)
+        return { ok: true, models: stats }
+      },
+    }),
+
     dealTemperature: tool({
       description:
         'Оценить «температуру» сделок — насколько клиент горячий и готов к покупке. Вызывай, когда админ спрашивает «кого дожимать в первую очередь», «самые горячие клиенты», «кто готов купить», «насколько горячий этот диалог». Без conversationId вернёт топ самых горячих клиентов; с conversationId — оценку по конкретному диалогу. У каждой оценки есть балл 0–100, категория и понятные причины — проговори их админу.',
@@ -698,7 +872,7 @@ export async function prepareAssistantRun(
 
     openPanel: tool({
       description:
-        'Открыть админу рабочую панель для действий, которые лучше делать руками: settings (все настройки), aggressiveness (ползунок дожима), knowledge (база знаний), training (обучение и песочница), corrections (правки к конкретным сообщениям), dialogs (подключение ИИ к диалогам), logs (журнал). Вызывай, когда задача требует ручной работы или админ просит «покажи/открой».',
+        'Открыть админу рабочую панель для действий, которые лучше делать руками: settings (все настройки), aggressiveness (ползунок дожима), knowledge (база знаний), training (обучение ассистента на реальных диалогах), corrections (правки к конкретным сообщениям), dialogs (подключение ИИ к диалогам), logs (журнал). Вызывай, когда задача требует ручной работы или админ просит «покажи/открой».',
       inputSchema: z.object({
         panel: z.enum([
           'settings',
@@ -814,10 +988,14 @@ const SYSTEM_INSTRUCTIONS = [
   '• Когда админ хочет проверить, как продавец ответит клиенту («а что ты ответишь на…», «покажи ответ, если клиент скажет…», «как отработаешь возражение…») — вызови previewReply с репликой клиента и покажи полученный ответ дословно. Это черновик для проверки, клиенту он НЕ отправляется — так и скажи.',
   '• Когда админ спрашивает про результаты/статистику («как за неделю», «сколько дожали», «конверсия», «где теряем») — вызови getPerformance и объясни цифры человеческим языком: что хорошо, что проседает, и что можно поправить в правилах или настройках.',
   '• Когда админ спрашивает, кого дожимать в первую очередь или насколько горячий клиент («самые горячие», «кто готов купить», «температура диалога») — вызови dealTemperature и назови самых горячих с их баллом и причинами, либо оцени конкретный диалог.',
+  '• База знаний: добавить факт — addKnowledge; показать всё — listKnowledge; поправить/выключить факт — updateKnowledge; удалить — deleteKnowledge. Перед изменением или удалением СНАЧАЛА вызови listKnowledge, чтобы взять id нужной записи. Удаляй только то, что админ явно попросил.',
+  '• Уроки обучения: показать сохранённые — listLessons; удалить — deleteLesson (сначала возьми id через listLessons). Добавляй уроки только через addLesson и только с согласия админа.',
+  '• Управление диалогами прямо из чата: listDialogs — показать, что ведёт ИИ (scope=enrolled) или найти диалог для подключения (scope=all или поиск по имени); attachAi — поручить диалог боту; detachAi — вернуть диалог человеку. Всегда сначала listDialogs, чтобы взять правильный conversationId, и подтверди админу, к какому именно контакту подключил/от какого отключил ИИ.',
+  '• Когда админ спрашивает про расходы на ИИ или скорость («сколько тратим», «расход токенов», «какая модель», «как быстро отвечает») — вызови getCostStats и объясни по моделям простыми словами.',
   '• Когда админ просит разобрать ошибки или доучить продавца («разбери провалы», «где мы теряем клиентов», «чему тебя доучить») — вызови findWeakSpots, покажи предложенные уроки коротким списком и спроси, какие сохранить. Сохраняй только одобренные — через addLesson. Не сохраняй уроки без согласия админа.',
   '• Когда админ говорит про дожим молчунов или напоминания («дожимай, если не отвечают», «пиши сам через N часов», «напоминай два раза», «во сколько не беспокоить») — используй getFollowupStatus, чтобы показать текущие настройки, и configureFollowup, чтобы их менять. Помни: включение авто-дожима требует подтверждения (вернётся needsConfirmation) — объясни админу, что после включения ИИ сам начнёт писать напоминания молчащим клиентам. Задержку, число касаний, тихие часы и каналы можно менять сразу.',
   '• ВАЖНО: выключение ИИ-менеджера и максимальный дожим (уровень 3) — рискованные действия. Инструменты вернут needsConfirmation вместо применения. В этом случае НЕ утверждай, что уже сделал — попроси админа подтвердить действие кнопкой ниже.',
-  '• Если задача требует ручной работы (подключить ИИ к конкретному диалогу, исправить конкретное сообщение, посмотреть журнал подробно, полноценно обучить на аккаунте) — вызови openPanel с нужной панелью и скажи, что открыл её.',
+  '• Подключение/отключение ИИ к диалогам делай прямо из чата (listDialogs + attachAi/detachAi), а не через панель. openPanel вызывай, только когда задачу удобнее закончить руками: исправить конкретное сообщение (corrections), посмотреть журнал подробно (logs), полноценно обучить на аккаунте (training) — открой нужную панель и скажи, что открыл её.',
   '• Если админ просит ОБЪЯСНИТЬ или РАССКАЗАТЬ — отвечай понятно и по делу, без воды, опираясь на getStatus.',
   '• Если админ спрашивает, что ИИ уже знает или чему обучен («что ты знаешь про…», «как отвечаешь на…») — вызови searchKnowledge и ответь по найденному, не выдумывая.',
   '• Если админ спрашивает про ошибки/сбои/«почему молчит» — вызови getRecentLogs и объясни простыми словами, что нашёл.',

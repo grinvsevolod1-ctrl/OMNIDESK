@@ -106,6 +106,7 @@ const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
   lesson: GraduationCap,
   directive: ScrollText,
   followup: BellRing,
+  dialog: MessagesSquare,
 }
 
 /** Human tone labels for the status strip. */
