@@ -345,6 +345,7 @@ async function fireAiLead(params: {
         persona: config.persona,
         tone: config.tone,
         playbook: config.playbook,
+        directives: config.directives,
         lessons,
         corrections,
         memory: memory.summary,

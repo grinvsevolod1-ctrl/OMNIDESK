@@ -92,6 +92,29 @@ export interface AiAssistConfig {
   maxTokens: number
   /** Persuasion intensity 0..3 (default 2 = assertive). */
   aggressiveness: number
+  /**
+   * The chat-driven mandate — admin's plain-language rules from ai_directives,
+   * ordered and obeyed verbatim. Empty when none set or table absent.
+   */
+  directives: string[]
+}
+
+/**
+ * Active directives (the chat-driven mandate) as ordered plain strings.
+ * Best-effort: returns [] if the table is missing (pre-085 migration) so a
+ * Telegram reply is never blocked.
+ */
+export async function getDirectiveTexts(): Promise<string[]> {
+  try {
+    const rows = await query<{ body: string }>(
+      `SELECT body FROM ai_directives
+        WHERE enabled = true
+        ORDER BY sort_order ASC, created_at ASC`,
+    )
+    return rows.map((r) => (r.body ?? '').trim()).filter(Boolean)
+  } catch {
+    return []
+  }
 }
 
 /** One correction lesson in the shape the pure brain expects. */
@@ -139,6 +162,7 @@ export async function getAiAssistConfig(): Promise<AiAssistConfig> {
          FROM ai_assist_settings WHERE id = true`,
     ),
   )
+  const directives = await getDirectiveTexts()
   return {
     enabled: !!row?.enabled,
     tone: row?.tone ?? 'professional',
@@ -151,6 +175,7 @@ export async function getAiAssistConfig(): Promise<AiAssistConfig> {
       row?.aggressiveness == null
         ? 2
         : Math.max(0, Math.min(3, Math.round(Number(row!.aggressiveness)))),
+    directives,
   }
 }
 

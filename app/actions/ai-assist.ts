@@ -51,6 +51,7 @@ import {
   type AiLogLevel,
   type AiLogRow,
 } from '@/lib/data/ai-log'
+import { directiveTexts } from '@/lib/data/ai-directives'
 
 /**
  * Server actions backing the admin «ИИ» tab: shared assistant settings, the
@@ -484,15 +485,17 @@ export async function aiSuggestReplyAction(input: {
   history: Array<{ role: 'client' | 'manager'; body: string }>
 }): Promise<string | null> {
   await requireAdmin()
-  const [settings, lessons] = await Promise.all([
+  const [settings, lessons, directives] = await Promise.all([
     getAiAssistSettings(),
     listBrainLessons(SUGGEST_LESSON_CONTEXT),
+    directiveTexts(),
   ])
   return generateManagerReply(
     {
       persona: settings.persona,
       tone: settings.tone,
       playbook: settings.playbook,
+      directives,
       lessons,
       aggressiveness: settings.aggressiveness,
       history: input.history,

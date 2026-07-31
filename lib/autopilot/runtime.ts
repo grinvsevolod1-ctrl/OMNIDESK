@@ -22,6 +22,7 @@ import {
   generateManagerReply,
   isBrainConfigured,
 } from '../ai/manager-brain'
+import { directiveTexts } from '../data/ai-directives'
 import { logAi } from '../data/ai-log'
 import { deliverMaxMessage } from '../max-dispatch'
 import { deliverVkMessage } from '../vk-dispatch'
@@ -227,7 +228,7 @@ async function runLivechatAiLead(input: {
       channelType: 'livechat',
     })
 
-    const [lessons, corrections, history, memory, knowledge] =
+    const [lessons, corrections, history, memory, knowledge, directives] =
       await Promise.all([
         listBrainLessons(12),
         listManualCorrectionRules(60),
@@ -235,6 +236,8 @@ async function runLivechatAiLead(input: {
         getConversationAiMemory(input.conversationId),
         // RAG: retrieve facts relevant to what the client just asked.
         retrieveKnowledge(input.text, 4),
+        // The chat-driven mandate — admin's plain-language rules, obeyed verbatim.
+        directiveTexts(),
       ])
 
     // Escalation guard: if the client is angry, demands a human, or the dialog
@@ -263,6 +266,7 @@ async function runLivechatAiLead(input: {
         persona: settings.persona,
         tone: settings.tone,
         playbook: settings.playbook,
+        directives,
         lessons,
         corrections,
         memory: memory.summary,

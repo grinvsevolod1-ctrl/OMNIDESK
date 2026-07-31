@@ -103,6 +103,7 @@ const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
   model: Settings2,
   knowledge: BookOpen,
   lesson: GraduationCap,
+  directive: ScrollText,
 }
 
 /** Human tone labels for the status strip. */

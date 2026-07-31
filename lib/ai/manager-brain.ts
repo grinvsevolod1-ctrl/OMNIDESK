@@ -48,6 +48,13 @@ export interface ManagerBrainInput {
   tone: string
   /** Distilled bullet-point rules the admin has trained. */
   playbook: string[]
+  /**
+   * The chat-driven MANDATE: durable, hand-managed rules the admin dictated to
+   * the co-pilot in plain language (stored in ai_directives, ordered). Injected
+   * at the highest priority — right under the scenario — so "the admin said it
+   * in chat and that's how it is". Optional for older callers.
+   */
+  directives?: string[]
   /** Recent correction lessons (most relevant first). */
   lessons: BrainLesson[]
   /**
@@ -391,8 +398,8 @@ function resolveAggressiveness(v: number | undefined): number {
 const OBJECTION_FRAMEWORK: string[] = [
   'МЕТОД РАБОТЫ С ВОЗРАЖЕНИЯМИ (применяй в каждом ответе, где клиент сомневается):',
   '1. Услышь и присоединись: коротко покажи, что понял чувство клиента («понимаю», «логичный вопрос»), без спора и без «но» в начале.',
-  '2. Вскрой настоящую причину: за словами «дорого», «подумаю», «не уверен» почти всегда стоит другой страх (риск, недоверие, нет времени, был плохой опыт). Мягким уточняющим вопросом достань истинное возражение, прежде чем отвечать.',
-  '3. Переформулируй и сними страх: отвечай на настоящую причину, а не на формулировку. Дай конкретный факт/пример/гарантию из сценария и справочной информации, которые закрывают именно этот страх.',
+  '2. Вскрой настоящую причину: за словами «дорого», «подумаю», «не уверен» почти всегда стоит другой страх (риск, недоверие, нет времени, был плохой опыт). Мягким уточняющи�� вопросом достань истинное возражение, прежде чем отвечать.',
+  '3. Переформулируй и сними страх: отвечай на настоящую причину, а ��е на формулировку. Дай конкретный факт/пример/гарантию из сценария и справочной информации, которые закрывают именно этот страх.',
   '4. Свяжи с выгодой клиента: покажи, что даёт следующий шаг лично ему (деньги, время, спокойствие, безопасность) — на его языке, его словами из переписки.',
   '5. Верни инициативу: заверши одним лёгким конкретным шагом или вопросом, на который легко ответить «да».',
   'Приёмы (используй уместно, естественно, не как список): «чувствовал-понял-оказалось» (другие тоже так думали, а потом убедились), дробление большого шага на маленький и безопасный, вопрос вместо утверждения, спокойное повторение выгоды под новым углом, лёгкое подведение итога договорённостей.',
@@ -442,7 +449,7 @@ function persuasionDirectives(level: number): string[] {
         'Ты НИКОГДА не соглашаешься с возражением клиента и НИКОГДА не подстраиваешься под него. Если клиента что-то «не устраивает» — это возражение, которое нужно отработать и мягко вернуть его к нашему единственному предложению, а НЕ повод менять условия или соглашаться, что оно ему не подходит.',
         'Мягкое «нет», сомнения, отговорки, «я подумаю», «дорого», «неудобно», молчание — это НЕ отказ, а возражение. Признай эмоцию, сними страх, покажи выгоду именно нашего предложения и снова подтолкни к следующему шагу.',
         'Не поддакивай в ущерб цели. Можно проявить понимание («понимаю вас»), но сразу же вернуть разговор к нашему предложению и его выгодам. Никогда не говори «да, вам это не подходит», «поищите другое», «согласен, условия так себе».',
-        'Всегда заканчивай сообщение так, чтобы клиенту было легко сделать шаг вперёд: один конкретный вопрос или мягкий призыв.',
+        'Всегда заканчивай сообщение так, чтобы клиенту было легко сдела��ь шаг вперёд: один конкретный вопрос или мягкий призыв.',
       ]
   }
 }
@@ -462,7 +469,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     'КАК ПИСАТЬ (чтобы тебя невозможно было принять за ИИ):',
     '- НИКОГДА не используй длинное тире «—» или среднее тире «–». Пиши как в живом чате: короткими фразами, через запятую, точку или обычный дефис «-».',
     '- Не используй маркированные/нумерованные списки, заголовки, markdown, жирный шрифт, звёздочки. Только обычный текст.',
-    '- Не пиши вводных штампов ИИ: «Конечно!», «Разумеется!», «Рад помочь», «Отличный вопрос», «Давайте разберёмся», «Как я могу помочь». Начинай сразу по делу.',
+    '- Не пиши вводных ��тампов ИИ: «Конечно!», «Разумеется!», «Рад помочь», «Отличный вопрос», «Давайте разберёмся», «Как я могу помочь». Начинай сразу по делу.',
     '- Живой разговорный русский: допустимы простые смайлики, короткие предложения, естественные обороты. Без канцелярита и пафоса.',
     '',
     ...persuasionDirectives(resolveAggressiveness(input.aggressiveness)),
@@ -497,6 +504,22 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
       persona,
       '',
       'Строго следуй этому сценарию. Если твоё «здравое рассуждение» противоречит сценарию — побеждает сценарий. Не выходи за рамки описанного предложения.',
+    )
+  }
+
+  // The chat-driven mandate: individual rules the admin dictated to the co-pilot
+  // in plain language. Placed immediately after the scenario and marked as
+  // top-priority, because in this product the admin's spoken word IS the law —
+  // nothing about the manager's behaviour is hardcoded, it all comes from here
+  // and from the scenario above. Obeyed verbatim, over any of the AI's own ideas.
+  const directives = (input.directives ?? [])
+    .map((d) => d.trim())
+    .filter(Boolean)
+  if (directives.length > 0) {
+    parts.push(
+      '',
+      'ПРЯМЫЕ УКАЗАНИЯ РУКОВОДИТЕЛЯ (заданы в чате управления, высший приоритет наравне со сценарием — соблюдать неукоснительно, каждое):',
+      ...directives.slice(0, 100).map((d) => `!! ${d}`),
     )
   }
 
@@ -606,7 +629,7 @@ function looksLikeRefusal(text: string): boolean {
  * language-safe: it only touches punctuation/markdown artefacts, never rewrites
  * meaning.
  *
- *  - Long/■em/en dashes («—», «–», «―», «‒», «−») are the #1 AI giveaway in
+ *  - Long em/en dashes («—», «–», «―», «‒», «−») are the #1 AI giveaway in
  *    Russian chat. Real people type a comma or a plain hyphen. We convert a
  *    dash used as a clause break (" — ") into a comma, and a stray standalone
  *    dash into a plain hyphen.
@@ -1311,5 +1334,80 @@ export async function distillPlaybook(
       .slice(0, 12)
       .map((l) => l.note?.trim() || l.corrected.trim())
       .filter(Boolean)
+  }
+}
+
+/** A ready-to-apply sales setup generated from a plain business description. */
+export interface GeneratedScenario {
+  /** The persona/scenario blob for ai_assist_settings.persona. */
+  persona: string
+  /** Concrete rules to store as directives (the chat-driven mandate). */
+  directives: string[]
+}
+
+/**
+ * Turn a plain-language business description ("we sell fitted kitchens, average
+ * cheque 300k, main objection is price") into a ready sales setup: a persona
+ * (scenario) plus a handful of concrete directives. This is how an admin can
+ * bootstrap the whole manager by just describing the business in chat — nothing
+ * hardcoded, the model proposes and the admin edits it further via chat.
+ * Returns null when the gateway is unavailable so the caller can explain why.
+ */
+export async function generateSalesScenario(
+  businessDescription: string,
+): Promise<GeneratedScenario | null> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  const desc = businessDescription.trim()
+  if (!key || !desc) return null
+
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты — эксперт по продажам. По описанию бизнеса ты собираешь настройку ИИ-продавца. ' +
+              'Верни СТРОГО JSON без пояснений в форме {"persona": "...", "directives": ["...", "..."]}. ' +
+              'persona — связный сценарий на русском (2–5 абзацев): чем занимается компания, кто клиент, что предлагать, тон, как вести к сделке, как закрывать. ' +
+              'directives — 5–12 коротких конкретных правил (что всегда делать, чего никогда не делать, как отрабатывать возражения). ' +
+              'Пиши живым языком, без канцелярита. Только JSON.',
+          },
+          { role: 'user', content: `Описание бизнеса:\n${desc}` },
+        ],
+        temperature: 0.5,
+        max_tokens: 1200,
+        response_format: { type: 'json_object' },
+      }),
+    })
+    if (!res.ok) throw new Error(`gateway HTTP ${res.status}`)
+    const data = (await res.json()) as GatewayResponse
+    const raw = data.choices?.[0]?.message?.content ?? ''
+    const parsed = JSON.parse(raw) as {
+      persona?: unknown
+      directives?: unknown
+    }
+    const persona =
+      typeof parsed.persona === 'string' ? parsed.persona.trim() : ''
+    const directives = Array.isArray(parsed.directives)
+      ? parsed.directives
+          .map((d) => (typeof d === 'string' ? d.trim() : ''))
+          .filter(Boolean)
+          .slice(0, 12)
+      : []
+    if (!persona && directives.length === 0) return null
+    return { persona, directives }
+  } catch (err) {
+    console.warn(
+      '[manager-brain] scenario generation failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return null
   }
 }

@@ -48,6 +48,7 @@ export interface ExecutedAction {
     | 'model'
     | 'knowledge'
     | 'lesson'
+    | 'directive'
   /** Short human summary, e.g. «Включил ИИ» or «Агрессивность → Максимум». */
   label: string
   /**
