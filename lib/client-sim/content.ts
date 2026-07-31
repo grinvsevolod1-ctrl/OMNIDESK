@@ -354,28 +354,39 @@ function typoWord(word: string): string {
   if (word.length < 3) return word
   const roll = Math.random()
   const i = randInt(0, word.length - 1)
-  if (roll < 0.3 && i < word.length - 1) {
-    // swap two adjacent chars
+
+  // Most common real phone typo (45%): thumb lands on a PHYSICALLY adjacent key.
+  // Preserve the original letter's case when substituting.
+  if (roll < 0.45) {
+    const ch = word[i]
+    const near = TYPO_ADJACENT[ch.toLowerCase()]
+    if (near) {
+      let rep = near[randInt(0, near.length - 1)]
+      if (ch === ch.toUpperCase() && ch !== ch.toLowerCase()) rep = rep.toUpperCase()
+      return word.slice(0, i) + rep + word.slice(i + 1)
+    }
+    // fall through to a structural typo if this char has no mapped neighbour
+  }
+  // Fat-finger inserts an adjacent key NEXT TO the intended one (25%).
+  if (roll < 0.70) {
+    const near = TYPO_ADJACENT[word[i].toLowerCase()]
+    if (near) {
+      const extra = near[randInt(0, near.length - 1)]
+      return word.slice(0, i) + word[i] + extra + word.slice(i + 1)
+    }
+  }
+  if (roll < 0.85 && i < word.length - 1) {
+    // swap two adjacent chars (fast typing)
     const arr = word.split('')
     ;[arr[i], arr[i + 1]] = [arr[i + 1], arr[i]]
     return arr.join('')
   }
-  if (roll < 0.55) {
-    // drop a char
+  if (roll < 0.94) {
+    // drop a char (missed the key)
     return word.slice(0, i) + word.slice(i + 1)
   }
-  if (roll < 0.78) {
-    // double a char
-    return word.slice(0, i) + word[i] + word.slice(i)
-  }
-  // wrong neighbour key
-  const lower = word[i].toLowerCase()
-  const near = TYPO_ADJACENT[lower]
-  if (near) {
-    const rep = near[randInt(0, near.length - 1)]
-    return word.slice(0, i) + rep + word.slice(i + 1)
-  }
-  return word
+  // double a char (held too long / bounce)
+  return word.slice(0, i) + word[i] + word.slice(i)
 }
 
 

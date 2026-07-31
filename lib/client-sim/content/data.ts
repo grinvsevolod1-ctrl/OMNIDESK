@@ -106,7 +106,7 @@ export const JOB_HOOKS = [
   'вакансия комплектовщика',
   'работа наборщиком текста',
   'вакансия промоутера',
-  'работ�� расклейщиком',
+  'работа расклейщиком',
   'подработка с ежедневной оплатой на карту',
   'вакансия администратора чата',
   'работа тайным покупателем',
@@ -248,7 +248,7 @@ export const ARCHETYPES: readonly SimArchetype[] = [
     id: 'greedy',
     label: 'Жадный',
     brief:
-      'Интере��ует только сумма и как быстро вывести. Про обязанности не спрашивает, «где деньги», «сколько срублю». Меркантильный.',
+      'Интересует только сумма и как быстро вывести. Про обязанности не спрашивает, «где деньги», «сколько срублю». Меркантильный.',
     moodBias: 0, patienceBias: -0.1, talkativeness: 0.4,
   },
   {
@@ -371,10 +371,33 @@ export const GOALS = [
 ]
 
 
+/**
+ * Physical key-neighbour map for the standard Russian ЙЦУКЕН phone/desktop
+ * layout. Each key lists the keys physically touching it (same row + the two
+ * rows above/below), so a "fat-finger" typo hits a genuinely adjacent key —
+ * exactly the kind of slip a real thumb makes on a phone. This is what powers
+ * the believable typos that a persona then self-edits to fix.
+ *
+ *   row1:  й ц у к е н г ш щ з х ъ
+ *   row2:  ф ы в а п р о л д ж э
+ *   row3:  я ч с м и т ь б ю
+ */
 export const TYPO_ADJACENT: Record<string, string> = {
-  о: 'ао', а: 'оя', е: 'еёи', и: 'ий', н: 'нг', т: 'ть', с: 'сщ', в: 'ва',
-  р: 'рп', л: 'лд', к: 'ку', м: 'мн', п: 'по', д: 'дл',
-}
+  // row 1
+  й: 'цфы',      ц: 'йуфыв',    у: 'цкыва',    к: 'уевап',
+  е: 'кнапр',    н: 'егпро',    г: 'ншрол',    ш: 'гщолд',
+  щ: 'шзлдж',    з: 'щхджэ',    х: 'зъжэ',     ъ: 'хэ',
+  // row 2
+  ф: 'йцыяч',    ы: 'фвйцячс',  в: 'ыаэучсм', // note: в near у/ц/ч/с/м
+  а: 'впуксми',  п: 'аркемит',  р: 'понеить',  о: 'рлнгтьб',
+  л: 'одгшьбю',  д: 'лжшщбю',   ж: 'дэщзю',    э: 'жзх',
+  // row 3
+  я: 'фыч',      ч: 'ясфыв',    с: 'чмыва',    м: 'сивап',
+  и: 'мтапр',    т: 'иьпро',    ь: 'тброл',
+  б: 'ьюолд',    ю: 'блджэ',
+  // е/ё are the same physical key on most RU phone keyboards
+  ё: 'екн',
+  }
 
 // Bracket-laughs / sad brackets — the RU-chat "текстовая улыбка".
 export const EMOJI_BRACKETS = ['))', ')))', '))))', '))))))', '(', '((', ')', '))))))))']

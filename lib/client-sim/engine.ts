@@ -222,7 +222,7 @@ async function tick(): Promise<void> {
         level: 'info',
         source: 'sim',
         event: 'reaped',
-        message: `За��р��то ${reaped} диалогов, где кл����нт перестал отвечать (�� ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
+        message: `За��р��то ${reaped} диалогов, где клиент перестал отвечать (за ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
       })
     }
 
@@ -564,25 +564,73 @@ async function scheduleManagerReactions(): Promise<void> {
     const mult = circadianMultiplier(hour, p.thread.persona.chronotype, weekend)
     delay = Math.round(delay * mult)
 
-    // --- Real-life interruption -------------------------------------------
-    // Occasionally, when the persona was about to reply promptly, life gets in
-    // the way: they fire off a quick "hang on, someone needs me" and only come
-    // back with the real answer several minutes later. A very human pattern that
-    // bots never produce. Only when they were going to be quick (delay < 5 min)
-    // and not in the dead of night.
-    if (delay < 300 && (hour < 23 && hour >= 7) && chance(0.05)) {
-      const brb = pick(LIFE_INTERRUPTIONS)
-      // Post the aside now; do NOT trigger the manager for it — the real reply
-      // that follows will drive the conversation forward on its own.
-      await insertInboundMessage(p.thread.conversationId, p.thread.persona.name, brb)
-      await bumpRepliesTotal()
-      // The real answer lands 5–20 min later.
-      delay = randInt(300, 1200)
+    // --- First-reply engagement curve -------------------------------------
+    // A lead who JUST submitted the web form is actively watching the chat for
+    // the first reply — they answer noticeably faster on the opening exchange,
+    // then cool down to normal cadence. Real funnels show exactly this decay;
+    // a flat cadence from message #1 onward is a tell.
+    const fresh = p.thread.state === 'opening' || p.thread.turns <= 1
+    if (fresh) {
+      delay = Math.round(delay * (0.4 + Math.random() * 0.25)) // 0.40–0.65×
+      delay = Math.max(6, Math.min(delay, 240)) // engaged → within ~4 min
     }
 
-    await scheduleReaction(p.thread.conversationId, p.managerMessageId, delay)
+    // --- Rare human asides (mutually exclusive) ---------------------------
+    // Only when they were going to reply promptly and it's waking hours.
+    const conv = p.thread.conversationId
+    const who = p.thread.persona.name
+    if (delay < 300 && hour < 23 && hour >= 7) {
+      if (chance(0.012)) {
+        // Wrong-chat slip: a message clearly meant for someone else lands here,
+        // then a quick "oops, not for you". Bots never misfire like this.
+        const stray = pick(WRONG_CHAT_STRAYS)
+        await insertInboundMessage(conv, who, stray)
+        await bumpRepliesTotal()
+        void (async () => {
+          try {
+            await sleep(randInt(4, 14) * 1000)
+            await insertInboundMessage(conv, who, pick(WRONG_CHAT_FIXES))
+            await bumpRepliesTotal()
+          } catch {
+            /* best-effort aside */
+          }
+        })()
+        delay = randInt(60, 300)
+      } else if (chance(0.05)) {
+        // Real-life interruption: "hang on, someone needs me", then quiet.
+        await insertInboundMessage(conv, who, pick(LIFE_INTERRUPTIONS))
+        await bumpRepliesTotal()
+        delay = randInt(300, 1200)
+      }
+    }
+
+    await scheduleReaction(conv, p.managerMessageId, delay)
   }
 }
+
+/**
+ * Stray messages clearly meant for a DIFFERENT chat that a person fat-fingers
+ * into this one, immediately followed by a correction from WRONG_CHAT_FIXES.
+ * Mundane and off-topic on purpose — that's what makes it read as a genuine
+ * misfire rather than part of the job conversation.
+ */
+const WRONG_CHAT_STRAYS: string[] = [
+  'мам привет, я попозже наберу',
+  'ты хлеб купил?',
+  'буду через полчаса',
+  'скинь номер карты потом',
+  'да, договорились на завтра',
+  'ок, выезжаю',
+  'ты где, я жду уже',
+  'солнышко, купи молоко пожалуйста',
+]
+const WRONG_CHAT_FIXES: string[] = [
+  'ой, это не вам, извините',
+  'сорри, не туда написал',
+  'ой не в тот чат, простите',
+  'это не вам, промахнулся)',
+  'блин, не туда, извините',
+]
 
 /**
  * Short real-life asides a persona fires off mid-conversation before going quiet
@@ -1137,7 +1185,7 @@ export function rollBehavior(
 
   // Temperament nudges.
   if (/наглый|дерзкий|борзый|вспыльчивый|нервный/.test(temper)) weights.angry += 4
-  if (/под��зрительн|ост��рожн/.test(temper)) weights.dismissive += 3
+  if (/подозрительн|осторожн/.test(temper)) weights.dismissive += 3
   if (/тупова|простоват/.test(temper)) weights.confused += 4
   if (/жадн|делов/.test(temper)) weights.curious += 4
   if (/спокойн|дружелюб|уставш/.test(temper)) weights.curious += 2

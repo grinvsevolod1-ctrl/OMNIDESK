@@ -482,7 +482,7 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
                 setValue={setMaxConcurrent}
               />
               <p className="text-xs text-muted-foreground text-pretty">
-                Сколь��о «живых» клиентов может вести переписку одновременно —
+                Сколько «живых» клиентов может вести переписку одновременно —
                 независимо от суточного потока. Сюда входят и те, кто спит, обещал
                 ответить позже или временно пропал. Можно смело ставить до 100.
               </p>

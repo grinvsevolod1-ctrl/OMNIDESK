@@ -179,7 +179,7 @@ export interface SimPersona {
   backstory?: SimBackstory
   /**
    * Verbal tics this persona sprinkles in — filler words, catchphrases, verbal
-   * habits, e.g. «короче», «ну эт�� самое», «братан». Rolled once at spawn.
+   * habits, e.g. «короче», «ну это самое», «братан». Rolled once at spawn.
    */
   quirks?: string[]
   /**
