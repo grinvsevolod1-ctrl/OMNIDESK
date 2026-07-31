@@ -21,6 +21,10 @@
 //     pm2 start ecosystem.config.js
 //     pm2 save
 //
+//   Do NOT put omnidesk-auto-deploy in that delete list: it is the watcher that
+//   runs deploy.sh, so deleting it mid-deploy would kill the deploy itself.
+//   `pm2 start ecosystem.config.js` leaves an already-running watcher as-is.
+//
 // Both processes read the same .env (DATABASE_URL + ENCRYPTION_KEY must match).
 const path = require('path')
 
@@ -159,6 +163,40 @@ module.exports = {
       max_memory_restart: '256M',
       // Treat a start as stable only after 20s; back off on repeated early
       // exits (e.g. transient git failures) instead of hammering.
+      min_uptime: 20000,
+      restart_delay: 10000,
+      exp_backoff_restart_delay: 1000,
+      max_restarts: 10,
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
+      // Continuous deployment watcher: polls origin/main and runs deploy.sh
+      // whenever a new commit lands, so this VPS always tracks main
+      // automatically. Long-lived fork process.
+      //
+      // CRITICAL — do NOT add omnidesk-auto-deploy to deploy.sh's `pm2 delete`
+      // line. deploy.sh is what this process spawns; deleting it mid-run would
+      // SIGKILL the very process performing the deploy. It is intentionally
+      // omitted there. `pm2 start ecosystem.config.js` (the last step of
+      // deploy.sh) leaves an already-running auto-deploy untouched, and the
+      // watcher self-restarts via PM2 if its own source changed in the deploy.
+      //
+      // Toggle off without removing the process: set AUTO_DEPLOY_ENABLED=false
+      // in .env (the watcher then idles). Tune with AUTO_DEPLOY_BRANCH /
+      // AUTO_DEPLOY_INTERVAL_MS (see scripts/auto-deploy.mjs header).
+      name: 'omnidesk-auto-deploy',
+      script: 'scripts/auto-deploy.mjs',
+      cwd: __dirname,
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      max_memory_restart: '256M',
+      // A deploy can take a while (install + build + migrate); don't let PM2's
+      // watchdog consider a legitimately busy watcher "unstable". Back off on
+      // repeated early exits instead of hammering.
       min_uptime: 20000,
       restart_delay: 10000,
       exp_backoff_restart_delay: 1000,
