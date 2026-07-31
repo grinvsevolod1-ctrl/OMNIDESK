@@ -124,10 +124,8 @@ interface ChatMessage {
   pending?: PendingConfirmation | null
   /** A high-impact preset awaiting confirmation (rendered as a card). */
   presetConfirm?: ConsolePreset | null
-  /** True while tokens are still streaming into this bubble (no typewriter). */
+  /** True while tokens are still streaming into this bubble. */
   streaming?: boolean
-  /** Assistant bubbles typewriter-reveal on first mount only. */
-  animate?: boolean
 }
 
 /** Quick-access panels shown as a compact row (instant open, no model call). */
@@ -980,7 +978,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 </span>
               )
             ) : (
-              <AssistantText text={message.content} animate={!!message.animate} />
+              <AssistantText text={message.content} />
             )
           ) : (
             <p className="whitespace-pre-wrap text-pretty leading-relaxed">
@@ -1014,28 +1012,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 }
 
 /** Typewriter reveal for assistant text (first mount only). */
-function AssistantText({
-  text,
-  animate,
-}: {
-  text: string
-  animate: boolean
-}) {
-  const [shown, setShown] = useState(animate ? '' : text)
-  useEffect(() => {
-    // Assistant message text is fixed after mount; only the animated branch
-    // needs to progressively reveal it.
-    if (!animate) return
-    let i = 0
-    const id = window.setInterval(() => {
-      i += 2
-      setShown(text.slice(0, i))
-      if (i >= text.length) window.clearInterval(id)
-    }, 12)
-    return () => window.clearInterval(id)
-  }, [text, animate])
+function AssistantText({ text }: { text: string }) {
+  // Settled (non-streaming) assistant reply. Progressive reveal is already
+  // handled by the live token stream above, so this just renders the final text.
   return (
-    <p className="whitespace-pre-wrap text-pretty leading-relaxed">{shown}</p>
+    <p className="whitespace-pre-wrap text-pretty leading-relaxed">{text}</p>
   )
 }
 
@@ -1225,12 +1206,8 @@ function PanelBody({
   }
 }
 
-/* ------------------------------ Empty hero ------------------------------ */
+/* -------------------------- Pending confirmation ------------------------ */
 
-/**
- * Proactive health check surfaced on the hero: a calm "all good" banner, or a
- * prioritised list of issues each with a one-click fix prompt.
- */
 /**
  * Confirm/Cancel card for a guarded high-impact action the assistant proposed
  * but won't run until approved (disable AI, max aggressiveness).

@@ -1,6 +1,5 @@
 import 'server-only'
 import { query } from '../db'
-import type { AiWeeklyStats } from '../ai-console/assistant'
 
 /**
  * AI activity log — the panel-side writer/reader for the `ai_logs` table (see
@@ -176,54 +175,6 @@ export async function listAiLogs(opts?: {
   } catch {
     // Table may not be migrated yet — behave as an empty log.
     return []
-  }
-}
-
-/**
- * A 7-day activity snapshot of the AI manager, computed from the AI-scoped log
- * only (the secret simulator's sources are excluded, exactly like listAiLogs).
- * Best-effort: returns zeros if the table isn't migrated or is empty, so the
- * weekly summary card never breaks the console.
- */
-export async function getAiWeeklyStats(): Promise<AiWeeklyStats> {
-  const empty: AiWeeklyStats = {
-    repliesSent: 0,
-    handoffs: 0,
-    escalations: 0,
-    errors: 0,
-    activeDialogs: 0,
-  }
-  try {
-    const rows = await query<{
-      replies: number
-      handoffs: number
-      escalations: number
-      errors: number
-      dialogs: number
-    }>(
-      `SELECT
-         COUNT(*) FILTER (WHERE event = 'reply.sent')::int              AS replies,
-         COUNT(*) FILTER (WHERE event = 'promoted')::int               AS handoffs,
-         COUNT(*) FILTER (WHERE event = 'escalated')::int              AS escalations,
-         COUNT(*) FILTER (WHERE level = 'error')::int                  AS errors,
-         COUNT(DISTINCT conversation_id)
-           FILTER (WHERE event = 'reply.sent')::int                    AS dialogs
-       FROM ai_logs
-      WHERE created_at >= now() - interval '7 days'
-        AND NOT (source = ANY($1::text[]))`,
-      [SIM_SOURCES],
-    )
-    const r = rows[0]
-    if (!r) return empty
-    return {
-      repliesSent: Number(r.replies ?? 0),
-      handoffs: Number(r.handoffs ?? 0),
-      escalations: Number(r.escalations ?? 0),
-      errors: Number(r.errors ?? 0),
-      activeDialogs: Number(r.dialogs ?? 0),
-    }
-  } catch {
-    return empty
   }
 }
 

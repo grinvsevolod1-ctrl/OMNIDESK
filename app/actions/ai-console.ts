@@ -5,16 +5,11 @@ import { requireAdmin } from '@/lib/auth'
 import {
   getAiAssistSettings,
   updateAiAssistSettings,
-  listKnowledge,
-  countLessons,
 } from '@/lib/data/ai-assist'
-import { listAiLogs, getAiWeeklyStats } from '@/lib/data/ai-log'
 import {
   AGGRESSIVENESS_LABELS,
   type AssistantResult,
   type AssistantTurn,
-  type AiWeeklyStats,
-  type ConsoleBriefing,
   type ExecutedAction,
   type PendingConfirmation,
   type SettingsRevert,
@@ -26,8 +21,8 @@ import { AI_PATH, runAssistantOnce } from '@/lib/ai-console/run-assistant'
  * Server actions for the conversational co-pilot of the AI SALES MANAGER admin
  * panel. The heavy agent orchestration lives in `lib/ai-console/run-assistant`
  * (shared with the streaming route); this file exposes the thin, admin-guarded
- * server-action surface plus the proactive briefing, weekly summary, presets,
- * confirmation of guarded actions and one-click undo.
+ * server-action surface: the non-streaming fallback turn, presets, confirmation
+ * of guarded actions and one-click undo.
  *
  * Hard guarantees preserved from the original design:
  *   1. Scope lock — zero knowledge of the secret client simulator.
@@ -44,81 +39,6 @@ export async function aiAssistantAction(
 ): Promise<AssistantResult> {
   await requireAdmin()
   return runAssistantOnce(history)
-}
-
-/**
- * Proactive health check shown the moment the console opens. Deterministic —
- * reads live data and surfaces what needs attention with one-click fixes. Never
- * calls the model, so it works even without a gateway. Strictly AI-manager
- * scope; log reads are hard-scoped to 'ai' (the secret simulator can't leak in).
- */
-export async function aiConsoleBriefingAction(): Promise<ConsoleBriefing> {
-  await requireAdmin()
-
-  const [settings, knowledge, lessonCount, errorLogs] = await Promise.all([
-    getAiAssistSettings(),
-    listKnowledge(),
-    countLessons(),
-    listAiLogs({ scope: 'ai', level: 'error', limit: 200 }),
-  ])
-
-  // Errors within the last 24h — the window an admin actually cares about.
-  const dayAgo = Date.now() - 24 * 60 * 60 * 1000
-  const errorsToday = errorLogs.filter(
-    (l) => new Date(l.createdAt).getTime() >= dayAgo,
-  ).length
-
-  const issues: ConsoleBriefing['issues'] = []
-
-  if (!settings.enabled) {
-    issues.push({
-      severity: 'warn',
-      text: 'ИИ-менеджер выключен — клиенты сейчас не получают автоответы.',
-      action: 'Включи ИИ-менеджера',
-    })
-  }
-  if (errorsToday > 0) {
-    issues.push({
-      severity: 'warn',
-      text: `За сутки ${errorsToday} ${pluralErrors(errorsToday)} ИИ — стоит разобраться.`,
-      action: 'Что с ошибками ИИ?',
-    })
-  }
-  if (knowledge.length === 0) {
-    issues.push({
-      severity: 'info',
-      text: 'База знаний пустая — ИИ отвечает без фактов о вашей компании.',
-      action: 'Добавь факт про доставку и оплату',
-    })
-  }
-  if (lessonCount === 0) {
-    issues.push({
-      severity: 'info',
-      text: 'Пока нет ни одного урока — ИИ не дообучен на ваших диалогах.',
-      action: 'Открой обучение ассистента',
-    })
-  }
-
-  const healthy = issues.length === 0
-  const aggr =
-    AGGRESSIVENESS_LABELS[settings.aggressiveness]?.toLowerCase() ??
-    'сбалансированный'
-  const headline = healthy
-    ? `Всё работает штатно: ИИ включён, дожим ${aggr}. Чем помочь?`
-    : issues.length === 1
-      ? 'Одна вещь требует внимания:'
-      : `${issues.length} ${pluralPoints(issues.length)} требуют внимания:`
-
-  return { headline, issues, healthy }
-}
-
-/**
- * A 7-day activity snapshot of the AI manager for the weekly summary card.
- * Deterministic, AI-scoped, best-effort (returns zeros if the log is empty).
- */
-export async function aiWeeklySummaryAction(): Promise<AiWeeklyStats> {
-  await requireAdmin()
-  return getAiWeeklyStats()
 }
 
 /**
@@ -226,22 +146,4 @@ export async function aiRevertSettingsAction(
   await updateAiAssistSettings(patch)
   revalidatePath(AI_PATH)
   return { ok: true }
-}
-
-/** Russian plural for the error counter. */
-function pluralErrors(n: number): string {
-  const m10 = n % 10
-  const m100 = n % 100
-  if (m10 === 1 && m100 !== 11) return 'ошибка'
-  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'ошибки'
-  return 'ошибок'
-}
-
-/** Russian plural for the "N points need attention" headline. */
-function pluralPoints(n: number): string {
-  const m10 = n % 10
-  const m100 = n % 100
-  if (m10 === 1 && m100 !== 11) return 'пункт'
-  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'пункта'
-  return 'пунктов'
 }

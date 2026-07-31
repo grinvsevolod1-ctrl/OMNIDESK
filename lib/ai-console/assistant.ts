@@ -96,50 +96,6 @@ export interface PendingConfirmation {
   detail: string
 }
 
-/**
- * A 7-day activity snapshot of the AI manager, shown as a weekly summary card.
- * Computed from the AI-scoped log only (the secret simulator never leaks in).
- */
-export interface AiWeeklyStats {
-  /** Replies the AI sent to clients. */
-  repliesSent: number
-  /** Leads the AI handed to a human (client became ready). */
-  handoffs: number
-  /** Times the AI escalated an angry/stuck dialog to a human. */
-  escalations: number
-  /** Errors logged. */
-  errors: number
-  /** Distinct dialogs the AI actively answered in. */
-  activeDialogs: number
-}
-
-/**
- * One thing the proactive briefing wants the admin to notice, with a ready-made
- * prompt that fixes/explores it in one click.
- */
-export interface BriefingIssue {
-  /** Drives colour + icon: warn = needs attention, info = nice-to-improve. */
-  severity: 'warn' | 'info'
-  /** Human sentence describing the situation. */
-  text: string
-  /** One-click prompt sent to the assistant to act on it. */
-  action: string
-}
-
-/**
- * A deterministic health check shown the moment the console opens — so the admin
- * immediately sees the AI manager's real state and what needs attention, without
- * asking. Computed from live data; never calls the model, so it always works.
- */
-export interface ConsoleBriefing {
-  /** One-line summary headline. */
-  headline: string
-  /** Zero or more things worth acting on, most important first. */
-  issues: BriefingIssue[]
-  /** True when nothing needs attention (drives the calm "all good" styling). */
-  healthy: boolean
-}
-
 /** Max turns of history we send to the model (keeps latency + cost bounded). */
 export const ASSISTANT_HISTORY_LIMIT = 12
 
