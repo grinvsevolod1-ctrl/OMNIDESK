@@ -108,6 +108,46 @@ export interface SimBackstory {
   detail: string
 }
 
+/**
+ * Per-persona stable speech fingerprint — rolled ONCE at spawn, persisted in
+ * sim_threads.persona, used in every subsequent generate call. Gives the model a
+ * concrete character "voice" that stays consistent across all turns of this one
+ * dialogue so the operator never reads two messages and thinks "same bot".
+ *
+ * All fields are optional so legacy persona rows without a fingerprint still work.
+ */
+export interface SpeechFingerprint {
+  /**
+   * This persona's personal connector word or phrase — injected into every
+   * prompt so they use it instead of the generic AI fill-words.
+   * Example: «короче», «ну вот», «слушай», «типа», «я к чему».
+   */
+  connector?: string
+  /**
+   * One persistent grammar or punctuation quirk that makes them unique.
+   * Example: «никогда не ставит вопросительный знак», «пишет «и» вместо «и »
+   * перед согласной», «раздельно пишет "не" почти всегда».
+   */
+  grammarQuirk?: string
+  /**
+   * One personal typing habit, e.g. «всегда пишет "чё" вместо "что"»,
+   * «сокращает "спасибо" → "спс"», «пишет числа словами».
+   */
+  typingHabit?: string
+  /**
+   * Characteristic sentence-ending pattern, e.g. «заканчивает фразы многоточием»,
+   * «ставит два восклицательных знака», «обрывает без знака»,
+   * «иногда добавляет "ну"».
+   */
+  sentenceEnding?: string
+  /**
+   * One topic or personal detail they tend to circle back to,
+   * e.g. «постоянно упоминает что двое детей», «вспоминает кредит».
+   * Injected as a light nudge, not a mandate.
+   */
+  personalDetail?: string
+}
+
 /** A fully-formed fake client. */
 export interface SimPersona {
   name: string
@@ -147,6 +187,12 @@ export interface SimPersona {
    * of looping. Rolled once at spawn. Optional for legacy rows (no arc then).
    */
   goal?: string
+  /**
+   * Stable speech fingerprint — rolled once at spawn so every message from this
+   * persona carries the same consistent "voice" (connector word, grammar quirk,
+   * typing habit, sentence ending, recurring detail). Optional for legacy rows.
+   */
+  speechFingerprint?: SpeechFingerprint
 }
 
 /**

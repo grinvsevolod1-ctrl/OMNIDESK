@@ -221,7 +221,7 @@ async function tick(): Promise<void> {
         level: 'info',
         source: 'sim',
         event: 'reaped',
-        message: `Закрыто ${reaped} диалогов, где кли��нт перестал отвечать (�� ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
+        message: `Закрыто ${reaped} диалогов, где кл����нт перестал отвечать (�� ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
       })
     }
 
@@ -413,35 +413,80 @@ async function maybeSpawn(settings: SimSettings): Promise<void> {
 /* --------------------- reacting to manager replies ---------------------- */
 
 /**
+ * Estimate the cognitive "weight" of a manager message — how much thinking
+ * the client plausibly needs before typing a reply. Returns a multiplier
+ * (1.0 = baseline, higher = needs more time):
+ *   - Long message with multiple sentences → harder to process
+ *   - Contains a question → person actually pauses to think of an answer
+ *   - Contains numbers/money → they mentally calculate
+ *   - Very short (≤10 chars) → trivially easy, reply almost instantly
+ */
+function messageComplexity(text: string): number {
+  const len = text.trim().length
+  if (len <= 10) return 0.3 // ultra-short: "ок", "да", "пиши"
+  if (len <= 35) return 0.7 // one short phrase
+  let mult = 1.0
+  // Every extra 60 chars bumps by 0.15 (long texts need more reading time)
+  mult += Math.min(0.9, Math.floor((len - 36) / 60) * 0.15)
+  // Questions demand an answer — person actually thinks
+  if (/[?？]/.test(text) || /\bкак\b|\bкогда\b|\bсколько\b|\bпочему\b|\bзачем\b|\bкуда\b/i.test(text)) {
+    mult += 0.4
+  }
+  // Numbers / money → mental calculation pause
+  if (/\d{3,}|руб|тыс|₽|зп|оклад|ставк|заработ/i.test(text)) {
+    mult += 0.3
+  }
+  return Math.min(3.5, mult)
+}
+
+/**
  * For every thread where the manager has posted a reply we haven't reacted to,
  * schedule a human-like delayed reaction. We DON'T reply instantly — we set
  * next_run_at a few seconds/minutes out so it reads as a real person typing
  * back later.
+ *
+ * Timing model:
+ *  • 20% of the time the persona is in an "online session" — they glanced at
+ *    the phone and will reply in 8–40 s, scaled by message complexity.
+ *  • 8% of the time they're genuinely busy and won't answer for 15–60 min.
+ *  • Otherwise: base 25–180 s, scaled up by message complexity so a long
+ *    multi-question message takes naturally longer than a one-word "ок".
+ *  • Night hours (23:00–08:00) stretch all delays 2–5×.
+ *
+ * The result is a realistic skewed distribution rather than a flat uniform
+ * spread, which is the most obvious statistical tell of a bot farm.
  */
 async function scheduleManagerReactions(): Promise<void> {
-  // Autonomous reply pacing: a person typically answers within ~20s–4min, but
-  // sometimes near-instantly and sometimes not for a long while. These bounds
-  // are fixed (not operator-tunable) so behaviour always reads as human.
-  const replyMinSec = 20
-  const replyMaxSec = 240
   const pending = await findThreadsAwaitingReaction(40)
   for (const p of pending) {
+    const complexity = messageComplexity(p.managerBody ?? '')
     let delay: number
-    // Sometimes a real person just... doesn't answer for a long while.
-    if (chance(0.12)) {
-      delay = randInt(replyMaxSec * 3, replyMaxSec * 8)
-    } else if (chance(0.08)) {
-      // "Glanced at the phone" — a rare near-instant reply.
-      delay = randInt(3, 12)
+
+    const roll = Math.random()
+    if (roll < 0.20) {
+      // "Online session" — phone in hand, replies fast but not robotically instant.
+      // Scale slightly by complexity: trivial msg = 8s, long msg = 40s.
+      const base = Math.round(8 + complexity * 10)
+      delay = randInt(base, base + 20)
+    } else if (roll < 0.28) {
+      // Genuinely busy — won't look at phone for a while.
+      delay = randInt(900, 3600)
+    } else if (roll < 0.35) {
+      // Long stretch — saw the notification but in a meeting/driving/working.
+      delay = randInt(3600, 14400)
     } else {
-      delay = randInt(replyMinSec, replyMaxSec)
+      // Normal reply: base window scaled by message complexity.
+      const base = Math.round(25 * complexity)
+      const top = Math.round(180 * complexity)
+      delay = randInt(Math.max(15, base), Math.min(600, top))
     }
-    // People are slower at night: stretch delays during 23:00–08:00 (server
-    // local time) so the daily rhythm isn't perfectly flat around the clock.
+
+    // Night penalty: people are slower to reply at night.
     const hour = new Date().getHours()
     if (hour >= 23 || hour < 8) {
-      delay = Math.round(delay * (2 + Math.random() * 4))
+      delay = Math.round(delay * (2 + Math.random() * 3))
     }
+
     await scheduleReaction(p.thread.conversationId, p.managerMessageId, delay)
   }
 }
@@ -652,18 +697,64 @@ async function runThreadTurn(thread: SimThreadRow, settings?: SimSettings): Prom
   const plan = rollTurnPlan(rolled, thread.turns, wasDormant)
 
   // --- Silent transitions (no message posted) --------------------------------
+  // Micro-farewell: ~35% of the time a person sends a brief heads-up before
+  // going quiet ("щас занят", "отойду ненадолго") so the manager doesn't see
+  // a hard cut. This is one of the clearest human realism signals.
+  const IGNORE_FAREWELLS = [
+    'щас занят, чуть позже',
+    'отойду на минуту',
+    'погоди',
+    'потом отвечу',
+    'занят щас',
+    'одну секунду',
+    'позже напишу',
+    'не могу сейчас',
+    'ага, попозже',
+    'занят, напомни',
+    'буду чуть позже',
+    'сейчас не могу говорить',
+  ]
+  const VANISH_FAREWELLS = [
+    'ладно разберусь, если что напишу',
+    'окей подумаю',
+    'ок посмотрю потом',
+    'ладно ладно, потом погляжу',
+    'ок, позже вернусь к этому',
+    'подумаю, напишу если что',
+    'займусь, потом отвечу',
+    'ага, завтра свяжусь если что',
+    'хорошо, позже напишу',
+    'ладно, разберёмся',
+    'подумать надо, потом',
+    'ок отойду, потом',
+  ]
+
   if (plan.kind === 'ignore') {
-    // Brief sulk — resurface within minutes.
+    // ~35% chance of sending a short "brb" line before going quiet.
+    if (chance(0.35)) {
+      const farewell = pick(IGNORE_FAREWELLS)
+      await insertInboundMessage(conversationId, persona.name, farewell)
+      await bumpRepliesTotal()
+      void triggerManagerReply(conversationId, farewell)
+    }
     await updateThread(conversationId, {
       state: 'ignoring',
+      turns: thread.turns + (chance(0.35) ? 1 : 0),
       nextRunAt: isoIn(randInt(180, 1200)),
     })
     return
   }
   if (plan.kind === 'vanish') {
-    // Drop off for a day+ then (usually) come back — a scheduled comeback.
+    // ~40% chance of a soft close-off message before the long disappearance.
+    if (chance(0.40)) {
+      const farewell = pick(VANISH_FAREWELLS)
+      await insertInboundMessage(conversationId, persona.name, farewell)
+      await bumpRepliesTotal()
+      void triggerManagerReply(conversationId, farewell)
+    }
     await updateThread(conversationId, {
       state: 'vanished',
+      turns: thread.turns + (chance(0.40) ? 1 : 0),
       nextRunAt: isoIn(randInt(20 * 3600, 72 * 3600)),
     })
     void logAi({
@@ -808,7 +899,7 @@ export function rollBehavior(
 
   // Temperament nudges.
   if (/наглый|дерзкий|борзый|вспыльчивый|нервный/.test(temper)) weights.angry += 4
-  if (/подозрительн|ост��рожн/.test(temper)) weights.dismissive += 3
+  if (/под��зрительн|ост��рожн/.test(temper)) weights.dismissive += 3
   if (/тупова|простоват/.test(temper)) weights.confused += 4
   if (/жадн|делов/.test(temper)) weights.curious += 4
   if (/спокойн|дружелюб|уставш/.test(temper)) weights.curious += 2

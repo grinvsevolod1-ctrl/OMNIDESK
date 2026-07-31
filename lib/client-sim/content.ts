@@ -3,11 +3,13 @@ import type {
   SimGender,
   SimPersona,
   SimPersonaConfig,
+  SpeechFingerprint,
   SimStyle,
   SimTone,
 } from './types'
 
 import {
+  AI_CLICHE_BLACKLIST,
   ANGRY,
   ARCHETYPES,
   CONFUSED,
@@ -18,6 +20,11 @@ import {
   EMOJI_PICTURES,
   FEMALE_FIRST,
   FILLERS,
+  FP_CONNECTORS,
+  FP_GRAMMAR_QUIRKS,
+  FP_PERSONAL_DETAILS,
+  FP_SENTENCE_ENDINGS,
+  FP_TYPING_HABITS,
   GOALS,
   JOB_HOOKS,
   LIFE_DETAILS,
@@ -299,8 +306,36 @@ export function makePersona(
       return Array.from(set)
     })(),
     goal: pick(goalPool),
+    speechFingerprint: rollSpeechFingerprint(),
   }
 }
+
+/* ========================================================================= */
+/*  Speech fingerprint                                                       */
+/*  Rolled once at spawn — gives every "person" a stable unique voice that   */
+/*  the model stays consistent with across all turns. Optional dimensions:   */
+/*  connector, grammar quirk, typing habit, sentence-ending, personal detail */
+/* ========================================================================= */
+
+/**
+ * Roll a fresh speech fingerprint. Every pool item is picked independently
+ * so the combination space is enormous (25×15×16×10×12 = ~720k combos) and
+ * two personas almost never land on the same voice configuration.
+ */
+export function rollSpeechFingerprint(): SpeechFingerprint {
+  return {
+    connector: pick(FP_CONNECTORS),
+    grammarQuirk: pick(FP_GRAMMAR_QUIRKS),
+    typingHabit: pick(FP_TYPING_HABITS),
+    sentenceEnding: pick(FP_SENTENCE_ENDINGS),
+    // Personal detail is only added ~70% of the time — some people don't
+    // volunteer life details at all, so not every persona mentions one.
+    personalDetail: chance(0.7) ? pick(FP_PERSONAL_DETAILS) : undefined,
+  }
+}
+
+/** Re-export so callers never need to dig into content/data.ts directly. */
+export { AI_CLICHE_BLACKLIST }
 
 /* ========================================================================= */
 /*  Human-noise style mangling                                               */
