@@ -9,17 +9,13 @@ import {
 } from 'react'
 import dynamic from 'next/dynamic'
 import {
-  AlertTriangle,
   ArrowUp,
-  BarChart3,
   BookOpen,
   Check,
   Copy,
   Flame,
-  Gauge,
   GraduationCap,
   Highlighter,
-  Lightbulb,
   Loader2,
   MessagesSquare,
   Mic,
@@ -28,7 +24,6 @@ import {
   ScrollText,
   Settings2,
   ShieldAlert,
-  ShieldCheck,
   Sparkles,
   Square,
   Undo2,
@@ -42,25 +37,17 @@ import type { AiAssistLesson, AiAssistSettings } from '@/lib/data/ai-assist'
 import { INTENT_BY_ID, type ConsoleIntent } from '@/lib/ai-console/intents'
 import {
   AGGRESSIVENESS_LABELS,
-  type AiWeeklyStats,
   type AssistantResult,
   type AssistantTurn,
-  type ConsoleBriefing,
   type ExecutedAction,
   type PendingConfirmation,
 } from '@/lib/ai-console/assistant'
-import {
-  CONSOLE_PRESETS,
-  presetSummary,
-  type ConsolePreset,
-} from '@/lib/ai-console/presets'
+import { presetSummary, type ConsolePreset } from '@/lib/ai-console/presets'
 import {
   aiApplyPresetAction,
   aiAssistantAction,
   aiConfirmPendingAction,
-  aiConsoleBriefingAction,
   aiRevertSettingsAction,
-  aiWeeklySummaryAction,
 } from '@/app/actions/ai-console'
 import { aiSettingsAction, aiListLessonsAction } from '@/app/actions/ai-assist'
 import { cn } from '@/lib/utils'
@@ -160,36 +147,6 @@ const QUICK_PANELS: ConsoleIntent[] = [
 ]
 
 /** Example prompts grouped by theme for the empty-state hero. */
-const PROMPT_GROUPS: { title: string; icon: LucideIcon; prompts: string[] }[] = [
-  {
-    title: 'Настройка',
-    icon: Settings2,
-    prompts: [
-      'Включи ИИ-менеджера',
-      'Дожимай клиентов жёстче',
-      'Поменяй тон на дружелюбный',
-    ],
-  },
-  {
-    title: 'Обучение',
-    icon: GraduationCap,
-    prompts: [
-      'Добавь факт: доставка по городу 300 ₽',
-      'Добавь урок, как отвечать на «дорого»',
-      'Что ты знаешь про доставку?',
-    ],
-  },
-  {
-    title: 'Аналитика',
-    icon: ScrollText,
-    prompts: [
-      'Расскажи, как ты сейчас настроен',
-      'Что с ошибками ИИ?',
-      'Объясни, что такое агрессивность продаж',
-    ],
-  },
-]
-
 let idSeq = 0
 const nextId = () => `m${Date.now()}_${idSeq++}`
 
@@ -231,10 +188,6 @@ export function AiConsole({
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [undone, setUndone] = useState<Set<string>>(() => new Set())
-  // Proactive health check shown on the empty-state hero.
-  const [briefing, setBriefing] = useState<ConsoleBriefing | null>(null)
-  // 7-day activity snapshot shown on the empty-state hero.
-  const [weekly, setWeekly] = useState<AiWeeklyStats | null>(null)
 
   // Speak assistant replies aloud (Siri-style). Off by default so text-only
   // admins are never surprised by audio.
@@ -258,28 +211,16 @@ export function AiConsole({
     setActivePanelMsgId(null)
   }, [])
 
-  // Proactive briefing + weekly stats: fetch both in parallel (best-effort).
-  const loadBriefing = useCallback(async () => {
-    const [b, w] = await Promise.allSettled([
-      aiConsoleBriefingAction(),
-      aiWeeklySummaryAction(),
-    ])
-    if (b.status === 'fulfilled') setBriefing(b.value)
-    if (w.status === 'fulfilled') setWeekly(w.value)
-  }, [])
-
   // Keep settings/lessons in sync after the agent mutates them server-side.
   const refreshSettings = useCallback(async () => {
     try {
       const { settings: fresh, lessonCount: count } = await aiSettingsAction()
       setSettings(fresh)
       setLessonCount(count)
-      // A mutation may have resolved (or created) an issue — refresh the check.
-      void loadBriefing()
     } catch {
       /* non-fatal — panels still work with the last known state */
     }
-  }, [loadBriefing])
+  }, [])
 
   const refreshLessons = useCallback(async () => {
     try {
@@ -658,11 +599,10 @@ export function AiConsole({
     }
   }
 
-  // Autofocus the composer + run the proactive health check on mount.
+  // Autofocus the composer on mount.
   useEffect(() => {
     inputRef.current?.focus()
-    void loadBriefing()
-  }, [loadBriefing])
+  }, [])
 
   // Esc closes the open inline panel.
   useEffect(() => {
@@ -688,13 +628,16 @@ export function AiConsole({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Live status strip — instant situational awareness. */}
-      <StatusStrip
-        settings={settings}
-        lessonCount={lessonCount}
-        hasChat={hasChat}
-        onNewChat={newChat}
-      />
+      {/* Status is context, not a landing-screen summary: only show it once a
+          conversation is underway. The empty screen stays a single question. */}
+      {hasChat ? (
+        <StatusStrip
+          settings={settings}
+          lessonCount={lessonCount}
+          hasChat={hasChat}
+          onNewChat={newChat}
+        />
+      ) : null}
 
       {!configured ? (
         <Card className="border-amber-500/40 bg-amber-500/5 p-4 text-sm text-amber-700 dark:text-amber-400">
@@ -760,17 +703,18 @@ export function AiConsole({
           <div ref={bottomRef} />
         </div>
       ) : (
-        <EmptyHero
-          lessonCount={lessonCount}
-          briefing={briefing}
-          weekly={weekly}
-          onPick={send}
-          onApplyPreset={applyPreset}
-        />
+        <EmptyHero />
       )}
 
-      {/* Composer — the one place you talk to the assistant. */}
-      <Card className="sticky bottom-4 z-10 flex flex-col gap-3 p-3 shadow-lg">
+      {/* Composer — the one place you talk to the assistant. It only pins to the
+          bottom once a conversation is going; on the empty screen it sits right
+          under the question as the single focal element. */}
+      <Card
+        className={cn(
+          'z-10 flex flex-col gap-3 p-3 shadow-lg',
+          hasChat && 'sticky bottom-4',
+        )}
+      >
         {voice.listening ? (
           <div className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary duration-300 animate-in fade-in">
             <span className="flex gap-0.5" aria-hidden="true">
@@ -789,7 +733,7 @@ export function AiConsole({
             onKeyDown={onKeyDown}
             rows={2}
             disabled={loading}
-            placeholder="Спросите или скажите, что сделать с ИИ-менеджером. Напр.: «дожимай жёстче», «добавь факт про доставку», «как ты настроен?»"
+            placeholder="Напишите, что сделать с ИИ-менеджером…"
             className="resize-none pr-32"
             aria-label="Сообщение ассистенту ИИ-менеджера"
           />
@@ -857,31 +801,34 @@ export function AiConsole({
           </div>
         </div>
 
-        {/* Quick-access panels — instant open, no model call. */}
-        <div className="flex flex-wrap gap-1.5">
-          {QUICK_PANELS.map((intent) => {
-            const meta = INTENT_BY_ID[intent]
-            const Icon = PANEL_ICON[intent]
-            if (!meta) return null
-            return (
-              <button
-                key={intent}
-                type="button"
-                onClick={() => openPanelDirect(intent)}
-                disabled={loading}
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-                  activePanel === intent
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : 'border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                )}
-              >
-                <Icon className="size-3.5" />
-                {meta.label}
-              </button>
-            )
-          })}
-        </div>
+        {/* Quick-access panels — instant open, no model call. Kept off the empty
+            screen so the landing view is just the question and the input. */}
+        {hasChat ? (
+          <div className="flex flex-wrap gap-1.5">
+            {QUICK_PANELS.map((intent) => {
+              const meta = INTENT_BY_ID[intent]
+              const Icon = PANEL_ICON[intent]
+              if (!meta) return null
+              return (
+                <button
+                  key={intent}
+                  type="button"
+                  onClick={() => openPanelDirect(intent)}
+                  disabled={loading}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                    activePanel === intent
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                  {meta.label}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
       </Card>
     </div>
   )
@@ -1285,138 +1232,6 @@ function PanelBody({
  * Proactive health check surfaced on the hero: a calm "all good" banner, or a
  * prioritised list of issues each with a one-click fix prompt.
  */
-function BriefingCard({
-  briefing,
-  onPick,
-}: {
-  briefing: ConsoleBriefing
-  onPick: (text: string) => void
-}) {
-  if (briefing.healthy) {
-    return (
-      <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2.5 text-sm text-emerald-700 duration-500 animate-in fade-in dark:text-emerald-400">
-        <ShieldCheck className="size-4 shrink-0" />
-        <span className="text-pretty">{briefing.headline}</span>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-muted/40 p-3.5 duration-500 animate-in fade-in">
-      <p className="flex items-center gap-2 text-sm font-medium text-pretty">
-        <AlertTriangle className="size-4 shrink-0 text-amber-500" />
-        {briefing.headline}
-      </p>
-      <ul className="flex flex-col gap-2">
-        {briefing.issues.map((issue, i) => {
-          const Icon = issue.severity === 'warn' ? AlertTriangle : Lightbulb
-          return (
-            <li
-              key={i}
-              className="flex flex-col gap-1.5 rounded-lg border border-border bg-card p-2.5 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <span className="flex items-start gap-2 text-sm text-pretty">
-                <Icon
-                  className={cn(
-                    'mt-0.5 size-4 shrink-0',
-                    issue.severity === 'warn'
-                      ? 'text-amber-500'
-                      : 'text-sky-500',
-                  )}
-                />
-                {issue.text}
-              </span>
-              <Button
-                size="sm"
-                variant={issue.severity === 'warn' ? 'default' : 'secondary'}
-                className="shrink-0 self-start sm:self-auto"
-                onClick={() => onPick(issue.action)}
-              >
-                {issue.action}
-              </Button>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
-
-/** 7-day activity snapshot of the AI manager. */
-function WeeklyCard({ weekly }: { weekly: AiWeeklyStats }) {
-  const items: { label: string; value: number; hint?: boolean }[] = [
-    { label: 'ответов', value: weekly.repliesSent },
-    { label: 'диалогов', value: weekly.activeDialogs },
-    { label: 'передач менеджеру', value: weekly.handoffs },
-    { label: 'эскалаций', value: weekly.escalations },
-    { label: 'ошибок', value: weekly.errors, hint: weekly.errors > 0 },
-  ]
-  const empty = items.every((i) => i.value === 0)
-  return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-muted/40 p-3.5">
-      <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        <BarChart3 className="size-3.5" />
-        ИИ-менеджер за 7 дней
-      </p>
-      {empty ? (
-        <p className="text-sm text-muted-foreground text-pretty">
-          За последнюю неделю ИИ-менеджер ещё не работал с диалогами.
-        </p>
-      ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-          {items.map((i) => (
-            <div
-              key={i.label}
-              className="flex flex-col items-center gap-0.5 rounded-lg border border-border bg-card p-2.5 text-center"
-            >
-              <span
-                className={cn(
-                  'text-xl font-semibold tabular-nums',
-                  i.hint ? 'text-amber-500' : 'text-foreground',
-                )}
-              >
-                {i.value}
-              </span>
-              <span className="text-[11px] leading-tight text-muted-foreground">
-                {i.label}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** One-tap presets that batch several settings into a named mode. */
-function PresetRow({ onApply }: { onApply: (preset: ConsolePreset) => void }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        <Gauge className="size-3.5" />
-        Быстрые режимы
-      </p>
-      <div className="grid gap-2 sm:grid-cols-3">
-        {CONSOLE_PRESETS.map((preset) => (
-          <button
-            key={preset.id}
-            type="button"
-            onClick={() => onApply(preset)}
-            className="flex flex-col gap-1 rounded-lg border border-border p-2.5 text-left transition-colors hover:border-primary/40 hover:bg-muted/60"
-          >
-            <span className="text-sm font-medium text-pretty">
-              {preset.name}
-            </span>
-            <span className="text-xs text-muted-foreground text-pretty">
-              {preset.description}
-            </span>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 /**
  * Confirm/Cancel card for a guarded high-impact action the assistant proposed
  * but won't run until approved (disable AI, max aggressiveness).
@@ -1471,67 +1286,21 @@ function PendingCard({
   )
 }
 
-function EmptyHero({
-  lessonCount,
-  briefing,
-  weekly,
-  onPick,
-  onApplyPreset,
-}: {
-  lessonCount: number
-  briefing: ConsoleBriefing | null
-  weekly: AiWeeklyStats | null
-  onPick: (text: string) => void
-  onApplyPreset: (preset: ConsolePreset) => void
-}) {
+/**
+ * Empty-state landing: intentionally just one big question and nothing else.
+ * Everything situational (status, briefing, presets, panels) is summoned by the
+ * conversation itself — never dumped on the first screen.
+ */
+function EmptyHero() {
   return (
-    <Card className="flex flex-col gap-5 p-6 duration-500 animate-in fade-in">
-      <div className="flex flex-col items-center gap-2 text-center">
-        <span className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-          <Sparkles className="size-6" />
-        </span>
-        <h2 className="text-lg font-semibold text-pretty">
-          Ассистент ИИ-менеджера
-        </h2>
-        <p className="max-w-md text-sm text-muted-foreground text-pretty">
-          Просто скажите, что нужно — я включу и настрою ИИ-менеджера, добавлю
-          факты и уроки, объясню, как всё устроено, или открою нужный раздел.
-          {lessonCount > 0
-            ? ` В обучении уже ${lessonCount} ${pluralLessons(lessonCount)}.`
-            : ''}
-        </p>
-      </div>
-
-      {briefing ? <BriefingCard briefing={briefing} onPick={onPick} /> : null}
-
-      {weekly ? <WeeklyCard weekly={weekly} /> : null}
-
-      <PresetRow onApply={onApplyPreset} />
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        {PROMPT_GROUPS.map((group) => {
-          const GroupIcon = group.icon
-          return (
-            <div key={group.title} className="flex flex-col gap-2">
-              <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                <GroupIcon className="size-3.5" />
-                {group.title}
-              </p>
-              {group.prompts.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => onPick(p)}
-                  className="rounded-lg border border-border p-2.5 text-left text-sm text-pretty transition-colors hover:border-primary/40 hover:bg-muted/60"
-                >
-                  «{p}»
-                </button>
-              ))}
-            </div>
-          )
-        })}
-      </div>
-    </Card>
+    <div className="flex min-h-[42vh] flex-col items-center justify-center gap-6 py-8 text-center duration-500 animate-in fade-in">
+      <span className="flex size-16 items-center justify-center rounded-3xl bg-primary/10 text-primary">
+        <Sparkles className="size-8" />
+      </span>
+      <h2 className="max-w-xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+        Чем помочь с ИИ-менеджером?
+      </h2>
+    </div>
   )
 }
 
