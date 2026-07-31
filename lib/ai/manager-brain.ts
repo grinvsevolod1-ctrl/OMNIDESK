@@ -398,8 +398,8 @@ function resolveAggressiveness(v: number | undefined): number {
 const OBJECTION_FRAMEWORK: string[] = [
   'МЕТОД РАБОТЫ С ВОЗРАЖЕНИЯМИ (применяй в каждом ответе, где клиент сомневается):',
   '1. Услышь и присоединись: коротко покажи, что понял чувство клиента («понимаю», «логичный вопрос»), без спора и без «но» в начале.',
-  '2. Вскрой настоящую причину: за словами «дорого», «подумаю», «не уверен» почти всегда стоит другой страх (риск, недоверие, нет времени, был плохой опыт). Мягким уточняющи�� вопросом достань истинное возражение, прежде чем отвечать.',
-  '3. Переформулируй и сними страх: отвечай на настоящую причину, а ��е на формулировку. Дай конкретный факт/пример/гарантию из сценария и справочной информации, которые закрывают именно этот страх.',
+  '2. Вскрой настоящую причину: за словами «дорого», «подумаю», «не уверен» почти всегда стоит другой страх (риск, недоверие, нет времени, был плохой опыт). Мягким уточняющим вопросом достань истинное возражение, прежде чем отвечать.',
+  '3. Переформулируй и сними страх: отвечай на настоящую причину, а не на формулировку. Дай конкретный факт/пример/гарантию из сценария и справочной информации, которые закрывают именно этот страх.',
   '4. Свяжи с выгодой клиента: покажи, что даёт следующий шаг лично ему (деньги, время, спокойствие, безопасность) — на его языке, его словами из переписки.',
   '5. Верни инициативу: заверши одним лёгким конкретным шагом или вопросом, на который легко ответить «да».',
   'Приёмы (используй уместно, естественно, не как список): «чувствовал-понял-оказалось» (другие тоже так думали, а потом убедились), дробление большого шага на маленький и безопасный, вопрос вместо утверждения, спокойное повторение выгоды под новым углом, лёгкое подведение итога договорённостей.',
@@ -448,8 +448,8 @@ function persuasionDirectives(level: number): string[] {
         ...common,
         'Ты НИКОГДА не соглашаешься с возражением клиента и НИКОГДА не подстраиваешься под него. Если клиента что-то «не устраивает» — это возражение, которое нужно отработать и мягко вернуть его к нашему единственному предложению, а НЕ повод менять условия или соглашаться, что оно ему не подходит.',
         'Мягкое «нет», сомнения, отговорки, «я подумаю», «дорого», «неудобно», молчание — это НЕ отказ, а возражение. Признай эмоцию, сними страх, покажи выгоду именно нашего предложения и снова подтолкни к следующему шагу.',
-        'Не поддакивай в ущерб цели. Можно проявить понимание («понимаю вас»), но сразу же вернуть разговор к нашему предложению и его выгодам. Никогда не говори «да, вам это не подходит», «поищите другое», «согласен, условия так себе».',
-        'Всегда заканчивай сообщение так, чтобы клиенту было легко сдела��ь шаг вперёд: один конкретный вопрос или мягкий призыв.',
+        'Не поддакивай в ущерб цели. Можно проявить понимание («понимаю вас»), но сразу же вернуть разговор к на��ему предложению и его выгодам. Никогда не говори «да, вам это не подходит», «поищите другое», «согласен, условия так себе».',
+        'Всегда заканчивай сообщение так, чтобы клиенту было легко сделать шаг вперёд: один конкретный вопрос или мягкий призыв.',
       ]
   }
 }
@@ -469,7 +469,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     'КАК ПИСАТЬ (чтобы тебя невозможно было принять за ИИ):',
     '- НИКОГДА не используй длинное тире «—» или среднее тире «–». Пиши как в живом чате: короткими фразами, через запятую, точку или обычный дефис «-».',
     '- Не используй маркированные/нумерованные списки, заголовки, markdown, жирный шрифт, звёздочки. Только обычный текст.',
-    '- Не пиши вводных ��тампов ИИ: «Конечно!», «Разумеется!», «Рад помочь», «Отличный вопрос», «Давайте разберёмся», «Как я могу помочь». Начинай сразу по делу.',
+    '- Не пиши вводных штампов ИИ: «Конечно!», «Разумеется!», «Рад помочь», «Отличный вопрос», «Давайте разберёмся», «Как я могу помочь». Начинай сразу по делу.',
     '- Живой разговорный русский: допустимы простые смайлики, короткие предложения, естественные обороты. Без канцелярита и пафоса.',
     '',
     ...persuasionDirectives(resolveAggressiveness(input.aggressiveness)),
@@ -518,7 +518,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
   if (directives.length > 0) {
     parts.push(
       '',
-      'ПРЯМЫЕ УКАЗАНИЯ РУКОВОДИТЕЛЯ (заданы в чате управления, высший приоритет наравне со сценарием — соблюдать неукоснительно, каждое):',
+      'ПРЯМЫЕ УКАЗАНИЯ РУКОВОДИТЕЛЯ (заданы в чате управления, высший приоритет нара��не со сценарием — соблюдать неукоснительно, каждое):',
       ...directives.slice(0, 100).map((d) => `!! ${d}`),
     )
   }
@@ -1409,5 +1409,86 @@ export async function generateSalesScenario(
       err instanceof Error ? err.message : String(err),
     )
     return null
+  }
+}
+
+/** One improvement the AI proposes after studying a lost/handed-off dialog. */
+export interface ProposedLesson {
+  /** The client situation/objection that tripped the AI up. */
+  situation: string
+  /** How the AI SHOULD have answered next time. */
+  corrected: string
+  /** Short reason why this is better. */
+  note: string
+}
+
+/**
+ * Study a batch of REAL dialogs that went badly (handed off or lost) and propose
+ * concrete lessons: for each recurring failure, the client situation and a
+ * better answer. This is how the co-pilot turns real losses into training — the
+ * admin reviews the proposals in chat and decides which to save. Nothing is
+ * persisted here. Returns [] when the gateway is unavailable or nothing useful
+ * was found. Callers MUST only pass non-simulated transcripts (isolation).
+ */
+export async function analyzeDialogsForLessons(
+  transcripts: string[],
+): Promise<ProposedLesson[]> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  const clean = transcripts.map((t) => t.trim()).filter(Boolean).slice(0, 12)
+  if (!key || clean.length === 0) return []
+
+  // Cap each transcript so one long thread can't blow the context budget.
+  const corpus = clean
+    .map((t, i) => `=== Диалог ${i + 1} ===\n${t.slice(0, 2500)}`)
+    .join('\n\n')
+
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты — наставник отдела продаж. Тебе дают реальные диалоги, где ИИ-продавец не довёл клиента (передал человеку или клиент ушёл). ' +
+              'Найди повторяющиеся ошибки и слабые места. Верни СТРОГО JSON без пояснений в форме {"lessons": [{"situation": "...", "corrected": "...", "note": "..."}]}. ' +
+              'situation — реплика/возражение клиента, на котором продавец споткнулся (обобщённо, без личных данных). ' +
+              'corrected — как правильно ответить в следующий раз (живой текст, готовый к отправке). ' +
+              'note — коротко, почему так лучше. Дай 3–8 самых полезных уроков. Не выдумывай того, чего нет в диалогах. Только JSON.',
+          },
+          { role: 'user', content: corpus },
+        ],
+        temperature: 0.4,
+        max_tokens: 1500,
+        response_format: { type: 'json_object' },
+      }),
+    })
+    if (!res.ok) throw new Error(`gateway HTTP ${res.status}`)
+    const data = (await res.json()) as GatewayResponse
+    const raw = data.choices?.[0]?.message?.content ?? ''
+    const parsed = JSON.parse(raw) as { lessons?: unknown }
+    if (!Array.isArray(parsed.lessons)) return []
+    return parsed.lessons
+      .map((l) => {
+        const o = (l ?? {}) as Record<string, unknown>
+        return {
+          situation: typeof o.situation === 'string' ? o.situation.trim() : '',
+          corrected: typeof o.corrected === 'string' ? o.corrected.trim() : '',
+          note: typeof o.note === 'string' ? o.note.trim() : '',
+        }
+      })
+      .filter((l) => l.situation && l.corrected)
+      .slice(0, 8)
+  } catch (err) {
+    console.warn(
+      '[manager-brain] lesson analysis failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return []
   }
 }

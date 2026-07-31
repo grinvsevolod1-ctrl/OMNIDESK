@@ -49,6 +49,7 @@ export interface ExecutedAction {
     | 'knowledge'
     | 'lesson'
     | 'directive'
+    | 'followup'
   /** Short human summary, e.g. «Включил ИИ» or «Агрессивность → Максимум». */
   label: string
   /**
@@ -90,7 +91,7 @@ export interface AssistantResult {
  * admin explicitly confirms it. Executed via aiConfirmPendingAction.
  */
 export interface PendingConfirmation {
-  kind: 'disable' | 'max_aggressiveness'
+  kind: 'disable' | 'max_aggressiveness' | 'enable_followup'
   /** Button/label text, e.g. «Выключить ИИ-менеджера». */
   label: string
   /** One-sentence consequence so the admin knows what they're approving. */

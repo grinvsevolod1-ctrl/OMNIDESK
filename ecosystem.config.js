@@ -17,7 +17,7 @@
 //   definition forever. Always recreate from this file after a code update:
 //     rm -rf .next && pnpm install && pnpm build
 //     pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads \
-//       omnidesk-cron-retry-dead-letters omnidesk-log-reporter
+//       omnidesk-cron-retry-dead-letters omnidesk-cron-followup omnidesk-log-reporter
 //     pm2 start ecosystem.config.js
 //     pm2 save
 //
@@ -137,6 +137,27 @@ module.exports = {
       cwd: __dirname,
       autorestart: false,
       cron_restart: '* * * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
+      // Self-hosted replacement for Vercel Cron: sweeps for silent clients on
+      // AI-led dialogs and sends gentle follow-up nudges (see
+      // /api/cron/followup). Runs every 15 minutes as a scheduled one-shot; the
+      // delay, quiet-hours and per-streak dedup guards live in the DB, and the
+      // whole feature is OFF until an admin enables it via the co-pilot chat, so
+      // frequent runs are safe. Requires CRON_SECRET in the shared .env.
+      //
+      // NOTE: if you update an already-running deploy, remember to include this
+      // app in the `pm2 delete ...` line (see the header) before re-starting
+      // from this file, otherwise PM2 keeps the old process list.
+      name: 'omnidesk-cron-followup',
+      script: 'scripts/cron-followup.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '*/15 * * * *',
       env: {
         ...rootEnv,
         NODE_ENV: 'production',

@@ -6,6 +6,7 @@ import {
   getAiAssistSettings,
   updateAiAssistSettings,
 } from '@/lib/data/ai-assist'
+import { updateFollowupSettings } from '@/lib/data/ai-followup'
 import {
   AGGRESSIVENESS_LABELS,
   type AssistantResult,
@@ -113,6 +114,17 @@ export async function aiConfirmPendingAction(
         kind: 'aggressiveness',
         label: `Агрессивность → ${AGGRESSIVENESS_LABELS[3]}`,
         revert: { aggressiveness: baseline.aggressiveness },
+      },
+    }
+  }
+  if (pending.kind === 'enable_followup') {
+    await updateFollowupSettings({ enabled: true })
+    revalidatePath(AI_PATH)
+    return {
+      ok: true,
+      action: {
+        kind: 'followup',
+        label: 'Включил авто-дожим (follow-up)',
       },
     }
   }
