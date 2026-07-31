@@ -1,6 +1,5 @@
 import type { ChannelType } from '@/lib/types'
 import type {
-  SimBackstory,
   SimGender,
   SimPersona,
   SimPersonaConfig,
@@ -111,40 +110,6 @@ function randomNick(): string {
 /*  every time and never sound copy-pasted.                                  */
 /* ========================================================================= */
 
-
-function makeBackstory(): SimBackstory {
-  return {
-    occupation: pick(OCCUPATIONS),
-    motivation: pick(MOTIVATIONS),
-    region: pick(REGIONS),
-    detail: pick(LIFE_DETAILS),
-  }
-}
-
-/** Roll 0–3 distinct verbal tics for a persona. */
-function rollQuirks(): string[] {
-  const n = randInt(0, 3)
-  if (n === 0) return []
-  return shuffle(QUIRKS_POOL).slice(0, n)
-}
-
-/** Roll 2–3 free-form character traits (drawn from TEMPERS, deduped). */
-function rollTraits(seed: string): string[] {
-  const n = randInt(2, 3)
-  const set = new Set<string>([seed])
-  while (set.size < n + 1) set.add(pick(TEMPERS))
-  return Array.from(set)
-}
-
-/**
- * The private agenda each simulated client carries into the chat. This is what
- * turns a reactive chatter into a scenario with an ARC: the client is trying to
- * REACH this outcome, so across the dialogue they push forward (probe → weigh →
- * decide) instead of endlessly circling. Rolled once at spawn.
- */
-function rollGoal(): string {
-  return pick(GOALS)
-}
 
 /**
  * Lock this persona into ONE laugh/emoji register so it stays consistent across

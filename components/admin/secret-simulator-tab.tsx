@@ -11,7 +11,6 @@ import {
   FilePen,
   FlaskConical,
   Gauge,
-  GraduationCap,
   Inbox,
   LayoutDashboard,
   Loader2,
@@ -48,13 +47,6 @@ const SecretSimulatorCampaign = dynamic(
     ),
   { ssr: false, loading: simLoading },
 )
-const SecretSimulatorLearn = dynamic(
-  () =>
-    import('@/components/admin/secret-simulator-learn').then(
-      (m) => m.SecretSimulatorLearn,
-    ),
-  { ssr: false, loading: simLoading },
-)
 const SecretSimulatorContent = dynamic(
   () =>
     import('@/components/admin/secret-simulator-content').then(
@@ -73,13 +65,6 @@ const SecretSimulatorTest = dynamic(
   () =>
     import('@/components/admin/secret-simulator-test').then(
       (m) => m.SecretSimulatorTest,
-    ),
-  { ssr: false, loading: simLoading },
-)
-const SecretSimulatorTrain = dynamic(
-  () =>
-    import('@/components/admin/secret-simulator-train').then(
-      (m) => m.SecretSimulatorTrain,
     ),
   { ssr: false, loading: simLoading },
 )
@@ -613,12 +598,9 @@ export function SecretSimulatorTab({ channels }: { channels: Channel[] }) {
           )}
         </TabsContent>
 
-        {/* ---- Train ---- */}
-        <TabsContent value="learn" className="mt-4">
-          <div className="flex flex-col gap-4">
-            <SecretSimulatorLearn />
-            <SecretSimulatorTrain />
-          </div>
+        {/* ---- Content pools ---- */}
+        <TabsContent value="content" className="mt-4">
+          <SecretSimulatorContent />
         </TabsContent>
 
         {/* ---- Adopt / continue real dialogues ---- */}
