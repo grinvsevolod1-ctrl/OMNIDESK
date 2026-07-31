@@ -9,6 +9,7 @@ import {
 } from 'react'
 import dynamic from 'next/dynamic'
 import {
+  AlertTriangle,
   ArrowUp,
   BookOpen,
   Check,
@@ -16,6 +17,7 @@ import {
   Flame,
   GraduationCap,
   Highlighter,
+  Lightbulb,
   Loader2,
   MessagesSquare,
   Mic,
@@ -23,6 +25,7 @@ import {
   Power,
   ScrollText,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Square,
   Undo2,
@@ -38,10 +41,12 @@ import {
   AGGRESSIVENESS_LABELS,
   type AssistantResult,
   type AssistantTurn,
+  type ConsoleBriefing,
   type ExecutedAction,
 } from '@/lib/ai-console/assistant'
 import {
   aiAssistantAction,
+  aiConsoleBriefingAction,
   aiRevertSettingsAction,
 } from '@/app/actions/ai-console'
 import { aiSettingsAction, aiListLessonsAction } from '@/app/actions/ai-assist'
@@ -207,6 +212,8 @@ export function AiConsole({
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [undone, setUndone] = useState<Set<string>>(() => new Set())
+  // Proactive health check shown on the empty-state hero.
+  const [briefing, setBriefing] = useState<ConsoleBriefing | null>(null)
 
   // Speak assistant replies aloud (Siri-style). Off by default so text-only
   // admins are never surprised by audio.
@@ -228,16 +235,27 @@ export function AiConsole({
     setActivePanelMsgId(null)
   }, [])
 
+  // Proactive briefing: fetch the live health check (best-effort, non-blocking).
+  const loadBriefing = useCallback(async () => {
+    try {
+      setBriefing(await aiConsoleBriefingAction())
+    } catch {
+      /* non-fatal — the hero still shows example prompts */
+    }
+  }, [])
+
   // Keep settings/lessons in sync after the agent mutates them server-side.
   const refreshSettings = useCallback(async () => {
     try {
       const { settings: fresh, lessonCount: count } = await aiSettingsAction()
       setSettings(fresh)
       setLessonCount(count)
+      // A mutation may have resolved (or created) an issue — refresh the check.
+      void loadBriefing()
     } catch {
       /* non-fatal — panels still work with the last known state */
     }
-  }, [])
+  }, [loadBriefing])
 
   const refreshLessons = useCallback(async () => {
     try {
@@ -405,10 +423,11 @@ export function AiConsole({
     }
   }
 
-  // Autofocus the composer on mount.
+  // Autofocus the composer + run the proactive health check on mount.
   useEffect(() => {
     inputRef.current?.focus()
-  }, [])
+    void loadBriefing()
+  }, [loadBriefing])
 
   // Esc closes the open inline panel.
   useEffect(() => {
@@ -487,7 +506,11 @@ export function AiConsole({
           <div ref={bottomRef} />
         </div>
       ) : (
-        <EmptyHero lessonCount={lessonCount} onPick={send} />
+        <EmptyHero
+          lessonCount={lessonCount}
+          briefing={briefing}
+          onPick={send}
+        />
       )}
 
       {/* Composer — the one place you talk to the assistant. */}
@@ -1001,11 +1024,74 @@ function PanelBody({
 
 /* ------------------------------ Empty hero ------------------------------ */
 
+/**
+ * Proactive health check surfaced on the hero: a calm "all good" banner, or a
+ * prioritised list of issues each with a one-click fix prompt.
+ */
+function BriefingCard({
+  briefing,
+  onPick,
+}: {
+  briefing: ConsoleBriefing
+  onPick: (text: string) => void
+}) {
+  if (briefing.healthy) {
+    return (
+      <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2.5 text-sm text-emerald-700 duration-500 animate-in fade-in dark:text-emerald-400">
+        <ShieldCheck className="size-4 shrink-0" />
+        <span className="text-pretty">{briefing.headline}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-muted/40 p-3.5 duration-500 animate-in fade-in">
+      <p className="flex items-center gap-2 text-sm font-medium text-pretty">
+        <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+        {briefing.headline}
+      </p>
+      <ul className="flex flex-col gap-2">
+        {briefing.issues.map((issue, i) => {
+          const Icon = issue.severity === 'warn' ? AlertTriangle : Lightbulb
+          return (
+            <li
+              key={i}
+              className="flex flex-col gap-1.5 rounded-lg border border-border bg-card p-2.5 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <span className="flex items-start gap-2 text-sm text-pretty">
+                <Icon
+                  className={cn(
+                    'mt-0.5 size-4 shrink-0',
+                    issue.severity === 'warn'
+                      ? 'text-amber-500'
+                      : 'text-sky-500',
+                  )}
+                />
+                {issue.text}
+              </span>
+              <Button
+                size="sm"
+                variant={issue.severity === 'warn' ? 'default' : 'secondary'}
+                className="shrink-0 self-start sm:self-auto"
+                onClick={() => onPick(issue.action)}
+              >
+                {issue.action}
+              </Button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
 function EmptyHero({
   lessonCount,
+  briefing,
   onPick,
 }: {
   lessonCount: number
+  briefing: ConsoleBriefing | null
   onPick: (text: string) => void
 }) {
   return (
@@ -1025,6 +1111,8 @@ function EmptyHero({
             : ''}
         </p>
       </div>
+
+      {briefing ? <BriefingCard briefing={briefing} onPick={onPick} /> : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
         {PROMPT_GROUPS.map((group) => {
