@@ -111,14 +111,16 @@ function runDeploy() {
     timeout: cfg.deployTimeoutMs,
   })
   if (res.status === 0) {
+    // Exit 0 covers both "deployed" and "another deploy held the lock, skipped"
+    // (deploy.sh exits 0 on lock contention). Either way we're not behind for a
+    // bad reason; if we skipped, the next tick still sees local != remote and
+    // retries. A non-zero status below is therefore a genuine deploy failure.
     log('deploy.sh finished successfully.')
     return true
   }
-  // A non-zero exit is most often flock losing the race to a concurrent deploy;
-  // treat it as "try again next cycle" rather than a hard failure.
   log(
     `deploy.sh exited with code ${res.status ?? 'null'} ` +
-      `(possibly a concurrent deploy holding the lock — will retry next cycle).`,
+      `(deploy failed — will retry next cycle).`,
   )
   return false
 }

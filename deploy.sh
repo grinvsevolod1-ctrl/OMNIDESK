@@ -16,25 +16,35 @@ cd "$APP_DIR"
 
 # Serialize deploys. A manual `./deploy.sh` and the auto-deploy watcher
 # (scripts/auto-deploy.mjs) must NEVER build/migrate/swap .next at the same
-# time, or two concurrent builds race on .next.new and the atomic swap. Re-exec
-# ourselves holding a non-blocking flock on a lockfile; if another deploy is
-# already running we exit cleanly (code 0) instead of clobbering its in-flight
-# build — the watcher simply retries on its next poll. flock ships with
-# util-linux and is present on any Linux VPS; if it is somehow missing we fall
-# through and run unlocked rather than fail the deploy.
+# time, or two concurrent builds race on .next.new and the atomic swap.
+#
+# We use flock's FILE-DESCRIPTOR form (lock an fd we opened ourselves) rather
+# than its exec form (`flock LOCK ./deploy.sh`). The exec form makes flock call
+# execvp() on deploy.sh directly, and that raw exec can fail with
+# "flock: failed to execute ...: Permission denied" (EACCES) under PM2, SELinux
+# /AppArmor, or a noexec mount — even when `./deploy.sh` runs fine from an
+# interactive shell (bash has ENOEXEC fallbacks that execvp does not). The fd
+# form never execs anything: we just take a non-blocking lock on an open fd in
+# THIS process and keep running. The kernel releases the lock automatically when
+# the script exits and the fd closes, so there is nothing to clean up.
+#
+# If another deploy already holds the lock we exit cleanly (code 0) instead of
+# clobbering its in-flight build — the watcher simply retries on its next poll.
+# flock ships with util-linux and is present on any Linux VPS; if it is somehow
+# missing we fall through and run unlocked rather than fail the deploy.
 DEPLOY_LOCK="${DEPLOY_LOCK:-$APP_DIR/.deploy.lock}"
-if [ "${_DEPLOY_LOCKED:-}" != "1" ] && command -v flock >/dev/null 2>&1; then
-  # Re-run ourselves under flock. -n = non-blocking, -E 75 = exit with 75 (not
-  # the generic 1) when the lock is already held, so we can tell "someone else
-  # is deploying" apart from a real deploy failure. `|| code=$?` keeps `set -e`
-  # from aborting before we can inspect the result.
-  code=0
-  _DEPLOY_LOCKED=1 flock -n -E 75 "$DEPLOY_LOCK" "$0" "$@" || code=$?
-  if [ "$code" -eq 75 ]; then
-    echo "ℹ️  Another deploy is already running (lock held). Skipping this run."
-    exit 0
+if command -v flock >/dev/null 2>&1; then
+  # Open (or create) the lockfile on fd 9. If we can't even open it, don't abort
+  # the whole deploy — fall through and run unlocked.
+  if exec 9>"$DEPLOY_LOCK"; then
+    # -n = non-blocking: return immediately instead of waiting if held.
+    if ! flock -n 9; then
+      echo "ℹ️  Another deploy is already running (lock held). Skipping this run."
+      exit 0
+    fi
+  else
+    echo "⚠️  Could not open lock file $DEPLOY_LOCK — proceeding without a lock."
   fi
-  exit "$code"
 fi
 
 echo "🚀 Deploying OMNIDESK from $APP_DIR ..."
