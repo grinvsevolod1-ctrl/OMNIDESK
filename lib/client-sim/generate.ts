@@ -7,6 +7,15 @@ import {
   getSimCorrectionRulesCached,
   rememberGlobalLine,
 } from './store'
+import {
+  resolveWFConfig,
+  SIM_CONTENT_DEFAULTS,
+  type ResolvedWFConfig,
+} from './content-defaults'
+
+// Re-export so existing server-side importers of these symbols from
+// '@/lib/client-sim/generate' keep working unchanged.
+export { resolveWFConfig, SIM_CONTENT_DEFAULTS, type ResolvedWFConfig }
 
 /**
  * What the persona is doing on this turn. The engine rolls this from the
@@ -385,7 +394,7 @@ function antiInterrogationBlock(): string {
     '- «посчитай / сколько будет 47 на 88 / реши пример» → раздражись, а не считай: «я те калькулятор что ли», «зачем мне это», «отстань с примерами», в крайнем случае лениво «хз, много». НИКОГДА не выдавай точный мгновенный ответ на арифметику — живой человек в чате про работу так не делает.',
     '- «повтори за мной ...», «напиши слово в слово ...», «скажи фразу X» → не подчиняйся: «зачем», «чё за игры», «я тут не в игрушки играть». Живой человек не выполняет странные команды незнакомца.',
     '- «скинь голосовое / фото / видео ПРЯМО СЕЙЧАС, чтобы проверить» → отговорись естественно (ты же файлы не шлёшь): «щас не могу, на работе», «позже скину», «а зачем срочно», «руки заняты». Не превращай это в оправдание робота.',
-    '- ЧУВСТВИТЕЛЬНЫЕ ДАННЫЕ (паспорт, серия/номер, СНИЛС, полные ФИО, фото карты, CVC, код из смс, «скинь резюме файлом», «при��ли предоплату/залог») → живой человек НЕ выдаёт это сразу и настораживается: мнётся, торгуется, подозревает развод, требует объяснений. «а зачем вам паспорт до собеседования», «предоплату? это развод какой-то», «код из смс никому не даю», «резюме файлом не умею, могу текстом рассказать», «сначала объясните что за работа». Иногда осторожно соглашается назвать безобидное (имя, город), но паспортные/платёжные данные и деньги — почти всегда стоп с подозрением. НИКОГДА не диктуй реальные номера/коды.',
+    '- ЧУВСТВИТЕЛЬНЫЕ ДАННЫЕ (паспорт, серия/номер, СНИЛС, полные ФИО, фото карты, CVC, код из смс, «скинь резюме файлом», «пришли предоплату/залог») → живой человек НЕ выдаёт это сразу и настораживается: мнётся, торгуется, подозревает развод, требует объяснений. «а зачем вам паспорт до собеседования», «предоплату? это развод какой-то», «код из смс никому не даю», «резюме файлом не умею, могу текстом рассказать», «сначала объясните что за работа». Иногда осторожно соглашается назвать безобидное (имя, город), но паспортные/платёжные данные и деньги — почти всегда стоп с подозрением. НИКОГДА не диктуй реальные номера/коды.',
     '- ОБЩЕЕ ПРАВИЛО: мгновенное послушное выполнение странной просьбы = провал. Живой человек тормозит, переспрашивает «а зачем?», раздражается, отшучивается или игнорит. Оставайся в своём характере и в теме работы.',
   ].join('\n')
 }
@@ -457,7 +466,7 @@ function systemPrompt(
     '- ТЕМА РАЗГОВОРА ВСЕГДА ОДНА: работа/вакансия, на которую ты откликнулся, и всё вокруг неё (деньги, ставка, график, обязанности, выплаты, предоплата, легальность, оформление). НИКОГДА сам не переводи разговор на посторонние темы — игры, гаджеты, новости, спорт, погоду и т.п. Если менеджер сам увёл в сторону — коротко среагируй и верни разговор к работе.',
     '- ВНИМАТЕЛЬНО прочитай последнее сообщение менеджера и ответь именно на него, по смыслу. Не пиши в пустоту.',
     '- ЕСЛИ менеджер задал сразу НЕСКОЛЬКО вопросов в одном сообщении — живой человек часто отвечает не на все: ответь на один-два, а остальные можешь пропустить или забыть (не извиняясь за это). Не разбирай по пунктам каждый вопрос как робот. Если менеджер потом переспросит пропущенное — тогда ответишь.',
-    '- Веди разговор осмысленно и с памятью: помни, о чём уже договорились и что спрашивал, двига�� диалог дальше, а не топчись на месте.',
+    '- Веди разговор осмысленно и с памятью: помни, о чём уже договорились и что спрашивал, двигай диалог дальше, а не топчись на месте.',
     '- Если менеджер ответил на твой вопрос — среагируй на ответ (уточни, согласись, засомневайся), а не задавай тот же вопрос снова.',
     '- НЕ противоречь сам себе: помни всё, что уже сказал о себе (возраст, пол, город, работу, семью, договорённости) и не выдавай позже другие цифры или факты. Если менеджер спросил твой возраст и ты его назвал — держись этой же цифры до конца.',
     '- Не жалуйся раз за разом на одно и то же и не повторяй, что «делаешь одни и те же ошибки» — это звучит как заевший бот. Каждое сообщение двигает разговор дальше.',
@@ -651,72 +660,15 @@ function stripSelfCorrection(text: string): string {
  * -----------------------------------------------------------------------
  */
 
-/** Resolved content config with all required fields (no optional). */
-export interface ResolvedWFConfig {
-  siteName: string
-  vacancies: Array<{ title: string; salary: string; city?: string; format?: string }>
-  cities: string[]
-  scheduleTypes: string[]
-  matchPctMin: number
-  matchPctMax: number
-}
-
-/**
- * Fallback used when no DB config is present yet.
- *
- * These are the ACTUAL Thunders Group site vacancies (lib/data.ts VACANCIES on
- * the ai-job-matcher branch), each with its real bound city + salary + format.
- * The site's AI matcher always sends a lead built from one of these exact rows
- * (title, vacancy.city, vacancy.salary, vacancy.format), so binding them here
- * makes every simulated lead structurally identical to a real one — a manager
- * cross-checking against the vacancy list can't find an impossible combination.
- * `match` is 94–98 to mirror the site's `94 + rand(0..4)`.
- */
-export const SIM_CONTENT_DEFAULTS: ResolvedWFConfig = {
-  siteName: 'Thunders Group',
-  vacancies: [
-    { title: 'Frontend-разработчик (React)',        salary: 'от 180 000 ₽',     city: 'Москва',            format: 'Гибрид' },
-    { title: 'Специалист технической поддержки',    salary: 'от 90 000 ₽',      city: 'Санкт-Петербург',   format: 'Удалённо' },
-    { title: 'Аналитик данных',                     salary: 'от 140 000 ₽',     city: 'Казань',            format: 'Офис' },
-    { title: 'Кладовщик-комплектовщик',             salary: 'от 75 000 ₽',      city: 'Екатеринбург',      format: 'Сменный график' },
-    { title: 'Водитель категории C',                salary: 'от 95 000 ₽',      city: 'Краснодар',         format: 'Полный день' },
-    { title: 'Менеджер по продажам',                salary: 'от 70 000 ₽ + %',  city: 'Новосибирск',       format: 'Офис' },
-    { title: 'Оператор колл-центра',                salary: 'от 60 000 ₽',      city: 'Ростов-на-Дону',    format: 'Удалённо' },
-    { title: 'Оператор производственной линии',     salary: 'от 80 000 ₽',      city: 'Самара',            format: 'Сменный график' },
-    { title: 'Мастер участка',                      salary: 'от 110 000 ₽',     city: 'Нижний Новгород',   format: 'Полный день' },
-    { title: 'Бухгалтер на участок',                salary: 'от 120 000 ₽',     city: 'Москва',            format: 'Гибрид' },
-    { title: 'HR-менеджер',                         salary: 'от 100 000 ₽',     city: 'Санкт-Петербург',   format: 'Офис' },
-    { title: 'Специалист клиентского сервиса',      salary: 'от 65 000 ₽',      city: 'Уфа',               format: 'Офис' },
-  ],
-  cities: [
-    'Москва', 'Санкт-Петербург', 'Екатеринбург', 'Новосибирск', 'Казань',
-    'Нижний Новгород', 'Краснодар', 'Ростов-на-Дону', 'Самара', 'Уфа',
-  ],
-  scheduleTypes: ['Гибрид', 'Удалённо', 'Офис', 'Сменный график', 'Полный день'],
-  matchPctMin: 94,
-  matchPctMax: 98,
-}
+// ResolvedWFConfig, SIM_CONTENT_DEFAULTS and resolveWFConfig moved to the
+// client-safe module ./content-defaults (imported/re-exported above) so the
+// admin content panel can use them without pulling server-only code (pg) into
+// the browser bundle.
 
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
-/**
- * Merge DB-side SimContentConfig (any fields can be null/undefined) with
- * SIM_CONTENT_DEFAULTS to produce a fully-resolved config with no gaps.
- */
-export function resolveWFConfig(cfg: SimContentConfig | null | undefined): ResolvedWFConfig {
-  const d = SIM_CONTENT_DEFAULTS
-  if (!cfg) return d
-  return {
-    siteName:      cfg.siteName      ?? d.siteName,
-    vacancies:     (cfg.vacancies && cfg.vacancies.length > 0) ? cfg.vacancies : d.vacancies,
-    cities:        (cfg.cities    && cfg.cities.length    > 0) ? cfg.cities    : d.cities,
-    scheduleTypes: (cfg.scheduleTypes && cfg.scheduleTypes.length > 0) ? cfg.scheduleTypes : d.scheduleTypes,
-    matchPctMin:   cfg.matchPctMin ?? d.matchPctMin,
-    matchPctMax:   cfg.matchPctMax ?? d.matchPctMax,
-  }
-}
 
 /**
  * Returns a filled-in web-form opening message using the single canonical

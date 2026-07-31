@@ -35,7 +35,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { SimContentConfig, SimStatus } from '@/lib/client-sim/types'
-import { SIM_CONTENT_DEFAULTS } from '@/lib/client-sim/generate'
+import { SIM_CONTENT_DEFAULTS } from '@/lib/client-sim/content-defaults'
 import {
   simStatusAction,
   simUpdateContentConfigAction,
