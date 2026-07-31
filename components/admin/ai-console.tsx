@@ -580,6 +580,21 @@ export function AiConsole({
   const voice = useSpeechInput({
     onInterim: (text) => setInput(text),
     onFinal: (text) => send(text),
+    onError: (code) => {
+      // 'no-speech'/'aborted' are benign (user paused or tapped stop) — stay
+      // quiet. Everything else gets a one-line explanation so a dead mic button
+      // never looks like a broken feature.
+      if (code === 'no-speech' || code === 'aborted') return
+      const message =
+        code === 'not-allowed'
+          ? 'Нет доступа к микрофону. Разрешите его в настройках браузера.'
+          : code === 'audio-capture'
+            ? 'Микрофон не найден. Подключите его и попробуйте снова.'
+            : code === 'network'
+              ? 'Нет связи с сервисом распознавания речи.'
+              : 'Не удалось запустить голосовой ввод.'
+      toast.error(message)
+    },
   })
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
