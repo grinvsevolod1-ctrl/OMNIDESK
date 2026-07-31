@@ -1,5 +1,10 @@
 import { query, one } from './db.js'
-import { embedText, toVectorLiteral } from '../../lib/ai/manager-brain.js'
+import {
+  embedText,
+  toVectorLiteral,
+  understandMedia,
+} from '../../lib/ai/manager-brain.js'
+import { getStoredMediaBytes } from './repo-media.js'
 
 /**
  * Worker-side AI/autopilot repository, extracted from repo.ts and re-exported
@@ -417,11 +422,15 @@ export async function getConversationHistoryForAi(
   // the moment the dialog was enrolled onward, so enrolling a pre-existing
   // thread never makes the AI replay old backlog or drift onto a stale topic.
   const rows = await query<{
+  id: string
   direction: 'in' | 'out'
   body: string
   media_type: string | null
+  media_understanding: string | null
+  media_blob_id: string | null
   }>(
-  `SELECT m.direction, m.body, m.media_type
+  `SELECT m.id, m.direction, m.body, m.media_type,
+          m.media_understanding, m.media_blob_id
   FROM messages m
   JOIN conversations c ON c.id = m.conversation_id
   LEFT JOIN messages cut ON cut.id = c.ai_enrolled_from_message_id
@@ -433,12 +442,50 @@ export async function getConversationHistoryForAi(
   LIMIT $2`,
   [conversationId, Math.max(1, Math.min(50, limit))],
   )
-  return rows
-    .reverse()
-    .map((r) => ({
-      role: r.direction === 'in' ? 'client' : 'manager',
-      body: r.body.trim() || mediaPlaceholderForAi(r.media_type),
-    }))
+  const ordered = rows.reverse()
+  return Promise.all(
+    ordered.map(async (r) => ({
+      role: (r.direction === 'in' ? 'client' : 'manager') as
+        | 'client'
+        | 'manager',
+      body: r.body.trim() || (await resolveMediaBodyForAi(r)),
+    })),
+  )
+}
+
+/**
+ * Turn a media-only row into the richest text the brain can use: a cached
+ * understanding if present, otherwise analyze the stored bytes once (vision for
+ * images, speech-to-text for voice/audio), persist it, and use it. Falls back
+ * to a placeholder when there are no bytes or analysis fails. (Worker runtime.)
+ */
+async function resolveMediaBodyForAi(row: {
+  id: string
+  media_type: string | null
+  media_understanding: string | null
+  media_blob_id: string | null
+}): Promise<string> {
+  if (row.media_understanding && row.media_understanding.trim()) {
+    return row.media_understanding.trim()
+  }
+  if (row.media_blob_id) {
+    try {
+      const understood = await understandMedia({
+        mediaType: row.media_type,
+        loadBytes: () => getStoredMediaBytes(row.id),
+      })
+      if (understood) {
+        await query(
+          `UPDATE messages SET media_understanding = $2 WHERE id = $1`,
+          [row.id, understood],
+        )
+        return understood
+      }
+    } catch {
+      /* fall through to placeholder */
+    }
+  }
+  return mediaPlaceholderForAi(row.media_type)
 }
 
 /** Short human-readable stand-in for a media-only message in AI history. */

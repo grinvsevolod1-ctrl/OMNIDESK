@@ -11,10 +11,12 @@ import dynamic from 'next/dynamic'
 import {
   AlertTriangle,
   ArrowUp,
+  BarChart3,
   BookOpen,
   Check,
   Copy,
   Flame,
+  Gauge,
   GraduationCap,
   Highlighter,
   Lightbulb,
@@ -25,6 +27,7 @@ import {
   Power,
   ScrollText,
   Settings2,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Square,
@@ -39,15 +42,26 @@ import type { AiAssistLesson, AiAssistSettings } from '@/lib/data/ai-assist'
 import { INTENT_BY_ID, type ConsoleIntent } from '@/lib/ai-console/intents'
 import {
   AGGRESSIVENESS_LABELS,
+  type AiWeeklyStats,
   type AssistantResult,
   type AssistantTurn,
   type ConsoleBriefing,
   type ExecutedAction,
+  type PendingConfirmation,
 } from '@/lib/ai-console/assistant'
 import {
+  CONSOLE_PRESETS,
+  getPreset,
+  presetSummary,
+  type ConsolePreset,
+} from '@/lib/ai-console/presets'
+import {
+  aiApplyPresetAction,
   aiAssistantAction,
+  aiConfirmPendingAction,
   aiConsoleBriefingAction,
   aiRevertSettingsAction,
+  aiWeeklySummaryAction,
 } from '@/app/actions/ai-console'
 import { aiSettingsAction, aiListLessonsAction } from '@/app/actions/ai-assist'
 import { cn } from '@/lib/utils'
@@ -125,6 +139,10 @@ interface ChatMessage {
   actions?: ExecutedAction[]
   openPanel?: ConsoleIntent | null
   source?: AssistantResult['source']
+  /** A guarded change awaiting the admin's Confirm/Cancel (rendered as a card). */
+  pending?: PendingConfirmation | null
+  /** True while tokens are still streaming into this bubble (no typewriter). */
+  streaming?: boolean
   /** Assistant bubbles typewriter-reveal on first mount only. */
   animate?: boolean
 }
@@ -214,6 +232,8 @@ export function AiConsole({
   const [undone, setUndone] = useState<Set<string>>(() => new Set())
   // Proactive health check shown on the empty-state hero.
   const [briefing, setBriefing] = useState<ConsoleBriefing | null>(null)
+  // 7-day activity snapshot shown on the empty-state hero.
+  const [weekly, setWeekly] = useState<AiWeeklyStats | null>(null)
 
   // Speak assistant replies aloud (Siri-style). Off by default so text-only
   // admins are never surprised by audio.

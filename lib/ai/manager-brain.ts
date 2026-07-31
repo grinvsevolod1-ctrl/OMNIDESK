@@ -177,6 +177,191 @@ export function isBrainConfigured(): boolean {
   return Boolean(process.env.AI_GATEWAY_API_KEY)
 }
 
+/* ----------------------- Media understanding (vision + STT) --------------- */
+
+const TRANSCRIPTION_URL = 'https://ai-gateway.vercel.sh/v1/audio/transcriptions'
+
+// A multimodal model reads the client's photos (passport, receipt, screenshot…)
+// so the manager reacts to what was actually sent, not a blind "[Фото]".
+const VISION_MODEL = process.env.MANAGER_AI_VISION_MODEL || 'openai/gpt-4.1-mini'
+// Speech-to-text for voice notes / audio. whisper-1 is cheap and solid on RU.
+const TRANSCRIBE_MODEL =
+  process.env.MANAGER_AI_TRANSCRIBE_MODEL || 'openai/whisper-1'
+
+// Guards so we never ship an oversized payload to the gateway. Images are
+// resized-on-send by the model, but we still cap the upload; whisper's own
+// hard limit is 25MB.
+const VISION_MAX_BYTES = 8 * 1024 * 1024
+const TRANSCRIBE_MAX_BYTES = 24 * 1024 * 1024
+
+/** The media kinds the brain can turn into text. Others keep a placeholder. */
+export type UnderstandableMedia = 'image' | 'voice' | 'audio'
+
+/** Map an arbitrary media_type to an understandable kind, or null. */
+export function understandableMediaKind(
+  mediaType: string | null | undefined,
+): UnderstandableMedia | null {
+  if (mediaType === 'image') return 'image'
+  if (mediaType === 'voice') return 'voice'
+  if (mediaType === 'audio') return 'audio'
+  return null
+}
+
+/**
+ * Describe an image the client sent, in one short Russian sentence, focused on
+ * what matters for a sales/onboarding chat (documents, IDs, receipts, defects,
+ * screenshots). Returns null on any failure so the caller degrades to a
+ * placeholder rather than breaking the reply.
+ */
+export async function describeImage(
+  bytes: Buffer,
+  mime: string | null,
+  log?: BrainLog,
+): Promise<string | null> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  if (!key || bytes.byteLength === 0 || bytes.byteLength > VISION_MAX_BYTES) {
+    return null
+  }
+  const dataUrl = `data:${mime || 'image/jpeg'};base64,${bytes.toString('base64')}`
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты помогаешь менеджеру понять, что клиент прислал на фото. Опиши изображение ОДНИМ коротким предложением на русском. Если это документ (паспорт, права, СНИЛС, ИНН, трудовая, договор, чек, справка) — прямо назови тип документа и ключевые видимые поля, не выдумывая данные. Если это скриншот переписки/оплаты — скажи это. Без вступлений, только суть.',
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Что на этом изображении?' },
+              { type: 'image_url', image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+        temperature: 0.2,
+        max_tokens: 160,
+      }),
+    })
+    if (!res.ok) {
+      log?.({
+        level: 'warn',
+        event: 'vision.http_error',
+        message: `Не удалось распознать фото (HTTP ${res.status}).`,
+      })
+      return null
+    }
+    const data = (await res.json()) as GatewayResponse
+    const text = data.choices?.[0]?.message?.content?.trim()
+    return text ? text.replace(/\s+/g, ' ').slice(0, 400) : null
+  } catch (err) {
+    log?.({
+      level: 'warn',
+      event: 'vision.exception',
+      message: `Ошибка распознавания фото: ${err instanceof Error ? err.message : String(err)}`,
+    })
+    return null
+  }
+}
+
+/**
+ * Transcribe a voice note / audio message to Russian text via the gateway's
+ * OpenAI-compatible transcription endpoint. Returns null on any failure.
+ */
+export async function transcribeAudio(
+  bytes: Buffer,
+  mime: string | null,
+  name: string | null,
+  log?: BrainLog,
+): Promise<string | null> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  if (!key || bytes.byteLength === 0 || bytes.byteLength > TRANSCRIBE_MAX_BYTES) {
+    return null
+  }
+  try {
+    const form = new FormData()
+    const fileName = name || (mime?.includes('mpeg') ? 'audio.mp3' : 'audio.ogg')
+    // Uint8Array view keeps this dependency-free and works under Node 18+ in
+    // both the Next.js runtime and the worker (tsx).
+    const blob = new Blob([new Uint8Array(bytes)], {
+      type: mime || 'audio/ogg',
+    })
+    form.append('file', blob, fileName)
+    form.append('model', TRANSCRIBE_MODEL)
+    form.append('language', 'ru')
+    const res = await fetch(TRANSCRIPTION_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },
+      body: form,
+    })
+    if (!res.ok) {
+      log?.({
+        level: 'warn',
+        event: 'stt.http_error',
+        message: `Не удалось расшифровать аудио (HTTP ${res.status}).`,
+      })
+      return null
+    }
+    const data = (await res.json()) as { text?: string }
+    const text = data.text?.trim()
+    return text ? text.replace(/\s+/g, ' ').slice(0, 1200) : null
+  } catch (err) {
+    log?.({
+      level: 'warn',
+      event: 'stt.exception',
+      message: `Ошибка расшифровки аудио: ${err instanceof Error ? err.message : String(err)}`,
+    })
+    return null
+  }
+}
+
+/**
+ * Turn one media message into a compact text stand-in the brain can reason
+ * about, e.g. «[Фото: паспорт РФ, разворот с фамилией]» or «[Голосовое,
+ * расшифровка: "перезвоните после обеда"]». Returns null when the kind isn't
+ * understandable or analysis failed, so the caller falls back to a placeholder.
+ * The bytes are provided lazily so we only pull them from the DB when needed.
+ */
+export async function understandMedia(
+  params: {
+    mediaType: string | null
+    loadBytes: () => Promise<{
+      bytes: Buffer
+      mime: string | null
+      name: string | null
+    } | null>,
+  },
+  log?: BrainLog,
+): Promise<string | null> {
+  const kind = understandableMediaKind(params.mediaType)
+  if (!kind) return null
+  const media = await params.loadBytes()
+  if (!media) return null
+
+  if (kind === 'image') {
+    const desc = await describeImage(media.bytes, media.mime, log)
+    return desc ? `[Фото: ${desc}]` : null
+  }
+  // voice / audio
+  const transcript = await transcribeAudio(
+    media.bytes,
+    media.mime,
+    media.name,
+    log,
+  )
+  if (!transcript) return null
+  return kind === 'voice'
+    ? `[Голосовое сообщение, расшифровка: "${transcript}"]`
+    : `[Аудио, расшифровка: "${transcript}"]`
+}
+
 const TONE_HINT: Record<string, string> = {
   professional:
     'Деловой, вежливый, уверенный тон. Без панибратства, но по-человечески.',
@@ -206,8 +391,8 @@ function resolveAggressiveness(v: number | undefined): number {
 const OBJECTION_FRAMEWORK: string[] = [
   'МЕТОД РАБОТЫ С ВОЗРАЖЕНИЯМИ (применяй в каждом ответе, где клиент сомневается):',
   '1. Услышь и присоединись: коротко покажи, что понял чувство клиента («понимаю», «логичный вопрос»), без спора и без «но» в начале.',
-  '2. Вскрой настоящую причину: за словами «дорого», «подумаю», «не уверен» почти всегда стоит другой страх (риск, недоверие, нет времени, был плохой опыт). Мягким уточняющим вопросом достань истинное возражение, прежде чем отвечать.',
-  '3. Переформулируй и сними страх: отвечай на настоящую причину, а не на формулировку. Дай конкретный факт/пример/гарантию из сценария и справочной информации, которые закрывают именно этот страх.',
+  '2. Вскрой настоящую причину: за словами «дорого», «подумаю», «не уверен» почти всегда стоит другой страх (риск, недоверие, нет времени, был плохой опыт). Мягким уточняющи�� вопросом достань истинное возражение, прежде чем отвечать.',
+  '3. Переформулируй и сними страх: отвечай на настоящую причину, а ��е на формулировку. Дай конкретный факт/пример/гарантию из сценария и справочной информации, которые закрывают именно этот страх.',
   '4. Свяжи с выгодой клиента: покажи, что даёт следующий шаг лично ему (деньги, время, спокойствие, безопасность) — на его языке, его словами из переписки.',
   '5. Верни инициативу: заверши одним лёгким конкретным шагом или вопросом, на который легко ответить «да».',
   'Приёмы (используй уместно, естественно, не как список): «чувствовал-понял-оказалось» (другие тоже так думали, а потом убедились), дробление большого шага на маленький и безопасный, вопрос вместо утверждения, спокойное повторение выгоды под новым углом, лёгкое подведение итога договорённостей.',
@@ -257,7 +442,7 @@ function persuasionDirectives(level: number): string[] {
         'Ты НИКОГДА не соглашаешься с возражением клиента и НИКОГДА не подстраиваешься под него. Если клиента что-то «не устраивает» — это возражение, которое нужно отработать и мягко вернуть его к нашему единственному предложению, а НЕ повод менять условия или соглашаться, что оно ему не подходит.',
         'Мягкое «нет», сомнения, отговорки, «я подумаю», «дорого», «неудобно», молчание — это НЕ отказ, а возражение. Признай эмоцию, сними страх, покажи выгоду именно нашего предложения и снова подтолкни к следующему шагу.',
         'Не поддакивай в ущерб цели. Можно проявить понимание («понимаю вас»), но сразу же вернуть разговор к нашему предложению и его выгодам. Никогда не говори «да, вам это не подходит», «поищите другое», «согласен, условия так себе».',
-        'Всегда заканчивай сообщение так, чтобы клиенту было легко сделать шаг вперёд: один конкретный вопрос или мягкий призыв.',
+        'Всегда заканчивай сообщение так, чтобы клиенту было легко сд��лать шаг вперёд: один конкретный вопрос или мягкий призыв.',
       ]
   }
 }
@@ -283,6 +468,17 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
     ...persuasionDirectives(resolveAggressiveness(input.aggressiveness)),
     '',
     ...OBJECTION_FRAMEWORK,
+    '',
+    'ГЛАВНАЯ ЦЕЛЬ (к ней ведёшь весь диалог):',
+    '- Довести человека до оформления по документам: он должен согласиться и прислать/предоставить документы или данные, которые запрашиваются по сценарию (это финальная точка твоей работы).',
+    '- Когда человек явно готов и передаёт документы/данные — не тормози: подтверди, чётко скажи, какой следующий шаг, и веди к передаче менеджеру для оформления. Систему передачи менеджеру запускает не ты — просто доведи человека до готовности, остальное произойдёт само.',
+    '- Ты сам и есть менеджер: не предлагай «переключить на человека» как способ уйти от разговора. Передача менеджеру — это результат успеха (человек готов оформляться), а не отговорка.',
+    '',
+    'РАБОТА С ФОТО И ГОЛОСОВЫМИ (клиент может прислать их вместо текста):',
+    '- В истории диалога вложения приходят уже расшифрованными: «[Фото: ...]» — это описание присланного изображения, «[Голосовое сообщение, расшифровка: "..."]» и «[Аудио, расшифровка: "..."]» — это дословно то, что человек сказал. Реагируй на их СОДЕРЖАНИЕ как на обычные слова клиента.',
+    '- Если на фото документ (паспорт, СНИЛС, ИНН, права, трудовая, договор, чек, справка) — это сильный сигнал готовности: поблагодари, подтверди, что получил, и веди к следующему шагу оформления. НИКОГДА не проси прислать документ повторно, если он уже на фото, и не зачитывай вслух персональные данные с документа.',
+    '- Если прислали голосовое/аудио — отвечай по сути сказанного, не проси «напишите текстом».',
+    '- Если вложение не удалось распознать (видишь только «[фото]»/«[голосовое сообщение]» без расшифровки) — мягко попроси уточнить содержание словами, не придумывай, что там было.',
     '',
     'НИКОГДА не упоминай, что ты бот/ИИ/ассистент. Не извиняйся за то, что ты программа.',
     'Отвечай ОДНИМ сообщением, как в чате — коротко, живо, по-русски.',
@@ -737,7 +933,7 @@ export async function assessLeadReady(
             content:
               'Ты анализируешь переписку менеджера с клиентом. Определи ОДНО: клиент уже ЯВНО ' +
               'согласился предоставить документы или запрошенный перечень данных (готов прислать/' +
-              'показать паспорт, реквизиты, справки, фото документов, заполнить анкету, скинуть ' +
+              'показать паспорт, ��еквизиты, справки, фото документов, заполнить анкету, скинуть ' +
               'нужные сведения) — то есть готов передать то, что запрашивает менеджер. ' +
               'Отвечай СТРОГО одним словом: "ДА" — только если клиент прямо согласился предоставить ' +
               'документы/данные (например «да, скину», «хорошо, вышлю», «куда отправить документы»). ' +
@@ -1090,7 +1286,7 @@ export async function distillPlaybook(
             content:
               (existingPersona.trim()
                 ? `Контекст компании:\n${existingPersona.trim()}\n\n`
-                : '') + `Примеры:\n${corpus}`,
+                : '') + `Прим��ры:\n${corpus}`,
           },
         ],
         temperature: 0.4,

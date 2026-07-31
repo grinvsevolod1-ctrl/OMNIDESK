@@ -4,9 +4,11 @@ import {
   type BrainLesson,
   embedText,
   toVectorLiteral,
+  understandMedia,
 } from '../ai/manager-brain'
 import type { MediaType } from '../types'
 import { mediaPlaceholder } from './ai-assist-shared'
+import { getStoredMediaBytes } from './media-archive'
 
 /* --------------------------------------------------------------------------
  * Domain re-exports. Training-corpus and corrections/review concerns were split
@@ -279,11 +281,15 @@ export async function getConversationHistoryForAi(
   // pre-existing thread we stamp ai_enrolled_from_message_id, and the brain is
   // fed only the turns at/after that point — never the stale backlog above it.
   const rows = await query<{
+    id: string
     direction: 'in' | 'out'
     body: string
     media_type: MediaType | null
+    media_understanding: string | null
+    media_blob_id: string | null
   }>(
-    `SELECT m.direction, m.body, m.media_type
+    `SELECT m.id, m.direction, m.body, m.media_type,
+            m.media_understanding, m.media_blob_id
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
        LEFT JOIN messages cut ON cut.id = c.ai_enrolled_from_message_id
@@ -304,14 +310,51 @@ export async function getConversationHistoryForAi(
       LIMIT $2`,
     [conversationId, Math.max(1, Math.min(50, limit))],
   )
-  return rows
-    .reverse()
-    .map((r) => ({
+  const ordered = rows.reverse()
+  return Promise.all(
+    ordered.map(async (r) => ({
       role: (r.direction === 'in' ? 'client' : 'manager') as
         | 'client'
         | 'manager',
-      body: r.body.trim() || mediaPlaceholder(r.media_type),
-    }))
+      body: r.body.trim() || (await resolveMediaBody(r)),
+    })),
+  )
+}
+
+/**
+ * Turn a media-only row into the richest text the brain can use: a cached
+ * understanding if we have one, otherwise analyze the stored bytes once
+ * (vision for images, speech-to-text for voice/audio), persist the result, and
+ * use it. Falls back to a plain placeholder when there are no bytes or analysis
+ * fails — so a reply is never blocked by media handling. (Panel runtime.)
+ */
+async function resolveMediaBody(row: {
+  id: string
+  media_type: MediaType | null
+  media_understanding: string | null
+  media_blob_id: string | null
+}): Promise<string> {
+  if (row.media_understanding && row.media_understanding.trim()) {
+    return row.media_understanding.trim()
+  }
+  if (row.media_blob_id) {
+    try {
+      const understood = await understandMedia({
+        mediaType: row.media_type,
+        loadBytes: () => getStoredMediaBytes(row.id),
+      })
+      if (understood) {
+        await query(
+          `UPDATE messages SET media_understanding = $2 WHERE id = $1`,
+          [row.id, understood],
+        )
+        return understood
+      }
+    } catch {
+      /* fall through to placeholder */
+    }
+  }
+  return mediaPlaceholder(row.media_type)
 }
 
 /**

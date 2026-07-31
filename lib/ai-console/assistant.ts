@@ -74,8 +74,43 @@ export interface AssistantResult {
    * fresh settings when true so the open panels stay in sync.
    */
   settingsChanged: boolean
+  /**
+   * A high-impact change the assistant deliberately did NOT apply, and is asking
+   * the admin to confirm first (turning the AI off, or maxing out aggression).
+   * When present, the UI shows a Confirm/Cancel card instead of a silent change.
+   */
+  pending?: PendingConfirmation | null
   /** Which engine answered: the tool-calling agent or the offline fallback. */
   source: 'ai' | 'fallback'
+}
+
+/**
+ * A guarded, high-impact action the assistant proposes but won't run until the
+ * admin explicitly confirms it. Executed via aiConfirmPendingAction.
+ */
+export interface PendingConfirmation {
+  kind: 'disable' | 'max_aggressiveness'
+  /** Button/label text, e.g. «Выключить ИИ-менеджера». */
+  label: string
+  /** One-sentence consequence so the admin knows what they're approving. */
+  detail: string
+}
+
+/**
+ * A 7-day activity snapshot of the AI manager, shown as a weekly summary card.
+ * Computed from the AI-scoped log only (the secret simulator never leaks in).
+ */
+export interface AiWeeklyStats {
+  /** Replies the AI sent to clients. */
+  repliesSent: number
+  /** Leads the AI handed to a human (client became ready). */
+  handoffs: number
+  /** Times the AI escalated an angry/stuck dialog to a human. */
+  escalations: number
+  /** Errors logged. */
+  errors: number
+  /** Distinct dialogs the AI actively answered in. */
+  activeDialogs: number
 }
 
 /**
