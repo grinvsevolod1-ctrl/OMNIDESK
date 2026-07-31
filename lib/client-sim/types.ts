@@ -179,7 +179,7 @@ export interface SimPersona {
   backstory?: SimBackstory
   /**
    * Verbal tics this persona sprinkles in — filler words, catchphrases, verbal
-   * habits, e.g. «короче», «ну это самое», «братан». Rolled once at spawn.
+   * habits, e.g. «короче», «ну эт�� самое», «братан». Rolled once at spawn.
    */
   quirks?: string[]
   /**
@@ -245,9 +245,15 @@ export interface SimPersonaConfig {
 export interface SimContentConfig {
   /** Name shown in the opening message, e.g. "Thunders Group". */
   siteName?: string
-  /** Vacancy list for the web-form opener. */
-  vacancies?: Array<{ title: string; salary: string }>
-  /** City pool for the opener. */
+  /**
+   * Vacancy list for the web-form opener. `city`/`format` are OPTIONAL bindings:
+   * when present, the opener uses that exact tuple (title+city+salary+format) so
+   * the generated lead is an existing, self-consistent site vacancy — exactly
+   * what the real AI-matcher sends. When absent, the opener falls back to a
+   * random city from `cities` and a random schedule from `scheduleTypes`.
+   */
+  vacancies?: Array<{ title: string; salary: string; city?: string; format?: string }>
+  /** City pool for the opener (used when a vacancy has no bound city). */
   cities?: string[]
   /** Work-schedule type labels: "Удалённо", "Полный день", "Сменный график". */
   scheduleTypes?: string[]

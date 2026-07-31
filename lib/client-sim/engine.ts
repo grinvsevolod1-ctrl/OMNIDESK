@@ -222,7 +222,7 @@ async function tick(): Promise<void> {
         level: 'info',
         source: 'sim',
         event: 'reaped',
-        message: `Закрыто ${reaped} диалогов, где кл����нт перестал отвечать (�� ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
+        message: `За��р��то ${reaped} диалогов, где кл����нт перестал отвечать (�� ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
       })
     }
 
@@ -329,9 +329,13 @@ async function maybeSpawn(settings: SimSettings): Promise<void> {
   if (!settings.campaignActive) {
     if (chance(0.15)) nextDelay = Math.round(nextDelay * randInt(2, 4))
     else if (chance(0.06)) nextDelay = Math.max(15, Math.round(nextDelay * 0.25))
-    // People show up less at night: stretch gaps during 23:00–08:00 local time.
-    const hour = new Date().getHours()
-    if (hour >= 23 || hour < 8) nextDelay = Math.round(nextDelay * (1.5 + Math.random() * 2))
+    // Real job-site sign-ups follow a smooth daily curve — a strong midday and
+    // evening peak, a deep overnight lull, a gentle morning ramp — NOT a flat
+    // 24/7 stream. Stretching the inter-arrival gap by this per-hour factor makes
+    // the histogram of when new leads appear match genuine web traffic, which is
+    // the biggest statistical tell to disappear at "thousands per day" scale.
+    const { hour, weekend } = moscowNow()
+    nextDelay = Math.round(nextDelay * arrivalGapMultiplier(hour, weekend))
   }
 
   // Bail out BEFORE claiming a spawn slot if there's nowhere to spawn — a
@@ -445,6 +449,31 @@ function moscowNow(): { hour: number; weekend: boolean } {
   const msk = new Date(Date.now() + 3 * 60 * 60 * 1000)
   const dow = msk.getUTCDay() // 0=Sun … 6=Sat
   return { hour: msk.getUTCHours(), weekend: dow === 0 || dow === 6 }
+}
+
+/**
+ * Inter-arrival gap multiplier for NEW dialogues by Moscow hour. Mirrors a real
+ * job-site sign-up curve: a dead overnight lull, a morning ramp, a broad midday
+ * plateau, and a pronounced evening peak (people job-hunt after work). >1 spaces
+ * arrivals further apart (fewer leads), <1 packs them closer (busy hours). This
+ * shapes the WHEN-do-leads-appear histogram to look human across a whole day —
+ * the single most visible tell once thousands of dialogues accumulate.
+ */
+function arrivalGapMultiplier(hour: number, weekend: boolean): number {
+  // Indexed by hour 0..23. Lower = more arrivals in that hour.
+  const curve: number[] = [
+    5.5, 7.0, 9.0, 9.0, 8.0, 6.0, // 0-5  dead of night
+    3.5, 2.0, 1.3, 1.0, 0.9, 0.85, // 6-11 morning ramp → late-morning peak
+    0.9, 0.95, 0.95, 0.9, 0.9, 0.85, // 12-17 midday plateau
+    0.8, 0.75, 0.8, 1.0, 1.6, 3.0, // 18-23 evening peak → wind-down
+  ]
+  let m = curve[Math.max(0, Math.min(23, hour))]
+  // Weekends: a bit quieter overall and a later, flatter start (people sleep in).
+  if (weekend) {
+    m *= 1.2
+    if (hour >= 6 && hour < 11) m *= 1.4
+  }
+  return m
 }
 
 /**

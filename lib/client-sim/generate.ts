@@ -609,36 +609,47 @@ function stripSelfCorrection(text: string): string {
 /** Resolved content config with all required fields (no optional). */
 export interface ResolvedWFConfig {
   siteName: string
-  vacancies: Array<{ title: string; salary: string }>
+  vacancies: Array<{ title: string; salary: string; city?: string; format?: string }>
   cities: string[]
   scheduleTypes: string[]
   matchPctMin: number
   matchPctMax: number
 }
 
-/** Fallback used when no DB config is present yet. */
+/**
+ * Fallback used when no DB config is present yet.
+ *
+ * These are the ACTUAL Thunders Group site vacancies (lib/data.ts VACANCIES on
+ * the ai-job-matcher branch), each with its real bound city + salary + format.
+ * The site's AI matcher always sends a lead built from one of these exact rows
+ * (title, vacancy.city, vacancy.salary, vacancy.format), so binding them here
+ * makes every simulated lead structurally identical to a real one — a manager
+ * cross-checking against the vacancy list can't find an impossible combination.
+ * `match` is 94–98 to mirror the site's `94 + rand(0..4)`.
+ */
 export const SIM_CONTENT_DEFAULTS: ResolvedWFConfig = {
   siteName: 'Thunders Group',
   vacancies: [
-    { title: 'Менеджер по продажам',              salary: 'от 90 000 ₽' },
-    { title: 'Специалист технической поддержки',  salary: 'от 90 000 ₽' },
-    { title: 'Торговый представитель',            salary: 'от 80 000 ₽' },
-    { title: 'Кладовщик-комплектовщик',           salary: 'от 75 000 ₽' },
-    { title: 'Оператор склада',                   salary: 'от 68 000 ₽' },
-    { title: 'Грузчик-экспедитор',                salary: 'от 65 000 ₽' },
-    { title: 'Водитель-курьер',                   salary: 'от 85 000 ₽' },
-    { title: 'Помощник менеджера',                salary: 'от 60 000 ₽' },
-    { title: 'Приёмщик товара',                   salary: 'от 74 000 ₽' },
-    { title: 'Разнорабочий',                      salary: 'от 60 000 ₽' },
+    { title: 'Frontend-разработчик (React)',        salary: 'от 180 000 ₽',     city: 'Москва',            format: 'Гибрид' },
+    { title: 'Специалист технической поддержки',    salary: 'от 90 000 ₽',      city: 'Санкт-Петербург',   format: 'Удалённо' },
+    { title: 'Аналитик данных',                     salary: 'от 140 000 ₽',     city: 'Казань',            format: 'Офис' },
+    { title: 'Кладовщик-комплектовщик',             salary: 'от 75 000 ₽',      city: 'Екатеринбург',      format: 'Сменный график' },
+    { title: 'Водитель категории C',                salary: 'от 95 000 ₽',      city: 'Краснодар',         format: 'Полный день' },
+    { title: 'Менеджер по продажам',                salary: 'от 70 000 ₽ + %',  city: 'Новосибирск',       format: 'Офис' },
+    { title: 'Оператор колл-центра',                salary: 'от 60 000 ₽',      city: 'Ростов-на-Дону',    format: 'Удалённо' },
+    { title: 'Оператор производственной линии',     salary: 'от 80 000 ₽',      city: 'Самара',            format: 'Сменный график' },
+    { title: 'Мастер участка',                      salary: 'от 110 000 ₽',     city: 'Нижний Новгород',   format: 'Полный день' },
+    { title: 'Бухгалтер на участок',                salary: 'от 120 000 ₽',     city: 'Москва',            format: 'Гибрид' },
+    { title: 'HR-менеджер',                         salary: 'от 100 000 ₽',     city: 'Санкт-Петербург',   format: 'Офис' },
+    { title: 'Специалист клиентского сервиса',      salary: 'от 65 000 ₽',      city: 'Уфа',               format: 'Офис' },
   ],
   cities: [
     'Москва', 'Санкт-Петербург', 'Екатеринбург', 'Новосибирск', 'Казань',
-    'Нижний Новгород', 'Челябинск', 'Краснодар', 'Ростов-на-Дону', 'Пермь',
-    'Красноярск', 'Самара', 'Уфа', 'Воронеж', 'Омск',
+    'Нижний Новгород', 'Краснодар', 'Ростов-на-Дону', 'Самара', 'Уфа',
   ],
-  scheduleTypes: ['Удалённо', 'Полный день', 'Сменный график'],
-  matchPctMin: 85,
-  matchPctMax: 97,
+  scheduleTypes: ['Гибрид', 'Удалённо', 'Офис', 'Сменный график', 'Полный день'],
+  matchPctMin: 94,
+  matchPctMax: 98,
 }
 
 function pick<T>(arr: T[]): T {
@@ -676,8 +687,11 @@ function rollWebFormOpening(
   if (Math.random() > 0.80) return null
 
   const vac      = pick(cfg.vacancies)
-  const city     = pick(cfg.cities)
-  const schedule = pick(cfg.scheduleTypes)
+  // Prefer the vacancy's OWN bound city/format (a real site row) so the tuple is
+  // always self-consistent and actually exists; fall back to random pools only
+  // for legacy/unbound panel entries.
+  const city     = vac.city ?? pick(cfg.cities)
+  const schedule = vac.format ?? pick(cfg.scheduleTypes)
   const match    = cfg.matchPctMin + Math.floor(
     Math.random() * (cfg.matchPctMax - cfg.matchPctMin + 1),
   )

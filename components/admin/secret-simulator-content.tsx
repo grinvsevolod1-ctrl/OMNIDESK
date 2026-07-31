@@ -92,6 +92,9 @@ function SectionHeader({ label, open, onToggle }: SectionHeaderProps) {
 interface Vacancy {
   title: string
   salary: string
+  /** Optional bindings: when set, the opener uses this exact real site tuple. */
+  city?: string
+  format?: string
 }
 
 interface VacancyEditorProps {
@@ -101,7 +104,11 @@ interface VacancyEditorProps {
 
 function VacancyEditor({ value, onChange }: VacancyEditorProps) {
   function handleChange(idx: number, field: keyof Vacancy, val: string) {
-    onChange(value.map((v, i) => (i === idx ? { ...v, [field]: val } : v)))
+    onChange(
+      value.map((v, i) =>
+        i === idx ? { ...v, [field]: val === '' ? undefined : val } : v,
+      ),
+    )
   }
   function add() {
     onChange([...value, { title: '', salary: '' }])
@@ -111,18 +118,35 @@ function VacancyEditor({ value, onChange }: VacancyEditorProps) {
   }
   return (
     <div className="flex flex-col gap-2">
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        «Город» и «Формат» необязательны. Если заполнены — опенер выдаёт ровно
+        этот кортеж (как реальная строка вакансии на сайте). Если пусты — город и
+        график подставляются случайно из общих пулов ниже.
+      </p>
       {value.map((v, i) => (
-        <div key={i} className="flex gap-2 items-start">
+        <div key={i} className="flex flex-wrap gap-2 items-start rounded-md border border-border/50 p-2">
           <Input
             placeholder="Должность"
             value={v.title}
             onChange={(e) => handleChange(i, 'title', e.target.value)}
-            className="flex-1 h-8 text-xs"
+            className="flex-1 min-w-[10rem] h-8 text-xs"
           />
           <Input
             placeholder="Зарплата"
             value={v.salary}
             onChange={(e) => handleChange(i, 'salary', e.target.value)}
+            className="w-36 h-8 text-xs"
+          />
+          <Input
+            placeholder="Город (необяз.)"
+            value={v.city ?? ''}
+            onChange={(e) => handleChange(i, 'city', e.target.value)}
+            className="w-36 h-8 text-xs"
+          />
+          <Input
+            placeholder="Формат (необяз.)"
+            value={v.format ?? ''}
+            onChange={(e) => handleChange(i, 'format', e.target.value)}
             className="w-36 h-8 text-xs"
           />
           <Button
