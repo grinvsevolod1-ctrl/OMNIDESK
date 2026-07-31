@@ -94,10 +94,22 @@ fi
 BRANCH="${DEPLOY_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 echo "📦 Branch: $BRANCH"
 
-# 2. Pull the latest code. .env is git-ignored, so it is untouched by checkout.
+# 2. Sync the code to exactly match the remote branch. This box is a deploy
+#    MIRROR, not a dev checkout: any local edits to tracked files (e.g. a
+#    deploy.sh hand-hacked while debugging on the server) must NEVER block the
+#    update the way `git pull --ff-only` does with
+#    "Your local changes would be overwritten by merge". So instead of a merge
+#    pull we fetch and hard-reset onto origin/$BRANCH, discarding local drift.
+#
+#    Safety notes:
+#      - .env and everything else git-ignored/untracked is left untouched —
+#        `reset --hard` only touches TRACKED files.
+#      - Resetting deploy.sh while it is the running script is safe: git writes
+#        the new file via a temp file + rename, so this bash process keeps its
+#        open handle to the old inode and finishes executing the old bytes.
 git fetch origin "$BRANCH"
-git checkout "$BRANCH"
-git pull --ff-only origin "$BRANCH"
+git checkout -f "$BRANCH"
+git reset --hard "origin/$BRANCH"
 
 # 3. Install dependencies (panel + worker) before building or migrating.
 pnpm install --frozen-lockfile
