@@ -241,7 +241,17 @@ export async function secretReassignConversationsAction(input: {
 /*  incoming message would.                                              */
 /* ===================================================================== */
 
-export type ConversationWithManager = Conversation & { managerName: string | null }
+export type ConversationWithManager = Conversation & {
+  managerName: string | null
+  /**
+   * God-console-only: true when the contact is a simulated persona from our
+   * site, false for a genuine external client. Permanent flag (migration 065),
+   * so the source stays visible even after the sim thread finishes or is cleaned
+   * up. Never exposed on the shared `Conversation` type, so it can't leak into
+   * the manager inbox.
+   */
+  isSimulated: boolean
+}
 
 /**
  * God-console-only view model: a conversation plus the simulator's involvement

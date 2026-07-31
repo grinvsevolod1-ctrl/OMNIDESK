@@ -78,6 +78,52 @@ import {
  * All are driven purely by props (no server actions of their own).
  */
 
+/* ------------------------------ Source badge -------------------------- */
+
+/**
+ * Persistent origin indicator for the god console: whether this lead is a
+ * simulated persona from our own site or a genuine external client. Driven by
+ * the permanent `conversations.is_simulated` flag, so it stays correct even
+ * after the simulator thread finishes — unlike the live "autopilot" badge.
+ */
+export function SourceBadge({
+  isSimulated,
+  size = 'sm',
+}: {
+  isSimulated: boolean
+  size?: 'sm' | 'md'
+}) {
+  const cls =
+    size === 'md'
+      ? 'gap-1 px-2 py-0.5 text-[11px]'
+      : 'gap-1 px-1.5 py-0.5 text-[10px]'
+  const iconCls = size === 'md' ? 'size-3.5' : 'size-3'
+  if (isSimulated) {
+    return (
+      <span
+        className={cn(
+          'flex items-center rounded font-medium bg-chart-4/15 text-foreground',
+          cls,
+        )}
+        title="Клиент с нашего сайта (симулятор)"
+      >
+        <Bot className={iconCls} /> С сайта
+      </span>
+    )
+  }
+  return (
+    <span
+      className={cn(
+        'flex items-center rounded font-medium bg-chart-2/15 text-foreground',
+        cls,
+      )}
+      title="Реальный клиент из внешнего канала"
+    >
+      <UserRound className={iconCls} /> Реальный
+    </span>
+  )
+}
+
 /* --------------------------- Conversation row ------------------------- */
 
 export const ConversationRow = memo(function ConversationRow({
@@ -130,12 +176,13 @@ export const ConversationRow = memo(function ConversationRow({
             {c.contactBlocked && (
               <Ban className="size-3 shrink-0 text-destructive" aria-label="Менеджер заблокирован клиентом" />
             )}
+            <SourceBadge isSimulated={c.isSimulated} />
             {simDriving && (
               <span
                 className="flex items-center gap-1 rounded bg-chart-2/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground"
-                title="Диалог ведёт симулятор"
+                title="Ответы клиента сейчас генерирует симулятор (автопилот)"
               >
-                <Bot className="size-3" /> Симулятор
+                <Bot className="size-3" /> Автопилот
               </span>
             )}
             {simPaused && (
@@ -220,6 +267,7 @@ export function ThreadHeader({
             <ChannelIcon type={conversation.channelType} className="size-3 rounded-full" />
             {TYPE_LABEL[conversation.channelType] ?? conversation.channelType}
           </Badge>
+          <SourceBadge isSimulated={conversation.isSimulated} size="md" />
           {blocked && (
             <Badge variant="destructive" className="gap-1">
               <Ban className="size-3" />

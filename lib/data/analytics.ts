@@ -518,11 +518,19 @@ export const getManagerPerformance = cachedAnalytics(
  */
 export async function getConversationAdmin(
   conversationId: string,
-): Promise<(Conversation & { managerName: string | null }) | null> {
+): Promise<
+  | (Conversation & { managerName: string | null; isSimulated: boolean })
+  | null
+> {
   const rows = await query<
-    ConversationRow & { channel_name: string | null; manager_name: string | null }
+    ConversationRow & {
+      channel_name: string | null
+      manager_name: string | null
+      is_simulated: boolean | null
+    }
   >(
-    `SELECT ${conversationColumns('c')}, ch.name AS channel_name, m.name AS manager_name
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name, m.name AS manager_name,
+            c.is_simulated
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers m ON m.id = c.manager_id
@@ -535,6 +543,10 @@ export async function getConversationAdmin(
     ...toConversation(rows[0]),
     channelName: rows[0].channel_name ?? undefined,
     managerName: rows[0].manager_name ?? null,
+    // God-console-only source flag: true = simulated persona from our site,
+    // false = genuine external client. Reliable & permanent (migration 065),
+    // unlike the live sim_threads state which ends/gets cleaned up.
+    isSimulated: Boolean(rows[0].is_simulated),
   }
 }
 
@@ -567,7 +579,9 @@ export async function listConversationsAdmin(opts?: {
   search?: string
   channelType?: ChannelType
   limit?: number
-}): Promise<Array<Conversation & { managerName: string | null }>> {
+}): Promise<
+  Array<Conversation & { managerName: string | null; isSimulated: boolean }>
+> {
   const params: unknown[] = []
   // Simulator dialogs are real leads and appear in the admin browser like any
   // other conversation.
@@ -591,9 +605,14 @@ export async function listConversationsAdmin(opts?: {
   const limitParam = `$${params.length}`
 
   const rows = await query<
-    ConversationRow & { channel_name: string | null; manager_name: string | null }
+    ConversationRow & {
+      channel_name: string | null
+      manager_name: string | null
+      is_simulated: boolean | null
+    }
   >(
-    `SELECT ${conversationColumns('c')}, ch.name AS channel_name, m.name AS manager_name
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name, m.name AS manager_name,
+            c.is_simulated
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers m ON m.id = c.manager_id
@@ -606,6 +625,8 @@ export async function listConversationsAdmin(opts?: {
     ...toConversation(r),
     channelName: r.channel_name ?? undefined,
     managerName: r.manager_name ?? null,
+    // God-console-only source flag (see getConversationAdmin).
+    isSimulated: Boolean(r.is_simulated),
   }))
 }
 

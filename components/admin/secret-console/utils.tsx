@@ -66,8 +66,12 @@ export const SIM_STATE_LABEL: Record<string, string> = {
   done: 'завершён',
 }
 
-/** List-level involvement filter. */
-export type SimFilter = 'all' | 'driving' | 'paused' | 'plain'
+/**
+ * List-level filter. Source axis: `sim` (from our site) vs `real` (external
+ * client), driven by the permanent is_simulated flag. Control axis: `driving`
+ * (autopilot replying) vs `paused` (operator took over).
+ */
+export type SimFilter = 'all' | 'sim' | 'real' | 'driving' | 'paused'
 /** Thread-level direction filter. */
 export type DirFilter = 'all' | 'in' | 'out'
 

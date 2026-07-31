@@ -250,9 +250,10 @@ export function SecretConsole({
   }, [managers])
 
   // Whether any simulated conversation exists at all — drives whether we even
-  // show the involvement filter (keeps the UI clean when nothing is simulated).
+  // show the source filter (keeps the UI clean when nothing is simulated). Uses
+  // the permanent is_simulated flag, so it stays correct for finished sims too.
   const hasAnySim = useMemo(
-    () => conversations.some((c) => c.sim != null),
+    () => conversations.some((c) => c.isSimulated),
     [conversations],
   )
 
@@ -261,9 +262,12 @@ export function SecretConsole({
     return conversations.filter((c) => {
       if (unreadOnly && c.unread <= 0) return false
       if (statusFilter !== 'all' && c.status !== statusFilter) return false
+      // Source axis (reliable, permanent).
+      if (simFilter === 'sim' && !c.isSimulated) return false
+      if (simFilter === 'real' && c.isSimulated) return false
+      // Control axis (live autopilot state).
       if (simFilter === 'driving' && !(c.sim?.active && !c.sim.paused)) return false
       if (simFilter === 'paused' && !(c.sim?.active && c.sim.paused)) return false
-      if (simFilter === 'plain' && c.sim?.active) return false
       return true
     })
   }, [conversations, unreadOnly, statusFilter, simFilter])
@@ -510,16 +514,17 @@ export function SecretConsole({
 
               {hasAnySim && (
                 <div className="grid gap-1.5">
-                  <Label className="text-xs text-muted-foreground">Ведение</Label>
+                  <Label className="text-xs text-muted-foreground">Источник и ведение</Label>
                   <Select value={simFilter} onValueChange={(v) => setSimFilter((v as SimFilter) ?? 'all')}>
                     <SelectTrigger className="h-9">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Все диалоги</SelectItem>
-                      <SelectItem value="driving">Ведёт симулятор</SelectItem>
+                      <SelectItem value="sim">С нашего сайта (симулятор)</SelectItem>
+                      <SelectItem value="real">Реальные клиенты</SelectItem>
+                      <SelectItem value="driving">Автопилот ведёт</SelectItem>
                       <SelectItem value="paused">На паузе (вы)</SelectItem>
-                      <SelectItem value="plain">Обычные</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
