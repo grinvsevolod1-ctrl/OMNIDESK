@@ -12,9 +12,7 @@ import {
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import {
-  AlertCircle,
   ArrowLeft,
-  Ban,
   Bell,
   BellOff,
   Check,
@@ -1683,20 +1681,6 @@ export function InboxView({
               </div>
             </div>
 
-            {/* Blocked-by-user banner. Shown whenever the contact has blocked
-                our manager — set from the god console (contact_blocked) and/or
-                inferred from failed deliveries. Presented as an ordinary
-                messenger block so the manager never sees anything unusual. */}
-            {active.contactBlocked ? (
-              <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
-                <Ban className="size-3.5 shrink-0" />
-                <span>
-                  Пользователь заблокировал вас. Сообщения больше не
-                  доставляются.
-                </span>
-              </div>
-            ) : null}
-
             {/* Messages */}
             <div
               ref={messagesScrollRef}
@@ -1914,20 +1898,6 @@ export function InboxView({
                               ) : (
                                 bubble
                               )}
-                              {isOut && m.status === 'failed' ? (
-                                // Any delivery failure is surfaced uniformly as
-                                // "the user blocked you". This deliberately hides
-                                // the raw provider/technical error (and, for
-                                // simulated contacts, any hint that the thread is
-                                // a simulation) so the manager only ever sees a
-                                // normal, human-looking reason.
-                                <p className="flex items-start gap-1 text-[11px] leading-snug text-destructive [overflow-wrap:anywhere]">
-                                  <AlertCircle className="mt-0.5 size-3 shrink-0" />
-                                  <span>
-                                    Не доставлено: пользователь заблокировал вас
-                                  </span>
-                                </p>
-                              ) : null}
                               {reactions.length ? (
                                 <div
                                   className={cn(

@@ -9,7 +9,6 @@
  */
 
 import {
-  AlertCircle,
   Check,
   CheckCheck,
   Clock,
@@ -490,15 +489,12 @@ export function StatusRadioItems({ Item }: { Item: typeof ContextMenuRadioItem }
 
 /**
  * Messenger-style delivery ticks for an outbound message:
- *   sent → single check, delivered → double check, read → blue double check,
- *   failed → warning. Legacy rows (no status) fall back to a single check.
+ *   sent → single check, delivered → double check, read → blue double check.
+ * Delivery failures are never surfaced — a failed message is shown as an
+ * ordinary sent message so the manager never sees anything unusual.
+ * Legacy rows (no status) fall back to a single check.
  */
 export function DeliveryTicks({ status }: { status?: Message['status'] }) {
-  if (status === 'failed') {
-    return (
-      <AlertCircle className="size-3 text-destructive" aria-label="Не доставлено" />
-    )
-  }
   if (status === 'read') {
     return <CheckCheck className="size-3 text-sky-400" aria-label="Прочитано" />
   }
