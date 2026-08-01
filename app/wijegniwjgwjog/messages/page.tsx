@@ -13,6 +13,18 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = {
   title: 'Messages',
   manifest: '/messenger.webmanifest',
+  // iOS "Add to Home Screen" uses the apple-touch-icon from the page head, NOT
+  // the manifest. Without this it would inherit the root Omnidesk icon, so we
+  // pin the messenger's own icon here to make it a distinct standalone app.
+  icons: {
+    icon: [
+      { url: '/messenger-icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/messenger-icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: [
+      { url: '/messenger-icon-192.png', sizes: '192x192', type: 'image/png' },
+    ],
+  },
   appleWebApp: {
     capable: true,
     title: 'Messages',
