@@ -1728,7 +1728,15 @@ export function InboxView({
                   const prevSameSide =
                     prev && prev.direction === m.direction && !showDay
                   return (
-                    <div key={m.id}>
+                    // content-visibility lets the browser skip layout/paint of
+                    // off-screen bubbles — a large win on 300-message threads.
+                    <div
+                      key={m.id}
+                      style={{
+                        contentVisibility: 'auto',
+                        containIntrinsicSize: 'auto 56px',
+                      }}
+                    >
                       {showDay ? (
                         <div className="my-3 flex justify-center">
                           <span className="rounded-full bg-card/90 px-2.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm ring-1 ring-border/50">

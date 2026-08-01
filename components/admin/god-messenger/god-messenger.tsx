@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -96,6 +97,10 @@ export function GodMessenger({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [conversation, setConversation] = useState<ConversationWithManager | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  // Render window: only the newest N messages hit the DOM. Long chats
+  // (hundreds of messages) otherwise make opening a thread visibly slow on
+  // mobile. "Показать ещё" expands the window; SSE appends work unchanged.
+  const [visibleCount, setVisibleCount] = useState(MESSAGES_WINDOW)
   const [loadingThread, setLoadingThread] = useState(false)
 
   const [live, setLive] = useState(false)
@@ -171,6 +176,7 @@ export function GodMessenger({
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setReplyTo(null)
+    setVisibleCount(MESSAGES_WINDOW)
     if (selectedId) void loadThread(selectedId)
     else {
       setConversation(null)
@@ -483,6 +489,9 @@ export function GodMessenger({
           style={{
             transform: backDrag ? `translateX(${backDrag}px)` : undefined,
             transition: backDrag ? 'none' : 'transform 0.2s ease-out',
+            // Promote to its own compositor layer only WHILE dragging, so the
+            // swipe-back tracks the finger without jank on weak GPUs.
+            willChange: backDrag ? 'transform' : undefined,
             touchAction: 'pan-y',
           }}
           onPointerDown={conversation ? onBackPointerDown : undefined}
@@ -534,14 +543,27 @@ export function GodMessenger({
                     Сообщений пока нет. Напишите первое.
                   </p>
                 ) : (
-                  messages.map((m, i) => (
-                    <MessageBubble
-                      key={m.id}
-                      message={m}
-                      prev={messages[i - 1]}
-                      onReply={startReply}
-                    />
-                  ))
+                  <>
+                    {messages.length > visibleCount && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setVisibleCount((c) => c + MESSAGES_WINDOW)
+                        }
+                        className="mx-auto mb-2 block rounded-full border border-border bg-background px-4 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      >
+                        Показать ещё ({messages.length - visibleCount} скрыто)
+                      </button>
+                    )}
+                    {messages.slice(-visibleCount).map((m, i, visible) => (
+                      <MessageBubble
+                        key={m.id}
+                        message={m}
+                        prev={visible[i - 1]}
+                        onReply={startReply}
+                      />
+                    ))}
+                  </>
                 )}
                 <div ref={endRef} />
               </div>
@@ -624,13 +646,16 @@ const DRAG_TRIGGER = 56
 const THREAD_DRAG_MAX = 120
 const THREAD_DRAG_TRIGGER = 70
 
+/* How many newest messages are rendered initially / added per "show more". */
+const MESSAGES_WINDOW = 50
+
 /**
  * One message. Perspective is inverted vs. the manager inbox: an INBOUND message
  * (direction 'in') is what the god typed AS THE CLIENT, so it sits on the RIGHT
  * as "mine"; an OUTBOUND message (direction 'out') is the manager's reply, shown
  * on the LEFT as "theirs". Swipe a bubble left (like Telegram) to reply to it.
  */
-function MessageBubble({
+const MessageBubble = memo(function MessageBubble({
   message,
   prev,
   onReply,
@@ -716,7 +741,12 @@ function MessageBubble({
       )}
       <div
         className="relative select-none"
-        style={{ touchAction: 'pan-y' }}
+        // content-visibility: browser skips layout/paint of off-screen bubbles.
+        style={{
+          touchAction: 'pan-y',
+          contentVisibility: 'auto',
+          containIntrinsicSize: 'auto 56px',
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -787,4 +817,4 @@ function MessageBubble({
       </div>
     </>
   )
-}
+})

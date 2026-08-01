@@ -54,8 +54,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
-import { SettingsTab } from '@/components/admin/ai-settings-tab'
-import { TrainingTab } from '@/components/admin/ai-training-tab'
+
 import { useSpeechInput } from '@/components/admin/ai-console/use-speech-input'
 
 // Heavier, less-frequently opened panels load on demand — the console's initial
@@ -85,6 +84,16 @@ const AiLogsTab = dynamic(
 const KnowledgeBaseCard = dynamic(
   () =>
     import('@/components/admin/ai-settings-tab').then((m) => m.KnowledgeBaseCard),
+  { loading: panelLoading },
+)
+// Settings and training panels also only appear when the assistant opens them,
+// so they don't belong in the initial chunk either (~1200 lines combined).
+const SettingsTab = dynamic(
+  () => import('@/components/admin/ai-settings-tab').then((m) => m.SettingsTab),
+  { loading: panelLoading },
+)
+const TrainingTab = dynamic(
+  () => import('@/components/admin/ai-training-tab').then((m) => m.TrainingTab),
   { loading: panelLoading },
 )
 

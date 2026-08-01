@@ -48,8 +48,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { ServersAdmin } from '@/components/admin/hosting/servers-admin'
+import dynamic from 'next/dynamic'
 import { DeploymentLogs } from '@/components/admin/hosting/deployment-logs'
+
+// The full servers table (with its dialogs and forms) is only needed when the
+// assistant opens an inline panel — keep it out of the console's initial chunk
+// so the chat itself loads faster.
+const ServersAdmin = dynamic(
+  () =>
+    import('@/components/admin/hosting/servers-admin').then(
+      (m) => m.ServersAdmin,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center py-10 text-muted-foreground">
+        <Loader2 className="size-5 animate-spin" />
+      </div>
+    ),
+  },
+)
 import { useSpeechInput } from '@/components/admin/ai-console/use-speech-input'
 import type { HostingServer, ServerAuthType } from '@/lib/types'
 

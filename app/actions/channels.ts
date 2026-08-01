@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { requireManager } from '@/lib/auth'
-import { enqueueJob, getChannel } from '@/lib/data'
+import { enqueueJob, getChannel, listChannels } from '@/lib/data'
 import type { ChannelStatus, SessionStatus } from '@/lib/types'
 
 /**
@@ -47,6 +47,35 @@ export async function getChannelStatusAction(
     detail: channel.detail,
     codeDelivery: delivery === 'app' || delivery === 'sms' ? delivery : null,
   }
+}
+
+/**
+ * Batched variant: statuses for many channels in ONE round trip and ONE query.
+ * Powers the shared connections-page poller — previously every ChannelCard
+ * polled individually, so N accounts cost N parallel requests every 15s.
+ * Scoped to the caller: only their own channels come back.
+ */
+export async function getChannelStatusesAction(
+  channelIds: string[],
+): Promise<Record<string, ChannelStatusSnapshot>> {
+  const session = await requireManager()
+  if (channelIds.length === 0) return {}
+  const wanted = new Set(channelIds)
+  const channels = await listChannels(session.sub)
+  const out: Record<string, ChannelStatusSnapshot> = {}
+  for (const channel of channels) {
+    if (!wanted.has(channel.id)) continue
+    const delivery = (channel.config as { codeDelivery?: unknown } | null)
+      ?.codeDelivery
+    out[channel.id] = {
+      sessionStatus: channel.sessionStatus,
+      status: channel.status,
+      lastError: channel.lastError,
+      detail: channel.detail,
+      codeDelivery: delivery === 'app' || delivery === 'sms' ? delivery : null,
+    }
+  }
+  return out
 }
 
 /* ------------------------------ Reconnect -------------------------------- */

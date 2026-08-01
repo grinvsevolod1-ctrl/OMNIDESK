@@ -13,6 +13,14 @@ interface LogLine {
 }
 
 /**
+ * DOM cap: only the newest N lines are rendered (long deploys produce
+ * thousands, which makes the surrounding chat/page heavy). "Показать все"
+ * lifts the cap for the current deployment. State still keeps every line,
+ * so lifting the cap loses nothing.
+ */
+const VISIBLE_TAIL = 300
+
+/**
  * Live deploy-log viewer backed by the SSE route. EventSource auto-sends
  * Last-Event-ID (the last seq) on reconnect, so the server resumes exactly where
  * it left off with no duplicate or lost lines. The stream self-closes once the
@@ -28,6 +36,7 @@ export function DeploymentLogs({
   const [lines, setLines] = useState<LogLine[]>([])
   const [status, setStatus] = useState<DeploymentStatus>(initialStatus)
   const [connected, setConnected] = useState(false)
+  const [showAll, setShowAll] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const seenSeq = useRef<Set<number>>(new Set())
 
@@ -118,7 +127,17 @@ export function DeploymentLogs({
             {active ? 'Ожидание вывода…' : 'Нет логов для этого деплоя.'}
           </p>
         ) : (
-          lines.map((l) => (
+          <>
+            {!showAll && lines.length > VISIBLE_TAIL && (
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="mb-2 w-full rounded-md border border-border bg-muted/40 py-1.5 text-center text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                Показать все ({lines.length - VISIBLE_TAIL} строк скрыто)
+              </button>
+            )}
+            {(showAll ? lines : lines.slice(-VISIBLE_TAIL)).map((l) => (
             <div
               key={l.seq}
               className={cn(
@@ -135,7 +154,8 @@ export function DeploymentLogs({
               {l.stream === 'command' ? `$ ${l.line}` : null}
               {l.stream !== 'agent' && l.stream !== 'command' ? l.line : null}
             </div>
-          ))
+            ))}
+          </>
         )}
       </div>
     </div>

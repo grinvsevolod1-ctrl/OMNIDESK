@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
+import { useCallback, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   AlertTriangle,
@@ -11,9 +11,10 @@ import {
 import { ChannelIcon } from '@/components/channel-icons'
 import { toast } from 'sonner'
 import {
-  getChannelStatusAction,
   restartChannelAction,
+  type ChannelStatusSnapshot,
 } from '@/app/actions/channels'
+import { useChannelStatus } from '@/lib/hooks/use-channel-status'
 import { SessionBadge, StatusBadge } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -21,9 +22,8 @@ import { Card } from '@/components/ui/card'
 import { getChannelMeta, type Channel } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-// How often the card re-checks a personal session, and the ceiling on
-// consecutive automatic restart attempts before we stop and defer to the admin.
-const POLL_MS = 15_000
+// Ceiling on consecutive automatic restart attempts before we stop and defer
+// to the admin. (Poll cadence lives in the shared use-channel-status hook.)
 const MAX_AUTO_ATTEMPTS = 4
 
 function timeAgo(iso: string | null): string {
@@ -72,20 +72,12 @@ export function ChannelCard({ channel }: { channel: Channel }) {
     [channel.id, router],
   )
 
-  // Live status polling + automatic reconnection for personal accounts. This is
-  // the manager's only lever now that account creation/login lives with the
-  // admin: if the session drops we quietly restart it (worker reuses the stored
+  // Live status + automatic reconnection for personal accounts, fed by the
+  // SHARED batched poller (one request for all cards instead of one each).
+  // If the session drops we quietly restart it (worker reuses the stored
   // session — no code needed), backing off after MAX_AUTO_ATTEMPTS.
-  useEffect(() => {
-    if (!isPersonal) return
-    let cancelled = false
-
-    async function tick() {
-      // Skip the round-trip while the tab is backgrounded; the next visible
-      // tick catches up. Avoids status polling running for every hidden tab.
-      if (typeof document !== 'undefined' && document.hidden) return
-      const snap = await getChannelStatusAction(channel.id)
-      if (cancelled || !snap) return
+  const onSnapshot = useCallback(
+    (snap: ChannelStatusSnapshot) => {
       setSessionStatus(snap.sessionStatus)
       setLastError(snap.lastError)
 
@@ -105,14 +97,10 @@ export function ChannelCard({ channel }: { channel: Channel }) {
       } else if (attemptsRef.current >= MAX_AUTO_ATTEMPTS) {
         setAutoReconnecting(false)
       }
-    }
-
-    const id = setInterval(tick, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [channel.id, isPersonal, restart])
+    },
+    [restart],
+  )
+  useChannelStatus(channel.id, isPersonal, onSnapshot)
 
   return (
     <Card className="p-4">
