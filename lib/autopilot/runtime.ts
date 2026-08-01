@@ -224,7 +224,7 @@ async function runLivechatAiLead(input: {
       level: 'debug',
       source: 'ai-lead',
       event: 'inbound',
-      message: `Новое сообщение клиен��а: "${input.text.slice(0, 200)}" — готовлю ответ.`,
+      message: `Новое сообщение клиента: "${input.text.slice(0, 200)}" — готовлю ответ.`,
       conversationId: input.conversationId,
       channelType: 'livechat',
     })

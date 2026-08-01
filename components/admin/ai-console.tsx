@@ -10,6 +10,7 @@ import {
   BellRing,
   FileDown,
   Flame,
+  FlaskConical,
   GraduationCap,
   Highlighter,
   ListChecks,
@@ -114,6 +115,7 @@ const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
   report: FileDown,
   memory: NotebookPen,
   check: ListChecks,
+  experiment: FlaskConical,
 }
 
 /** Human tone labels for the status strip. */

@@ -29,6 +29,10 @@ const GUARDED_FILES = [
   // surfaces only — and must stay blind to the guarded subsystems forever.
   'lib/data/ai-health.ts',
   'lib/data/ai-copilot.ts',
+  // A/B experiments overlay persona/tone/aggressiveness per conversation branch.
+  // It sits on the customer-reply hot path and must never reach into the
+  // simulator or god panel either.
+  'lib/data/ai-experiments.ts',
 ]
 
 // Any of these appearing in an import/require or path string means the module
@@ -68,4 +72,28 @@ describe('AI co-pilot isolation from simulator / god panel', () => {
       expect(/import\s*\(\s*['"][^'"]*client-sim/.test(src)).toBe(false)
     }
   })
+})
+
+/**
+ * Encoding guard: the Russian-language prompt strings that steer the customer
+ * reply live inside these modules. A botched save that mangles a multi-byte
+ * character (the U+FFFD replacement char) silently corrupts an instruction the
+ * model reads verbatim — e.g. «сохра�ит правила» — which is exactly the kind of
+ * bug that slips past a type-check. Fail CI if any of them carry U+FFFD.
+ */
+describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
+  const PROMPT_FILES = [
+    'lib/ai/manager-brain.ts',
+    'lib/ai-console/run-assistant.ts',
+    'lib/autopilot/runtime.ts',
+    'lib/data/ai-experiments.ts',
+  ]
+  for (const rel of PROMPT_FILES) {
+    it(`${rel} contains no replacement characters`, () => {
+      const src = readSource(rel)
+      expect(src.includes('\uFFFD'), `${rel} has a corrupted character`).toBe(
+        false,
+      )
+    })
+  }
 })
