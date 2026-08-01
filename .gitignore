@@ -3,9 +3,16 @@ node_modules
 
 # Build output
 .next/
+# Staging/retired build dirs used by deploy.sh's atomic swap
+.next.new/
+.next.old/
 out/
 dist/
 *.tsbuildinfo
+
+# Deploy bookkeeping (VPS-local, never committed)
+.deploy.lock
+.deploy.last-success
 
 # Environment variables
 .env

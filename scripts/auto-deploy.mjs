@@ -89,8 +89,26 @@ function selfHash() {
 const startHash = selfHash()
 let deploying = false
 
-// Commit the running build was built from (whatever is currently checked out).
+// Commit of the last deploy that finished END-TO-END. deploy.sh writes this
+// marker as its very last step, past every failure point (build, swap, pm2
+// restart). We compare origin/<branch> against THIS — never against `git
+// rev-parse HEAD` — because deploy.sh hard-resets HEAD to the remote sha at the
+// very START of a deploy. With the old HEAD comparison, a deploy killed
+// mid-flight (e.g. by our own AUTO_DEPLOY_TIMEOUT_MS) left HEAD == remote, so
+// the next tick concluded "already up to date" and never retried, leaving the
+// panel down (nginx 502) until a human ran deploy.sh by hand.
+const LAST_SUCCESS_FILE = path.join(REPO_ROOT, '.deploy.last-success')
+
 function deployedSha() {
+  try {
+    const sha = fs.readFileSync(LAST_SUCCESS_FILE, 'utf8').trim()
+    if (/^[0-9a-f]{40}$/.test(sha)) return sha
+  } catch {
+    // No marker yet (first run after this feature shipped, or a fresh box).
+  }
+  // Fallback: whatever is checked out. Correct for a box that was deployed
+  // before the marker existed; a stale-but-equal HEAD just means one harmless
+  // extra deploy at worst, never a skipped one.
   const r = git(['rev-parse', 'HEAD'])
   return r.ok ? r.stdout : ''
 }
@@ -113,16 +131,70 @@ function runDeploy() {
   if (res.status === 0) {
     // Exit 0 covers both "deployed" and "another deploy held the lock, skipped"
     // (deploy.sh exits 0 on lock contention). Either way we're not behind for a
-    // bad reason; if we skipped, the next tick still sees local != remote and
-    // retries. A non-zero status below is therefore a genuine deploy failure.
+    // bad reason; if we skipped, the marker file is unchanged so the next tick
+    // still sees a mismatch and retries. A non-zero status / signal below is
+    // therefore a genuine deploy failure.
     log('deploy.sh finished successfully.')
     return true
   }
-  log(
-    `deploy.sh exited with code ${res.status ?? 'null'} ` +
-      `(deploy failed — will retry next cycle).`,
-  )
+  // status === null means the child died from a SIGNAL, not an exit code — in
+  // practice our own `timeout: cfg.deployTimeoutMs` SIGTERM-ing a build that
+  // ran long. Say so explicitly instead of the cryptic "code null".
+  const how =
+    res.status === null
+      ? `signal ${res.signal || 'unknown'}${
+          res.signal === 'SIGTERM'
+            ? ` (likely AUTO_DEPLOY_TIMEOUT_MS=${cfg.deployTimeoutMs}ms exceeded)`
+            : ''
+        }`
+      : `code ${res.status}`
+  log(`deploy.sh exited with ${how} (deploy failed — will retry next cycle).`)
+  ensurePanelAlive()
   return false
+}
+
+// Last line of defense after a FAILED deploy. deploy.sh has its own EXIT trap
+// that un-swaps .next and re-registers the panel, but that trap cannot run if
+// the script was SIGKILLed or died before bash could react. Repair both hazards
+// from here so a broken deploy can never leave nginx serving 502s:
+//   a) live build missing but the retired one still parked in .next.old → restore
+//   b) panel deleted from PM2 but never re-started → recreate from ecosystem
+function ensurePanelAlive() {
+  try {
+    const nextDir = path.join(REPO_ROOT, '.next')
+    const oldDir = path.join(REPO_ROOT, '.next.old')
+    if (!fs.existsSync(nextDir) && fs.existsSync(oldDir)) {
+      log('live .next missing after failed deploy — restoring .next.old')
+      fs.renameSync(oldDir, nextDir)
+    }
+    const probe = spawnSync('pm2', ['describe', 'omnidesk-panel'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: process.env,
+      timeout: 60_000,
+    })
+    // `pm2 describe` exits non-zero when the process is not registered, and
+    // reports "stopped" in stdout when it is registered but not running.
+    const down =
+      probe.status !== 0 || /status\s*│\s*stopped/i.test(probe.stdout || '')
+    if (down) {
+      log('panel is not running after failed deploy — recovering via pm2 ...')
+      const start = spawnSync('pm2', ['start', 'ecosystem.config.js'], {
+        cwd: REPO_ROOT,
+        stdio: 'inherit',
+        env: process.env,
+        timeout: 120_000,
+      })
+      if (start.status === 0) {
+        spawnSync('pm2', ['save'], { cwd: REPO_ROOT, env: process.env, timeout: 60_000 })
+        log('panel recovered — old version keeps serving until the retry succeeds.')
+      } else {
+        log('pm2 recovery failed; will try again after the next failed deploy.')
+      }
+    }
+  } catch (err) {
+    log('ensurePanelAlive error:', err?.message || err)
+  }
 }
 
 async function tick() {

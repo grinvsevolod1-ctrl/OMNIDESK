@@ -47,6 +47,43 @@ if command -v flock >/dev/null 2>&1; then
   fi
 fi
 
+# ── Failsafe: never leave the box serving 502s ────────────────────────────────
+# A deploy can die mid-flight (build error, or the auto-deploy watcher's
+# AUTO_DEPLOY_TIMEOUT_MS killing us with SIGTERM → "exited with code null").
+# The two windows that used to take the panel down permanently:
+#   a) between `mv .next .next.old` and `mv .next.new .next` → no build on disk
+#   b) between `pm2 delete omnidesk-panel` and `pm2 start`   → panel process gone
+# This EXIT trap runs on ANY exit path (including trapped SIGTERM/SIGINT) and
+# repairs both: restore the retired build if the new one wasn't promoted, and
+# resurrect the panel from ecosystem.config.js if it is no longer registered.
+# On a successful deploy DEPLOY_OK=1 makes the trap a no-op.
+DEPLOY_OK=0
+restore_panel_on_failure() {
+  local code=$?
+  [ "$DEPLOY_OK" = "1" ] && return 0
+  echo "⚠️  Deploy did not complete (exit $code) — running failsafe recovery ..."
+  # a) Un-swap: if the live build vanished but the previous one is still parked
+  #    in .next.old, put it back so `next start` has something to serve.
+  if [ ! -d .next ] && [ -d .next.old ]; then
+    echo "   Restoring previous build from .next.old"
+    mv .next.old .next || true
+  fi
+  # b) Resurrect: if the panel was deleted from PM2 but never re-started,
+  #    recreate every app from ecosystem.config.js. `pm2 start` on an already-
+  #    running app is a harmless no-op, so this is safe on every failure path.
+  if ! pm2 describe omnidesk-panel >/dev/null 2>&1; then
+    echo "   Panel missing from PM2 — restarting from ecosystem.config.js"
+    pm2 start ecosystem.config.js || true
+    pm2 save || true
+  fi
+  echo "⚠️  Recovery done. The OLD version keeps serving; deploy will be retried."
+}
+trap restore_panel_on_failure EXIT
+# Convert kill signals into normal exits so the EXIT trap above actually runs
+# (bash's default SIGTERM/SIGINT action skips EXIT traps). 143/130 = 128+signal.
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
 echo "🚀 Deploying OMNIDESK from $APP_DIR ..."
 
 # 0. Sanity: .env must exist AND contain the vars every process needs. PM2 loads
@@ -151,4 +188,14 @@ pm2 start ecosystem.config.js
 pm2 save
 pm2 status
 
+# 7. Record the commit that was ACTUALLY deployed end-to-end. The auto-deploy
+#    watcher compares origin/<branch> against THIS marker (not `git rev-parse
+#    HEAD`) to decide whether to deploy: step 2 above hard-resets HEAD to the
+#    remote sha long before the build/restart succeed, so a deploy killed
+#    mid-flight used to leave HEAD == remote and the watcher never retried —
+#    the panel stayed down until a human intervened. The marker is only written
+#    here, past every failure point, so a failed deploy is always retried.
+git rev-parse HEAD > .deploy.last-success 2>/dev/null || true
+
+DEPLOY_OK=1
 echo "✅ Deploy complete!"
