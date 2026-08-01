@@ -1,8 +1,11 @@
-import { ServersAdmin } from '@/components/admin/hosting/servers-admin'
+import { ServersConsole } from '@/components/admin/servers-console/servers-console'
 import { PageHeader } from '@/components/page-parts'
 import { requireAdmin } from '@/lib/auth'
+import { isBrainConfigured } from '@/lib/ai/manager-brain'
 import { listServers } from '@/lib/data'
 import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
+
+export const dynamic = 'force-dynamic'
 
 export default async function AdminServersPage() {
   await requireAdmin()
@@ -13,18 +16,13 @@ export default async function AdminServersPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Серверы"
-        description="Управляйте парком VPS и разворачивайте на них приложения прямо из Git-репозиториев."
+        description="Разговорная консоль: подключите VPS и скажите, какой репозиторий развернуть — ИИ сам всё установит и покажет живой лог."
       />
-
-      {!workerOnline ? (
-        <p className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-2.5 text-sm text-warning">
-          Воркер не в сети — серверы и приложения можно добавлять, но проверка
-          связи, деплой и управление процессами требуют запущенного воркера на
-          VPS.
-        </p>
-      ) : null}
-
-      <ServersAdmin servers={servers} />
+      <ServersConsole
+        initialServers={servers}
+        configured={isBrainConfigured()}
+        workerOnline={workerOnline}
+      />
     </div>
   )
 }

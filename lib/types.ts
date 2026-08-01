@@ -622,8 +622,18 @@ export type DeploymentStatus =
   | 'running'
   | 'success'
   | 'failed'
-/** Which stream a deploy log line came from. */
-export type DeployLogStream = 'stdout' | 'stderr' | 'system'
+/**
+ * Which stream a deploy log line came from. Beyond process output we also
+ * record the autonomous agent's own activity:
+ *   - 'agent'   — the model's reasoning / narration of what it's about to do
+ *   - 'command' — a shell command the agent decided to run (echoed before output)
+ */
+export type DeployLogStream =
+  | 'stdout'
+  | 'stderr'
+  | 'system'
+  | 'agent'
+  | 'command'
 /** Command the panel enqueues for the hosting worker to run over SSH. */
 export type DeployAction =
   | 'deploy'
@@ -632,6 +642,10 @@ export type DeployAction =
   | 'restart'
   | 'remove'
   | 'health_check'
+  /** Autonomous AI deploy: the agent analyses the box and installs everything. */
+  | 'ai_deploy'
+/** How a deployment was carried out. */
+export type DeploymentMode = 'manual' | 'ai'
 
 /** Latest resource snapshot the worker records for a server. */
 export interface ServerMetrics {
@@ -678,6 +692,8 @@ export interface HostingApp {
   port: number | null
   status: AppStatus
   lastError: string | null
+  /** True when a GitHub token is stored for cloning a private repo (masked). */
+  hasRepoToken: boolean
   createdAt: string
   updatedAt: string
 }
@@ -688,6 +704,12 @@ export interface HostingDeployment {
   commitHash: string | null
   status: DeploymentStatus
   trigger: string
+  /** Whether this deploy ran via the classic pipeline or the autonomous agent. */
+  mode: DeploymentMode
+  /** Agent's closing summary of what it did (AI deploys), or null. */
+  summary: string | null
+  /** Resolved public URL once the deploy succeeded, or null. */
+  siteUrl: string | null
   startedAt: string | null
   finishedAt: string | null
   createdAt: string

@@ -15,6 +15,7 @@ import type {
   AppRuntime,
   AppStatus,
   DeployAction,
+  DeploymentMode,
   DeploymentStatus,
   HostingApp,
   HostingDeployLog,
@@ -156,6 +157,7 @@ interface AppRow {
   domain: string | null
   runtime: AppRuntime
   env_encrypted: string | null
+  repo_token_encrypted: string | null
   port: number | null
   status: AppStatus
   last_error: string | null
@@ -165,7 +167,8 @@ interface AppRow {
 
 const APP_COLUMN_NAMES = [
   'id', 'server_id', 'name', 'repo_url', 'branch', 'domain', 'runtime',
-  'env_encrypted', 'port', 'status', 'last_error', 'created_at', 'updated_at',
+  'env_encrypted', 'repo_token_encrypted', 'port', 'status', 'last_error',
+  'created_at', 'updated_at',
 ] as const
 
 function appColumns(alias = 'hosting_apps'): string {
@@ -200,6 +203,7 @@ function toApp(r: AppRow): HostingApp {
     port: r.port === null ? null : Number(r.port),
     status: r.status,
     lastError: r.last_error ?? null,
+    hasRepoToken: Boolean(r.repo_token_encrypted),
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   }
@@ -231,16 +235,20 @@ export async function createApp(input: {
   runtime: AppRuntime
   port?: number | null
   env?: Record<string, string> | null
+  /** GitHub token for cloning a private repo — encrypted at rest. */
+  repoToken?: string | null
 }): Promise<HostingApp> {
   const id = randomUUID()
   const envEnc =
     input.env && Object.keys(input.env).length > 0
       ? encryptJson(input.env)
       : null
+  const tokenEnc = input.repoToken ? encrypt(input.repoToken) : null
   const rows = await query<AppRow>(
     `INSERT INTO hosting_apps
-       (id, server_id, name, repo_url, branch, domain, runtime, env_encrypted, port, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'stopped')
+       (id, server_id, name, repo_url, branch, domain, runtime, env_encrypted,
+        repo_token_encrypted, port, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'stopped')
      RETURNING ${APP_COLUMN_NAMES.join(', ')}`,
     [
       id,
@@ -251,6 +259,7 @@ export async function createApp(input: {
       input.domain ?? null,
       input.runtime,
       envEnc,
+      tokenEnc,
       input.port ?? null,
     ],
   )
@@ -285,10 +294,17 @@ interface DeploymentRow {
   commit_hash: string | null
   status: DeploymentStatus
   trigger: string
+  mode: DeploymentMode
+  summary: string | null
+  site_url: string | null
   started_at: string | Date | null
   finished_at: string | Date | null
   created_at: string | Date
 }
+
+const DEPLOYMENT_COLUMNS =
+  'id, app_id, commit_hash, status, trigger, mode, summary, site_url, ' +
+  'started_at, finished_at, created_at'
 
 function toDeployment(r: DeploymentRow): HostingDeployment {
   return {
@@ -297,6 +313,9 @@ function toDeployment(r: DeploymentRow): HostingDeployment {
     commitHash: r.commit_hash ?? null,
     status: r.status,
     trigger: r.trigger,
+    mode: r.mode ?? 'manual',
+    summary: r.summary ?? null,
+    siteUrl: r.site_url ?? null,
     startedAt: r.started_at ? new Date(r.started_at).toISOString() : null,
     finishedAt: r.finished_at ? new Date(r.finished_at).toISOString() : null,
     createdAt: new Date(r.created_at).toISOString(),
@@ -308,7 +327,7 @@ export async function listDeploymentsForApp(
   limit = 20,
 ): Promise<HostingDeployment[]> {
   const rows = await query<DeploymentRow>(
-    `SELECT id, app_id, commit_hash, status, trigger, started_at, finished_at, created_at
+    `SELECT ${DEPLOYMENT_COLUMNS}
        FROM hosting_deployments
       WHERE app_id = $1
       ORDER BY created_at DESC
@@ -322,7 +341,7 @@ export async function getDeploymentById(
   id: string,
 ): Promise<HostingDeployment | null> {
   const rows = await query<DeploymentRow>(
-    `SELECT id, app_id, commit_hash, status, trigger, started_at, finished_at, created_at
+    `SELECT ${DEPLOYMENT_COLUMNS}
        FROM hosting_deployments WHERE id = $1 LIMIT 1`,
     [id],
   )
@@ -333,18 +352,76 @@ export async function getDeploymentById(
 export async function createDeployment(
   appId: string,
   trigger: string,
+  mode: DeploymentMode = 'manual',
 ): Promise<HostingDeployment> {
   const id = randomUUID()
   const rows = await query<DeploymentRow>(
-    `INSERT INTO hosting_deployments (id, app_id, status, trigger)
-     VALUES ($1, $2, 'queued', $3)
-     RETURNING id, app_id, commit_hash, status, trigger, started_at, finished_at, created_at`,
-    [id, appId, trigger],
+    `INSERT INTO hosting_deployments (id, app_id, status, trigger, mode)
+     VALUES ($1, $2, 'queued', $3, $4)
+     RETURNING ${DEPLOYMENT_COLUMNS}`,
+    [id, appId, trigger, mode],
   )
   return toDeployment(rows[0])
 }
 
+/**
+ * Cancel an in-flight deployment: mark it failed with a summary and append a
+ * log line so the live viewer shows the cancellation. The autonomous agent
+ * polls the deployment status between steps and aborts once it's no longer
+ * active. Only affects deployments that haven't already reached a terminal
+ * state. Returns true when a row was actually cancelled.
+ */
+export async function cancelDeployment(deploymentId: string): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE hosting_deployments
+        SET status = 'failed',
+            summary = COALESCE(summary, 'Отменено администратором'),
+            finished_at = now()
+      WHERE id = $1 AND status NOT IN ('success', 'failed')
+      RETURNING id`,
+    [deploymentId],
+  )
+  if (rows.length > 0) {
+    await appendDeployLog(deploymentId, 'system', 'Установка отменена администратором.')
+  }
+  return rows.length > 0
+}
+
+/** Store (or clear) the encrypted GitHub token used to clone a private repo. */
+export async function setAppRepoToken(
+  appId: string,
+  token: string | null,
+): Promise<void> {
+  const enc = token ? encrypt(token) : null
+  await query(
+    'UPDATE hosting_apps SET repo_token_encrypted = $2, updated_at = now() WHERE id = $1',
+    [appId, enc],
+  )
+}
+
 /* ------------------------------ Deploy logs ---------------------------- */
+
+/**
+ * Append a log line to a deployment (panel-side mirror of the worker's writer).
+ * seq is assigned atomically as max(seq)+1 so the SSE cursor stays gap-free.
+ * Used to record admin-initiated events like a cancellation.
+ */
+export async function appendDeployLog(
+  deploymentId: string,
+  stream: HostingDeployLog['stream'],
+  line: string,
+): Promise<void> {
+  await query(
+    `INSERT INTO hosting_deploy_logs (deployment_id, seq, stream, line)
+     VALUES (
+       $1,
+       COALESCE((SELECT max(seq) FROM hosting_deploy_logs WHERE deployment_id = $1), 0) + 1,
+       $2,
+       $3
+     )`,
+    [deploymentId, stream, line],
+  )
+}
 
 interface DeployLogRow {
   id: string | number

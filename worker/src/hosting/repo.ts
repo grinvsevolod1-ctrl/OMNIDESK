@@ -36,6 +36,8 @@ export interface ServerRecord {
   /** Decrypted secret (private key PEM or password), or null when unset. */
   secret: string | null
   host_fingerprint: string | null
+  /** The agent's short memory about this box (OS, what's installed), or null. */
+  agent_notes: string | null
 }
 
 export interface AppRecord {
@@ -48,6 +50,8 @@ export interface AppRecord {
   runtime: 'node' | 'docker' | 'static' | 'php'
   /** Decrypted environment map (empty when none). */
   env: Record<string, string>
+  /** Decrypted GitHub token for cloning a private repo, or null. */
+  repoToken: string | null
   port: number | null
   status: string
 }
@@ -106,12 +110,13 @@ interface ServerRow {
   ssh_username: string
   secret_encrypted: string | null
   host_fingerprint: string | null
+  agent_notes: string | null
 }
 
 export async function getServer(id: string): Promise<ServerRecord | null> {
   const row = await one<ServerRow>(
     `SELECT id, name, ip_address, ssh_port, auth_type, ssh_username,
-            secret_encrypted, host_fingerprint
+            secret_encrypted, host_fingerprint, agent_notes
        FROM hosting_servers WHERE id = $1`,
     [id],
   )
@@ -131,7 +136,19 @@ export async function getServer(id: string): Promise<ServerRecord | null> {
     ssh_username: row.ssh_username,
     secret,
     host_fingerprint: row.host_fingerprint,
+    agent_notes: row.agent_notes ?? null,
   }
+}
+
+/** Persist the agent's short memory about a server (best-effort). */
+export async function setServerAgentNotes(
+  serverId: string,
+  notes: string,
+): Promise<void> {
+  await query('UPDATE hosting_servers SET agent_notes = $2 WHERE id = $1', [
+    serverId,
+    notes.slice(0, 4000),
+  ])
 }
 
 /** Persist the pinned host-key fingerprint captured on first connect. */
@@ -174,6 +191,7 @@ interface AppRow {
   domain: string | null
   runtime: 'node' | 'docker' | 'static' | 'php'
   env_encrypted: string | null
+  repo_token_encrypted: string | null
   port: number | null
   status: string
 }
@@ -181,7 +199,7 @@ interface AppRow {
 export async function getApp(id: string): Promise<AppRecord | null> {
   const row = await one<AppRow>(
     `SELECT id, server_id, name, repo_url, branch, domain, runtime,
-            env_encrypted, port, status
+            env_encrypted, repo_token_encrypted, port, status
        FROM hosting_apps WHERE id = $1`,
     [id],
   )
@@ -195,6 +213,12 @@ export async function getApp(id: string): Promise<AppRecord | null> {
   } catch {
     env = {}
   }
+  let repoToken: string | null = null
+  try {
+    if (row.repo_token_encrypted) repoToken = decrypt(row.repo_token_encrypted)
+  } catch {
+    repoToken = null
+  }
   return {
     id: row.id,
     server_id: row.server_id,
@@ -204,6 +228,7 @@ export async function getApp(id: string): Promise<AppRecord | null> {
     domain: row.domain,
     runtime: row.runtime,
     env,
+    repoToken,
     port: row.port === null ? null : Number(row.port),
     status: row.status,
   }
@@ -227,14 +252,22 @@ export async function setAppStatus(
 export async function setDeploymentStatus(
   deploymentId: string,
   status: string,
-  opts: { commitHash?: string | null; started?: boolean; finished?: boolean } = {},
+  opts: {
+    commitHash?: string | null
+    started?: boolean
+    finished?: boolean
+    summary?: string | null
+    siteUrl?: string | null
+  } = {},
 ): Promise<void> {
   await query(
     `UPDATE hosting_deployments
        SET status = $2,
            commit_hash = COALESCE($3, commit_hash),
            started_at  = CASE WHEN $4 THEN now() ELSE started_at END,
-           finished_at = CASE WHEN $5 THEN now() ELSE finished_at END
+           finished_at = CASE WHEN $5 THEN now() ELSE finished_at END,
+           summary = COALESCE($6, summary),
+           site_url = COALESCE($7, site_url)
      WHERE id = $1`,
     [
       deploymentId,
@@ -242,8 +275,25 @@ export async function setDeploymentStatus(
       opts.commitHash ?? null,
       opts.started ?? false,
       opts.finished ?? false,
+      opts.summary ?? null,
+      opts.siteUrl ?? null,
     ],
   )
+}
+
+/**
+ * Read a deployment's current status. The autonomous agent polls this between
+ * steps: if the admin cancelled it (status flipped to a terminal state), the
+ * agent aborts gracefully instead of continuing to run commands.
+ */
+export async function getDeploymentStatus(
+  deploymentId: string,
+): Promise<string | null> {
+  const row = await one<{ status: string }>(
+    'SELECT status FROM hosting_deployments WHERE id = $1',
+    [deploymentId],
+  )
+  return row?.status ?? null
 }
 
 /**
@@ -253,7 +303,7 @@ export async function setDeploymentStatus(
  */
 export async function appendDeployLog(
   deploymentId: string,
-  stream: 'stdout' | 'stderr' | 'system',
+  stream: 'stdout' | 'stderr' | 'system' | 'agent' | 'command',
   line: string,
 ): Promise<void> {
   await query(

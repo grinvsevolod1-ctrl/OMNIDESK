@@ -3,12 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Terminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { DeploymentStatus } from '@/lib/types'
+import type { DeployLogStream, DeploymentStatus } from '@/lib/types'
 import { DEPLOYMENT_STATUS_LABEL, isDeploymentActive } from './shared'
 
 interface LogLine {
   seq: number
-  stream: 'stdout' | 'stderr' | 'system'
+  stream: DeployLogStream
   line: string
 }
 
@@ -125,9 +125,15 @@ export function DeploymentLogs({
                 'whitespace-pre-wrap break-all',
                 l.stream === 'stderr' && 'text-destructive',
                 l.stream === 'system' && 'text-primary',
+                // The autonomous agent's own narration and the commands it runs
+                // stand out from raw process output.
+                l.stream === 'agent' && 'font-sans text-accent-foreground',
+                l.stream === 'command' && 'font-semibold text-success',
               )}
             >
-              {l.line}
+              {l.stream === 'agent' ? `— ${l.line}` : null}
+              {l.stream === 'command' ? `$ ${l.line}` : null}
+              {l.stream !== 'agent' && l.stream !== 'command' ? l.line : null}
             </div>
           ))
         )}
