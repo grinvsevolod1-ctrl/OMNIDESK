@@ -174,6 +174,10 @@ describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
     'lib/ai-console/tools-quality.ts',
     'lib/autopilot/runtime.ts',
     'lib/data/ai-experiments.ts',
+    // Simulator prompt/message text (Russian, read verbatim by the model and
+    // posted into dialogs) — the same corruption class was found here too.
+    'lib/client-sim/engine.ts',
+    'lib/client-sim/generate.ts',
   ]
   for (const rel of PROMPT_FILES) {
     it(`${rel} contains no replacement characters`, () => {
