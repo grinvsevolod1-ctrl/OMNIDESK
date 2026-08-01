@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import {
   ArrowUp,
@@ -473,7 +473,7 @@ export function AiConsole({
         await refreshSettings()
         toast.success('Изменение отменено.')
       } catch {
-        toast.error('Не удалось отменить изменение.')
+        toast.error('Не уд��лось отменить изменение.')
       }
     },
     [refreshSettings],
@@ -979,7 +979,13 @@ function StatusChip({
 
 /* ------------------------------ Message bubbles -------------------------- */
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+// Memoized: the composer keeps its input in root state, so without memo every
+// keystroke re-rendered every bubble in the thread (laggy typing on mobile).
+const MessageBubble = memo(function MessageBubble({
+  message,
+}: {
+  message: ChatMessage
+}) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
 
@@ -1077,7 +1083,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     </div>
   )
-}
+})
 
 /** Typewriter reveal for assistant text (first mount only). */
 function AssistantText({ text }: { text: string }) {

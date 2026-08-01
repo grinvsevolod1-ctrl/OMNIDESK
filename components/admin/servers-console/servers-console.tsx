@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowUp,
@@ -411,32 +411,14 @@ export function ServersConsole({
 
       {hasChat ? (
         <div className="flex flex-col gap-4">
-          {messages.map((m) => (
-            <div key={m.id} className="flex flex-col gap-3">
-              <MessageBubble message={m} />
-              {m.actions && m.actions.length > 0 ? (
-                <ActionReceipts actions={m.actions} />
-              ) : null}
-              {m.credentialRequest ? (
-                <CredentialCard
-                  request={m.credentialRequest}
-                  onSaved={() => {
-                    void refreshServers()
-                  }}
-                />
-              ) : null}
-              {m.launchedDeploy ? (
-                <DeployCard deploy={m.launchedDeploy} />
-              ) : null}
-              {m.openPanel && activePanelMsgId === m.id && activePanel ? (
-                <InlinePanel
-                  panel={activePanel}
-                  servers={servers}
-                  onClose={closePanel}
-                />
-              ) : null}
-            </div>
-          ))}
+          <ChatThread
+            messages={messages}
+            servers={servers}
+            activePanel={activePanel}
+            activePanelMsgId={activePanelMsgId}
+            onClosePanel={closePanel}
+            onCredentialSaved={refreshServers}
+          />
           <div ref={bottomRef} className="scroll-mb-40" />
         </div>
       ) : (
@@ -485,7 +467,7 @@ export function ServersConsole({
                   setVoiceMode((v) => !v)
                 }}
                 aria-label={
-                  voiceMode ? 'Отключить озвучку ответов' : 'Озвучивать ответы'
+                  voiceMode ? 'Отключить озвучку ответов' : 'Озвучи��ать ответы'
                 }
                 aria-pressed={voiceMode}
                 title={voiceMode ? 'Озвучка включена' : 'Озвучивать ответы'}
@@ -572,6 +554,58 @@ export function ServersConsole({
   )
 }
 
+/* ------------------------------ Chat thread ----------------------------- */
+
+/**
+ * The whole message feed, memoized as one unit. The console keeps the input
+ * value in root state, so WITHOUT this every keystroke re-rendered every
+ * bubble, the live deploy log stream and the embedded servers table — the
+ * exact "laggy typing on mobile" symptom. All props here are referentially
+ * stable while typing, so keystrokes now skip the feed entirely.
+ */
+const ChatThread = memo(function ChatThread({
+  messages,
+  servers,
+  activePanel,
+  activePanelMsgId,
+  onClosePanel,
+  onCredentialSaved,
+}: {
+  messages: ChatMessage[]
+  servers: HostingServer[]
+  activePanel: OpenPanel | null
+  activePanelMsgId: string | null
+  onClosePanel: () => void
+  onCredentialSaved: () => void
+}) {
+  return (
+    <>
+      {messages.map((m) => (
+        <div key={m.id} className="flex flex-col gap-3">
+          <MessageBubble message={m} />
+          {m.actions && m.actions.length > 0 ? (
+            <ActionReceipts actions={m.actions} />
+          ) : null}
+          {m.credentialRequest ? (
+            <CredentialCard
+              request={m.credentialRequest}
+              onSaved={onCredentialSaved}
+            />
+          ) : null}
+          {m.launchedDeploy ? <DeployCard deploy={m.launchedDeploy} /> : null}
+          {m.openPanel && activePanelMsgId === m.id && activePanel ? (
+            <InlinePanel
+              panel={activePanel}
+              servers={servers}
+              onClose={onClosePanel}
+            />
+          ) : null}
+        </div>
+      ))}
+    </>
+  )
+})
+
 /* ------------------------------ Status strip ---------------------------- */
 
 function StatusStrip({
@@ -642,7 +676,11 @@ function StatusChip({
 
 /* ------------------------------ Message bubbles -------------------------- */
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+const MessageBubble = memo(function MessageBubble({
+  message,
+}: {
+  message: ChatMessage
+}) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
 
@@ -732,7 +770,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     </div>
   )
-}
+})
 
 function Dot({ delay }: { delay: string }) {
   return (
@@ -1045,7 +1083,11 @@ function SavedNote({ text }: { text: string }) {
  * the live log stream so the admin watches every step in real time, with a Stop
  * button to cancel mid-flight.
  */
-function DeployCard({ deploy }: { deploy: LaunchedDeploy }) {
+const DeployCard = memo(function DeployCard({
+  deploy,
+}: {
+  deploy: LaunchedDeploy
+}) {
   const [canceled, setCanceled] = useState(false)
   const [busy, setBusy] = useState(false)
 
@@ -1117,11 +1159,11 @@ function DeployCard({ deploy }: { deploy: LaunchedDeploy }) {
       />
     </Card>
   )
-}
+})
 
 /* ------------------------------ Inline panel ---------------------------- */
 
-function InlinePanel({
+const InlinePanel = memo(function InlinePanel({
   panel,
   servers,
   onClose,
@@ -1167,7 +1209,7 @@ function InlinePanel({
       )}
     </Card>
   )
-}
+})
 
 function PanelLink({ href, label }: { href: string; label: string }) {
   return (
