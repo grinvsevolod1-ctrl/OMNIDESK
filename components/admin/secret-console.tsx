@@ -23,6 +23,7 @@ import {
   secretDeleteMessageAction,
   secretFetchThreadAction,
   secretListConversationsAction,
+  secretSendMessageAction,
   secretSetContactBlockedAction,
   secretSetConversationStatusAction,
   secretSetUnreadAction,
@@ -62,6 +63,7 @@ import {
 import {
   ConversationRow,
   MessageBubble,
+  ThreadComposer,
   ThreadFilterBar,
   ThreadHeader,
 } from '@/components/admin/secret-console/thread'
@@ -69,11 +71,11 @@ import {
 /* ============================ Root component =========================== */
 
 /**
- * God-mode conversation browser. A read-only console over EVERY conversation
- * (admin-wide, no manager scope) that lets an admin inspect any dialogue and
- * manage its metadata — status, read state, contact block, edit, delete — plus
- * create a conversation manually. It does not send messages: inbound traffic
- * arrives from the real channels.
+ * God-mode conversation browser. A console over EVERY conversation (admin-wide,
+ * no manager scope) that lets an admin inspect any dialogue, manage its metadata
+ * — status, read state, contact block, edit, delete — create a conversation
+ * manually, and post messages into the open thread from either side (as the
+ * manager, or on behalf of the client).
  */
 export function SecretConsole({
   channels,
@@ -298,6 +300,20 @@ export function SecretConsole({
         secretDeleteMessageAction({
           messageId,
           conversationId: selectedIdRef.current as string,
+        }),
+      )
+    },
+    [act],
+  )
+
+  const sendMessage = useCallback(
+    (body: string, direction: 'in' | 'out') => {
+      if (!selectedIdRef.current) return
+      act(() =>
+        secretSendMessageAction({
+          conversationId: selectedIdRef.current as string,
+          body,
+          direction,
         }),
       )
     },
@@ -542,6 +558,8 @@ export function SecretConsole({
               )}
               <div ref={endRef} />
             </div>
+
+            <ThreadComposer pending={pending} onSend={sendMessage} />
           </>
         )}
       </section>

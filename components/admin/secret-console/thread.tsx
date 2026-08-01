@@ -1,16 +1,18 @@
 'use client'
 
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import {
   ArrowLeft,
   Ban,
   Circle,
+  Loader2,
   Mail,
   MailOpen,
   MoreHorizontal,
   Paperclip,
   Pencil,
   Search,
+  Send,
   ShieldCheck,
   Trash2,
   UserRound,
@@ -22,6 +24,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Popover,
   PopoverContent,
@@ -54,9 +57,9 @@ import {
  * secret-console.tsx to keep the root component focused on state/orchestration.
  * All are driven purely by props (no server actions of their own).
  *
- * This is a read-only conversation browser: it lets an admin inspect any
- * dialogue and manage its metadata (status / read / block / edit / delete).
- * It does NOT send messages — inbound traffic comes from real channels.
+ * The console lets an admin inspect any dialogue, manage its metadata
+ * (status / read / block / edit / delete) and post messages into it from either
+ * side — as the manager (outbound) or on behalf of the client (inbound).
  */
 
 /* --------------------------- Conversation row ------------------------- */
@@ -421,3 +424,103 @@ export const MessageBubble = memo(function MessageBubble({
     </div>
   )
 })
+
+/* ---------------------------- Thread composer ------------------------- */
+
+/**
+ * Message composer for the god-console. An admin can post into the open thread
+ * from either side: as the manager (direction 'out', bubble on the right) or on
+ * behalf of the client (direction 'in', an inbound message that also bumps the
+ * unread counter, exactly like a real incoming chat). The direction toggle
+ * makes the active side explicit so it is never ambiguous who is "speaking".
+ */
+export function ThreadComposer({
+  pending,
+  onSend,
+}: {
+  pending: boolean
+  onSend: (body: string, direction: 'in' | 'out') => void
+}) {
+  const [body, setBody] = useState('')
+  const [direction, setDirection] = useState<'in' | 'out'>('out')
+  const asClient = direction === 'in'
+
+  function submit() {
+    const text = body.trim()
+    if (!text || pending) return
+    onSend(text, direction)
+    setBody('')
+  }
+
+  return (
+    <div className="border-t border-border bg-card p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">Отправить как:</span>
+        <div className="flex items-center rounded-md border border-border bg-background p-0.5">
+          <button
+            type="button"
+            onClick={() => setDirection('out')}
+            className={cn(
+              'rounded px-2.5 py-1 text-xs font-medium transition-colors',
+              !asClient
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            Менеджер
+          </button>
+          <button
+            type="button"
+            onClick={() => setDirection('in')}
+            className={cn(
+              'rounded px-2.5 py-1 text-xs font-medium transition-colors',
+              asClient
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            Клиент
+          </button>
+        </div>
+      </div>
+      <div className="flex items-end gap-2">
+        <Textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => {
+            if (
+              e.key === 'Enter' &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing &&
+              e.keyCode !== 229
+            ) {
+              e.preventDefault()
+              submit()
+            }
+          }}
+          placeholder={
+            asClient
+              ? 'Сообщение от имени клиента…'
+              : 'Ответ от имени менеджера…'
+          }
+          className="max-h-40 min-h-11 flex-1 resize-none"
+          rows={1}
+        />
+        <Button
+          type="button"
+          size="icon"
+          className="size-11 shrink-0"
+          disabled={pending || !body.trim()}
+          onClick={submit}
+          aria-label="Отправить сообщение"
+        >
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Send className="size-4" />
+          )}
+        </Button>
+      </div>
+    </div>
+  )
+}
