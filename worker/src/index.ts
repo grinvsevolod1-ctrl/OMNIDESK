@@ -5,11 +5,17 @@ import { processJob, drainQueue } from './jobs.js'
 import { registry } from './registry.js'
 import { runNoResponseSweep } from './autopilot.js'
 import { captureException, initErrorReporter } from './error-reporter.js'
+import { processDeployJob, drainDeployQueue } from './hosting/jobs.js'
+import { sweepServerHealth } from './hosting/ops.js'
 
 /** How often the autopilot 'no_response' scheduler scans for silent threads. */
 const NO_RESPONSE_SWEEP_MS = 60_000
 
+/** How often to health-check every managed hosting server. */
+const HOSTING_HEALTH_SWEEP_MS = 120_000
+
 let noResponseTimer: NodeJS.Timeout | null = null
+let hostingHealthTimer: NodeJS.Timeout | null = null
 
 async function main(): Promise<void> {
   logger.info('Omnidesk worker starting')
@@ -29,6 +35,23 @@ async function main(): Promise<void> {
 
   // 3. Drain anything that was queued while we were down
   await drainQueue()
+
+  // 3b. App Hosting ("Серверы"): consume deploy_jobs the same way — react to new
+  //     jobs via NOTIFY, then drain anything queued while we were down.
+  await startListener('deploy_jobs', (jobId) => {
+    processDeployJob(jobId).catch((err) =>
+      logger.error({ err, jobId }, 'processDeployJob failed'),
+    )
+  })
+  await drainDeployQueue()
+
+  // 3c. Periodically health-check every managed server (cpu/ram/disk/uptime).
+  hostingHealthTimer = setInterval(() => {
+    sweepServerHealth().catch((err) =>
+      logger.error({ err }, 'hosting health sweep failed'),
+    )
+  }, HOSTING_HEALTH_SWEEP_MS)
+  hostingHealthTimer.unref?.()
 
   // 4. Resume sessions that were live before the last restart
   await registry.restore()
@@ -51,6 +74,7 @@ async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Shutting down worker')
   try {
     if (noResponseTimer) clearInterval(noResponseTimer)
+    if (hostingHealthTimer) clearInterval(hostingHealthTimer)
     await registry.shutdownAll()
     await pool.end()
   } finally {

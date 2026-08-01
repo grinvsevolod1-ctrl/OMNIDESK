@@ -83,3 +83,6 @@ export * from './data/login-ban'
 
 /* Global maintenance kill-switch (fake 502 screen, toggled from god panel) */
 export * from './data/maintenance'
+
+/* App Hosting ("Серверы"): servers, apps, deployments, logs + deploy queue */
+export * from './data/hosting'

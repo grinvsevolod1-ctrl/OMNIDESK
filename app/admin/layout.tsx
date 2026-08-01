@@ -24,6 +24,7 @@ const nav: NavItem[] = [
     ],
   },
   { href: '/admin/proxies', label: 'Прокси', icon: 'proxies' },
+  { href: '/admin/servers', label: 'Серверы', icon: 'servers' },
   { href: '/admin/finance', label: 'Учёт', icon: 'finance' },
   { href: '/admin/contacts', label: 'Контакты', icon: 'inbox' },
   { href: '/admin/settings', label: 'Система', icon: 'settings' },

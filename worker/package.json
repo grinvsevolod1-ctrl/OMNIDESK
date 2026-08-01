@@ -17,12 +17,14 @@
     "pg": "^8.13.1",
     "pino": "^9.5.0",
     "socks-proxy-agent": "^8.0.4",
+    "ssh2": "^1.17.0",
     "telegram": "^2.26.22",
     "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@types/pg": "^8.11.10",
+    "@types/ssh2": "^1.15.5",
     "typescript": "^5.7.2"
   }
 }

@@ -25,6 +25,7 @@ import {
   Plug,
   Radio,
   Server,
+  ServerCog,
   Settings,
   BrainCircuit,
   Users,
@@ -62,6 +63,7 @@ export type NavIcon =
   | 'connections'
   | 'inbox'
   | 'proxies'
+  | 'servers'
   | 'livechat'
   | 'analytics'
   | 'quickReplies'
@@ -83,6 +85,7 @@ const ICONS: Record<NavIcon, ComponentType<{ className?: string }>> = {
   connections: Plug,
   inbox: Inbox,
   proxies: Server,
+  servers: ServerCog,
   livechat: MessageCircle,
   analytics: BarChart3,
   quickReplies: MessageSquareText,
