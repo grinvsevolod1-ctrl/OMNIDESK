@@ -178,6 +178,105 @@ export async function sendPushToVisitor(
   return { sent, pruned }
 }
 
+/* --------------------------- God-messenger push --------------------------- */
+
+/**
+ * Persist (or refresh) a god-messenger device subscription. Unlike the manager
+ * table this has no owner scope — the god panel is a single super-admin surface,
+ * so every subscribed device receives every god push. Keyed by endpoint so a
+ * re-subscribe from the same device updates in place.
+ */
+export async function saveGodSubscription(
+  sub: StoredSubscription,
+  userAgent: string | null,
+): Promise<void> {
+  await query(
+    `INSERT INTO god_push_subscriptions (endpoint, p256dh, auth, user_agent, last_used_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (endpoint)
+       DO UPDATE SET p256dh = $2, auth = $3, user_agent = $4, last_used_at = now()`,
+    [sub.endpoint, sub.p256dh, sub.auth, userAgent],
+  )
+}
+
+/** Remove a god-messenger subscription by endpoint. */
+export async function removeGodSubscription(endpoint: string): Promise<void> {
+  await query('DELETE FROM god_push_subscriptions WHERE endpoint = $1', [
+    endpoint,
+  ])
+}
+
+/** True when at least one god device is subscribed. */
+export async function hasGodSubscriptions(): Promise<boolean> {
+  try {
+    const rows = await query<{ one: number }>(
+      'SELECT 1 AS one FROM god_push_subscriptions LIMIT 1',
+    )
+    return rows.length > 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Send a push to EVERY god-messenger device. Same dead-endpoint pruning and
+ * never-throws contract as the manager path. Used when a manager replies in any
+ * conversation, so the god-admin is notified on their phone.
+ */
+export async function sendPushToGod(
+  payload: PushPayload,
+): Promise<{ sent: number; pruned: number }> {
+  if (!ensureConfigured()) return { sent: 0, pruned: 0 }
+
+  let subs: SubscriptionRow[]
+  try {
+    subs = await query<SubscriptionRow>(
+      'SELECT endpoint, p256dh, auth FROM god_push_subscriptions',
+    )
+  } catch {
+    return { sent: 0, pruned: 0 }
+  }
+  if (subs.length === 0) return { sent: 0, pruned: 0 }
+
+  const body = JSON.stringify(payload)
+  let sent = 0
+  let pruned = 0
+  const dead: string[] = []
+
+  await Promise.all(
+    subs.map(async (row) => {
+      const subscription: PushSubscription = {
+        endpoint: row.endpoint,
+        keys: { p256dh: row.p256dh, auth: row.auth },
+      }
+      try {
+        await webpush.sendNotification(subscription, body, { TTL: 120 })
+        sent += 1
+      } catch (err: unknown) {
+        const statusCode =
+          typeof err === 'object' && err && 'statusCode' in err
+            ? (err as { statusCode?: number }).statusCode
+            : undefined
+        if (statusCode === 404 || statusCode === 410) dead.push(row.endpoint)
+      }
+    }),
+  )
+
+  if (dead.length > 0) {
+    try {
+      await query(
+        'DELETE FROM god_push_subscriptions WHERE endpoint = ANY($1)',
+        [dead],
+      )
+      pruned = dead.length
+    } catch {
+      /* ignore prune failure */
+    }
+  }
+
+  return { sent, pruned }
+}
+
 export interface PushPayload {
   title: string
   body: string

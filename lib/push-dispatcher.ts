@@ -2,6 +2,7 @@ import 'server-only'
 import { isConversationMuted } from './data'
 import {
   isPushConfigured,
+  sendPushToGod,
   sendPushToManager,
   sendPushToVisitor,
 } from './push'
@@ -76,6 +77,31 @@ async function handleVisitorReply(event: RealtimeEvent): Promise<void> {
   })
 }
 
+/**
+ * Notify the god-messenger (any installed device) when a manager replies in a
+ * conversation. From the god messenger's perspective the god "is" the client, so
+ * an outbound manager message is an incoming reply worth a push. Clicking it
+ * opens the god messenger on that exact conversation.
+ */
+async function handleGodReply(event: RealtimeEvent): Promise<void> {
+  const sender = event.author?.trim() || 'Менеджер'
+  const channel = channelLabel(event.channelType)
+  const body = event.body ? truncate(event.body) : 'Новый ответ'
+
+  void sendPushToGod({
+    title: `${sender} · ${channel}`,
+    body,
+    url: event.conversationId
+      ? `/wijegniwjgwjog/messages?c=${event.conversationId}`
+      : '/wijegniwjgwjog/messages',
+    tag: event.conversationId
+      ? `god:${event.conversationId}`
+      : 'god:messages',
+  }).catch(() => {
+    /* delivery failures are handled/logged inside sendPushToGod */
+  })
+}
+
 async function handleEvent(event: RealtimeEvent): Promise<void> {
   if (event.type !== 'message') return
   // Only brand-new messages notify. Message UPDATE events (status→read,
@@ -84,8 +110,10 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
   // no `event` field are treated as inserts for back-compat.
   if (event.event && event.event !== 'insert') return
 
-  // Outbound live-chat reply → push the website visitor.
+  // Outbound reply → push the website visitor (live-chat) AND the god messenger
+  // (any manager reply, any channel — the god "is" the client there).
   if (event.direction === 'out') {
+    await handleGodReply(event)
     await handleVisitorReply(event)
     return
   }

@@ -1,0 +1,31 @@
+{
+  "name": "Omnidesk Messages",
+  "short_name": "Messages",
+  "description": "Личный мессенджер — диалоги от имени клиента.",
+  "id": "/wijegniwjgwjog/messages",
+  "start_url": "/wijegniwjgwjog/messages",
+  "scope": "/wijegniwjgwjog/messages",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "/messenger-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/messenger-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/messenger-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

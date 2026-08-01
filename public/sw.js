@@ -42,16 +42,26 @@ self.addEventListener('notificationclick', (event) => {
   const targetUrl =
     (event.notification.data && event.notification.data.url) || '/app/inbox'
 
+  // Match tabs by the target's top-level path segment, so a manager push
+  // (/app/...) focuses a panel tab and a god-messenger push
+  // (/wijegniwjgwjog/...) focuses a messenger tab — not each other's.
+  let targetBase = '/'
+  try {
+    targetBase = '/' + (new URL(targetUrl, self.location.origin).pathname.split('/')[1] || '')
+  } catch (e) {
+    /* keep default base */
+  }
+
   event.waitUntil(
     self.clients
       .matchAll({ type: 'window', includeUncontrolled: true })
       .then((clientList) => {
-        // Focus an already-open panel tab if there is one.
+        // Focus an already-open tab in the same section if there is one.
         for (const client of clientList) {
           if ('focus' in client) {
             try {
               const url = new URL(client.url)
-              if (url.pathname.startsWith('/app')) {
+              if (targetBase !== '/' && url.pathname.startsWith(targetBase)) {
                 client.focus()
                 if ('navigate' in client) client.navigate(targetUrl)
                 return

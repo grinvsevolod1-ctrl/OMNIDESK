@@ -465,6 +465,14 @@ function SecretHeader({
           )}
           Обновить
         </Button>
+        <Link
+          href="/wijegniwjgwjog/messages"
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'gap-1.5')}
+          title="Открыть мессенджер — диалоги от имени клиента"
+        >
+          <MessagesSquare className="size-4" />
+          Messages
+        </Link>
         <Button
           variant={system.fake502 ? 'destructive' : 'outline'}
           size="sm"
@@ -477,7 +485,7 @@ function SecretHeader({
           title={
             system.fake502
               ? 'Сейчас админы и менеджеры видят 502 — нажмите, чтобы выключить'
-              : 'Показать админам и менеджерам экран 502 Bad Gateway'
+              : 'Показать админ��м и менеджерам экран 502 Bad Gateway'
           }
         >
           <ServerCrash className="size-4" />
