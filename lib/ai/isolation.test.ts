@@ -23,7 +23,17 @@ const GUARDED_FILES = [
   'lib/data/ai-followup.ts',
   'lib/followup/runtime.ts',
   'app/api/cron/followup/route.ts',
+  // The co-pilot core plus the domain modules the former monolith was split
+  // into — each contains tool code that must stay blind to sim/god internals.
   'lib/ai-console/run-assistant.ts',
+  'lib/ai-console/run-state.ts',
+  'lib/ai-console/prompt.ts',
+  'lib/ai-console/tools-settings.ts',
+  'lib/ai-console/tools-knowledge.ts',
+  'lib/ai-console/tools-directives.ts',
+  'lib/ai-console/tools-dialogs.ts',
+  'lib/ai-console/tools-analytics.ts',
+  'lib/ai-console/tools-quality.ts',
   // "Bigger brains" surfaces: system health, business memory + check cases.
   // getSystemHealth in particular reads channels/queue/balance — admin-visible
   // surfaces only — and must stay blind to the guarded subsystems forever.
@@ -85,6 +95,15 @@ describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
   const PROMPT_FILES = [
     'lib/ai/manager-brain.ts',
     'lib/ai-console/run-assistant.ts',
+    // The split-out co-pilot modules: the system prompt and every tool
+    // description are Russian text the model reads verbatim.
+    'lib/ai-console/prompt.ts',
+    'lib/ai-console/tools-settings.ts',
+    'lib/ai-console/tools-knowledge.ts',
+    'lib/ai-console/tools-directives.ts',
+    'lib/ai-console/tools-dialogs.ts',
+    'lib/ai-console/tools-analytics.ts',
+    'lib/ai-console/tools-quality.ts',
     'lib/autopilot/runtime.ts',
     'lib/data/ai-experiments.ts',
   ]
