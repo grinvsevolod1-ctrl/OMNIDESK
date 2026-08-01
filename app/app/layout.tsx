@@ -5,8 +5,9 @@ import { NotificationProvider } from '@/components/manager/notification-provider
 import { NotificationGate } from '@/components/manager/notification-gate'
 import { HeaderNotificationBell } from '@/components/manager/header-notification-bell'
 import { LunchToggle } from '@/components/manager/lunch-toggle'
+import { Fake502 } from '@/components/fake-502'
 import { requireManager } from '@/lib/auth'
-import { getManagerOnLunch } from '@/lib/data'
+import { getFake502, getManagerOnLunch } from '@/lib/data'
 
 const nav: NavItem[] = [
   { href: '/app', label: 'Обзор', icon: 'overview' },
@@ -25,6 +26,11 @@ export default async function ManagerLayout({
   children: ReactNode
 }) {
   const user = await requireManager()
+
+  // God-panel maintenance kill-switch: when on, managers see a fake 502 instead
+  // of the dashboard. The god panel is never gated by this, so it can be undone.
+  if (await getFake502()) return <Fake502 />
+
   const onLunch = await getManagerOnLunch(user.sub)
   return (
     <SWRProvider>

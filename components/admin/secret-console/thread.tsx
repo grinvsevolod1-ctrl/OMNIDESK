@@ -428,60 +428,35 @@ export const MessageBubble = memo(function MessageBubble({
 /* ---------------------------- Thread composer ------------------------- */
 
 /**
- * Message composer for the god-console. An admin can post into the open thread
- * from either side: as the manager (direction 'out', bubble on the right) or on
- * behalf of the client (direction 'in', an inbound message that also bumps the
- * unread counter, exactly like a real incoming chat). The direction toggle
- * makes the active side explicit so it is never ambiguous who is "speaking".
+ * Message composer for the god-console. Messages are posted into the open thread
+ * ONLY on behalf of the client (direction 'in') — an inbound message that also
+ * bumps the unread counter, exactly like a real incoming chat. There is
+ * deliberately no "as manager" option here: the manager side is driven by the
+ * real product, the console only injects client-side traffic.
  */
 export function ThreadComposer({
   pending,
   onSend,
 }: {
   pending: boolean
-  onSend: (body: string, direction: 'in' | 'out') => void
+  onSend: (body: string) => void
 }) {
   const [body, setBody] = useState('')
-  const [direction, setDirection] = useState<'in' | 'out'>('out')
-  const asClient = direction === 'in'
 
   function submit() {
     const text = body.trim()
     if (!text || pending) return
-    onSend(text, direction)
+    onSend(text)
     setBody('')
   }
 
   return (
     <div className="border-t border-border bg-card p-3">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">Отправить как:</span>
-        <div className="flex items-center rounded-md border border-border bg-background p-0.5">
-          <button
-            type="button"
-            onClick={() => setDirection('out')}
-            className={cn(
-              'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-              !asClient
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            Менеджер
-          </button>
-          <button
-            type="button"
-            onClick={() => setDirection('in')}
-            className={cn(
-              'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-              asClient
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            Клиент
-          </button>
-        </div>
+      <div className="mb-2 flex items-center gap-1.5">
+        <UserRound className="size-3.5 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">
+          Сообщение от имени клиента
+        </span>
       </div>
       <div className="flex items-end gap-2">
         <Textarea
@@ -498,11 +473,7 @@ export function ThreadComposer({
               submit()
             }
           }}
-          placeholder={
-            asClient
-              ? 'Сообщение от имени клиента…'
-              : 'Ответ от имени менеджера…'
-          }
+          placeholder="Сообщение от имени клиента…"
           className="max-h-40 min-h-11 flex-1 resize-none"
           rows={1}
         />
@@ -512,7 +483,7 @@ export function ThreadComposer({
           className="size-11 shrink-0"
           disabled={pending || !body.trim()}
           onClick={submit}
-          aria-label="Отправить сообщение"
+          aria-label="Отправить сообщение от имени клиента"
         >
           {pending ? (
             <Loader2 className="size-4 animate-spin" />

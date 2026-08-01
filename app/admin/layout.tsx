@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react'
 import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
 import { SWRProvider } from '@/components/swr-provider'
+import { Fake502 } from '@/components/fake-502'
 import { requireAdmin } from '@/lib/auth'
+import { getFake502 } from '@/lib/data'
 
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
@@ -33,6 +35,11 @@ export default async function AdminLayout({
   children: ReactNode
 }) {
   const user = await requireAdmin()
+
+  // God-panel maintenance kill-switch: when on, admins see a fake 502 instead
+  // of the dashboard. The god panel is never gated by this, so it can be undone.
+  if (await getFake502()) return <Fake502 />
+
   return (
     <SWRProvider>
       <DashboardShell

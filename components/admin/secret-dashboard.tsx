@@ -22,6 +22,7 @@ import {
   RefreshCw,
   Search,
   Server,
+  ServerCrash,
   ShieldCheck,
   Target,
   Lock,
@@ -34,6 +35,7 @@ import {
   secretClearManagerTempPasswordAction,
   secretLockAction,
   secretRevealManagerTempPasswordAction,
+  secretSetFake502Action,
   secretSetManagerStatusAction,
   secretSetManagerTempPasswordAction,
   type ActionResult,
@@ -141,6 +143,8 @@ interface SecretSystem {
   aiBalanceOk: boolean
   /** Why the balance is unavailable, if so. */
   aiBalanceMessage: string | null
+  /** When true, admins & managers currently see the fake 502 screen. */
+  fake502: boolean
 }
 
 
@@ -165,6 +169,7 @@ export function SecretDashboard({
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [confirm502Open, setConfirm502Open] = useState(false)
 
   // Live refresh: re-run the RSC every 20s so metrics/tables stay current
   // without any client-side fetching. Pausable to avoid churn while typing.
@@ -219,6 +224,23 @@ export function SecretDashboard({
         onLock={() => {
           void secretLockAction().then(() => router.refresh())
         }}
+        onToggle502={() => {
+          if (system.fake502) {
+            // Turning it OFF is safe — no confirmation needed.
+            run(() => secretSetFake502Action(false))
+          } else {
+            setConfirm502Open(true)
+          }
+        }}
+      />
+
+      <Confirm502Dialog
+        open={confirm502Open}
+        onOpenChange={setConfirm502Open}
+        pending={pending}
+        onConfirm={() =>
+          run(() => secretSetFake502Action(true), () => setConfirm502Open(false))
+        }
       />
 
       <AiBalanceBanner system={system} />
@@ -324,6 +346,60 @@ export function SecretDashboard({
   )
 }
 
+/* ------------------------- Fake-502 confirm ------------------------- */
+
+function Confirm502Dialog({
+  open,
+  onOpenChange,
+  pending,
+  onConfirm,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  pending: boolean
+  onConfirm: () => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ServerCrash className="size-5 text-destructive" />
+            Показать экран «502 Bad Gateway»?
+          </DialogTitle>
+          <DialogDescription>
+            Все администраторы и менеджеры вместо своих кабинетов увидят страницу
+            502 Bad Gateway, как будто сервис недоступен. Эта панель продолжит
+            работать — вы сможете выключить режим в любой момент.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
+            Отмена
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={onConfirm}
+            disabled={pending}
+            className="gap-1.5"
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <ServerCrash className="size-4" />
+            )}
+            Включить 502
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /* ------------------------------- Header ------------------------------- */
 
 function SecretHeader({
@@ -333,6 +409,7 @@ function SecretHeader({
   onToggleAuto,
   onRefresh,
   onLock,
+  onToggle502,
 }: {
   system: SecretSystem
   pending: boolean
@@ -340,6 +417,7 @@ function SecretHeader({
   onToggleAuto: () => void
   onRefresh: () => void
   onLock: () => void
+  onToggle502: () => void
 }) {
   return (
     <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
@@ -386,6 +464,24 @@ function SecretHeader({
             <RefreshCw className="size-4" />
           )}
           Обновить
+        </Button>
+        <Button
+          variant={system.fake502 ? 'destructive' : 'outline'}
+          size="sm"
+          onClick={onToggle502}
+          disabled={pending}
+          className={cn(
+            'press-scale gap-1.5',
+            !system.fake502 && 'border-destructive/40 text-destructive hover:text-destructive',
+          )}
+          title={
+            system.fake502
+              ? 'Сейчас админы и менеджеры видят 502 — нажмите, чтобы выключить'
+              : 'Показать админам и менеджерам экран 502 Bad Gateway'
+          }
+        >
+          <ServerCrash className="size-4" />
+          {system.fake502 ? 'Выключить 502' : 'Показать 502'}
         </Button>
         {system.gateEnabled && (
           <Button

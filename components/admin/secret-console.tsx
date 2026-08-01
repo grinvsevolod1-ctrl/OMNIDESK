@@ -74,8 +74,7 @@ import {
  * God-mode conversation browser. A console over EVERY conversation (admin-wide,
  * no manager scope) that lets an admin inspect any dialogue, manage its metadata
  * — status, read state, contact block, edit, delete — create a conversation
- * manually, and post messages into the open thread from either side (as the
- * manager, or on behalf of the client).
+ * manually, and inject messages into the open thread on behalf of the client.
  */
 export function SecretConsole({
   channels,
@@ -307,13 +306,13 @@ export function SecretConsole({
   )
 
   const sendMessage = useCallback(
-    (body: string, direction: 'in' | 'out') => {
+    (body: string) => {
       if (!selectedIdRef.current) return
       act(() =>
         secretSendMessageAction({
           conversationId: selectedIdRef.current as string,
           body,
-          direction,
+          direction: 'in',
         }),
       )
     },

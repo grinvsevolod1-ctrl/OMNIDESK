@@ -80,3 +80,6 @@ export * from './data/webhook-dead-letter'
 
 /* Persistent login brute-force blocklist (survives restarts) */
 export * from './data/login-ban'
+
+/* Global maintenance kill-switch (fake 502 screen, toggled from god panel) */
+export * from './data/maintenance'
