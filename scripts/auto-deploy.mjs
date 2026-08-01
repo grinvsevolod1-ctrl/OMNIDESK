@@ -20,6 +20,11 @@
  *   AUTO_DEPLOY_INTERVAL_MS poll interval in ms (default 30000, floor 5000).
  *   AUTO_DEPLOY_TIMEOUT_MS  hard cap for a single deploy.sh run (default 900000).
  *   APP_DIR                 repo checkout (default: repo root of this file).
+ *   DEPLOY_TG_BOT_TOKEN     Telegram bot token for deploy notifications
+ *                           (create a bot via @BotFather). Optional: without
+ *                           it, notifications are silently skipped.
+ *   DEPLOY_TG_CHAT_ID       chat id to notify (your own id — get it via
+ *                           @userinfobot, or a group id). Required with token.
  *
  * Safety model:
  *   - deploy.sh is self-serializing via flock, so this watcher can never clobber
@@ -50,7 +55,13 @@ const cfg = {
   remote: process.env.AUTO_DEPLOY_REMOTE || 'origin',
   intervalMs: Math.max(5_000, intEnv('AUTO_DEPLOY_INTERVAL_MS', 30_000)),
   deployTimeoutMs: intEnv('AUTO_DEPLOY_TIMEOUT_MS', 900_000),
+  tgToken: process.env.DEPLOY_TG_BOT_TOKEN || '',
+  tgChatId: process.env.DEPLOY_TG_CHAT_ID || '',
 }
+
+// Full output of the most recent deploy.sh run (captured via tee so the
+// realtime stream still reaches the PM2 log). Attached to failure notices.
+const DEPLOY_LOG_FILE = path.join(REPO_ROOT, '.deploy.log')
 
 function intEnv(name, fallback) {
   const v = Number(process.env[name])
@@ -88,6 +99,9 @@ function selfHash() {
 
 const startHash = selfHash()
 let deploying = false
+// Commit sha whose deploy failure was already reported to Telegram — resets
+// on any success so a NEW breakage on the next commit is reported again.
+let failNotifiedSha = ''
 
 // Commit of the last deploy that finished END-TO-END. deploy.sh writes this
 // marker as its very last step, past every failure point (build, swap, pm2
@@ -119,15 +133,94 @@ function remoteSha() {
   return r.ok ? r.stdout : ''
 }
 
+// ── Telegram deploy notifications ─────────────────────────────────────────────
+// Fire-and-forget by design: a Telegram outage must never fail or delay a
+// deploy, so every network error here is logged and swallowed. Configured via
+// DEPLOY_TG_BOT_TOKEN + DEPLOY_TG_CHAT_ID in the shared .env (ecosystem.config
+// injects it into this process); with either missing we skip silently.
+
+function tgConfigured() {
+  return Boolean(cfg.tgToken && cfg.tgChatId)
+}
+
+async function tgSendMessage(text) {
+  if (!tgConfigured()) return
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${cfg.tgToken}/sendMessage`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: cfg.tgChatId,
+          // Plain text on purpose: commit messages routinely contain _ * [ `
+          // which break Markdown parse_mode and get the whole notice rejected.
+          text: text.slice(0, 4000),
+          disable_web_page_preview: true,
+        }),
+      },
+    )
+    if (!res.ok) log(`telegram sendMessage failed: HTTP ${res.status}`)
+  } catch (err) {
+    log('telegram sendMessage error:', err?.message || err)
+  }
+}
+
+async function tgSendLogDocument(caption) {
+  if (!tgConfigured()) return
+  try {
+    // Last ~300 lines are where the build/migrate error always is; full logs
+    // of a long build can exceed Telegram's 50 MB document cap.
+    let content = ''
+    try {
+      const lines = fs.readFileSync(DEPLOY_LOG_FILE, 'utf8').split('\n')
+      content = lines.slice(-300).join('\n')
+    } catch {
+      content = 'deploy log file is missing — deploy.sh may have died before producing output.'
+    }
+    const form = new FormData()
+    form.append('chat_id', cfg.tgChatId)
+    form.append('caption', caption.slice(0, 1000))
+    form.append(
+      'document',
+      new Blob([content], { type: 'text/plain' }),
+      `deploy-error-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`,
+    )
+    const res = await fetch(
+      `https://api.telegram.org/bot${cfg.tgToken}/sendDocument`,
+      { method: 'POST', body: form },
+    )
+    if (!res.ok) log(`telegram sendDocument failed: HTTP ${res.status}`)
+  } catch (err) {
+    log('telegram sendDocument error:', err?.message || err)
+  }
+}
+
+// One-line summary of a commit for the notification text.
+function commitSummary(sha) {
+  const r = git(['log', '-1', '--format=%h %s', sha])
+  return r.ok ? r.stdout : sha.slice(0, 8)
+}
+
 function runDeploy() {
   log(`Change detected on ${cfg.remote}/${cfg.branch} — running deploy.sh ...`)
-  const res = spawnSync('bash', [path.join(REPO_ROOT, 'deploy.sh')], {
-    cwd: REPO_ROOT,
-    stdio: 'inherit',
-    // deploy.sh defaults to the checked-out branch; pin it to the tracked one.
-    env: { ...process.env, DEPLOY_BRANCH: cfg.branch },
-    timeout: cfg.deployTimeoutMs,
-  })
+  // tee: the realtime stream still reaches the PM2 log (stdio inherit), while
+  // the full output lands in .deploy.log for the failure notification.
+  // pipefail keeps deploy.sh's exit code as the pipeline's exit code.
+  const res = spawnSync(
+    'bash',
+    [
+      '-c',
+      `set -o pipefail; bash ${JSON.stringify(path.join(REPO_ROOT, 'deploy.sh'))} 2>&1 | tee ${JSON.stringify(DEPLOY_LOG_FILE)}`,
+    ],
+    {
+      cwd: REPO_ROOT,
+      stdio: 'inherit',
+      // deploy.sh defaults to the checked-out branch; pin it to the tracked one.
+      env: { ...process.env, DEPLOY_BRANCH: cfg.branch },
+      timeout: cfg.deployTimeoutMs,
+    },
+  )
   if (res.status === 0) {
     // Exit 0 covers both "deployed" and "another deploy held the lock, skipped"
     // (deploy.sh exits 0 on lock contention). Either way we're not behind for a
@@ -219,6 +312,34 @@ async function tick() {
         `${remote.slice(0, 8)} — deploying.`,
     )
     const ok = runDeploy()
+
+    // Notify AFTER the outcome is known. Success is "the end-to-end marker now
+    // matches remote" — not deploy.sh's exit code, which is also 0 on a lock-
+    // contention skip. Failures are deduped per commit: the watcher retries
+    // every cycle, and a broken build must not page you every ~30 seconds.
+    const deployedNow = deployedSha()
+    if (deployedNow === remote) {
+      failNotifiedSha = '' // new outcome — re-arm failure notices
+      await tgSendMessage(
+        `✅ OMNIDESK обновлён без ошибок\n` +
+          `Ветка: ${cfg.branch}\n` +
+          `Коммит: ${commitSummary(remote)}\n` +
+          `Панель перезапущена, всё работает.`,
+      )
+    } else if (!ok && failNotifiedSha !== remote) {
+      failNotifiedSha = remote
+      await tgSendMessage(
+        `❌ Ошибка автообновления OMNIDESK\n` +
+          `Ветка: ${cfg.branch}\n` +
+          `Коммит: ${commitSummary(remote)}\n` +
+          `Панель продолжает работать на старой версии; ` +
+          `деплой будет повторяться автоматически. Лог ошибки — в файле ниже.`,
+      )
+      await tgSendLogDocument(
+        `Лог упавшего деплоя (${commitSummary(remote)}), последние 300 строк`,
+      )
+    }
+
     if (ok && selfHash() !== startHash) {
       log(
         'watcher source changed during this deploy; exiting so PM2 relaunches ' +
@@ -243,6 +364,11 @@ function main() {
   log(
     `watching ${cfg.remote}/${cfg.branch} every ${cfg.intervalMs}ms ` +
       `(repo: ${REPO_ROOT})`,
+  )
+  log(
+    tgConfigured()
+      ? 'telegram deploy notifications: ON'
+      : 'telegram deploy notifications: off (set DEPLOY_TG_BOT_TOKEN + DEPLOY_TG_CHAT_ID in .env to enable)',
   )
   // First check immediately on boot (so a box that is behind main catches up
   // right away), then on the interval.
