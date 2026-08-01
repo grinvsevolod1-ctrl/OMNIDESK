@@ -22,11 +22,6 @@ import {
 } from '@/lib/data'
 import { generatePassword } from '@/lib/crypto'
 import {
-  getThreadSimInfoOne,
-  getThreadsSimInfo,
-  type ThreadSimInfo,
-} from '@/lib/client-sim/store'
-import {
   type ChannelType,
   type Conversation,
   type ManagerStatus,
@@ -243,40 +238,19 @@ export async function secretReassignConversationsAction(input: {
 
 export type ConversationWithManager = Conversation & {
   managerName: string | null
-  /**
-   * God-console-only: true when the contact is a simulated persona from our
-   * site, false for a genuine external client. Permanent flag (migration 065),
-   * so the source stays visible even after the sim thread finishes or is cleaned
-   * up. Never exposed on the shared `Conversation` type, so it can't leak into
-   * the manager inbox.
-   */
-  isSimulated: boolean
-}
-
-/**
- * God-console-only view model: a conversation plus the simulator's involvement
- * in it. `sim` is null for ordinary (non-simulated) conversations. This type is
- * deliberately local to the god console — the shared `Conversation`/data layer
- * is never widened, so nothing about the simulator can leak into the manager
- * inbox or the regular admin surface.
- */
-export type ConversationWithSim = ConversationWithManager & {
-  sim: ThreadSimInfo | null
 }
 
 /** Live-searchable list of every conversation (admin-wide, no manager scope). */
 export async function secretListConversationsAction(opts?: {
   search?: string
   channelType?: string
-}): Promise<ConversationWithSim[]> {
+}): Promise<ConversationWithManager[]> {
   await requireAdmin()
   const channelType =
     opts?.channelType && opts.channelType !== 'all'
       ? (opts.channelType as ChannelType)
       : undefined
-  const list = await listConversationsAdmin({ search: opts?.search, channelType })
-  const simInfo = await getThreadsSimInfo(list.map((c) => c.id))
-  return list.map((c) => ({ ...c, sim: simInfo.get(c.id) ?? null }))
+  return listConversationsAdmin({ search: opts?.search, channelType })
 }
 
 export interface ThreadResult {
@@ -284,8 +258,6 @@ export interface ThreadResult {
   message?: string
   conversation: ConversationWithManager | null
   messages: Message[]
-  /** Simulator involvement for this conversation (null when not simulated). */
-  sim: ThreadSimInfo | null
 }
 
 /** Full transcript + metadata for one conversation (admin-wide). */
@@ -294,11 +266,10 @@ export async function secretFetchThreadAction(
 ): Promise<ThreadResult> {
   await requireAdmin()
   if (!conversationId)
-    return { ok: false, message: 'Не указан диалог', conversation: null, messages: [], sim: null }
+    return { ok: false, message: 'Не указан диалог', conversation: null, messages: [] }
   const conversation = await getConversationAdmin(conversationId)
   if (!conversation)
-    return { ok: false, message: 'Диалог не найден', conversation: null, messages: [], sim: null }
+    return { ok: false, message: 'Диалог не найден', conversation: null, messages: [] }
   const messages = await listMessagesAdmin(conversationId)
-  const sim = await getThreadSimInfoOne(conversationId)
-  return { ok: true, conversation, messages, sim }
+  return { ok: true, conversation, messages }
 }

@@ -609,15 +609,14 @@ export async function aiLogsAction(opts?: {
 }): Promise<AiLogRow[]> {
   await requireAdmin()
   return listAiLogs({
-    scope: 'ai',
     sinceId: opts?.sinceId ?? null,
     level: opts?.level ?? 'all',
     limit: opts?.limit ?? 200,
   })
 }
 
-/** Clear the AI-manager activity log (does not touch the simulator log). */
+/** Clear the AI-manager activity log. */
 export async function aiClearLogsAction(): Promise<void> {
   await requireAdmin()
-  await clearAiLogs('ai')
+  await clearAiLogs()
 }

@@ -127,7 +127,7 @@ async function recentAiErrors(): Promise<{
   count: number
   recent: SystemHealth['recentErrors']
 }> {
-  const rows = await listAiLogs({ scope: 'ai', limit: 100 })
+  const rows = await listAiLogs({ limit: 100 })
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000
   const errors = rows.filter(
     (r) => r.level === 'error' && new Date(r.createdAt).getTime() >= dayAgo,

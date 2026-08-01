@@ -317,9 +317,6 @@ export async function listManualCorrectionRules(
  * exactly:
  *
  *   led = ai_assist_settings.enabled AND c.ai_enrolled AND NOT c.ai_paused
- *
- * Simulated dialogs are deliberately NOT excluded: the AI must treat them like
- * any real client. is_simulated only gates delivery + analytics downstream.
  */
 export async function isConversationAiLed(
   conversationId: string,
@@ -711,11 +708,7 @@ export async function findNoResponseConversations(maxMinutes: number): Promise<
        LEFT JOIN last_out lo ON lo.conversation_id = c.id
       WHERE (lo.created_at IS NULL OR lo.created_at < li.created_at)
         AND li.created_at < now() - '1 minute'::interval
-        AND li.created_at > now() - ($1 || ' minutes')::interval
-        -- Never let the worker touch simulator dialogs: they live on real
-        -- channels, so a canned auto-reply here would be sent to a real
-        -- provider. The simulator loop is driven entirely by the panel runtime.
-        AND c.is_simulated = false`,
+        AND li.created_at > now() - ($1 || ' minutes')::interval`,
     [String(maxMinutes)],
   )
   return rows.map((r) => ({

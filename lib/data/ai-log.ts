@@ -10,26 +10,12 @@ import { query } from '../db'
  *
  * Design rules:
  *  - Writes are BEST-EFFORT and NEVER throw. Logging must not be able to break
- *    the thing it is observing (a reply send, a sim tick, ingestion).
+ *    the thing it is observing (a reply send, ingestion).
  *  - The table is a capped ring buffer; we trim old rows opportunistically so
  *    it can't grow without bound.
  */
 
 export type AiLogLevel = 'debug' | 'info' | 'warn' | 'error'
-
-/**
- * Two fully independent log streams share the table but MUST NEVER be shown
- * together — they belong to unrelated systems:
- *   - 'ai'  → the AI manager that talks to real clients (sources: brain,
- *             ai-lead, handoff, worker). Visible in the normal admin panel.
- *   - 'sim' → the SECRET client simulator (source: sim). God-panel only —
- *             it must never leak into the ordinary admin UI.
- * Every read/clear is scoped so the two can't cross-contaminate.
- */
-export type AiLogScope = 'ai' | 'sim'
-
-/** Sources that belong to the secret simulator stream. */
-const SIM_SOURCES = ['sim']
 
 export interface AiLogInput {
   level?: AiLogLevel
@@ -205,22 +191,10 @@ export async function listAiLogs(opts?: {
   limit?: number
   sinceId?: string | null
   level?: AiLogLevel | 'all'
-  scope?: AiLogScope
 }): Promise<AiLogRow[]> {
   const limit = Math.max(1, Math.min(500, opts?.limit ?? 200))
   const conds: string[] = []
   const params: unknown[] = []
-
-  // Scope is mandatory in practice: 'ai' excludes the simulator sources, 'sim'
-  // includes only them. Defaults to 'ai' so an unscoped call can never leak
-  // secret simulator activity into the normal admin panel.
-  const scope: AiLogScope = opts?.scope ?? 'ai'
-  params.push(SIM_SOURCES)
-  conds.push(
-    scope === 'sim'
-      ? `source = ANY($${params.length}::text[])`
-      : `NOT (source = ANY($${params.length}::text[]))`,
-  )
 
   if (opts?.sinceId) {
     params.push(opts.sinceId)
@@ -254,18 +228,11 @@ export async function listAiLogs(opts?: {
 }
 
 /**
- * Wipe one log stream (admin "Очистить" action). Best-effort. Scoped so
- * clearing the AI-manager log never touches the secret simulator log and vice
- * versa.
+ * Wipe the AI-manager log (admin "Очистить" action). Best-effort.
  */
-export async function clearAiLogs(scope: AiLogScope = 'ai'): Promise<void> {
+export async function clearAiLogs(): Promise<void> {
   try {
-    await query(
-      scope === 'sim'
-        ? `DELETE FROM ai_logs WHERE source = ANY($1::text[])`
-        : `DELETE FROM ai_logs WHERE NOT (source = ANY($1::text[]))`,
-      [SIM_SOURCES],
-    )
+    await query(`DELETE FROM ai_logs`)
   } catch {
     // ignore
   }

@@ -7,11 +7,6 @@
  * thread/dialog sub-parts can share them without duplication.
  */
 
-import type { ConversationWithSim } from '@/app/actions/admin-secret'
-
-/** Simulator-involvement shape, derived from the god-console view model. */
-export type SimInfo = ConversationWithSim['sim']
-
 /* ------------------------------- Labels ------------------------------- */
 
 export const TYPE_LABEL: Record<string, string> = {
@@ -55,23 +50,6 @@ export const STATUS_VALUES = [
   'transferred',
 ]
 
-/** Human labels for the auto-client lifecycle (shown only inside "Детали"). */
-export const SIM_STATE_LABEL: Record<string, string> = {
-  opening: 'открывает диалог',
-  chatting: 'активная переписка',
-  ignoring: 'притих',
-  later: 'ответит позже',
-  sleeping: 'спит',
-  vanished: 'пропал',
-  done: 'завершён',
-}
-
-/**
- * List-level filter. Source axis: `sim` (from our site) vs `real` (external
- * client), driven by the permanent is_simulated flag. Control axis: `driving`
- * (autopilot replying) vs `paused` (operator took over).
- */
-export type SimFilter = 'all' | 'sim' | 'real' | 'driving' | 'paused'
 /** Thread-level direction filter. */
 export type DirFilter = 'all' | 'in' | 'out'
 

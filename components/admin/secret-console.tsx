@@ -23,14 +23,10 @@ import {
   secretDeleteMessageAction,
   secretFetchThreadAction,
   secretListConversationsAction,
-  secretSendAsClientAction,
-  secretSendClientMediaAction,
   secretSetContactBlockedAction,
   secretSetConversationStatusAction,
-  secretSetThreadSimAction,
   secretSetUnreadAction,
   type ConversationWithManager,
-  type ConversationWithSim,
 } from '@/app/actions/admin-secret'
 import { EmptyState } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
@@ -58,15 +54,12 @@ import {
   STATUS_VALUES,
   TYPE_LABEL,
   type DirFilter,
-  type SimFilter,
-  type SimInfo,
 } from '@/components/admin/secret-console/utils'
 import {
   CreateConversationDialog,
   EditConversationDialog,
 } from '@/components/admin/secret-console/dialogs'
 import {
-  Composer,
   ConversationRow,
   MessageBubble,
   ThreadFilterBar,
@@ -75,6 +68,13 @@ import {
 
 /* ============================ Root component =========================== */
 
+/**
+ * God-mode conversation browser. A read-only console over EVERY conversation
+ * (admin-wide, no manager scope) that lets an admin inspect any dialogue and
+ * manage its metadata — status, read state, contact block, edit, delete — plus
+ * create a conversation manually. It does not send messages: inbound traffic
+ * arrives from the real channels.
+ */
 export function SecretConsole({
   channels,
   managers,
@@ -82,19 +82,17 @@ export function SecretConsole({
   channels: Channel[]
   managers: Manager[]
 }) {
-  const [conversations, setConversations] = useState<ConversationWithSim[]>([])
+  const [conversations, setConversations] = useState<ConversationWithManager[]>([])
   const [loadingList, setLoadingList] = useState(true)
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
 
   // Client-side rail filters (applied on top of the server list; no refetch).
-  const [simFilter, setSimFilter] = useState<SimFilter>('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [unreadOnly, setUnreadOnly] = useState(false)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [conversation, setConversation] = useState<ConversationWithManager | null>(null)
-  const [threadSim, setThreadSim] = useState<SimInfo>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [loadingThread, setLoadingThread] = useState(false)
 
@@ -150,7 +148,6 @@ export function SecretConsole({
       const res = await secretFetchThreadAction(id)
       if (res.ok) {
         setConversation(res.conversation)
-        setThreadSim(res.sim)
         setMessages(res.messages)
       } else {
         toast.error(res.message ?? 'Диалог недоступен')
@@ -169,7 +166,6 @@ export function SecretConsole({
     if (selectedId) void loadThread(selectedId)
     else {
       setConversation(null)
-      setThreadSim(null)
       setMessages([])
     }
   }, [selectedId, loadThread])
@@ -249,33 +245,17 @@ export function SecretConsole({
     return (id: string | null) => (id ? map.get(id) ?? '—' : '—')
   }, [managers])
 
-  // Whether any simulated conversation exists at all — drives whether we even
-  // show the source filter (keeps the UI clean when nothing is simulated). Uses
-  // the permanent is_simulated flag, so it stays correct for finished sims too.
-  const hasAnySim = useMemo(
-    () => conversations.some((c) => c.isSimulated),
-    [conversations],
-  )
-
   // Client-side filtered rail. Cheap, memoised, no refetch.
   const visibleConversations = useMemo(() => {
     return conversations.filter((c) => {
       if (unreadOnly && c.unread <= 0) return false
       if (statusFilter !== 'all' && c.status !== statusFilter) return false
-      // Source axis (reliable, permanent).
-      if (simFilter === 'sim' && !c.isSimulated) return false
-      if (simFilter === 'real' && c.isSimulated) return false
-      // Control axis (live autopilot state).
-      if (simFilter === 'driving' && !(c.sim?.active && !c.sim.paused)) return false
-      if (simFilter === 'paused' && !(c.sim?.active && c.sim.paused)) return false
       return true
     })
-  }, [conversations, unreadOnly, statusFilter, simFilter])
+  }, [conversations, unreadOnly, statusFilter])
 
   const activeFilterCount =
-    (simFilter !== 'all' ? 1 : 0) +
-    (statusFilter !== 'all' ? 1 : 0) +
-    (unreadOnly ? 1 : 0)
+    (statusFilter !== 'all' ? 1 : 0) + (unreadOnly ? 1 : 0)
 
   // Thread messages after the (progressive) direction + text filter.
   const visibleMessages = useMemo(() => {
@@ -289,68 +269,6 @@ export function SecretConsole({
 
   /* ----- actions ----- */
   const handleSelect = useCallback((id: string) => setSelectedId(id), [])
-
-  const sendAsClient = useCallback(
-    (body: string, onDone: () => void) => {
-      if (!selectedId) return
-      const text = body.trim()
-      if (!text) return
-      startTransition(async () => {
-        const res = await secretSendAsClientAction({ conversationId: selectedId, body: text })
-        if (res.ok && res.createdMessage) {
-          const created = res.createdMessage
-          setMessages((prev) =>
-            prev.some((m) => m.id === created.id) ? prev : [...prev, created],
-          )
-          onDone()
-          if (res.simDetached) {
-            setThreadSim((s) => (s ? { ...s, paused: true } : s))
-            toast.info('Вы вступили в диалог — симулятор отключён от него')
-          }
-          void loadList({ silent: true })
-        } else {
-          toast.error(res.message)
-        }
-      })
-    },
-    [selectedId, loadList],
-  )
-
-  // Send a file AS THE CLIENT. Mirrors sendAsClient but ships bytes via
-  // FormData; the current textarea text (if any) rides along as the caption.
-  // `sendAs` lets a video be delivered as a round Telegram/VK-style "кружочек".
-  const sendClientMedia = useCallback(
-    (
-      file: File,
-      caption: string,
-      onDone: () => void,
-      sendAs?: 'video' | 'video_note',
-    ) => {
-      if (!selectedId) return
-      const fd = new FormData()
-      fd.append('file', file)
-      if (caption.trim()) fd.append('caption', caption.trim())
-      if (sendAs) fd.append('sendAs', sendAs)
-      startTransition(async () => {
-        const res = await secretSendClientMediaAction(selectedId, fd)
-        if (res.ok && res.createdMessage) {
-          const created = res.createdMessage
-          setMessages((prev) =>
-            prev.some((m) => m.id === created.id) ? prev : [...prev, created],
-          )
-          onDone()
-          toast.success(res.message)
-          if (res.simDetached) {
-            setThreadSim((s) => (s ? { ...s, paused: true } : s))
-          }
-          void loadList({ silent: true })
-        } else {
-          toast.error(res.message)
-        }
-      })
-    },
-    [selectedId, loadList],
-  )
 
   const act = useCallback(
     (fn: () => Promise<{ ok: boolean; message: string }>, onOk?: () => void) => {
@@ -373,17 +291,6 @@ export function SecretConsole({
     [loadList, loadThread],
   )
 
-  // Detach / re-attach the simulator for the OPEN dialogue only.
-  const setSim = useCallback(
-    (enabled: boolean) => {
-      if (!selectedId) return
-      // Optimistic flip for instant feedback; the reload reconciles truth.
-      setThreadSim((s) => (s ? { ...s, paused: !enabled } : s))
-      act(() => secretSetThreadSimAction({ conversationId: selectedId, enabled }))
-    },
-    [selectedId, act],
-  )
-
   const deleteMessage = useCallback(
     (messageId: string) => {
       if (!selectedIdRef.current) return
@@ -398,7 +305,6 @@ export function SecretConsole({
   )
 
   const showThreadPane = selectedId !== null
-  const simDriving = Boolean(threadSim?.active && !threadSim.paused)
 
   return (
     <div className="flex h-[calc(100vh-19rem)] min-h-[30rem] overflow-hidden rounded-xl border border-border bg-card">
@@ -468,7 +374,6 @@ export function SecretConsole({
                     size="sm"
                     className="h-7 px-2 text-xs"
                     onClick={() => {
-                      setSimFilter('all')
                       setStatusFilter('all')
                       setUnreadOnly(false)
                     }}
@@ -511,24 +416,6 @@ export function SecretConsole({
                   </SelectContent>
                 </Select>
               </div>
-
-              {hasAnySim && (
-                <div className="grid gap-1.5">
-                  <Label className="text-xs text-muted-foreground">Источник и ведение</Label>
-                  <Select value={simFilter} onValueChange={(v) => setSimFilter((v as SimFilter) ?? 'all')}>
-                    <SelectTrigger className="h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Все диалоги</SelectItem>
-                      <SelectItem value="sim">С нашего сайта (симулятор)</SelectItem>
-                      <SelectItem value="real">Реальные клиенты</SelectItem>
-                      <SelectItem value="driving">Автопилот ведёт</SelectItem>
-                      <SelectItem value="paused">На паузе (вы)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
 
               <Separator />
               <label className="flex cursor-pointer items-center justify-between">
@@ -579,20 +466,18 @@ export function SecretConsole({
             <EmptyState
               icon={MessageSquare}
               title="Выберите диалог"
-              description="Слева выберите переписку, чтобы писать от имени клиента и видеть ответы менеджера вживую."
+              description="Слева выберите переписку, чтобы просмотреть её и управлять статусом."
             />
           </div>
         ) : (
           <>
             <ThreadHeader
               conversation={conversation}
-              sim={threadSim}
               managerName={managerNameOf(conversation.managerId)}
               pending={pending}
               filterActive={showThreadFilter || dirFilter !== 'all' || msgSearch.trim() !== ''}
               onToggleFilter={() => setShowThreadFilter((v) => !v)}
               onBack={() => setSelectedId(null)}
-              onSetSim={setSim}
               onStatus={(status) =>
                 act(() => secretSetConversationStatusAction(conversation.id, status))
               }
@@ -638,7 +523,7 @@ export function SecretConsole({
                 </div>
               ) : messages.length === 0 ? (
                 <p className="py-16 text-center text-sm text-muted-foreground">
-                  Сообщений пока нет. Напишите первое от имени клиента.
+                  Сообщений пока нет.
                 </p>
               ) : visibleMessages.length === 0 ? (
                 <p className="py-16 text-center text-sm text-muted-foreground">
@@ -657,15 +542,6 @@ export function SecretConsole({
               )}
               <div ref={endRef} />
             </div>
-
-            <Composer
-              contactName={conversation.contactName}
-              pending={pending}
-              simDriving={simDriving}
-              onIntervene={() => setSim(false)}
-              onSend={sendAsClient}
-              onSendMedia={sendClientMedia}
-            />
           </>
         )}
       </section>

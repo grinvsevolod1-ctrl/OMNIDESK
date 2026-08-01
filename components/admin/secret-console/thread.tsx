@@ -1,42 +1,25 @@
 'use client'
 
-import { memo, useRef, useState } from 'react'
+import { memo } from 'react'
 import {
   ArrowLeft,
   Ban,
-  Bot,
   Circle,
-  Hand,
-  Info,
-  Loader2,
   Mail,
   MailOpen,
   MoreHorizontal,
   Paperclip,
   Pencil,
-  Radio,
   Search,
-  Send,
   ShieldCheck,
   Trash2,
   UserRound,
-  Video,
   X,
 } from 'lucide-react'
 import { ChannelIcon } from '@/components/channel-icons'
-import type {
-  ConversationWithManager,
-  ConversationWithSim,
-} from '@/app/actions/admin-secret'
+import type { ConversationWithManager } from '@/app/actions/admin-secret'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -51,9 +34,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
-import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
 import {
@@ -63,66 +43,21 @@ import {
   fmtTime,
   highlight,
   initials,
-  isComposing,
   MEDIA_CHIP_LABEL,
-  SIM_STATE_LABEL,
   STATUS_VALUES,
   TYPE_LABEL,
   type DirFilter,
-  type SimInfo,
 } from '@/components/admin/secret-console/utils'
 
 /**
  * Presentational thread sub-components for the secret console, extracted from
  * secret-console.tsx to keep the root component focused on state/orchestration.
  * All are driven purely by props (no server actions of their own).
+ *
+ * This is a read-only conversation browser: it lets an admin inspect any
+ * dialogue and manage its metadata (status / read / block / edit / delete).
+ * It does NOT send messages — inbound traffic comes from real channels.
  */
-
-/* ------------------------------ Source badge -------------------------- */
-
-/**
- * Persistent origin indicator for the god console: whether this lead is a
- * simulated persona from our own site or a genuine external client. Driven by
- * the permanent `conversations.is_simulated` flag, so it stays correct even
- * after the simulator thread finishes — unlike the live "autopilot" badge.
- */
-export function SourceBadge({
-  isSimulated,
-  size = 'sm',
-}: {
-  isSimulated: boolean
-  size?: 'sm' | 'md'
-}) {
-  const cls =
-    size === 'md'
-      ? 'gap-1 px-2 py-0.5 text-[11px]'
-      : 'gap-1 px-1.5 py-0.5 text-[10px]'
-  const iconCls = size === 'md' ? 'size-3.5' : 'size-3'
-  if (isSimulated) {
-    return (
-      <span
-        className={cn(
-          'flex items-center rounded font-medium bg-chart-4/15 text-foreground',
-          cls,
-        )}
-        title="Клиент с нашего сайта (симулятор)"
-      >
-        <Bot className={iconCls} /> С сайта
-      </span>
-    )
-  }
-  return (
-    <span
-      className={cn(
-        'flex items-center rounded font-medium bg-chart-2/15 text-foreground',
-        cls,
-      )}
-      title="Реальный клиент из внешнего канала"
-    >
-      <UserRound className={iconCls} /> Реальный
-    </span>
-  )
-}
 
 /* --------------------------- Conversation row ------------------------- */
 
@@ -131,12 +66,10 @@ export const ConversationRow = memo(function ConversationRow({
   active,
   onSelect,
 }: {
-  conversation: ConversationWithSim
+  conversation: ConversationWithManager
   active: boolean
   onSelect: (id: string) => void
 }) {
-  const simDriving = Boolean(c.sim?.active && !c.sim.paused)
-  const simPaused = Boolean(c.sim?.active && c.sim.paused)
   return (
     <li>
       <button
@@ -176,23 +109,6 @@ export const ConversationRow = memo(function ConversationRow({
             {c.contactBlocked && (
               <Ban className="size-3 shrink-0 text-destructive" aria-label="Менеджер заблокирован клиентом" />
             )}
-            <SourceBadge isSimulated={c.isSimulated} />
-            {simDriving && (
-              <span
-                className="flex items-center gap-1 rounded bg-chart-2/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground"
-                title="Ответы клиента сейчас генерирует симулятор (автопилот)"
-              >
-                <Bot className="size-3" /> Автопилот
-              </span>
-            )}
-            {simPaused && (
-              <span
-                className="flex items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning"
-                title="Вы управляете этим диалогом"
-              >
-                <Hand className="size-3" /> Вы
-              </span>
-            )}
             <span
               className={cn(
                 'rounded px-1.5 py-0.5 text-[10px] font-medium',
@@ -215,13 +131,11 @@ export const ConversationRow = memo(function ConversationRow({
 
 export function ThreadHeader({
   conversation,
-  sim,
   managerName,
   pending,
   filterActive,
   onToggleFilter,
   onBack,
-  onSetSim,
   onStatus,
   onToggleRead,
   onToggleBlock,
@@ -229,13 +143,11 @@ export function ThreadHeader({
   onDelete,
 }: {
   conversation: ConversationWithManager
-  sim: SimInfo
   managerName: string
   pending: boolean
   filterActive: boolean
   onToggleFilter: () => void
   onBack: () => void
-  onSetSim: (enabled: boolean) => void
   onStatus: (status: string) => void
   onToggleRead: () => void
   onToggleBlock: () => void
@@ -243,8 +155,6 @@ export function ThreadHeader({
   onDelete: () => void
 }) {
   const blocked = Boolean(conversation.contactBlocked)
-  const simActive = Boolean(sim?.active)
-  const simDriving = Boolean(sim?.active && !sim.paused)
 
   return (
     <div className="flex items-center gap-2 border-b border-border p-3">
@@ -267,7 +177,6 @@ export function ThreadHeader({
             <ChannelIcon type={conversation.channelType} className="size-3 rounded-full" />
             {TYPE_LABEL[conversation.channelType] ?? conversation.channelType}
           </Badge>
-          <SourceBadge isSimulated={conversation.isSimulated} size="md" />
           {blocked && (
             <Badge variant="destructive" className="gap-1">
               <Ban className="size-3" />
@@ -279,38 +188,6 @@ export function ThreadHeader({
           {conversation.contactHandle} · {managerName}
         </p>
       </div>
-
-      {/* Simulator take-over control — only for simulated dialogues. */}
-      {simActive && (
-        <div
-          className={cn(
-            'flex shrink-0 items-center gap-2 rounded-md border px-2.5 py-1.5',
-            simDriving
-              ? 'border-chart-2/40 bg-chart-2/10'
-              : 'border-warning/40 bg-warning/10',
-          )}
-        >
-          {simDriving ? (
-            <Bot className="size-4 shrink-0 text-foreground" aria-hidden />
-          ) : (
-            <Hand className="size-4 shrink-0 text-warning" aria-hidden />
-          )}
-          <div className="hidden min-w-0 flex-col leading-tight sm:flex">
-            <span className="text-xs font-medium">
-              {simDriving ? 'Ведёт симулятор' : 'Вы управляете'}
-            </span>
-            <span className="text-[10px] text-muted-foreground">
-              {simDriving ? 'вмешайтесь, чтобы взять' : 'симулятор на паузе'}
-            </span>
-          </div>
-          <Switch
-            checked={simDriving}
-            onCheckedChange={onSetSim}
-            disabled={pending}
-            aria-label="Передать диалог симулятору"
-          />
-        </div>
-      )}
 
       {/* Message filter toggle (progressive disclosure). */}
       <Button
@@ -391,20 +268,6 @@ export function ThreadHeader({
               <Trash2 className="size-3.5" /> Удалить
             </Button>
           </div>
-
-          {simActive && sim && (
-            <>
-              <Separator />
-              <div className="space-y-1 text-xs text-muted-foreground">
-                <div className="flex items-center gap-1.5 font-medium text-foreground">
-                  <Info className="size-3.5" /> Детали ведения
-                </div>
-                {sim.personaName && <p>Персона: {sim.personaName}</p>}
-                <p>Стадия: {SIM_STATE_LABEL[sim.state] ?? sim.state}</p>
-                <p>{sim.paused ? 'Симулятор отключён — вы ведёте диалог.' : 'Диалог автоматически ведёт симулятор.'}</p>
-              </div>
-            </>
-          )}
         </PopoverContent>
       </Popover>
     </div>
@@ -486,8 +349,8 @@ export const MessageBubble = memo(function MessageBubble({
   pending: boolean
   onDelete: (messageId: string) => void
 }) {
-  // Admin impersonates the CLIENT: inbound ('in') = "us" → right side.
-  const mine = message.direction === 'in'
+  // Outbound ('out') = the manager's own reply → right side.
+  const mine = message.direction === 'out'
   const deleted = Boolean(message.deletedAt)
   return (
     <div className={cn('group flex items-end gap-2', mine ? 'justify-end' : 'justify-start')}>
@@ -513,7 +376,7 @@ export const MessageBubble = memo(function MessageBubble({
         <div className="mb-0.5 flex items-center gap-2">
           <span className={cn('flex items-center gap-1 text-[11px] font-medium', mine ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
             <UserRound className="size-3" />
-            {message.author || (mine ? 'Клиент' : 'Менеджер')}
+            {message.author || (mine ? 'Менеджер' : 'Клиент')}
           </span>
           <span className={cn('text-[10px]', mine ? 'text-primary-foreground/60' : 'text-muted-foreground')}>
             {fmtDay(message.createdAt)}
@@ -558,164 +421,3 @@ export const MessageBubble = memo(function MessageBubble({
     </div>
   )
 })
-
-/* ------------------------------- Composer ----------------------------- */
-
-export function Composer({
-  contactName,
-  pending,
-  simDriving,
-  onIntervene,
-  onSend,
-  onSendMedia,
-}: {
-  contactName: string
-  pending: boolean
-  simDriving: boolean
-  onIntervene: () => void
-  onSend: (body: string, onDone: () => void) => void
-  onSendMedia: (
-    file: File,
-    caption: string,
-    onDone: () => void,
-    sendAs?: 'video' | 'video_note',
-  ) => void
-}) {
-  const [body, setBody] = useState('')
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  // When a video is picked we ask HOW to deliver it (обычное видео / кружочек)
-  // before sending; this holds the pending video until the choice is made.
-  const [pendingVideo, setPendingVideo] = useState<File | null>(null)
-
-  function submit() {
-    if (!body.trim() || pending) return
-    onSend(body, () => setBody(''))
-  }
-
-  // Attach a file "from the client": the current textarea text rides along as
-  // the caption, then both are cleared. The input is reset so the same file can
-  // be picked again. Videos pause for a delivery-style choice (video vs круг).
-  function onFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file || pending) return
-    if (file.type.startsWith('video/')) {
-      setPendingVideo(file)
-      return
-    }
-    onSendMedia(file, body, () => setBody(''))
-  }
-
-  // Deliver the buffered video with the chosen style, then reset the prompt.
-  function sendPendingVideo(sendAs: 'video' | 'video_note') {
-    const file = pendingVideo
-    if (!file) return
-    setPendingVideo(null)
-    onSendMedia(file, body, () => setBody(''), sendAs)
-  }
-
-  return (
-    <div className="border-t border-border p-3">
-      {simDriving && (
-        <div className="mb-2 flex items-center gap-2 rounded-md border border-chart-2/40 bg-chart-2/10 px-3 py-2 text-xs">
-          <Bot className="size-4 shrink-0 text-foreground" />
-          <span className="flex-1 text-muted-foreground">
-            Диалог ведёт симулятор. Отправьте сообщение или нажмите «Вмешаться» — симулятор отключится от этого диалога.
-          </span>
-          <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={pending} onClick={onIntervene}>
-            <Hand className="size-3.5" /> Вмешаться
-          </Button>
-        </div>
-      )}
-      <div className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Radio className="size-3.5 text-primary" />
-        Вы пишете от имени клиента{' '}
-        <span className="font-medium text-foreground">{contactName}</span>
-      </div>
-      <div className="flex items-end gap-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
-          onChange={onFilePicked}
-        />
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="size-11 shrink-0"
-          disabled={pending}
-          onClick={() => fileInputRef.current?.click()}
-          aria-label="Прикрепить файл от имени клиента"
-          title="Прикрепить файл"
-        >
-          <Paperclip className="size-4" />
-        </Button>
-        <Textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
-              e.preventDefault()
-              submit()
-            }
-          }}
-          placeholder="Сообщение от клиента… (Enter — отправить, Shift+Enter — перенос)"
-          className="max-h-40 min-h-11 flex-1 resize-none"
-          rows={1}
-        />
-        <Button onClick={submit} disabled={pending || !body.trim()} className="h-11 gap-1.5">
-          {pending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-          Отправить
-        </Button>
-      </div>
-
-      <Dialog
-        open={pendingVideo !== null}
-        onOpenChange={(v) => {
-          if (!v) setPendingVideo(null)
-        }}
-      >
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Как отправить видео?</DialogTitle>
-            <DialogDescription>
-              Кружочек будет доставлен менеджеру как видеосообщение — обрезанный
-              круг, как в Telegram и ВК.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-3 pt-1">
-            <button
-              type="button"
-              onClick={() => sendPendingVideo('video')}
-              className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-4 text-center transition-colors hover:border-primary hover:bg-accent"
-            >
-              <span className="flex size-12 items-center justify-center rounded-md bg-muted">
-                <Video className="size-6 text-foreground" />
-              </span>
-              <span className="text-sm font-medium">Видео</span>
-              <span className="text-xs text-muted-foreground">
-                Обычный прямоугольный ролик
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => sendPendingVideo('video_note')}
-              className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-4 text-center transition-colors hover:border-primary hover:bg-accent"
-            >
-              <span className="flex size-12 items-center justify-center rounded-full bg-muted">
-                <Circle className="size-6 text-foreground" />
-              </span>
-              <span className="text-sm font-medium">Кружочек</span>
-              <span className="text-xs text-muted-foreground">
-                Видеосообщение в круге
-              </span>
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  )
-}
-

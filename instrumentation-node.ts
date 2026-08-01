@@ -10,8 +10,7 @@
  *
  * Responsibilities:
  *  - start the push dispatcher so inbound messages generate Web Push
- *    notifications regardless of whether a browser tab is open,
- *  - resume the client simulator engine if it was left enabled, and
+ *    notifications regardless of whether a browser tab is open, and
  *  - install process-level safety nets + graceful shutdown.
  */
 export async function registerNode(): Promise<void> {
@@ -26,8 +25,8 @@ export async function registerNode(): Promise<void> {
 
   // Process-level safety net. The panel is a single long-lived Node process on
   // a VPS, so an unhandled rejection or thrown error in a background task (push
-  // dispatch, realtime, simulator) must be logged rather than silently killing
-  // the process. We log and keep running; genuinely fatal states are caught by
+  // dispatch, realtime) must be logged rather than silently killing the
+  // process. We log and keep running; genuinely fatal states are caught by
   // PM2 which restarts the process.
   process.on('unhandledRejection', (reason) => {
     log.error('process', 'unhandledRejection', { err: reason })
@@ -38,21 +37,13 @@ export async function registerNode(): Promise<void> {
     captureException(err, { scope: 'process.uncaughtException' })
   })
 
-  // Graceful shutdown on PM2 reload / SIGTERM: stop the simulator loop and
-  // close the DB pool so in-flight queries finish and no connection is leaked.
+  // Graceful shutdown on PM2 reload / SIGTERM: close the DB pool so in-flight
+  // queries finish and no connection is leaked.
   let shuttingDown = false
   const shutdown = async (signal: string) => {
     if (shuttingDown) return
     shuttingDown = true
     log.info('process', 'shutting down', { signal })
-    try {
-      const { stopEngine, engineRunning } = await import(
-        './lib/client-sim/engine'
-      )
-      if (engineRunning()) stopEngine()
-    } catch {
-      /* engine not loaded — nothing to stop */
-    }
     try {
       const { getPool } = await import('./lib/db')
       await getPool().end()
@@ -79,23 +70,4 @@ export async function registerNode(): Promise<void> {
 
   const { startPushDispatcher } = await import('./lib/push-dispatcher')
   startPushDispatcher()
-
-  // Resume the simulator if it was enabled before the last restart. Best-effort:
-  // never let a boot-time DB hiccup crash server startup. The hard kill-switch
-  // (CLIENT_SIM_DISABLED) short-circuits the resume entirely so the simulator
-  // stays off on this host no matter what the stored flag says.
-  try {
-    const { startEngine, simHardDisabled } = await import(
-      './lib/client-sim/engine'
-    )
-    if (simHardDisabled()) {
-      log.warn('client-sim', 'resume-on-boot skipped: CLIENT_SIM_DISABLED set')
-    } else {
-      const { getSettings } = await import('./lib/client-sim/store')
-      const settings = await getSettings()
-      if (settings.enabled) startEngine()
-    }
-  } catch (err) {
-    log.warn('client-sim', 'resume-on-boot skipped', { err })
-  }
 }

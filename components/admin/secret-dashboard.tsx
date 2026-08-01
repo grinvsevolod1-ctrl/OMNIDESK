@@ -11,7 +11,6 @@ import {
   ArrowLeftRight,
   ArrowUpRight,
   Ban,
-  Bot,
   CheckCircle2,
   Copy,
   Database,
@@ -92,25 +91,13 @@ const ChannelsTypeChart = dynamic(
     loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
   },
 )
-// Console + simulator are large, rarely the first tab an admin opens, and each
-// pulls its own tree of sub-components. Radix TabsContent doesn't mount inactive
-// tabs, so loading these lazily means their JS only downloads when the admin
-// actually switches to that tab. ssr:false since they're interactive-only.
+// The console is large, rarely the first tab an admin opens, and pulls its own
+// tree of sub-components. Radix TabsContent doesn't mount inactive tabs, so
+// loading it lazily means its JS only downloads when the admin actually
+// switches to that tab. ssr:false since it's interactive-only.
 const SecretConsole = dynamic(
   () =>
     import('@/components/admin/secret-console').then((m) => m.SecretConsole),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="h-96 animate-pulse rounded-lg bg-muted/40" />
-    ),
-  },
-)
-const SecretSimulatorTab = dynamic(
-  () =>
-    import('@/components/admin/secret-simulator-tab').then(
-      (m) => m.SecretSimulatorTab,
-    ),
   {
     ssr: false,
     loading: () => (
@@ -279,10 +266,6 @@ export function SecretDashboard({
             <Zap className="size-3.5" />
             Наплыв
           </TabsTrigger>
-          <TabsTrigger value="simulator" className="shrink-0 gap-1.5">
-            <Bot className="size-3.5" />
-            Симулятор
-          </TabsTrigger>
           <TabsTrigger value="overview" className="shrink-0">
             Обзор
           </TabsTrigger>
@@ -327,9 +310,6 @@ export function SecretDashboard({
         <TabsContent value="console" className="mt-4">
           <SecretConsole channels={channels} managers={managers} />
         </TabsContent>
-        <TabsContent value="simulator" className="mt-4">
-          <SecretSimulatorTab channels={channels} />
-        </TabsContent>
         <TabsContent value="bulk" className="mt-4">
           <MassImportTab
             channels={channels}
@@ -369,7 +349,7 @@ function SecretHeader({
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
-            Панель супер-администратора
+            Панель супер-��дминистратора
           </h1>
           <p className="text-sm text-muted-foreground">
             Прямое управление менеджерами, каналами и диалогами
@@ -450,9 +430,8 @@ function SystemPill({
 }
 
 /**
- * Live AI Gateway balance pill. Both the manager brain and the simulator bill
- * against the same key, so this one figure is the whole system's remaining AI
- * budget. Turns amber when funds run low and red when unavailable/empty.
+ * Live AI Gateway balance pill — the manager brain's remaining AI budget on the
+ * shared key. Turns amber when funds run low and red when unavailable/empty.
  */
 function AiBalancePill({ system }: { system: SecretSystem }) {
   const { aiBalanceOk, aiBalance, aiTotalUsed, aiBalanceMessage } = system
@@ -486,8 +465,8 @@ function AiBalancePill({ system }: { system: SecretSystem }) {
       )}
       title={
         aiTotalUsed != null
-          ? `Остаток на ИИ (менеджер + симулятор). Потрачено всего: ${usd(aiTotalUsed)}`
-          : 'Остаток на ИИ (менеджер + симулятор)'
+          ? `Остаток на ИИ. Потрачено всего: ${usd(aiTotalUsed)}`
+          : 'Остаток на ИИ'
       }
     >
       <Wallet className="size-3.5" />
@@ -497,9 +476,9 @@ function AiBalancePill({ system }: { system: SecretSystem }) {
 }
 
 /**
- * Prominent, always-visible balance panel. Both AIs (менеджер + симулятор) spend
- * from the same AI Gateway key, so this is the whole system's remaining budget.
- * Shown right under the header so it can't be missed on mobile.
+ * Prominent, always-visible balance panel showing the AI manager's remaining
+ * AI Gateway budget. Shown right under the header so it can't be missed on
+ * mobile.
  */
 function AiBalanceBanner({ system }: { system: SecretSystem }) {
   const { aiBalanceOk, aiBalance, aiTotalUsed, aiBalanceMessage } = system

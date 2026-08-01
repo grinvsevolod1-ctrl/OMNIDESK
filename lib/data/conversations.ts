@@ -624,36 +624,6 @@ export async function isConversationMuted(
   return rows.length > 0 ? Boolean(rows[0].muted) : false
 }
 
-/**
- * True when this conversation is a client-simulator dialog (is_simulated).
- *
- * This is the delivery kill-switch: simulator dialogs live on REAL channels
- * (a real channel_id + type like vk/whatsapp/max), so without this guard an
- * AI-manager reply to a fake client would be pushed to a real external
- * provider. The provider dispatchers call this and hard no-op for simulated
- * conversations, keeping the entire simulated exchange inside our own DB while
- * the AI manager still treats the dialog exactly like a real one.
- *
- * Fails safe: on any error it returns true (treat as simulated → do NOT
- * deliver), because leaking a fake message to a real user is far worse than
- * skipping a delivery.
- */
-export async function isConversationSimulated(
-  conversationId: string,
-): Promise<boolean> {
-  try {
-    const rows = await query<{ is_simulated: boolean }>(
-      `SELECT is_simulated FROM conversations WHERE id = $1`,
-      [conversationId],
-    )
-    // Unknown conversation → not simulated (nothing to protect).
-    return rows.length > 0 ? Boolean(rows[0].is_simulated) : false
-  } catch (err) {
-    console.error('isConversationSimulated: guard query failed:', err)
-    return true
-  }
-}
-
 /* ------------------------- Conversation transfer ------------------------- */
 
 export interface TransferTarget {

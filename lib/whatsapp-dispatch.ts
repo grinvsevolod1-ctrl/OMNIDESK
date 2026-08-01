@@ -2,7 +2,6 @@ import 'server-only'
 import {
   getLastInboundProviderId,
   getWhatsappCloudDispatchByConversationId,
-  isConversationSimulated,
   markMessageFailed,
   setMessageProviderId,
 } from './data'
@@ -29,10 +28,6 @@ export async function deliverWhatsappMessage(
   body: string,
 ): Promise<boolean> {
   try {
-    // Never push a simulator dialog's reply to the real WhatsApp provider.
-    // Return true ("handled") so the caller doesn't treat it as a stuck/failed
-    // send — the message simply stays in our DB, unsent to any real contact.
-    if (await isConversationSimulated(conversationId)) return true
     const dispatch =
       await getWhatsappCloudDispatchByConversationId(conversationId)
     if (!dispatch) return false // not a Cloud API WhatsApp conversation
@@ -73,7 +68,6 @@ export async function markWhatsappConversationRead(
   conversationId: string,
 ): Promise<boolean> {
   try {
-    if (await isConversationSimulated(conversationId)) return false
     const dispatch =
       await getWhatsappCloudDispatchByConversationId(conversationId)
     if (!dispatch) return false
