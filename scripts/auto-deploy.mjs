@@ -219,6 +219,14 @@ function runDeploy() {
       // deploy.sh defaults to the checked-out branch; pin it to the tracked one.
       env: { ...process.env, DEPLOY_BRANCH: cfg.branch },
       timeout: cfg.deployTimeoutMs,
+      // Own process GROUP/session. PM2 stops processes by signalling the whole
+      // group (SIGINT first), so without this a `pm2 restart omnidesk-auto-
+      // deploy` issued mid-deploy (e.g. to pick up new .env vars) killed the
+      // in-flight deploy.sh with SIGINT → "exited with code 130". Detached, the
+      // graceful group signal no longer reaches the deploy; the watcher itself
+      // defers its own SIGINT handler until spawnSync returns, so the deploy
+      // finishes and the marker file is written before the watcher exits.
+      detached: true,
     },
   )
   if (res.status === 0) {
@@ -230,9 +238,13 @@ function runDeploy() {
     log('deploy.sh finished successfully.')
     return true
   }
-  // status === null means the child died from a SIGNAL, not an exit code — in
-  // practice our own `timeout: cfg.deployTimeoutMs` SIGTERM-ing a build that
-  // ran long. Say so explicitly instead of the cryptic "code null".
+  // Decode HOW it died instead of printing a cryptic code:
+  //   status null           → killed by a signal; SIGTERM here is almost always
+  //                           our own AUTO_DEPLOY_TIMEOUT_MS.
+  //   130 / 143 (128+sig)   → deploy.sh trapped SIGINT/SIGTERM and exited: some
+  //                           external actor (a pm2 restart/stop of this
+  //                           watcher, or a Ctrl+C) interrupted the deploy —
+  //                           NOT a build error and NOT a timeout.
   const how =
     res.status === null
       ? `signal ${res.signal || 'unknown'}${
@@ -240,7 +252,11 @@ function runDeploy() {
             ? ` (likely AUTO_DEPLOY_TIMEOUT_MS=${cfg.deployTimeoutMs}ms exceeded)`
             : ''
         }`
-      : `code ${res.status}`
+      : res.status === 130 || res.status === 143
+        ? `code ${res.status} (interrupted by ${
+            res.status === 130 ? 'SIGINT' : 'SIGTERM'
+          } — usually a pm2 restart/stop of the watcher mid-deploy, not a build error)`
+        : `code ${res.status}`
   log(`deploy.sh exited with ${how} (deploy failed — will retry next cycle).`)
   ensurePanelAlive()
   return false
@@ -272,12 +288,30 @@ function ensurePanelAlive() {
       probe.status !== 0 || /status\s*│\s*stopped/i.test(probe.stdout || '')
     if (down) {
       log('panel is not running after failed deploy — recovering via pm2 ...')
-      const start = spawnSync('pm2', ['start', 'ecosystem.config.js'], {
-        cwd: REPO_ROOT,
-        stdio: 'inherit',
-        env: process.env,
-        timeout: 120_000,
-      })
+      const pm2Start = () =>
+        spawnSync('pm2', ['start', 'ecosystem.config.js'], {
+          cwd: REPO_ROOT,
+          stdio: 'inherit',
+          env: process.env,
+          timeout: 120_000,
+        })
+      let start = pm2Start()
+      if (start.status !== 0) {
+        // A pm2 daemon with corrupted in-memory state (the classic
+        // "Cannot read properties of undefined (reading 'pm2_env')" /
+        // "Process N not found" bug, triggered by deletes racing the
+        // every-minute cron one-shots) fails EVERY subsequent command until
+        // the daemon itself is refreshed. `pm2 update` restarts the daemon
+        // in-place, re-adopting live processes — then retry the start once.
+        log('pm2 start failed — refreshing the pm2 daemon (pm2 update) and retrying ...')
+        spawnSync('pm2', ['update'], {
+          cwd: REPO_ROOT,
+          stdio: 'inherit',
+          env: process.env,
+          timeout: 180_000,
+        })
+        start = pm2Start()
+      }
       if (start.status === 0) {
         spawnSync('pm2', ['save'], { cwd: REPO_ROOT, env: process.env, timeout: 60_000 })
         log('panel recovered — old version keeps serving until the retry succeeds.')
@@ -364,6 +398,14 @@ function main() {
   log(
     `watching ${cfg.remote}/${cfg.branch} every ${cfg.intervalMs}ms ` +
       `(repo: ${REPO_ROOT})`,
+  )
+  // Print the EFFECTIVE deploy timeout so "is it 60s?" never needs guessing:
+  // default is 15 minutes, overridable via AUTO_DEPLOY_TIMEOUT_MS in .env.
+  log(
+    `deploy timeout: ${cfg.deployTimeoutMs}ms` +
+      (process.env.AUTO_DEPLOY_TIMEOUT_MS
+        ? ' (from AUTO_DEPLOY_TIMEOUT_MS)'
+        : ' (default; override with AUTO_DEPLOY_TIMEOUT_MS in .env)'),
   )
   log(
     tgConfigured()
