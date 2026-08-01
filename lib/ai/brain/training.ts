@@ -10,7 +10,7 @@ import {
   MODEL,
   type BrainLesson,
   type GatewayResponse,
-} from './core.js'
+} from './core'
 
 /**
  * Learn an account's real selling STYLE from full manager↔client transcripts

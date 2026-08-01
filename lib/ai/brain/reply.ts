@@ -17,8 +17,8 @@ import {
   type BrainMetric,
   type GatewayResponse,
   type ManagerBrainInput,
-} from './core.js'
-import { buildSystemPrompt } from './prompt.js'
+} from './core'
+import { buildSystemPrompt } from './prompt'
 
 /**
  * One self-critique pass: ask the model to fix the draft only if it breaks the
