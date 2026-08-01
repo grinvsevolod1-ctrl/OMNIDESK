@@ -91,9 +91,58 @@ describe('AI co-pilot isolation from simulator / god panel', () => {
  * model reads verbatim — e.g. «сохра�ит правила» — which is exactly the kind of
  * bug that slips past a type-check. Fail CI if any of them carry U+FFFD.
  */
+/**
+ * Purity guard: lib/ai/brain/* is shared with the standalone worker, which
+ * imports it via a relative path under tsx and does NOT install the panel's
+ * dependencies. Every brain module must therefore stay dependency-free: no
+ * `@/` aliases, no `server-only`, no `ai` SDK, no DB — and it may only import
+ * sibling modules from the same directory ('./x.js'). This used to be a
+ * comment-only rule in the monolith's header; now it fails CI.
+ */
+describe('lib/ai/brain modules stay dependency-free (worker-safe)', () => {
+  const BRAIN_FILES = [
+    'lib/ai/brain/core.ts',
+    'lib/ai/brain/prompt.ts',
+    'lib/ai/brain/reply.ts',
+    'lib/ai/brain/assess.ts',
+    'lib/ai/brain/media.ts',
+    'lib/ai/brain/embeddings.ts',
+    'lib/ai/brain/training.ts',
+  ]
+  for (const rel of BRAIN_FILES) {
+    it(`${rel} only imports sibling brain modules`, () => {
+      const src = readSource(rel)
+      const specifiers = [
+        ...src.matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g),
+      ].map((m) => m[1])
+      for (const spec of specifiers) {
+        expect(
+          /^\.\/[a-z-]+\.js$/.test(spec),
+          `${rel} imports "${spec}" — brain modules may only import './sibling.js'`,
+        ).toBe(true)
+      }
+      // Match an actual import statement, not the doc comment that states the
+      // rule ("no `server-only`") — a substring check would trip on itself.
+      expect(
+        /import\s+['"]server-only['"]/.test(src),
+        `${rel} pulls in server-only`,
+      ).toBe(false)
+    })
+  }
+})
+
 describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
   const PROMPT_FILES = [
     'lib/ai/manager-brain.ts',
+    // The brain implementation modules the former monolith was split into —
+    // prompt.ts in particular IS the seller's personality, read verbatim.
+    'lib/ai/brain/core.ts',
+    'lib/ai/brain/prompt.ts',
+    'lib/ai/brain/reply.ts',
+    'lib/ai/brain/assess.ts',
+    'lib/ai/brain/media.ts',
+    'lib/ai/brain/embeddings.ts',
+    'lib/ai/brain/training.ts',
     'lib/ai-console/run-assistant.ts',
     // The split-out co-pilot modules: the system prompt and every tool
     // description are Russian text the model reads verbatim.
