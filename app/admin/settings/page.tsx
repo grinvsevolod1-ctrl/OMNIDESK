@@ -6,8 +6,11 @@ import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { requireAdmin } from '@/lib/auth'
 import { logoutAction } from '@/app/actions/auth'
+import pkg from '@/package.json'
 
-const PANEL_VERSION = '0.1.0'
+// Single source of truth: package.json version, so this card can never drift
+// from the actual release again (it sat at a hardcoded '0.1.0' for months).
+const PANEL_VERSION = pkg.version
 
 function initials(name: string): string {
   return name
