@@ -1,46 +1,40 @@
 import { TelegramClient, Api } from 'telegram'
 import { StringSession } from 'telegram/sessions/index.js'
-import { NewMessage, type NewMessageEvent } from 'telegram/events/index.js'
 import { computeCheck } from 'telegram/Password.js'
 import { returnBigInt } from 'telegram/Helpers.js'
-import { getPeerId } from 'telegram/Utils.js'
-import type { Dialog } from 'telegram/tl/custom/dialog.js'
 import { randomUUID } from 'node:crypto'
 import { env, assertTelegramConfigured } from './env.js'
 import { logger, type Logger } from './logger.js'
 import { describePhone, maskPhone } from './phone.js'
 import { gramProxy } from './proxy.js'
 import * as repo from './repo.js'
-import { onInbound as onAutopilotInbound } from './autopilot.js'
-import { classifyTgMedia, type TgMediaInfo } from './telegram-media.js'
 import {
   classifyError,
   errMessage,
   extractErrorCode,
-  telegramSendFailureReason,
 } from './telegram-errors.js'
 import {
-  MEDIA_MAX_STORE_BYTES,
-  TG_BACKFILL_BATCH,
-  TG_BACKFILL_MAX_CHATS,
-  TG_BACKFILL_MEDIA_THROTTLE_MS,
-  TG_BACKFILL_PAGE_THROTTLE_MS,
-  TG_BACKFILL_PER_CHAT,
-  TG_BACKFILL_THROTTLE_MS,
-  TG_DIALOG_FOLDERS,
-  TG_DIALOG_LIMIT,
-  TG_DIALOG_LIMIT_ALL,
   TG_SEND_JITTER_MS,
   TG_SEND_MIN_INTERVAL_MS,
-  TG_STORE_MEDIA,
-  TG_STORE_MEDIA_BACKFILL,
   inputPeerFromRecord,
   peerRecordFromEntity,
 } from './telegram-config.js'
+import type { TgSessionCtx } from './telegram-session-ctx.js'
+import { runKickSweep } from './telegram-exclusive.js'
+import { syncDialogs } from './telegram-history.js'
+import { attachTelegramHandlers } from './telegram-updates.js'
+import {
+  persistMediaBytes,
+  downloadMediaByRef,
+  listStickers,
+  downloadStickerById,
+  sendStickerTo,
+  type StickerDescriptor,
+} from './telegram-media-io.js'
 
-// Media/error classification helpers were split into focused sibling modules;
-// re-export their public surface so existing importers (e.g. registry.ts) keep
-// resolving them from './telegram.js'.
+// The feature modules this monolith was split into re-export their public
+// surface here so existing importers (e.g. registry.ts) keep resolving them
+// from './telegram.js'.
 export { classifyTgMedia } from './telegram-media.js'
 export type { TgMediaInfo } from './telegram-media.js'
 export { telegramSendFailureReason } from './telegram-errors.js'
@@ -57,6 +51,11 @@ const EXCLUSIVE_SWEEP_MS = 2 * 60_000
  * One live Telegram (MTProto) user session bound to a channel. The same client
  * instance is reused across login steps so the phoneCodeHash and connection
  * survive between "send code" and "enter password".
+ *
+ * The class owns the LOGIN FLOW and connection lifecycle exclusively — phone,
+ * phoneCodeHash and the string session never leave it. Everything else
+ * (history sync, live-update handlers, media/sticker IO, kick sweeps) lives in
+ * focused sibling modules operating on the narrow TgSessionCtx view.
  */
 export class TelegramSession {
   readonly channelId: string
@@ -81,11 +80,30 @@ export class TelegramSession {
    * Telegram authorizations). Set on login, cleared on stop/logout.
    */
   private exclusiveTimer: ReturnType<typeof setInterval> | null = null
+  /**
+   * The narrow view of this session the split-out feature modules operate on.
+   * Accessors re-read live state so a disconnect or pause mid-sweep is seen at
+   * the next checkpoint, exactly like direct `this.client` checks used to.
+   */
+  private readonly ctx: TgSessionCtx
 
   constructor(channelId: string, managerId: string) {
     this.channelId = channelId
     this.managerId = managerId
     this.session = new StringSession('')
+    this.ctx = {
+      channelId,
+      managerId,
+      getClient: () => this.client,
+      isIngestPaused: () => this.ingestPaused,
+      persistMediaBytes: (messageId, msg) =>
+        persistMediaBytes(this.client, messageId, msg),
+      resolveTarget: (target) => this.resolveTarget(target),
+      syncDialogs: (opts) => this.syncDialogs(opts),
+      enforceExclusiveSessions: () => this.enforceExclusiveSessions(),
+      throttleSend: () => this.throttleSend(),
+      senderSession: this,
+    }
   }
 
   /**
@@ -368,7 +386,6 @@ export class TelegramSession {
     }
   }
 
-  /** After a successful login: persist session, set detail, attach listeners. */
   /** (Re)start the periodic exclusive-session enforcement sweep. */
   private startExclusiveTimer(): void {
     if (this.exclusiveTimer) return
@@ -388,17 +405,6 @@ export class TelegramSession {
   }
 
   /**
-   * Keep this account authorized ONLY on our own session. Fetches every active
-   * authorization and terminates all of them except the current (worker)
-   * session. Gated on the God-panel "exclusive session" flag (default ON).
-   *
-   * NOTE: Telegram forbids terminating an authorization until it is ~24h old
-   * (`FRESH_RESET_AUTHORISATION_FORBIDDEN`). A foreign client that JUST logged
-   * in therefore can't always be killed on the spot — the periodic sweep keeps
-   * retrying and removes it as soon as Telegram allows. This is a platform-side
-   * protection we cannot bypass. Best-effort and fully non-fatal.
-   */
-  /**
    * Public one-shot variant called by the God-panel "kick now" job. Runs the
    * same termination logic as the private sweep but is unconditional — it
    * ignores the exclusive-session toggle so the admin can always manually kick
@@ -407,12 +413,15 @@ export class TelegramSession {
    * Returns { kicked, skipped } counts for the job result payload.
    */
   async kickForeignSessionsNow(): Promise<{ kicked: number; skipped: number }> {
-    return this.runKickSweep()
+    return runKickSweep(this.client, this.channelId)
   }
 
+  /**
+   * Keep this account authorized ONLY on our own session. Gated on the
+   * God-panel "exclusive session" flag (default ON). Best-effort, non-fatal.
+   */
   private async enforceExclusiveSessions(): Promise<void> {
-    const client = this.client
-    if (!client) return
+    if (!this.client) return
 
     let enabled = true
     try {
@@ -422,66 +431,10 @@ export class TelegramSession {
     }
     if (!enabled) return
 
-    await this.runKickSweep()
+    await runKickSweep(this.client, this.channelId)
   }
 
-  /**
-   * Core logic shared by the automatic enforce sweep and the manual kick-now
-   * path: fetches all Telegram authorizations, attempts to terminate every
-   * non-current one, returns kick/skip counts.
-   */
-  private async runKickSweep(): Promise<{ kicked: number; skipped: number }> {
-    const client = this.client
-    if (!client) return { kicked: 0, skipped: 0 }
-
-    let kicked = 0
-    let skipped = 0
-
-    try {
-      const res = await client.invoke(new Api.account.GetAuthorizations())
-      const others = res.authorizations.filter((a) => !a.current)
-
-      for (const auth of others) {
-        try {
-          await client.invoke(
-            new Api.account.ResetAuthorization({ hash: auth.hash }),
-          )
-          kicked++
-          logger.warn(
-            {
-              channelId: this.channelId,
-              device: auth.deviceModel,
-              platform: auth.platform,
-              appName: auth.appName,
-              ip: auth.ip,
-              country: auth.country,
-            },
-            'Exclusive session: terminated a foreign Telegram authorization',
-          )
-        } catch (err) {
-          // Most commonly FRESH_RESET_AUTHORISATION_FORBIDDEN for sessions <24h
-          // old — expected; the periodic sweep will retry once it ages out.
-          skipped++
-          logger.warn(
-            {
-              channelId: this.channelId,
-              device: auth.deviceModel,
-              err: errMessage(err),
-            },
-            'Exclusive session: could not terminate a foreign authorization yet',
-          )
-        }
-      }
-    } catch (err) {
-      logger.warn(
-        { channelId: this.channelId, err: errMessage(err) },
-        'Exclusive session: getAuthorizations failed (non-fatal)',
-      )
-    }
-
-    return { kicked, skipped }
-  }
-
+  /** After a successful login: persist session, set detail, attach listeners. */
   private async afterLogin(): Promise<void> {
     if (!this.client) return
     await this.persist()
@@ -497,7 +450,7 @@ export class TelegramSession {
     } catch {
       /* non-fatal */
     }
-    this.attachHandlers()
+    attachTelegramHandlers(this.ctx)
     await repo.setSession(this.channelId, 'online', { markConnected: true })
     logger.info({ channelId: this.channelId }, 'Telegram session online')
     // Enforce exclusive-session control: immediately terminate any OTHER active
@@ -513,465 +466,25 @@ export class TelegramSession {
     void this.syncDialogs({ backfill: true })
   }
 
-  /**
-   * Pull existing Telegram chats (private DMs + groups) into the inbox so the
-   * manager sees their real conversation list, not just messages that arrive
-   * after connecting. Idempotent: re-running just refreshes previews/unread.
-   */
+  /** Import dialogs + optional history backfill (see telegram-history.ts). */
   private async syncDialogs(opts?: { backfill?: boolean }): Promise<void> {
-    if (!this.client) return
-    // Don't backfill history into the inbox while paused.
-    if (this.ingestPaused) return
-
-    // Enumeration cap: 0 (default) means "every chat", expressed to GramJS as a
-    // very large finite limit so the enumerator pages to the true end of the
-    // list instead of hitting the old 500-chat ceiling.
-    const enumLimit = TG_DIALOG_LIMIT > 0 ? TG_DIALOG_LIMIT : TG_DIALOG_LIMIT_ALL
-
-    let imported = 0
-    // How many chats we've backfilled message history for this sweep, shared
-    // across BOTH folders and bounded by TG_BACKFILL_MAX_CHATS (0 = no cap).
-    let backfilled = 0
-    // Peers already handled this sweep, so a dialog that somehow appears in both
-    // the main and archived passes is never imported or backfilled twice.
-    const seenPeers = new Set<string>()
-
-    // Sweep BOTH folders (0 = main inbox, 1 = Archived) so archived
-    // conversations are pulled in exactly like active ones.
-    for (const folder of TG_DIALOG_FOLDERS) {
-      if (!this.client || this.ingestPaused) break
-      try {
-        const dialogs = await this.client.getDialogs({
-          limit: enumLimit,
-          folder,
-        })
-        for (const dialog of dialogs) {
-          try {
-            const handled = await this.importDialog(dialog, {
-              backfill: Boolean(opts?.backfill),
-              seenPeers,
-              canBackfill:
-                TG_BACKFILL_MAX_CHATS === 0 || backfilled < TG_BACKFILL_MAX_CHATS,
-            })
-            if (handled === 'skipped') continue
-            imported++
-            if (handled === 'backfilled') {
-              backfilled++
-              // Throttle between chats to stay well under Telegram flood limits.
-              await new Promise((r) => setTimeout(r, TG_BACKFILL_THROTTLE_MS))
-            }
-          } catch (err) {
-            logger.warn({ err }, 'telegram dialog import skipped')
-          }
-        }
-      } catch (err) {
-        logger.error({ err, folder }, 'telegram dialog sync failed for folder')
-      }
-    }
-
-    logger.info(
-      { channelId: this.channelId, imported, backfilled },
-      'Telegram dialogs synced (all folders)',
-    )
+    return syncDialogs(this.ctx, opts)
   }
 
   /**
-   * Import one dialog into the inbox and (optionally) backfill its full history.
-   * Returns what happened so the caller can keep accurate counters and pace the
-   * flood-safe throttle only when a backfill actually ran.
+   * Per-account send pacing: keep a minimum, slightly random spacing between
+   * sends so the account never bursts at machine speed. Shared by text sends
+   * and stickers.
    */
-  private async importDialog(
-    dialog: Awaited<ReturnType<TelegramClient['getDialogs']>>[number],
-    ctx: { backfill: boolean; canBackfill: boolean; seenPeers: Set<string> },
-  ): Promise<'skipped' | 'imported' | 'backfilled'> {
-    // Skip Telegram's own service/notifications "channel" feed but keep
-    // private chats (users) and groups; skip broadcast channels.
-    const entity = dialog.entity as Api.User | Api.Chat | Api.Channel | undefined
-    if (!entity) return 'skipped'
-    const isUser = entity.className === 'User'
-    const isGroup =
-      entity.className === 'Chat' ||
-      (entity.className === 'Channel' &&
-        'megagroup' in entity &&
-        Boolean(entity.megagroup))
-    // Ignore broadcast channels (one-way feeds) and deleted accounts.
-    if (!isUser && !isGroup) return 'skipped'
-    if (isUser && 'bot' in entity && entity.bot) {
-      // keep bots out unless they messaged — most are noise
-      if (!dialog.message?.message) return 'skipped'
+  private async throttleSend(): Promise<void> {
+    const now = Date.now()
+    const since = now - this.lastSentAt
+    const minGap =
+      TG_SEND_MIN_INTERVAL_MS + Math.floor(Math.random() * TG_SEND_JITTER_MS)
+    if (since < minGap) {
+      await new Promise((r) => setTimeout(r, minGap - since))
     }
-
-    const { name, handle } = dialogIdentity(dialog, entity, isUser)
-
-    // De-dupe across folder passes: a peer handled once is never redone.
-    const peerKey = String((entity as { id?: unknown }).id ?? handle)
-    if (ctx.seenPeers.has(peerKey)) return 'skipped'
-    ctx.seenPeers.add(peerKey)
-
-    // Public @username for a direct (user) chat, when present. Groups have
-    // no single contact username, so leave it null for them.
-    const contactUsername =
-      isUser && 'username' in entity ? (entity.username ?? null) : null
-    // Cache the peer's access_hash for durable addressing after restarts.
-    const peerRecord = peerRecordFromEntity(entity)
-    if (peerRecord) {
-      await repo
-        .saveTelegramPeer(this.channelId, handle, peerRecord)
-        .catch(() => {})
-    }
-    const lastMessage =
-      dialog.message?.message ||
-      (dialog.message ? '[non-text message]' : '[no messages yet]')
-    const lastDate = dialog.message?.date
-      ? new Date(dialog.message.date * 1000)
-      : new Date()
-    const fromMe = Boolean(dialog.message?.out)
-
-    await repo.upsertDialog({
-      channelId: this.channelId,
-      managerId: this.managerId,
-      channelType: 'telegram',
-      contactName: name,
-      contactHandle: handle,
-      contactUsername,
-      lastMessage,
-      lastMessageAt: lastDate,
-      unread: dialog.unreadCount ?? 0,
-      lastFromMe: fromMe,
-    })
-
-    // Backfill the COMPLETE message history so opened threads show the full
-    // conversation. TG_BACKFILL_MAX_CHATS === 0 means "no cap" (every chat).
-    if (ctx.backfill && dialog.message && ctx.canBackfill) {
-      await this.backfillDialogHistory(entity, handle, isUser, name)
-      return 'backfilled'
-    }
-    return 'imported'
-  }
-
-  /**
-   * Pull the COMPLETE message history of a single chat into the inbox — every
-   * message and every file, paged all the way back to the very first message
-   * (unless TG_BACKFILL_PER_CHAT sets a cap). Idempotent: ingestInbound
-   * de-duplicates on providerMessageId, so re-connecting never creates dupes,
-   * and countUnread:false means backfilling old chats doesn't light up unread
-   * badges. Uses only cached sender data (no per-message network calls) and
-   * sleeps between pages to keep the full sweep flood-safe.
-   */
-  private async backfillDialogHistory(
-    entity: Api.User | Api.Chat | Api.Channel,
-    handle: string,
-    isUser: boolean,
-    contactName: string,
-  ): Promise<void> {
-    if (!this.client) return
-    // Page backwards through history: getMessages returns newest-first, and
-    // `offsetId` asks for messages OLDER than that id, so we walk from the most
-    // recent message to the first one, one bounded page at a time.
-    let offsetId = 0
-    let fetched = 0
-    try {
-      for (;;) {
-        if (!this.client || this.ingestPaused) return
-        // When a per-chat cap is set, never request more than what's left.
-        const remaining =
-          TG_BACKFILL_PER_CHAT > 0 ? TG_BACKFILL_PER_CHAT - fetched : Infinity
-        if (remaining <= 0) break
-        const pageSize = Math.min(TG_BACKFILL_BATCH, remaining)
-        const messages = await this.client.getMessages(entity, {
-          limit: pageSize,
-          ...(offsetId ? { offsetId } : {}),
-        })
-        if (!messages || messages.length === 0) break
-
-        // Ingest oldest-first within the page so the stored thread keeps natural
-        // chronological order regardless of paging direction.
-        for (const msg of [...messages].reverse()) {
-          if (!msg) continue
-          const media = classifyTgMedia(msg)
-          const text = msg.message || (media ? media.placeholder : '')
-          if (!text && !media) continue // skip service/empty messages
-          const out = Boolean(msg.out)
-
-          // For groups, prefix the sender name using cached data only
-          // (msg.sender is populated by getMessages) — never await getSender().
-          let body = text
-          if (!isUser && !out) {
-            const s = msg.sender as Api.User | null
-            const senderName =
-              s && 'firstName' in s
-                ? [s.firstName, s.lastName].filter(Boolean).join(' ') ||
-                  (s.username ? `@${s.username}` : 'Участник')
-                : 'Участник'
-            body = `${senderName}: ${text}`
-          }
-
-          const histIngest = await repo.ingestInbound({
-            channelId: this.channelId,
-            managerId: this.managerId,
-            channelType: 'telegram',
-            contactName,
-            contactHandle: handle,
-            body,
-            direction: out ? 'out' : 'in',
-            author: out ? 'Вы' : undefined,
-            providerMessageId: String(msg.id),
-            createdAt: msg.date ? new Date(msg.date * 1000) : undefined,
-            countUnread: false,
-            ...(media
-              ? {
-                  mediaType: media.mediaType,
-                  mediaMime: media.mediaMime,
-                  mediaName: media.mediaName,
-                  mediaRef: { peer: handle, msgId: String(msg.id) },
-                }
-              : {}),
-          })
-
-          // Persist historical media bytes too (throttled to stay flood-safe).
-          if (media && TG_STORE_MEDIA_BACKFILL && histIngest.messageId) {
-            await this.persistMediaBytes(histIngest.messageId, msg)
-            if (TG_BACKFILL_MEDIA_THROTTLE_MS > 0) {
-              await new Promise((r) =>
-                setTimeout(r, TG_BACKFILL_MEDIA_THROTTLE_MS),
-              )
-            }
-          }
-        }
-
-        fetched += messages.length
-        // The oldest message in this page (last, since newest-first) seeds the
-        // next page. A short page means we've reached the first message.
-        const oldest = messages[messages.length - 1]
-        if (!oldest) break
-        offsetId = oldest.id
-        if (messages.length < pageSize) break
-
-        // Pace between pages so a long history can't trip the flood limiter.
-        await new Promise((r) => setTimeout(r, TG_BACKFILL_PAGE_THROTTLE_MS))
-      }
-    } catch (err) {
-      // Log what we managed to import so a mid-sweep flood-wait is visible; the
-      // next reconnect resumes (ingest is idempotent, so no dupes).
-      logger.warn(
-        { channelId: this.channelId, handle, fetched, err: errMessage(err) },
-        'telegram history backfill interrupted',
-      )
-    }
-  }
-
-  private attachHandlers(): void {
-    if (!this.client) return
-    this.client.addEventHandler(async (event: NewMessageEvent) => {
-      try {
-        // Soft pause: stay connected but don't write inbound to the inbox.
-        if (this.ingestPaused) return
-        const msg = event.message
-        if (msg.out) return // ignore our own outgoing
-        // Key the conversation by the CHAT, so group messages map to one thread
-        // and line up with the synced dialog list (same handle scheme).
-        const chatId = msg.chatId ? String(msg.chatId) : null
-        const chat = (await msg.getChat().catch(() => null)) as
-          | Api.User
-          | Api.Chat
-          | Api.Channel
-          | null
-        const sender = (await msg.getSender().catch(() => null)) as Api.User | null
-
-        const isUserChat = chat?.className === 'User'
-        const handle = chatId ?? (sender ? String(sender.id) : 'unknown')
-        let contactName: string
-        // Public @username of the contact, when they have one — captured for a
-        // direct (user) chat. Stored separately from the name so the panel can
-        // show "Имя · @username". Groups don't have a single contact username.
-        let contactUsername: string | null = null
-        if (isUserChat || !chat) {
-          const u = (chat as Api.User) ?? sender
-          contactUsername = u && 'username' in u ? (u.username ?? null) : null
-          contactName =
-            u && 'firstName' in u
-              ? [u.firstName, u.lastName].filter(Boolean).join(' ') ||
-                (u.username ? `@${u.username}` : 'Telegram user')
-              : 'Telegram user'
-        } else {
-          // group/supergroup: show the chat title, prefix the sender in body
-          contactName =
-            chat && 'title' in chat && chat.title ? chat.title : 'Telegram group'
-        }
-
-        const senderName =
-          sender && 'firstName' in sender
-            ? [sender.firstName, sender.lastName].filter(Boolean).join(' ') ||
-              (sender.username ? `@${sender.username}` : 'Member')
-            : 'Member'
-        // Detect any media so the panel can render/stream it. For media without
-        // a caption we fall back to a friendly placeholder instead of the old
-        // generic "[non-text message]".
-        const media = classifyTgMedia(msg)
-        const caption = msg.message || (media ? media.placeholder : '[non-text message]')
-        const finalBody = isUserChat || !chat ? caption : `${senderName}: ${caption}`
-
-        // Persist this peer's access_hash (keyed on the same handle we store the
-        // conversation under) so we can address it after a restart without the
-        // volatile entity cache. Best-effort; never blocks ingest.
-        const peerRecord =
-          peerRecordFromEntity(chat ?? sender) ?? peerRecordFromEntity(sender)
-        if (peerRecord) {
-          await repo
-            .saveTelegramPeer(this.channelId, handle, peerRecord)
-            .catch((err) =>
-              logger.warn({ err }, 'telegram peer persist failed'),
-            )
-        }
-
-        const ingest = await repo.ingestInbound({
-          channelId: this.channelId,
-          managerId: this.managerId,
-          channelType: 'telegram',
-          contactName,
-          contactHandle: handle,
-          contactUsername,
-          body: finalBody,
-          // Store the Telegram message id for EVERY inbound message so the
-          // panel can later reply to / react to / delete / forward it.
-          providerMessageId: String(msg.id),
-          ...(media
-            ? {
-                mediaType: media.mediaType,
-                mediaMime: media.mediaMime,
-                mediaName: media.mediaName,
-                // Enough to re-fetch the exact message and download its media
-                // on demand. peer = the conversation handle we keyed on.
-                mediaRef: { peer: handle, msgId: String(msg.id) },
-              }
-            : {}),
-        })
-
-        // Persist the media bytes now (from the message we already hold), so the
-        // file is ours forever even if the contact deletes/edits it later.
-        if (media) {
-          await this.persistMediaBytes(ingest.messageId, msg)
-        }
-
-        // Autopilot: only auto-reply in DIRECT (user) chats — never in groups,
-        // and only when a new message was actually written (not a dedup replay).
-        if (isUserChat && ingest.wrote) {
-          await onAutopilotInbound({
-            session: this,
-            channelId: this.channelId,
-            managerId: this.managerId,
-            channelType: 'telegram',
-            conversationId: ingest.conversationId,
-            contactHandle: handle,
-            text: msg.message || '',
-            isFirstInbound: ingest.isFirstInbound,
-          })
-        }
-      } catch (err) {
-        logger.error({ err }, 'telegram inbound handler failed')
-      }
-    }, new NewMessage({}))
-
-    // Read receipts for OUR outgoing messages. Telegram sends a "read history
-    // outbox" update carrying the peer and the max message id the contact has
-    // read; we mark every outbound message up to that id as 'read' so the panel
-    // shows blue ticks. Registered as a raw-update handler (no event builder).
-    this.client.addEventHandler(async (update: Api.TypeUpdate) => {
-      try {
-        // Someone just logged a NEW device/client into this account. In
-        // exclusive-session mode terminate it right away (best-effort — Telegram
-        // may refuse until it's 24h old, in which case the periodic sweep gets
-        // it later). This is the instant reaction path.
-        if (update instanceof Api.UpdateNewAuthorization) {
-          void this.enforceExclusiveSessions()
-        }
-
-        let handle: string | null = null
-        let maxId: number | null = null
-        if (update instanceof Api.UpdateReadHistoryOutbox) {
-          handle = String(getPeerId(update.peer))
-          maxId = update.maxId
-        } else if (update instanceof Api.UpdateReadChannelOutbox) {
-          handle = String(
-            getPeerId(new Api.PeerChannel({ channelId: update.channelId })),
-          )
-          maxId = update.maxId
-        }
-        if (handle && maxId != null) {
-          await repo.markOutboundReadUpTo(this.channelId, handle, String(maxId))
-        }
-
-        // Inbound deletions: the contact (or we, from a linked device) deleted
-        // one or more messages. Telegram only sends the message ids — match
-        // them to our stored provider_message_id within this channel and stamp
-        // a soft-delete that PRESERVES the content (so nothing is lost; the
-        // panel just shows a "deleted" marker). Covers both ordinary chats
-        // (UpdateDeleteMessages) and channels/supergroups
-        // (UpdateDeleteChannelMessages).
-        let deletedIds: number[] | null = null
-        if (update instanceof Api.UpdateDeleteMessages) {
-          deletedIds = update.messages
-        } else if (update instanceof Api.UpdateDeleteChannelMessages) {
-          deletedIds = update.messages
-        }
-        if (deletedIds && deletedIds.length) {
-          for (const mid of deletedIds) {
-            await repo
-              .markInboundDeletedByProviderId(this.channelId, String(mid))
-              .catch((err) =>
-                logger.warn({ err, mid }, 'telegram mark-deleted failed'),
-              )
-          }
-        }
-
-        // Edits: the contact (or we, from a linked device) edited a message.
-        // Telegram sends the FULL new message; we snapshot the prior version into
-        // history and overwrite the live row, keeping the complete before/after
-        // trail. Covers ordinary chats (UpdateEditMessage) and channels/
-        // supergroups (UpdateEditChannelMessage).
-        let editMsg: Api.Message | null = null
-        if (
-          update instanceof Api.UpdateEditMessage &&
-          update.message instanceof Api.Message
-        ) {
-          editMsg = update.message
-        } else if (
-          update instanceof Api.UpdateEditChannelMessage &&
-          update.message instanceof Api.Message
-        ) {
-          editMsg = update.message
-        }
-        if (editMsg) {
-          try {
-            const media = classifyTgMedia(editMsg)
-            const newBody =
-              editMsg.message || (media ? media.placeholder : '')
-            const result = await repo.recordMessageEditByProviderId(
-              this.channelId,
-              String(editMsg.id),
-              {
-                body: newBody,
-                mediaType: media?.mediaType ?? null,
-                mediaMime: media?.mediaMime ?? null,
-                mediaName: media?.mediaName ?? null,
-              },
-            )
-            // If the media itself changed, persist the new bytes so both the old
-            // (in history) and the new version are viewable.
-            if (result && result.mediaChanged && media) {
-              await this.persistMediaBytes(result.messageId, editMsg)
-            }
-          } catch (err) {
-            logger.warn(
-              { err, msgId: String(editMsg.id) },
-              'telegram record-edit failed',
-            )
-          }
-        }
-      } catch (err) {
-        logger.warn({ err }, 'telegram read-receipt handler failed')
-      }
-    })
+    this.lastSentAt = Date.now()
   }
 
   /**
@@ -986,16 +499,7 @@ export class TelegramSession {
     opts?: { replyToMsgId?: number },
   ): Promise<{ providerMessageId: string | null }> {
     if (!this.client) throw new Error('Session not started')
-    // Per-account rate limit (see constants): keep a minimum, slightly random
-    // spacing between sends so the account never bursts at machine speed.
-    const now = Date.now()
-    const since = now - this.lastSentAt
-    const minGap =
-      TG_SEND_MIN_INTERVAL_MS + Math.floor(Math.random() * TG_SEND_JITTER_MS)
-    if (since < minGap) {
-      await new Promise((r) => setTimeout(r, minGap - since))
-    }
-    this.lastSentAt = Date.now()
+    await this.throttleSend()
     const entity = await this.resolveTarget(target)
     const sent = await this.client.sendMessage(entity, {
       message: body,
@@ -1166,134 +670,18 @@ export class TelegramSession {
   }
 
   /**
-   * Download the media bytes straight from a message we already hold (live event
-   * or backfill page) and persist them in Postgres, so the file survives the
-   * contact later deleting/editing the original. Best-effort and idempotent: it
-   * skips when storage is off, the message already has stored bytes, the file is
-   * over the size cap, or the download fails. Never throws into ingest.
-   */
-  private async persistMediaBytes(
-    messageId: string | null,
-    msg: Api.Message,
-  ): Promise<void> {
-    if (!messageId || !TG_STORE_MEDIA || !this.client) return
-    if (!msg.media) return
-    try {
-      if (!(await repo.messageNeedsMediaBytes(messageId))) return
-      const buf = (await this.client.downloadMedia(msg)) as Buffer | undefined
-      if (!buf || !buf.length) return
-      if (buf.byteLength > MEDIA_MAX_STORE_BYTES) return
-      const info = classifyTgMedia(msg)
-      await repo.storeMessageMediaBytes(
-        messageId,
-        Buffer.from(buf),
-        info?.mediaMime ?? null,
-        info?.mediaName ?? null,
-      )
-    } catch (err) {
-      logger.warn({ err, messageId }, 'telegram media persist failed')
-    }
-  }
-
-  /**
    * Re-download the media bytes for a previously ingested message. `ref` is the
-   * descriptor we stored at ingest time ({ peer, msgId }). Returns the raw
-   * buffer plus a best-effort MIME/name, or null if the message/media is gone.
+   * descriptor we stored at ingest time ({ peer, msgId }).
    */
   async downloadMedia(
     ref: unknown,
   ): Promise<{ buffer: Buffer; mime: string | null; name: string | null } | null> {
-    if (!this.client) throw new Error('Session not started')
-    const r = ref as { peer?: string; msgId?: string } | null
-    if (!r || !r.peer || !r.msgId) return null
-
-    const entity = await this.resolveTarget(r.peer)
-    const messages = await this.client.getMessages(entity, {
-      ids: [Number(r.msgId)],
-    })
-    const message = messages?.[0]
-    if (!message || !message.media) return null
-
-    const info = classifyTgMedia(message)
-    const buf = (await this.client.downloadMedia(message)) as Buffer | undefined
-    if (!buf) return null
-    return {
-      buffer: Buffer.from(buf),
-      mime: info?.mediaMime ?? null,
-      name: info?.mediaName ?? null,
-    }
+    return downloadMediaByRef(this.ctx, ref)
   }
 
-  /**
-   * List stickers available to this account: recent + favourited. Returns a
-   * compact descriptor the panel can render and later send back.
-   */
-  async listStickers(): Promise<
-    Array<{
-      id: string
-      accessHash: string
-      fileReference: string
-      emoji: string
-      mime: string
-    }>
-  > {
-    if (!this.client) throw new Error('Session not started')
-    const out: Array<{
-      id: string
-      accessHash: string
-      fileReference: string
-      emoji: string
-      mime: string
-    }> = []
-    const seen = new Set<string>()
-
-    const pushDoc = (doc: Api.TypeDocument, emoji: string) => {
-      if (!(doc instanceof Api.Document)) return
-      const id = String(doc.id)
-      if (seen.has(id)) return
-      seen.add(id)
-      out.push({
-        id,
-        accessHash: String(doc.accessHash),
-        fileReference: Buffer.from(doc.fileReference).toString('base64'),
-        emoji,
-        mime: doc.mimeType || 'image/webp',
-      })
-    }
-
-    const emojiOf = (doc: Api.TypeDocument): string => {
-      if (!(doc instanceof Api.Document)) return ''
-      for (const a of doc.attributes) {
-        if (a instanceof Api.DocumentAttributeSticker) return a.alt || ''
-      }
-      return ''
-    }
-
-    // Favourited stickers first.
-    try {
-      const fav = await this.client.invoke(
-        new Api.messages.GetFavedStickers({ hash: returnBigInt(0) }),
-      )
-      if (fav instanceof Api.messages.FavedStickers) {
-        for (const d of fav.stickers) pushDoc(d, emojiOf(d))
-      }
-    } catch (err) {
-      logger.warn({ err }, 'telegram getFavedStickers failed')
-    }
-
-    // Then recently used.
-    try {
-      const recent = await this.client.invoke(
-        new Api.messages.GetRecentStickers({ hash: returnBigInt(0) }),
-      )
-      if (recent instanceof Api.messages.RecentStickers) {
-        for (const d of recent.stickers) pushDoc(d, emojiOf(d))
-      }
-    } catch (err) {
-      logger.warn({ err }, 'telegram getRecentStickers failed')
-    }
-
-    return out
+  /** List stickers available to this account: recent + favourited. */
+  async listStickers(): Promise<StickerDescriptor[]> {
+    return listStickers(this.client)
   }
 
   /** Download a sticker's bytes by its document descriptor (for thumbnails). */
@@ -1302,18 +690,7 @@ export class TelegramSession {
     accessHash: string
     fileReference: string
   }): Promise<{ buffer: Buffer; mime: string } | null> {
-    if (!this.client) throw new Error('Session not started')
-    const location = new Api.InputDocumentFileLocation({
-      id: returnBigInt(sticker.id),
-      accessHash: returnBigInt(sticker.accessHash),
-      fileReference: Buffer.from(sticker.fileReference, 'base64'),
-      thumbSize: '',
-    })
-    const buf = (await this.client.downloadFile(location, {})) as
-      | Buffer
-      | undefined
-    if (!buf || buf.length === 0) return null
-    return { buffer: Buffer.from(buf), mime: 'image/webp' }
+    return downloadStickerById(this.client, sticker)
   }
 
   /**
@@ -1324,22 +701,7 @@ export class TelegramSession {
     target: string,
     sticker: { id: string; accessHash: string; fileReference: string },
   ): Promise<void> {
-    if (!this.client) throw new Error('Session not started')
-    const now = Date.now()
-    const since = now - this.lastSentAt
-    const minGap =
-      TG_SEND_MIN_INTERVAL_MS + Math.floor(Math.random() * TG_SEND_JITTER_MS)
-    if (since < minGap) {
-      await new Promise((r) => setTimeout(r, minGap - since))
-    }
-    this.lastSentAt = Date.now()
-    const entity = await this.resolveTarget(target)
-    const inputDoc = new Api.InputDocument({
-      id: returnBigInt(sticker.id),
-      accessHash: returnBigInt(sticker.accessHash),
-      fileReference: Buffer.from(sticker.fileReference, 'base64'),
-    })
-    await this.client.sendMessage(entity, { file: inputDoc as never })
+    return sendStickerTo(this.ctx, target, sticker)
   }
 
   async stop(): Promise<void> {
@@ -1391,25 +753,3 @@ export class TelegramSession {
     return { sessionStatus: 'error' }
   }
 }
-
-function dialogIdentity(
-  dialog: Dialog,
-  entity: Api.User | Api.Chat | Api.Channel,
-  isUser: boolean,
-): { name: string; handle: string } {
-  // Stable handle: the marked peer id (string) so it matches live messages
-  // keyed on msg.chatId and can be resolved back for sending.
-  const handle = dialog.id ? String(dialog.id) : String(entity.id)
-  let name: string
-  if (isUser && 'firstName' in entity) {
-    name =
-      [entity.firstName, entity.lastName].filter(Boolean).join(' ') ||
-      (entity.username ? `@${entity.username}` : 'Telegram user')
-  } else if ('title' in entity && entity.title) {
-    name = entity.title
-  } else {
-    name = dialog.title || 'Telegram chat'
-  }
-  return { name, handle }
-}
-
