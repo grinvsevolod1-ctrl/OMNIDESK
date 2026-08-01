@@ -222,7 +222,7 @@ async function tick(): Promise<void> {
         level: 'info',
         source: 'sim',
         event: 'reaped',
-        message: `Закр��то ${reaped} диалогов, где клиент перестал отвечать (за ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
+        message: `Закрыто ${reaped} диалогов, где клиент перестал отвечать (за ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
       })
     }
 
