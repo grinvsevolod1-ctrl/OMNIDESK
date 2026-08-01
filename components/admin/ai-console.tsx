@@ -209,6 +209,11 @@ export function AiConsole({
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  // Stick-to-bottom: follow new/streaming messages only while the admin is
+  // already near the bottom. Scrolling up to read history releases the grip;
+  // sending a message re-engages it. A ref (not state) — scroll position must
+  // never cause re-renders.
+  const stickRef = useRef(true)
   // Monotonic token: a Stop or a newer request invalidates in-flight replies.
   const reqRef = useRef(0)
   // Aborts the in-flight streaming fetch on Stop / new request.
@@ -268,6 +273,10 @@ export function AiConsole({
     (raw: string) => {
       const q = raw.trim()
       if (!q || loading) return
+
+      // Sending always re-engages follow mode: your own question (and the
+      // reply streaming under it) must be visible without touching the wheel.
+      stickRef.current = true
 
       const userMsg: ChatMessage = { id: nextId(), role: 'user', content: q }
       const withUser = [...messages, userMsg]
@@ -522,6 +531,7 @@ export function AiConsole({
   const applyPreset = useCallback(
     async (preset: ConsolePreset, confirmed = false) => {
       if (loading) return
+      stickRef.current = true
 
       // High-impact presets («Максимальный дожим») ask first, mirroring the
       // guarded agent actions — no silent jump to maximum pressure.
@@ -582,6 +592,7 @@ export function AiConsole({
   // Instant panel open from a quick chip — no model call, added as a turn so the
   // conversation stays coherent.
   const openPanelDirect = useCallback((intent: ConsoleIntent) => {
+    stickRef.current = true
     const meta = INTENT_BY_ID[intent]
     const asstMsg: ChatMessage = {
       id: nextId(),
@@ -643,9 +654,31 @@ export function AiConsole({
     return () => window.removeEventListener('keydown', onEsc)
   }, [activePanel, closePanel])
 
-  // Keep the newest turn / opened panel in view.
+  // Track whether the admin is near the bottom of the page. Passive listener,
+  // ref write only — zero re-renders. The 200px threshold comfortably exceeds
+  // the composer clearance so the grip isn't lost right after an autoscroll.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    const onScroll = () => {
+      const doc = document.documentElement
+      const gapToBottom = doc.scrollHeight - window.innerHeight - window.scrollY
+      stickRef.current = gapToBottom < 200
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // Keep the newest turn / streaming tokens / opened panel in view — but only
+  // while stuck to the bottom. Two deliberate choices: `behavior: 'auto'`
+  // (instant), because this fires on EVERY streamed token and overlapping
+  // smooth animations cancel each other mid-flight, which is exactly how the
+  // thread used to stall above the newest message; and requestAnimationFrame,
+  // so the scroll runs after the new bubble's height is actually in the layout.
+  useEffect(() => {
+    if (!stickRef.current) return
+    const raf = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    })
+    return () => cancelAnimationFrame(raf)
   }, [messages, activePanel])
 
   const hasChat = messages.length > 0
@@ -730,7 +763,9 @@ export function AiConsole({
           {suggestions.length > 0 ? (
             <Suggestions items={suggestions} onPick={send} />
           ) : null}
-          <div ref={bottomRef} />
+          {/* scroll-mb clears the sticky composer: aligning this anchor to the
+              viewport bottom would otherwise park the newest lines behind it. */}
+          <div ref={bottomRef} className="scroll-mb-40" />
         </div>
       ) : (
         <EmptyHero />
