@@ -19,6 +19,8 @@ export const AGENT_LIMITS = {
   totalMs: 20 * 60_000,
   /** Cap on any single command. */
   perCommandMs: 8 * 60_000,
+  /** How often to check for admin cancellation while a command runs. */
+  cancelPollMs: 3_000,
   /** Max characters of a command's output fed back to the model per step. */
   maxOutputChars: 6000,
 } as const

@@ -34,6 +34,8 @@ export interface ExecutedAction {
     | 'app_created'
     | 'deploy_started'
     | 'lifecycle'
+    | 'app_deleted'
+    | 'server_deleted'
     | 'info'
   /** Short human summary, e.g. «Запустил ИИ-установку intranet». */
   label: string

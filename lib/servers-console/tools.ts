@@ -4,6 +4,8 @@ import { z } from 'zod'
 import {
   createApp,
   createDeployment,
+  deleteApp,
+  deleteServer,
   enqueueDeployJob,
   getAppById,
   getServerById,
@@ -198,6 +200,81 @@ export function serversTools(state: RunState) {
           appId: app.id,
           appName: app.name,
         }
+      },
+    }),
+
+    manage_app: tool({
+      description:
+        'Управлять жизненным циклом приложения на сервере: action="start" (запустить), "stop" (остановить), "restart" (перезапустить). Возьми appId через get_server. Для повторной установки используй start_ai_deploy с этим appId, а не manage_app.',
+      inputSchema: z.object({
+        appId: z.string().min(1),
+        action: z.enum(['start', 'stop', 'restart']),
+      }),
+      execute: async ({ appId, action }) => {
+        const app = await getAppById(appId)
+        if (!app) return { ok: false, reason: 'app_not_found' }
+        await enqueueDeployJob({ action, serverId: app.serverId, appId })
+        const verb =
+          action === 'start' ? 'Запускаю' : action === 'stop' ? 'Останавливаю' : 'Перезапускаю'
+        state.actions.push({ kind: 'lifecycle', label: `${verb} ${app.name}` })
+        state.dataChanged = true
+        return { ok: true, appId, action }
+      },
+    }),
+
+    delete_app: tool({
+      description:
+        'Удалить приложение: остановить процесс, удалить его код с сервера и убрать запись. НЕОБРАТИМО — сначала явно подтверди у админа и вызывай только с confirm=true. Возьми appId через get_server.',
+      inputSchema: z.object({
+        appId: z.string().min(1),
+        confirm: z
+          .boolean()
+          .describe('Должно быть true — подтверждение админа на удаление.'),
+      }),
+      execute: async ({ appId, confirm }) => {
+        if (!confirm) return { ok: false, reason: 'confirmation_required' }
+        const app = await getAppById(appId)
+        if (!app) return { ok: false, reason: 'app_not_found' }
+        const server = await getServerById(app.serverId)
+        // Reachable server → worker stops the process, cleans the code and drops
+        // the row atomically. Otherwise just remove the record.
+        if (server?.hasSecret) {
+          await enqueueDeployJob({ action: 'remove', serverId: app.serverId, appId })
+        } else {
+          await deleteApp(appId)
+        }
+        state.actions.push({ kind: 'app_deleted', label: `Удаляю приложение ${app.name}` })
+        state.dataChanged = true
+        return {
+          ok: true,
+          appId,
+          cleanedRemotely: Boolean(server?.hasSecret),
+        }
+      },
+    }),
+
+    delete_server: tool({
+      description:
+        'Отключить сервер из панели и удалить его запись (вместе с его приложениями в базе). НЕОБРАТИМО и НЕ останавливает процессы на самом сервере — сначала явно подтверди у админа и вызывай только с confirm=true. Возьми serverId через list_servers.',
+      inputSchema: z.object({
+        serverId: z.string().min(1),
+        confirm: z
+          .boolean()
+          .describe('Должно быть true — подтверждение админа на удаление.'),
+      }),
+      execute: async ({ serverId, confirm }) => {
+        if (!confirm) return { ok: false, reason: 'confirmation_required' }
+        const server = await getServerById(serverId)
+        if (!server) return { ok: false, reason: 'server_not_found' }
+        const apps = await listAppsForServer(serverId)
+        const ok = await deleteServer(serverId)
+        if (!ok) return { ok: false, reason: 'delete_failed' }
+        state.actions.push({
+          kind: 'server_deleted',
+          label: `Отключил сервер ${server.name}`,
+        })
+        state.dataChanged = true
+        return { ok: true, serverId, hadApps: apps.length }
       },
     }),
 

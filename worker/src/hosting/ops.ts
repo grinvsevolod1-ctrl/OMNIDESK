@@ -174,11 +174,15 @@ export async function runLifecycle(
     if (res.code !== 0 && action !== 'remove') {
       throw new Error(res.stderr.trim() || `команда завершилась с кодом ${res.code}`)
     }
-    // Reflect the new state (remove is handled by the panel deleting the row).
+    // Reflect the new state. For 'remove', the process and code are now gone
+    // from the server, so delete the app record too — cleanup is atomic and the
+    // console doesn't have to race the worker to drop the row.
     if (action === 'start' || action === 'restart') {
       await repo.setAppStatus(appId, 'running', null)
     } else if (action === 'stop') {
       await repo.setAppStatus(appId, 'stopped', null)
+    } else if (action === 'remove') {
+      await repo.deleteApp(appId)
     }
   } finally {
     if (conn) disconnect(conn.client)

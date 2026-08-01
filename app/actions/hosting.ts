@@ -175,15 +175,24 @@ export async function deleteAppAction(appId: string): Promise<HostingResult> {
   await requireAdmin()
   const app = await getAppById(appId)
   if (!app) return { ok: false, message: 'Приложение не найдено.' }
-  // Ask the worker to stop/remove the running process, then drop the row.
-  await enqueueDeployJob({
-    action: 'remove',
-    serverId: app.serverId,
-    appId,
-  })
+  const server = await getServerById(app.serverId)
+  // If we can reach the server, let the worker stop the process, clean the code
+  // AND delete the row (atomic cleanup — see runLifecycle 'remove'). Deleting
+  // the row here first would make the worker's remove job miss the app and leave
+  // the process running on the server.
+  if (server?.hasSecret) {
+    await enqueueDeployJob({ action: 'remove', serverId: app.serverId, appId })
+    revalidatePath(`/admin/servers/${app.serverId}`)
+    return { ok: true, message: 'Приложение останавливается и удаляется с сервера.' }
+  }
+  // No SSH credentials to reach the server — just drop the record; the remote
+  // process (if any) can't be cleaned automatically.
   await deleteApp(appId)
   revalidatePath(`/admin/servers/${app.serverId}`)
-  return { ok: true, message: 'Приложение удаляется с сервера.' }
+  return {
+    ok: true,
+    message: 'Приложение удалено из панели. Доступа к серверу нет — процесс на сервере мог остаться.',
+  }
 }
 
 /* ------------------------- Lifecycle / deploys ------------------------- */

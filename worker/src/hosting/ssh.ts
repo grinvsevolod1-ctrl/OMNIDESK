@@ -102,8 +102,13 @@ export function execStream(
   client: Client,
   command: string,
   onLine: (stream: 'stdout' | 'stderr', line: string) => void,
+  signal?: AbortSignal,
 ): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('aborted'))
+      return
+    }
     client.exec(command, (err, stream) => {
       if (err) {
         reject(err)
@@ -114,6 +119,26 @@ export function execStream(
       let outBuf = ''
       let errBuf = ''
       let code = 0
+      let aborted = false
+
+      // Cooperative interruption: when the caller aborts (e.g. the admin
+      // cancelled the deploy), signal the remote process and tear the channel
+      // down so a long-running command stops promptly instead of running to
+      // completion.
+      const onAbort = (): void => {
+        aborted = true
+        try {
+          stream.signal('KILL')
+        } catch {
+          /* ignore */
+        }
+        try {
+          stream.close()
+        } catch {
+          /* ignore */
+        }
+      }
+      if (signal) signal.addEventListener('abort', onAbort, { once: true })
 
       const flush = (which: 'stdout' | 'stderr', buf: string, rest: string) => {
         const parts = (buf + rest).split(/\r?\n/)
@@ -133,13 +158,21 @@ export function execStream(
         errBuf = flush('stderr', errBuf, text)
       })
       stream.on('close', (exitCode: number | null) => {
+        if (signal) signal.removeEventListener('abort', onAbort)
         // Emit any trailing partial line without a newline.
         if (outBuf) onLine('stdout', outBuf)
         if (errBuf) onLine('stderr', errBuf)
+        if (aborted) {
+          reject(new Error('aborted'))
+          return
+        }
         code = exitCode ?? 0
         resolve({ code, stdout, stderr })
       })
-      stream.on('error', (streamErr: Error) => reject(streamErr))
+      stream.on('error', (streamErr: Error) => {
+        if (signal) signal.removeEventListener('abort', onAbort)
+        reject(streamErr)
+      })
     })
   })
 }

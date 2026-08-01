@@ -41,9 +41,40 @@ import {
 
 const APPS_ROOT = '/opt/omnidesk-apps'
 
+/** Log/stream channels for a deployment (mirrors DeployLogStream in the panel). */
+type DeployStream = 'stdout' | 'stderr' | 'system' | 'agent' | 'command'
+
+/** Mutable per-run state threaded through the tool loop. */
+interface AgentState {
+  /** Current working directory; `cd` inside run_command persists here. */
+  cwd: string
+}
+
+/** Marker used to read back the shell's cwd after each command runs. */
+const CWD_MARKER = '__OMNIDESK_CWD__'
+
 /** POSIX single-quote escaping so a value can't break out of the shell. */
 function sh(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * If a streamed line carries the cwd marker, return the captured path (may be
+ * an empty string if pwd was empty); otherwise return null so the caller knows
+ * to treat it as normal output.
+ */
+function readCwdMarker(line: string): string | null {
+  const idx = line.indexOf(CWD_MARKER)
+  if (idx === -1) return null
+  return line.slice(idx + CWD_MARKER.length).trim()
+}
+
+/** Remove any cwd-marker line from a captured stdout blob. */
+function stripCwdMarker(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((l) => !l.includes(CWD_MARKER))
+    .join('\n')
 }
 
 /** Terminal deployment states — the agent stops if it sees one (e.g. cancel). */
@@ -218,31 +249,39 @@ export async function runAiDeploy(job: repo.DeployJob): Promise<void> {
     const client = conn.client
     const appDir = `${APPS_ROOT}/${app.id}`
 
-    /** Stream a command's output to the log, redacting the token, with timeout. */
-    const runStreaming = (command: string): Promise<ExecResult> => {
-      return new Promise<ExecResult>((resolve, reject) => {
-        let settled = false
-        const timer = setTimeout(() => {
-          if (settled) return
-          settled = true
-          reject(new Error(`команда превысила лимит ${AGENT_LIMITS.perCommandMs / 1000}с`))
-        }, AGENT_LIMITS.perCommandMs)
-        execStream(client, command, (s, line) => {
-          void log(s, redact(line))
-        }).then(
-          (res) => {
-            if (settled) return
-            settled = true
-            clearTimeout(timer)
-            resolve(res)
-          },
-          (err) => {
-            if (settled) return
-            settled = true
-            clearTimeout(timer)
-            reject(err instanceof Error ? err : new Error(String(err)))
-          },
-        )
+    /**
+     * Run a command, streaming output (via onLine) with two guardrails:
+     *  - a per-command time limit, and
+     *  - cooperative cancellation: we poll the deployment status while the
+     *    command runs and abort the SSH channel the moment the admin cancels,
+     *    so even a long `npm install` stops promptly instead of finishing.
+     */
+    const runStreaming = (
+      command: string,
+      onLine?: (s: DeployStream, line: string) => void,
+    ): Promise<ExecResult> => {
+      const controller = new AbortController()
+      let cancelled = false
+      const poll = setInterval(() => {
+        void repo.getDeploymentStatus(deploymentId).then((st) => {
+          if (isTerminal(st)) {
+            cancelled = true
+            controller.abort()
+          }
+        })
+      }, AGENT_LIMITS.cancelPollMs)
+      poll.unref?.()
+      const timer = setTimeout(() => controller.abort(), AGENT_LIMITS.perCommandMs)
+      const sink = onLine ?? ((s: DeployStream, line: string) => void log(s, redact(line)))
+      return execStream(client, command, sink, controller.signal).finally(() => {
+        clearInterval(poll)
+        clearTimeout(timer)
+      }).catch((err: unknown) => {
+        if (cancelled) throw new Error('установка отменена')
+        if (controller.signal.aborted) {
+          throw new Error(`команда превысила лимит ${AGENT_LIMITS.perCommandMs / 1000}с`)
+        }
+        throw err instanceof Error ? err : new Error(String(err))
       })
     }
 
@@ -257,6 +296,7 @@ export async function runAiDeploy(job: repo.DeployJob): Promise<void> {
       runStreaming,
       client,
       startedAt,
+      state: { cwd: appDir },
     })
 
     if (outcome.success) {
@@ -300,14 +340,15 @@ async function runAgentLoop(ctx: {
   appDir: string
   deploymentId: string
   token: string | null
-  log: (
-    stream: 'stdout' | 'stderr' | 'system' | 'agent' | 'command',
-    line: string,
-  ) => Promise<void>
+  log: (stream: DeployStream, line: string) => Promise<void>
   redact: (s: string) => string
-  runStreaming: (command: string) => Promise<ExecResult>
+  runStreaming: (
+    command: string,
+    onLine?: (s: DeployStream, line: string) => void,
+  ) => Promise<ExecResult>
   client: SshConnection['client']
   startedAt: number
+  state: AgentState
 }): Promise<AgentOutcome> {
   const { app, server, appDir, deploymentId, token, log, redact, runStreaming } = ctx
 
@@ -376,6 +417,7 @@ async function runAgentLoop(ctx: {
         redact,
         runStreaming,
         client: ctx.client,
+        state: ctx.state,
       })
       messages.push({
         role: 'tool',
@@ -402,16 +444,17 @@ async function executeTool(
     appDir: string
     deploymentId: string
     token: string | null
-    log: (
-      stream: 'stdout' | 'stderr' | 'system' | 'agent' | 'command',
-      line: string,
-    ) => Promise<void>
+    log: (stream: DeployStream, line: string) => Promise<void>
     redact: (s: string) => string
-    runStreaming: (command: string) => Promise<ExecResult>
+    runStreaming: (
+      command: string,
+      onLine?: (s: DeployStream, line: string) => void,
+    ) => Promise<ExecResult>
     client: SshConnection['client']
+    state: AgentState
   },
 ): Promise<{ payload: unknown; finish?: AgentOutcome }> {
-  const { app, appDir, token, log, redact, runStreaming } = ctx
+  const { app, appDir, token, log, redact, runStreaming, state } = ctx
   let args: Record<string, unknown> = {}
   try {
     args = call.function.arguments ? JSON.parse(call.function.arguments) : {}
@@ -437,13 +480,35 @@ async function executeTool(
       }
       if (explanation) await log('agent', explanation)
       await log('command', redact(command))
+      // Run inside the persistent working directory so `cd` carries across
+      // commands (each SSH exec is a fresh shell otherwise). After the command
+      // we print the resulting cwd behind a marker, read it back to update
+      // state, and strip the marker line from what the model and log see.
+      const wrapped = [
+        `cd ${sh(state.cwd)} 2>/dev/null || cd ${sh(APPS_ROOT)} 2>/dev/null || cd /`,
+        command,
+        '__omnidesk_rc=$?',
+        `printf '%s%s\\n' ${sh(CWD_MARKER)} "$(pwd)"`,
+        'exit $__omnidesk_rc',
+      ].join('\n')
+      let nextCwd = state.cwd
       try {
-        const res = await runStreaming(command)
+        const res = await runStreaming(wrapped, (s, line) => {
+          const captured = readCwdMarker(line)
+          if (captured !== null) {
+            if (captured) nextCwd = captured
+            return // don't surface the marker line
+          }
+          void log(s, redact(line))
+        })
+        state.cwd = nextCwd
+        const cleanOut = stripCwdMarker(res.stdout)
         return {
           payload: {
             ok: res.code === 0,
             exitCode: res.code,
-            output: clampOutput(redact(res.stdout + (res.stderr ? `\n${res.stderr}` : ''))),
+            cwd: state.cwd,
+            output: clampOutput(redact(cleanOut + (res.stderr ? `\n${res.stderr}` : ''))),
           },
         }
       } catch (err) {
@@ -556,12 +621,14 @@ function systemPrompt(): string {
     '2. Определи тип проекта по репозиторию (package.json → Node, Dockerfile → Docker, requirements.txt → Python, index.html → статика, composer.json → PHP и т.п.). Сначала set_status("cloning"), затем clone_repo, потом изучи файлы (ls, cat package.json).',
     '3. set_status("building"): установи недостающее (node+npm, docker, nginx/caddy, git, сборочные зависимости), затем установи зависимости проекта и собери его.',
     '4. set_status("running"): запусти приложение устойчиво (pm2 для Node/PHP, docker run --restart для Docker, либо systemd-юнит). Для статики — отдай через веб-сервер.',
-    '5. Если задан домен — настрой reverse-proxy и HTTPS (Caddy проще всего: он сам берёт сертификат Let\'s Encrypt). Проверь, что сайт отвечает (curl -I).',
-    '6. Вызови finish с итогом. Если сайт доступен — укажи url. Добавь serverNotes про ОС и установленное ПО.',
+    '5. Если задан домен — сначала ПРОВЕРЬ DNS: домен должен указывать на IP этого сервера (dig +short <домен> или getent hosts <домен>, сравни с внешним IP: curl -s ifconfig.me). Если A-запись не совпадает — НЕ запускай certbot/выпуск сертификата (он упадёт из-за проверки Let\'s Encrypt): подними reverse-proxy по HTTP (порт 80) и в finish предупреди, что для HTTPS нужно направить домен на этот IP. Если DNS в порядке — настрой reverse-proxy и HTTPS (Caddy проще всего: сам берёт сертификат Let\'s Encrypt).',
+    '6. Проверь, что приложение реально отвечает: curl -fsS -o /dev/null -w "%{http_code}" http://127.0.0.1:<порт> (и, если есть домен и HTTPS, curl -I по домену). Успех — это не «процесс запущен», а «на запрос приходит ответ». Если код 5xx/нет ответа — смотри логи процесса (pm2 logs / docker logs / journalctl) и чини.',
+    '7. Вызови finish с итогом. Если сайт доступен — укажи url. Добавь serverNotes про ОС, установленное ПО, выбранный порт и способ запуска.',
     '',
     'ПРАВИЛА:',
     '• Работай маленькими шагами: одна команда — одно понятное действие, с пояснением в explanation.',
-    '• Всегда сначала проверяй (есть ли уже node? какой порт?), потом ставь. Не переустанавливай уже установленное.',
+    '• Команды run_command выполняются в постоянной рабочей папке, и cd между вызовами СОХРАНЯЕТСЯ (в ответе приходит поле cwd — это твоя текущая папка). Всё равно предпочитай абсолютные пути для надёжности; в upload_file путь ВСЕГДА абсолютный.',
+    '• Всегда сначала проверяй (есть ли уже node? какой порт свободен — ss -ltnp | grep :<порт>?), потом ставь/занимай. Не переустанавливай уже установленное и не занимай уже занятый порт — выбери свободный и запиши его в serverNotes.',
     '• Ставь пакеты неинтерактивно (DEBIAN_FRONTEND=noninteractive apt-get install -y …).',
     '• Если команда упала — прочитай вывод, пойми причину и исправь (другой пакет, sudo, нужный порт), не повторяй вслепую.',
     '• Никогда не выполняй разрушительных команд (удаление корня, форматирование, выключение) — они всё равно будут заблокированы.',
@@ -576,7 +643,7 @@ function userContext(
   appDir: string,
 ): string {
   const lines = [
-    `Сервер: ${server.name} (${server.ip_address}), пользователь ${server.ssh_username}.`,
+    `Сервер: ${server.name} (${server.ip_address}), пол��зователь ${server.ssh_username}.`,
     server.agent_notes ? `Заметки о сервере: ${server.agent_notes}` : 'Заметок о сервере пока нет.',
     `Репозиторий: ${app.repo_url}, ветка ${app.branch || 'main'}.`,
     app.domain ? `Домен для сайта: ${app.domain}.` : 'Домен не задан — reverse-proxy можно пропустить или слушать по IP.',

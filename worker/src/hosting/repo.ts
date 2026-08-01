@@ -248,6 +248,15 @@ export async function setAppStatus(
   )
 }
 
+/**
+ * Delete an app record after its process and code have been removed from the
+ * server (called at the end of a 'remove' lifecycle job so cleanup is atomic
+ * and the console doesn't have to race the worker to delete the row).
+ */
+export async function deleteApp(appId: string): Promise<void> {
+  await query('DELETE FROM hosting_apps WHERE id = $1', [appId])
+}
+
 /* ----------------------------- Deployments -------------------------- */
 
 export async function setDeploymentStatus(
@@ -295,6 +304,37 @@ export async function getDeploymentStatus(
     [deploymentId],
   )
   return row?.status ?? null
+}
+
+/**
+ * Fail any deployment left actively running (cloning/building/running) — these
+ * are orphans from a worker that crashed or was redeployed mid-run: their SSH
+ * connection is long gone and nothing will ever advance them. Genuinely
+ * `queued` deployments are left alone so drainDeployQueue can still execute
+ * them normally. Called once on startup so the panel never shows a deploy stuck
+ * "running" forever, and the app is marked errored so the admin can retry.
+ * Returns the number of deployments recovered.
+ */
+export async function recoverStuckDeployments(): Promise<number> {
+  const stuck = await query<{ id: string; app_id: string }>(
+    `UPDATE hosting_deployments
+        SET status = 'failed',
+            summary = COALESCE(summary, 'Прервано: воркер был перезапущен во время установки.'),
+            finished_at = now()
+      WHERE status IN ('cloning', 'building', 'running')
+      RETURNING id, app_id`,
+  )
+  for (const row of stuck) {
+    await appendDeployLog(
+      row.id,
+      'system',
+      'Установка прервана: воркер перезапустился. Запустите деплой заново.',
+    ).catch(() => {})
+    await setAppStatus(row.app_id, 'error', 'Прервано перезапуском воркера').catch(
+      () => {},
+    )
+  }
+  return stuck.length
 }
 
 /**

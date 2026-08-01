@@ -7,6 +7,7 @@ import { runNoResponseSweep } from './autopilot.js'
 import { captureException, initErrorReporter } from './error-reporter.js'
 import { processDeployJob, drainDeployQueue } from './hosting/jobs.js'
 import { sweepServerHealth } from './hosting/ops.js'
+import { recoverStuckDeployments } from './hosting/repo.js'
 
 /** How often the autopilot 'no_response' scheduler scans for silent threads. */
 const NO_RESPONSE_SWEEP_MS = 60_000
@@ -38,6 +39,15 @@ async function main(): Promise<void> {
 
   // 3b. App Hosting ("Серверы"): consume deploy_jobs the same way — react to new
   //     jobs via NOTIFY, then drain anything queued while we were down.
+  //     First recover deployments orphaned by a crash/redeploy so none stay
+  //     stuck "running" forever.
+  const recovered = await recoverStuckDeployments().catch((err) => {
+    logger.error({ err }, 'recoverStuckDeployments failed')
+    return 0
+  })
+  if (recovered > 0) {
+    logger.warn({ recovered }, 'recovered stuck deployments on startup')
+  }
   await startListener('deploy_jobs', (jobId) => {
     processDeployJob(jobId).catch((err) =>
       logger.error({ err, jobId }, 'processDeployJob failed'),

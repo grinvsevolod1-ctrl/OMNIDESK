@@ -14,6 +14,13 @@ const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/chat/completions'
 /** Model for the deploy agent. Override with AI_DEPLOY_AGENT_MODEL. */
 export const AGENT_MODEL = process.env.AI_DEPLOY_AGENT_MODEL || 'openai/gpt-4.1'
 
+/**
+ * Known-good fallback if the configured model is rejected by the gateway (e.g.
+ * a typo in AI_DEPLOY_AGENT_MODEL, or a model that was retired). Keeps a deploy
+ * from dying outright over a bad model id.
+ */
+const FALLBACK_MODEL = 'openai/gpt-4o'
+
 /** True when the gateway key is present (agent can run). */
 export function isGatewayConfigured(): boolean {
   return Boolean(process.env.AI_GATEWAY_API_KEY)
@@ -76,21 +83,34 @@ export async function chatWithTools(
   const key = process.env.AI_GATEWAY_API_KEY
   if (!key) throw new Error('AI_GATEWAY_API_KEY не задан')
 
-  const res = await fetch(GATEWAY_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model: AGENT_MODEL,
-      messages,
-      tools,
-      tool_choice: 'auto',
-      temperature: opts.temperature ?? 0.2,
-    }),
-    signal: opts.signal,
-  })
+  const call = async (model: string): Promise<Response> =>
+    fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        tools,
+        tool_choice: 'auto',
+        temperature: opts.temperature ?? 0.2,
+      }),
+      signal: opts.signal,
+    })
+
+  let res = await call(AGENT_MODEL)
+  // A 400/404 usually means the configured model id is unknown — retry once on a
+  // known-good fallback so a bad AI_DEPLOY_AGENT_MODEL doesn't kill the deploy.
+  if (!res.ok && (res.status === 400 || res.status === 404) && AGENT_MODEL !== FALLBACK_MODEL) {
+    const body = await res.text().catch(() => '')
+    logger.warn(
+      { status: res.status, model: AGENT_MODEL, body: body.slice(0, 300) },
+      'gateway rejected model, retrying with fallback',
+    )
+    res = await call(FALLBACK_MODEL)
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '')
