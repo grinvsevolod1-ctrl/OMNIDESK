@@ -4,7 +4,7 @@
  * lib/ai/brain/ (see core.ts).
  */
 
-import { GATEWAY_URL, type BrainLog, type GatewayResponse } from './core.js'
+import { GATEWAY_URL, type BrainLog, type GatewayResponse } from './core'
 
 const TRANSCRIPTION_URL = 'https://ai-gateway.vercel.sh/v1/audio/transcriptions'
 

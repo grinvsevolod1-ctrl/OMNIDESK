@@ -96,8 +96,11 @@ describe('AI co-pilot isolation from simulator / god panel', () => {
  * imports it via a relative path under tsx and does NOT install the panel's
  * dependencies. Every brain module must therefore stay dependency-free: no
  * `@/` aliases, no `server-only`, no `ai` SDK, no DB — and it may only import
- * sibling modules from the same directory ('./x.js'). This used to be a
- * comment-only rule in the monolith's header; now it fails CI.
+ * sibling modules from the same directory using a BARE relative path ('./core',
+ * no `.js` suffix). The suffix matters: the worker's tsx resolves both forms,
+ * but Next.js's bundler resolver does NOT map a './core.js' specifier onto the
+ * real core.ts, so a `.js` suffix builds under the worker yet breaks the panel
+ * with "Module not found". This used to be a comment-only rule; now it fails CI.
  */
 describe('lib/ai/brain modules stay dependency-free (worker-safe)', () => {
   const BRAIN_FILES = [
@@ -117,8 +120,8 @@ describe('lib/ai/brain modules stay dependency-free (worker-safe)', () => {
       ].map((m) => m[1])
       for (const spec of specifiers) {
         expect(
-          /^\.\/[a-z-]+\.js$/.test(spec),
-          `${rel} imports "${spec}" — brain modules may only import './sibling.js'`,
+          /^\.\/[a-z-]+$/.test(spec),
+          `${rel} imports "${spec}" — brain modules may only import a bare './sibling' (no .js suffix, which breaks the Next.js build)`,
         ).toBe(true)
       }
       // Match an actual import statement, not the doc comment that states the
@@ -129,6 +132,22 @@ describe('lib/ai/brain modules stay dependency-free (worker-safe)', () => {
       ).toBe(false)
     })
   }
+
+  // The public barrel re-exports the submodules; it must use the same bare
+  // './brain/x' form so the panel build resolves it (the bug that shipped).
+  it('manager-brain.ts barrel re-exports with bare paths (no .js)', () => {
+    const src = readSource('lib/ai/manager-brain.ts')
+    const specifiers = [
+      ...src.matchAll(/from\s*['"](\.\/brain\/[^'"]+)['"]/g),
+    ].map((m) => m[1])
+    expect(specifiers.length).toBeGreaterThan(0)
+    for (const spec of specifiers) {
+      expect(
+        /^\.\/brain\/[a-z-]+$/.test(spec),
+        `manager-brain.ts re-exports "${spec}" — must be bare './brain/x' (a .js suffix breaks the Next.js build)`,
+      ).toBe(true)
+    }
+  })
 })
 
 describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {

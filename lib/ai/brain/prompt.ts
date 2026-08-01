@@ -5,7 +5,7 @@
  * Same dependency rules as the rest of lib/ai/brain/ (see core.ts).
  */
 
-import type { ManagerBrainInput } from './core.js'
+import type { ManagerBrainInput } from './core'
 
 const TONE_HINT: Record<string, string> = {
   professional:

@@ -23,14 +23,14 @@ export {
   type ManagerBrainInput,
   type BrainConfig,
   type BrainMetric,
-} from './brain/core.js'
+} from './brain/core'
 
 export {
   EMBEDDING_MODEL,
   EMBEDDING_DIM,
   embedText,
   toVectorLiteral,
-} from './brain/embeddings.js'
+} from './brain/embeddings'
 
 export {
   understandableMediaKind,
@@ -38,9 +38,9 @@ export {
   transcribeAudio,
   understandMedia,
   type UnderstandableMedia,
-} from './brain/media.js'
+} from './brain/media'
 
-export { generateManagerReply } from './brain/reply.js'
+export { generateManagerReply } from './brain/reply'
 
 export {
   clientShowsReadinessSignal,
@@ -48,7 +48,7 @@ export {
   extractClientMemory,
   detectEscalation,
   type EscalationVerdict,
-} from './brain/assess.js'
+} from './brain/assess'
 
 export {
   distillPlaybookFromDialogs,
@@ -59,4 +59,4 @@ export {
   type GeneratedScenario,
   type ProposedLesson,
   type LossPattern,
-} from './brain/training.js'
+} from './brain/training'
