@@ -12,8 +12,10 @@ import {
   Flame,
   GraduationCap,
   Highlighter,
+  ListChecks,
   Loader2,
   MessagesSquare,
+  NotebookPen,
   Mic,
   Plus,
   Power,
@@ -110,6 +112,8 @@ const ACTION_ICON: Record<ExecutedAction['kind'], LucideIcon> = {
   followup: BellRing,
   dialog: MessagesSquare,
   report: FileDown,
+  memory: NotebookPen,
+  check: ListChecks,
 }
 
 /** Human tone labels for the status strip. */

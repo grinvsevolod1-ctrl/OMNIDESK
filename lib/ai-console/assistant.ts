@@ -52,6 +52,8 @@ export interface ExecutedAction {
     | 'followup'
     | 'dialog'
     | 'report'
+    | 'memory'
+    | 'check'
   /** Short human summary, e.g. «Включил ИИ» or «Агрессивность → Максимум». */
   label: string
   /**

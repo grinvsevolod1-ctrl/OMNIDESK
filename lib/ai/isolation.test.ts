@@ -24,6 +24,11 @@ const GUARDED_FILES = [
   'lib/followup/runtime.ts',
   'app/api/cron/followup/route.ts',
   'lib/ai-console/run-assistant.ts',
+  // "Bigger brains" surfaces: system health, business memory + check cases.
+  // getSystemHealth in particular reads channels/queue/balance — admin-visible
+  // surfaces only — and must stay blind to the guarded subsystems forever.
+  'lib/data/ai-health.ts',
+  'lib/data/ai-copilot.ts',
 ]
 
 // Any of these appearing in an import/require or path string means the module

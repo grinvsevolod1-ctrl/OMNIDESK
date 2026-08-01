@@ -29,8 +29,19 @@ import {
 } from '@/lib/data/ai-assist'
 import {
   getAiPerformanceSummary,
+  getAiPerformanceTrend,
+  getDialogTranscript,
   listUnderperformingDialogs,
 } from '@/lib/data/ai-analytics'
+import { getSystemHealth } from '@/lib/data/ai-health'
+import {
+  addCheckCase,
+  addCopilotNote,
+  deleteCheckCase,
+  deleteCopilotNote,
+  listCheckCases,
+  listCopilotNotes,
+} from '@/lib/data/ai-copilot'
 import {
   getFollowupSettings,
   updateFollowupSettings,
@@ -255,7 +266,7 @@ export async function prepareAssistantRun(
 
     generateScenario: tool({
       description:
-        'Собрать ИИ-продавца «с нуля» по описанию бизнеса. Вызывай, когда админ описывает свою компанию/продукт и просит «настрой продавца», «сделай сценарий», «собери под мой бизнес». Модель сгенерирует персону (сценарий) и набор правил, применит персону (перезаписав старую) и сохранит правила как прямые указания. Передай businessDescription — всё, что админ рассказал о бизнесе.',
+        'Собрать ИИ-продавца «с нуля» по описанию бизнеса. Вызывай, когда админ описывает свою компанию/продукт и просит «настрой продавца», «сделай сценарий», «собери под мой бизнес». Модель сгенерирует персону (сценарий) и набор правил, применит персону (перезаписав старую) и сохра��ит правила как прямые указания. Передай businessDescription — всё, что админ рассказал о бизнесе.',
       inputSchema: z.object({
         businessDescription: z.string().min(10).max(4000),
       }),
@@ -632,10 +643,23 @@ export async function prepareAssistantRun(
         ])
         const q = (query ?? '').trim().toLowerCase()
         const match = (s: string) => !q || s.toLowerCase().includes(q)
-        const facts = knowledge
-          .filter((k) => match(k.title) || match(k.content))
-          .slice(0, 8)
-          .map((k) => ({ title: k.title, content: k.content }))
+        // Semantic-first: the same embedding retrieval the seller brain uses,
+        // so «что ты знаешь про доставку?» finds the fact even when worded
+        // differently. retrieveKnowledge returns a pre-formatted bullet list
+        // ('' when RAG is unavailable); substring stays as the fallback.
+        let semanticHits = ''
+        if (q) {
+          semanticHits = await retrieveKnowledge(q, 8).catch(() => '')
+        }
+        const facts = semanticHits
+          ? semanticHits
+              .split('\n')
+              .filter((line) => line.trim())
+              .map((line) => ({ title: '', content: line.replace(/^•\s*/, '') }))
+          : knowledge
+              .filter((k) => match(k.title) || match(k.content))
+              .slice(0, 8)
+              .map((k) => ({ title: k.title, content: k.content }))
         const trainedOn = lessons
           .filter(
             (l) => match(l.situation) || match(l.corrected) || match(l.note),
@@ -1020,6 +1044,234 @@ export async function prepareAssistantRun(
       },
     }),
 
+    readDialog: tool({
+      description:
+        'Прочитать ПОЛНУЮ переписку конкретного диалога (кто что писал, по репликам, с датами) плюс статус, канал и температуру подключения ИИ. Вызывай, когда админ просит «покажи переписку с …», «что бот ответил этому клиенту», «почему этот клиент слился», «разбери диалог с …». Сначала найди диалог через listDialogs (поиск по имени) и возьми conversationId. Разбирая диалог, цитируй ключевые реплики и говори конкретно: где ответ был хорош, где потеряли клиента и каким правилом/уроком это чинится.',
+      inputSchema: z.object({ conversationId: z.string().min(1) }),
+      execute: async ({ conversationId }) => {
+        const t = await getDialogTranscript(conversationId)
+        if (!t) return { ok: false, reason: 'not_found' }
+        return { ok: true, ...t }
+      },
+    }),
+
+    getSystemHealth: tool({
+      description:
+        'Проверить здоровье всей системы: статусы каналов (Telegram/WhatsApp/VK/MAX/лайв-чат), очередь задач и жив ли фоновый обработчик, ошибки ИИ за сутки, остаток средств на ИИ (баланс Gateway в долларах). Вызывай, когда админ говорит «ничего не работает», «бот молчит во всех каналах», «сколько осталось денег на ИИ», «всё ли в порядке», или в начале брифинга. Объясняй находки бытовым языком: «Telegram-канал отключён — поэтому бот там молчит».',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const h = await getSystemHealth()
+        return { ok: true, ...h }
+      },
+    }),
+
+    auditDirectives: tool({
+      description:
+        'Собрать ПОЛНЫЙ набор того, чем живёт продавец — все правила (включая выключенные), персону, тон, агрессивность и заголовки базы знаний — одним пакетом для ревизии. Вызывай, когда админ просит «проверь мои правила», «нет ли противоречий», «наведи порядок в правилах», а также ПОСЛЕ generateScenario. Получив пакет, САМ внимательно сверь правила между собой и с персоной: найди противоречия (одно правило запрещает то, что требует другое), дубли, устаревшее и рискованное для продаж. Доложи коротким списком «правило N ↔ правило M: в чём конфликт» и предложи, что поправить — но ничего не меняй без согласия админа.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const [directives, settings, knowledge] = await Promise.all([
+          listDirectives(),
+          getAiAssistSettings(),
+          listKnowledge(),
+        ])
+        return {
+          ok: true,
+          persona: settings.persona,
+          tone: settings.tone,
+          aggressiveness: settings.aggressiveness,
+          directives: directives.map((d, i) => ({
+            position: i + 1,
+            id: d.id,
+            body: d.body,
+            enabled: d.enabled,
+          })),
+          knowledgeTitles: knowledge.map((k) => k.title).slice(0, 40),
+        }
+      },
+    }),
+
+    getTrend: tool({
+      description:
+        'Сравнить результаты ИИ-продавца за период с ПРЕДЫДУЩИМ таким же периодом: диалоги, ликвидные лиды, передачи человеку — с дельтами. Вызывай, когда админ спрашивает «стало лучше?», «помогли ли вчерашние правки», «сравни эту неделю с прошлой», «динамика». Передай days — длина окна (по умолчанию 7). Говори выводами: «конверсия выросла с X до Y — правки работают», а не голыми цифрами.',
+      inputSchema: z.object({
+        days: z.number().int().min(1).max(180).optional(),
+      }),
+      execute: async ({ days }) => {
+        const trend = await getAiPerformanceTrend(days ?? 7)
+        return { ok: true, ...trend }
+      },
+    }),
+
+    getBriefing: tool({
+      description:
+        'Собрать полный брифинг одним вызовом: динамика за сутки и неделю, самые горячие сделки, кто ждёт нашего ответа, здоровье каналов и очереди, ошибки, баланс на ИИ, статус авто-дожима. Вызывай ТОЛЬКО когда админ сам спрашивает в духе «как дела», «что нового», «в чём проблема, давай разберём», «проведи брифинг» — или когда ты предложил провести брифинг и админ согласился. Изложи как короткий устный доклад: 1) главное одним предложением, 2) что горит, 3) что просело, 4) что предлагаешь сделать. Никаких простыней.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const [day, week, deals, health, followup] = await Promise.all([
+          getAiPerformanceTrend(1),
+          getAiPerformanceTrend(7),
+          listDealHeat(10),
+          getSystemHealth(),
+          getFollowupSettings(),
+        ])
+        return {
+          ok: true,
+          today: day,
+          week,
+          hotDeals: deals.filter((d) => d.band === 'hot'),
+          awaitingUs: deals.filter((d) => d.awaitingUs).length,
+          health,
+          followupEnabled: followup.enabled,
+        }
+      },
+    }),
+
+    rememberBusinessNote: tool({
+      description:
+        'Записать в ДОЛГУЮ ПАМЯТЬ важный факт о бизнесе админа, который пригодится в будущих разговорах: специфика продукта, сезонность, типовые клиенты, договорённости («у нас пик продаж в декабре», «основной клиент — оптовики»). Это память ДЛЯ ТЕБЯ (ассистента), а не правило для продавца — правила сохраняй через rememberDirective. Вызывай, когда админ рассказывает о бизнесе что-то важное и долгоиграющее, либо прямо просит «запомни на будущее». Формулируй кратко, одним предложением.',
+      inputSchema: z.object({ body: z.string().min(1).max(1000) }),
+      execute: async ({ body }) => {
+        const res = await addCopilotNote(body)
+        if (!res.ok) return res
+        actions.push({
+          kind: 'memory',
+          label: `Запомнил о бизнесе: «${truncate(body, 60)}»`,
+        })
+        return res
+      },
+    }),
+
+    listBusinessNotes: tool({
+      description:
+        'Показать всё, что ты помнишь о бизнесе админа (долгая память ассистента). Вызывай, когда админ спрашивает «что ты про нас помнишь», «что ты знаешь о моём бизнесе», или перед удалением заметки — чтобы взять id.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const notes = await listCopilotNotes()
+        return {
+          ok: true,
+          count: notes.length,
+          notes: notes.map((n) => ({ id: n.id, body: n.body, at: n.createdAt })),
+        }
+      },
+    }),
+
+    forgetBusinessNote: tool({
+      description:
+        'Удалить заметку из долгой памяти о бизнесе (устарела или админ просит забыть). Сначала возьми id через listBusinessNotes.',
+      inputSchema: z.object({ id: z.string().min(1) }),
+      execute: async ({ id }) => {
+        const ok = await deleteCopilotNote(id)
+        if (!ok) return { ok: false, reason: 'not_found' }
+        actions.push({ kind: 'memory', label: 'Забыл заметку о бизнесе' })
+        return { ok: true }
+      },
+    }),
+
+    addCheckCase: tool({
+      description:
+        'Сохранить проверочный вопрос для продавца: реплика клиента + что ХОРОШИЙ ответ обязан сделать («клиент: дорого → должен предложить рассрочку, не давать скидку сверх 10%»). Набор таких проверок гоняется через runCheckCases после изменений правил, чтобы ловить поломки. Вызывай, когда админ говорит «добавь проверку», «пусть это всегда проверяется», или сам предложи сохранить проверку после того, как админ отладил важный ответ через previewReply.',
+      inputSchema: z.object({
+        clientMessage: z.string().min(1).max(2000),
+        expectation: z.string().min(1).max(1000),
+      }),
+      execute: async ({ clientMessage, expectation }) => {
+        const res = await addCheckCase({ clientMessage, expectation })
+        if (!res.ok) return res
+        actions.push({
+          kind: 'check',
+          label: `Проверка: «${truncate(clientMessage, 50)}»`,
+        })
+        return res
+      },
+    }),
+
+    listCheckCases: tool({
+      description:
+        'Показать сохранённые проверочные вопросы для продавца. Вызывай, когда админ спрашивает «какие проверки есть», или перед удалением проверки — чтобы взять id.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const cases = await listCheckCases(false)
+        return {
+          ok: true,
+          count: cases.length,
+          cases: cases.map((c) => ({
+            id: c.id,
+            clientMessage: c.clientMessage,
+            expectation: c.expectation,
+            enabled: c.enabled,
+          })),
+        }
+      },
+    }),
+
+    deleteCheckCase: tool({
+      description:
+        'Удалить проверочный вопрос навсегда. Сначала возьми id через listCheckCases и убедись, что админ хочет убрать именно его.',
+      inputSchema: z.object({ id: z.string().min(1) }),
+      execute: async ({ id }) => {
+        const ok = await deleteCheckCase(id)
+        if (!ok) return { ok: false, reason: 'not_found' }
+        actions.push({ kind: 'check', label: 'Удалил проверку' })
+        return { ok: true }
+      },
+    }),
+
+    runCheckCases: tool({
+      description:
+        'Прогнать сохранённые проверочные вопросы через НАСТОЯЩИЙ мозг продавца с текущими правилами и вернуть пары «вопрос клиента → фактический ответ → что требовалось». Клиентам ничего не отправляется. Вызывай ПОСЛЕ изменений правил/персоны/агрессивности, когда админ просит «проверь, ничего не сломалось», или предложи сам после крупной правки. Получив результаты, САМ сверь каждый ответ с ожиданием и доложи: какие проверки прошли, какие провалились и почему — с конкретной цитатой из ответа.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const cases = (await listCheckCases(true)).slice(0, 6)
+        if (cases.length === 0) return { ok: true, ran: 0, results: [] }
+        const settings = await getAiAssistSettings()
+        const [lessons, directives] = await Promise.all([
+          listBrainLessons(12),
+          directiveTexts(),
+        ])
+        const results: Array<{
+          clientMessage: string
+          expectation: string
+          reply: string | null
+        }> = []
+        // Sequential on purpose: each run is a real model call; parallel bursts
+        // would spike latency limits and Gateway spend for no benefit here.
+        for (const c of cases) {
+          const knowledge = await retrieveKnowledge(c.clientMessage, 4).catch(
+            () => '',
+          )
+          const reply = await generateManagerReply(
+            {
+              persona: settings.persona,
+              tone: settings.tone,
+              playbook: settings.playbook,
+              directives,
+              lessons,
+              knowledge,
+              aggressiveness: settings.aggressiveness,
+              history: [{ role: 'client', body: c.clientMessage }],
+            },
+            undefined,
+            {
+              model: settings.model,
+              temperature: settings.temperature,
+              maxTokens: settings.maxTokens,
+            },
+          ).catch(() => null)
+          results.push({
+            clientMessage: c.clientMessage,
+            expectation: c.expectation,
+            reply,
+          })
+        }
+        actions.push({
+          kind: 'check',
+          label: `Прогнал ${results.length} провер${results.length === 1 ? 'ку' : 'ок'} продавца`,
+        })
+        return { ok: true, ran: results.length, results }
+      },
+    }),
+
     openPanel: tool({
       description:
         'Открыть админу рабочую панель для действий, которые лучше делать руками: settings (все настройки), aggressiveness (ползунок дожима), knowledge (база знаний), training (обучение ассистента на реальных диалогах), corrections (правки к конкретным сообщениям), dialogs (подключение ИИ к диалогам), logs (журнал). Вызывай, когда задача требует ручной работы или админ просит «покажи/открой».',
@@ -1041,12 +1293,26 @@ export async function prepareAssistantRun(
     }),
   }
 
+  // Long-term business memory survives the trimmed chat history: every note
+  // the admin asked to remember rides along in the system prompt, so the
+  // co-pilot stops re-asking about things it was already told. Best-effort —
+  // a failed read must never take the whole assistant down.
+  const notes = await listCopilotNotes().catch(() => [])
+  const memoryBlock =
+    notes.length > 0
+      ? [
+          '',
+          'ДОЛГАЯ ПАМЯТЬ О БИЗНЕСЕ АДМИНА (ты сохранил это раньше; опирайся на эти факты и не переспрашивай их заново):',
+          ...notes.map((n) => `• ${n.body}`),
+        ].join('\n')
+      : ''
+
   const agent = new ToolLoopAgent({
     model: ASSISTANT_MODEL,
     tools,
     stopWhen: isStepCount(12),
     temperature: 0.3,
-    instructions: SYSTEM_INSTRUCTIONS,
+    instructions: SYSTEM_INSTRUCTIONS + memoryBlock,
   })
 
   const finalize = (text: string): AssistantResult => {
@@ -1146,12 +1412,19 @@ const SYSTEM_INSTRUCTIONS = [
   '• Когда админ просит выгрузить/скачать отчёт или сводку («сделай отчёт», «выгрузи статистику», «отчёт за месяц в файл», «пришли таблицу по клиентам») — вызови exportReport (format=md для читаемого отчёта, format=csv для таблицы сделок в Excel; days — период). После этого скажи, что файл готов к скачиванию по кнопке под сообщением, и назови 2–3 ключевые цифры из сводки.',
   '• Настройки «мозга»: setModel меняет саму модель (умнее/быстрее/дешевле или сброс на значение по умолчанию), setModelParams меняет temperature (насколько живо/непредсказуемо пишет) и maxTokens (длина ответа), setAggressiveness — насколько напористо продаёт (0 мягко … 3 максимально; уровень 3 требует подтверждения). Если админ просит абстрактно («сделай поумнее», «пусть отвечает живее», «дожимай сильнее») — объясни простыми словами, какой параметр за это отвечает, предложи конкретное значение и меняй после согласия.',
   '• Когда админ просит разобрать ошибки или доучить продавца («разбери провалы», «где мы теряем клиентов», «чему тебя доучить») — вызови findWeakSpots, покажи предложенные уроки коротким списком и спроси, какие сохранить. Сохраняй только одобренные — через addLesson. Не сохраняй уроки без согласия админа.',
-  '• Когда админ говорит про дожим молчунов или напоминания («дожимай, если не отвечают», «пиши сам через N часов», «напоминай два раза», «во сколько не беспокоить») — используй getFollowupStatus, чтобы показать текущие настройки, и configureFollowup, чтобы их менять. Помни: включение авто-дожима требует подтверждения (вернётся needsConfirmation) — объясни админу, что после включения ИИ сам начнёт писать напоминания молчащим клиентам. Задержку, число касаний, тихие часы и каналы можно менять сразу.',
+  '• Когда админ говорит про дожим молчунов или напоминания («дожимай, если не отвечают», «пиши сам через N часов», «напоминай два раза», «во сколько не беспокоить») — испол��зуй getFollowupStatus, чтобы показать текущие настройки, и configureFollowup, чтобы их менять. Помни: включение авто-дожима требует подтверждения (вернётся needsConfirmation) — объясни админу, что после включения ИИ сам начнёт писать напоминания молчащим клиентам. Задержку, число касаний, тихие часы и каналы можно менять сразу.',
   '• ВАЖНО: выключение ИИ-менеджера и максимальный дожим (уровень 3) — рискованные действия. Инструменты вернут needsConfirmation вместо применения. В этом случае НЕ утверждай, что уже сделал — попроси админа подтвердить действие кнопкой ниже.',
-  '• Подключение/отключение ИИ к диалогам делай прямо из чата (listDialogs + attachAi/detachAi), а не через панель. openPanel вызывай, только когда задачу удобнее закончить руками: исправить конкретное сообщение (corrections), посмотреть журнал подробно (logs), полноценно обучить на аккаунте (training) — открой нужную панель и скажи, что открыл её.',
+  '• Подключение/отключение ИИ к диалогам делай прямо из чата (listDialogs + attachAi/detachAi), а не через панель. openPanel вызывай, только когда задачу удобнее закончить руками: исправить конкретное сообщение (corrections), посмотреть журнал подробно (logs), ��олноценно обучить на аккаунте (training) — открой нужную панель и скажи, что открыл её.',
   '• Если админ просит ОБЪЯСНИТЬ или РАССКАЗАТЬ — отвечай понятно и по делу, без воды, опираясь на getStatus.',
   '• Если админ спрашивает, что ИИ уже знает или чему обучен («что ты знаешь про…», «как отвечаешь на…») — вызови searchKnowledge и ответь по найденному, не выдумывая.',
-  '• Если админ спрашивает про ошибки/сбои/«почему молчит» — вызови getRecentLogs и объясни простыми словами, что нашёл.',
+  '• Если админ спрашивает про ошибки/сбои/«почему молчит» — сначала вызови getSystemHealth (каналы, очередь, баланс на ИИ, свежие ошибки) и при необходимости дополни getRecentLogs. Объясняй простыми словами и называй конкретную причину: «Telegram-канал остановлен», «закончились деньги на ИИ», «очередь стоит». Баланс Gateway — это остаток денег на работу ИИ в долларах; если он низкий или нулевой, обязательно предупреди.',
+  '• Разбор конкретного клиента: когда админ просит «покажи переписку с …», «почему этот клиент слился», «что бот ему написал» — найди диалог через listDialogs (поиск по имени), затем вызови readDialog и разбери переписку по репликам: процитируй ключевые места, скажи, где ответ был хорош, где потеряли клиента, и предложи конкретное правило или урок, который это чинит.',
+  '• Если админ ВСТАВИЛ в чат кусок переписки (видно реплики «клиент/менеджер») и просит разобрать — разбери прямо по вставленному тексту так же, по репликам, и предложи правило (rememberDirective) или урок (addLesson) по итогам. Сохраняй только с его согласия.',
+  '• Аудит правил: когда админ просит «проверь правила», «нет ли противоречий», «наведи порядок» — вызови auditDirectives и сам внимательно сверь правила между собой и с персоной. Также предлагай (не навязывая) такой аудит после generateScenario и после того, как правил стало заметно больше.',
+  '• Динамика: на вопросы «стало лучше?», «помогли ли правки», «сравни с прошлой неделей» — вызывай getTrend и отвечай выводами с дельтами, а не голыми цифрами.',
+  '• БРИФИНГ: когда админ спрашивает «как дела», «что нового», «что происходит», «в чём проблема — давай разберём» или просит брифинг — вызови getBriefing и доложи коротко, как умный зам: главное одним предложением → что горит → что просело → что предлагаешь. НЕ проводи брифинг без такого запроса; но если по ходу разговора видишь серьёзную проблему (падение конверсии, канал лежит, баланс на нуле) — можешь сам ПРЕДЛОЖИТЬ: «есть пара важных вещей, давай проведём брифинг?» — и проводи только после согласия.',
+  '• Долгая память: когда админ рассказывает важное о своём бизнесе (специфика, сезонность, кто клиенты, договорённости) — сохрани суть через rememberBusinessNote (это твоя память, НЕ правило для продавца). Что помнишь — listBusinessNotes; забыть — forgetBusinessNote. Не дублируй уже сохранённые заметки.',
+  '• Проверки продавца: addCheckCase сохраняет проверочный вопрос («клиент говорит X → ответ обязан Y»), runCheckCases прогоняет их через настоящий мозг продавца, ничего не отправляя клиентам. После крупных правок правил/персоны предложи прогнать проверки; получив результаты — сам сверь каждый ответ с ожиданием и честно доложи, что прошло, а что сломалось, с цитатой.',
   '• Пиши по-русски, коротко, тепло и живо, как умный коллега. Без канцелярита, без markdown-заголовков, максимум пара предложений плюс, при необходимости, короткий список.',
   '',
   'ВЕДИ АДМИНА ЗА РУКУ (он может быть совсем новичком и не разбираться в технике):',
