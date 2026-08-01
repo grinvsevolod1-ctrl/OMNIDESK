@@ -597,9 +597,9 @@ async function scheduleManagerReactions(): Promise<void> {
         })()
         delay = randInt(60, 300)
       } else if (chance(0.05)) {
-        // Real-life interruption: "hang on, someone needs me", then quiet.
-        await insertInboundMessage(conv, who, pick(LIFE_INTERRUPTIONS))
-        await bumpRepliesTotal()
+        // Real-life interruption — the persona just got pulled away. SILENT by
+        // owner decree: no "ща отойду" announcement, the reply simply arrives
+        // later. Announced departures in every dialog read as a scripted tell.
         delay = randInt(300, 1200)
       }
     }
@@ -630,26 +630,6 @@ const WRONG_CHAT_FIXES: string[] = [
   'ой не в тот чат, простите',
   'это не вам, промахнулся)',
   'блин, не туда, извините',
-]
-
-/**
- * Short real-life asides a persona fires off mid-conversation before going quiet
- * for a few minutes — the "hang on, something came up" moment. Deliberately
- * mundane and varied so no single phrase becomes a recognisable tell.
- */
-const LIFE_INTERRUPTIONS: string[] = [
-  'секунду, начальник зовёт',
-  'ща, минутку отойду',
-  'подождите, тут отвлекают',
-  'ой, погодите, звонок важный',
-  'секунду, ребёнок зовёт',
-  'момент, тут коллега подошёл',
-  'извините, отвлекли на минуту',
-  'ща, гляну и вернусь',
-  'подождите чуть, дела навалились',
-  'секунду, тут аврал небольшой',
-  'момент, договорю и напишу',
-  'ой отвлекли, счас вернусь',
 ]
 
 /* ---------------------- processing scheduled turns ---------------------- */
@@ -983,64 +963,22 @@ async function runThreadTurn(thread: SimThreadRow, settings?: SimSettings): Prom
   const plan = rollTurnPlan(rolled, thread.turns, wasDormant)
 
   // --- Silent transitions (no message posted) --------------------------------
-  // Micro-farewell: ~35% of the time a person sends a brief heads-up before
-  // going quiet ("щас занят", "отойду ненадолго") so the manager doesn't see
-  // a hard cut. This is one of the clearest human realism signals.
-  const IGNORE_FAREWELLS = [
-    'щас занят, чуть позже',
-    'отойду на минуту',
-    'погоди',
-    'потом отвечу',
-    'занят щас',
-    'одну секунду',
-    'позже напишу',
-    'не могу сейчас',
-    'ага, попозже',
-    'занят, напомни',
-    'буду чуть позже',
-    'сейчас не могу говорить',
-  ]
-  const VANISH_FAREWELLS = [
-    'ладно разберусь, если что напишу',
-    'окей подумаю',
-    'ок посмотрю потом',
-    'ладно ладно, потом погляжу',
-    'ок, позже вернусь к этому',
-    'подумаю, напишу если что',
-    'займусь, потом отвечу',
-    'ага, завтра свяжусь если что',
-    'хорошо, позже напишу',
-    'ладно, разберёмся',
-    'подумать надо, потом',
-    'ок отойду, потом',
-  ]
-
+  // Owner decree: a busy/leaving client NEVER announces it («щас занят»,
+  // «отойду», «потом отвечу» are banned). They just stop replying — the way it
+  // actually feels from the manager's side of a real chat. The thread state
+  // machine alone carries the pause; the comeback turn explains it afterwards.
   if (plan.kind === 'ignore') {
-    // ~35% chance of sending a short "brb" line before going quiet.
-    if (chance(0.35)) {
-      const farewell = pick(IGNORE_FAREWELLS)
-      await insertInboundMessage(conversationId, persona.name, farewell)
-      await bumpRepliesTotal()
-      void triggerManagerReply(conversationId, farewell)
-    }
     await updateThread(conversationId, {
       state: 'ignoring',
-      turns: thread.turns + (chance(0.35) ? 1 : 0),
+      turns: thread.turns,
       nextRunAt: isoIn(randInt(180, 1200)),
     })
     return
   }
   if (plan.kind === 'vanish') {
-    // ~40% chance of a soft close-off message before the long disappearance.
-    if (chance(0.40)) {
-      const farewell = pick(VANISH_FAREWELLS)
-      await insertInboundMessage(conversationId, persona.name, farewell)
-      await bumpRepliesTotal()
-      void triggerManagerReply(conversationId, farewell)
-    }
     await updateThread(conversationId, {
       state: 'vanished',
-      turns: thread.turns + (chance(0.40) ? 1 : 0),
+      turns: thread.turns,
       nextRunAt: isoIn(randInt(20 * 3600, 72 * 3600)),
     })
     void logAi({
@@ -1054,11 +992,29 @@ async function runThreadTurn(thread: SimThreadRow, settings?: SimSettings): Prom
     return
   }
 
+  // "Busy right now" — same decree: no «занят, отвечу позже» message. The
+  // client silently goes dormant for hours; the comeback fires afterwards.
+  if (plan.kind === 'later') {
+    await updateThread(conversationId, {
+      state: 'later',
+      turns: thread.turns,
+      nextRunAt: isoIn(randInt(3 * 3600, 10 * 3600)),
+    })
+    void logAi({
+      level: 'info',
+      source: 'sim',
+      event: 'later',
+      message: `«${persona.name}» занят — молча пропал, вернётся через несколько часов.`,
+      conversationId,
+      channelType: persona.channelType,
+    })
+    return
+  }
+
   // --- Turns that DO post a message ------------------------------------------
   // Pick the register the line should convey.
   let behavior: Behavior = rolled
-  if (plan.kind === 'later') behavior = 'later'
-  else if (plan.kind === 'end' && (plan.outcome === 'left' || plan.outcome === 'competitor'))
+  if (plan.kind === 'end' && (plan.outcome === 'left' || plan.outcome === 'competitor'))
     behavior = 'leaving'
   else if (wasDormant) behavior = 'comeback'
 
@@ -1104,22 +1060,7 @@ async function runThreadTurn(thread: SimThreadRow, settings?: SimSettings): Prom
   await postClientBubble(conversationId, persona.name, bubbles[0] ?? body, persona.style)
   await bumpRepliesTotal()
 
-  if (plan.kind === 'later') {
-    // Said "busy, later" — go dormant for a few hours, then a comeback fires.
-    await updateThread(conversationId, {
-      state: 'later',
-      turns: thread.turns + 1,
-      nextRunAt: isoIn(randInt(3 * 3600, 10 * 3600)),
-    })
-    void logAi({
-      level: 'info',
-      source: 'sim',
-      event: 'later',
-      message: `«${persona.name}» занят — обещал ответить позже.`,
-      conversationId,
-      channelType: persona.channelType,
-    })
-  } else if (plan.kind === 'end') {
+  if (plan.kind === 'end') {
     await updateThread(conversationId, {
       state: 'done',
       turns: thread.turns + 1,
@@ -1207,9 +1148,10 @@ export function rollBehavior(
 }
 
 /**
- * What shape a turn takes:
+ * What shape a turn takes. Every departure is SILENT by owner decree — a busy
+ * client never announces «занят/отойду/отвечу позже», they just stop replying:
  *   reply  — post a normal message and keep chatting
- *   later  — post a quick "busy, later" and go dormant for hours
+ *   later  — busy: silently dormant for hours, then a comeback fires
  *   ignore — brief sulk, resurface in minutes (no message)
  *   vanish — drop off for a day+ then come back (no message)
  *   end    — finish the dialogue, with a reason (outcome)

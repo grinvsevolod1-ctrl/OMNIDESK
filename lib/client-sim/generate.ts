@@ -28,7 +28,7 @@ export type Behavior =
   | 'dismissive' // brushes it off, not interested
   | 'confused' // doesn't get it, asks naive questions
   | 'nudge' // manager went quiet — pokes them
-  | 'later' // busy right now — says they'll answer later, then drops off
+  | 'later' // RETIRED: busy clients now vanish silently (engine never passes this) — kept for type compat
   | 'comeback' // returning after a gap (hours/days) — picks the thread back up
   | 'leaving' // walking away for good — lost interest / found someone else
 
