@@ -58,9 +58,27 @@ export function aiConfigured(): boolean {
   return Boolean(process.env.VERCEL && process.env.VERCEL_OIDC_TOKEN)
 }
 
+/**
+ * Per-turn focus for the 'curious' register. Curious is the most common rolled
+ * behaviour, and with one static hint («деньги, график, что делать») every
+ * inquisitive client hammered the same three topics — a loud repetition tell.
+ * A random concrete angle per turn spreads the questions across the whole
+ * space a real applicant cares about.
+ */
+const CURIOUS_FOCUS: string[] = [
+  'деньги: сколько выйдет за месяц, когда и куда платят, бывают ли задержки',
+  'график и занятость: сколько часов, можно ли совмещать, что со сменами',
+  'суть работы: что конкретно надо делать руками, по шагам',
+  'легальность: официально ли, что с договором и налогами, не серая ли схема',
+  'подвох: почему такая зарплата, в чём подстава, что не договаривают',
+  'старт: что нужно чтобы начать, когда можно приступить, что за обучение',
+  'условия: откуда работать, что за оборудование/софт нужен, кто руководит',
+  'опыт других: долго ли тут люди работают, можно ли отзыв/пример посмотреть',
+]
+
 const BEHAVIOR_HINT: Record<Behavior, string> = {
   open: 'Ты только что написал первым. Коротко спроси про работу которую нашёл, как будто реально ищешь подработку.',
-  curious: 'Тебе интересно, выспрашивай детали: деньги, график, что делать. Можешь быть недоверчивым.',
+  curious: 'Тебе интересно, выспрашивай детали. Можешь быть недоверчивым.',
   angry: 'Тебя бесит это предложение, оно сомнительное/незаконное. Ругайся, посылай, огрызайся — резко и грубо.',
   dismissive: 'Тебе не заходит, отмахнись коротко и лениво, можешь слить разговор.',
   confused: 'Ты туповато не догоняешь о чём речь, задай наивный/глупый вопрос, переспроси.',
@@ -88,6 +106,25 @@ interface GenArgs {
   corrections?: string[]
   /** Content pool config (vacancies, cities, etc.) — from sim_settings. NULL = use defaults. */
   contentConfig?: SimContentConfig | null
+}
+
+/**
+ * Semantic no-repeat guard for QUESTIONS. The fuzzy line-similarity check
+ * catches repeated phrasing, but «а по деньгам чё?» and «сколько платить
+ * будут?» slip through as different strings while being the same question.
+ * Listing the client's own past questions verbatim and banning re-asking is
+ * the reliable fix for "he asks the same thing over and over".
+ */
+function askedQuestionsBlock(ownLines: string[]): string {
+  const asked = ownLines.filter((l) => l.includes('?')).slice(-10)
+  if (asked.length === 0) return ''
+  const list = asked.map((q) => `- ${q}`).join('\n')
+  return [
+    '',
+    'ВОПРОСЫ, КОТОРЫЕ ТЫ УЖЕ ЗАДАВАЛ (НЕ задавай их снова — ни этими словами, ни другими, это ОДИН И ТОТ ЖЕ вопрос):',
+    list,
+    'Если менеджер на них ответил — реагируй на ответ или спрашивай про ДРУГОЕ. Если не ответил и это важно — можешь один раз прямо ткнуть что он ушёл от ответа, но не повторяй вопрос как заведённый.',
+  ].join('\n')
 }
 
 function avoidBlock(avoidLines: string[] | undefined): string {
@@ -435,12 +472,13 @@ function timeBlock(): string {
 function systemPrompt(
   persona: SimPersona,
   behavior: Behavior,
-  ownLines?: string[],
+  avoidLines?: string[],
   moodHint?: string,
   lengthHint?: string,
   swarmOpeners?: string[],
   corrections?: string[],
   clientTurns = 0,
+  ownLines: string[] = [],
 ): string {
   const s = persona.style
   const tone = persona.tone ?? 'mixed'
@@ -498,13 +536,18 @@ function systemPrompt(
     soft
       ? 'Менеджер часто предлагает сомнительную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ, в рамках своего характера: где-то интерес, где-то сомнение и осторожные вопросы, где-то вежливый отказ — но всегда корректно, без грубости и мата.'
       : 'Менеджер часто предлагает сомнительную/незаконную/серую работу или предоплату. Реагируй КАК ЖИВОЙ ЧЕЛОВЕК и КАЖДЫЙ РАЗ ПО-РАЗНОМУ, в рамках своего характера: где-то интерес и жадность до денег, где-то подозрение, где-то злость и мат, где-то пофиг.',
-    avoidBlock(ownLines),
+    askedQuestionsBlock(ownLines),
+    avoidBlock(avoidLines),
     openersBlock(swarmOpeners),
     '',
     `СЕЙЧАС: ${
       soft && behavior === 'angry'
         ? 'Тебя настораживает это предложение, оно кажется подозрительным. Вырази сомнение и недовольство сдержанно и вежливо, без грубости и мата.'
         : BEHAVIOR_HINT[behavior]
+    }${
+      behavior === 'curious'
+        ? ` Сейчас тебя больше всего волнует: ${pick(CURIOUS_FOCUS)}. Спроси про ЭТО (если ещё не спрашивал), своими словами.`
+        : ''
     }`,
     correctionsReminder(corrections),
     '',
@@ -746,8 +789,11 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
       // Strict admin corrections (cached, cheap). Always applied.
       const corrections =
         args.corrections ?? (await getSimCorrectionRulesCached())
-      // Recent context only — keeps it cheap and snappy.
-      const recent = history.slice(-12)
+      // Wide recent context. 12 messages (~6 turns) proved too short: past that
+      // horizon the client literally could not see its own earlier questions
+      // and re-asked them («сколько платят?» twice) — the owner's #1
+      // "он постоянно повторяется" complaint. 24 covers a whole typical dialog.
+      const recent = history.slice(-24)
       const messages = recent.map((m) => ({
         role: (m.role === 'manager' ? 'user' : 'assistant') as 'user' | 'assistant',
         content: m.body,
@@ -772,6 +818,7 @@ export async function generateReply(args: GenArgs): Promise<string | null> {
         swarmOpeners,
         corrections,
         clientTurns,
+        ownLines,
       )
 
       // Up to three attempts: if the line echoes something this persona OR the
