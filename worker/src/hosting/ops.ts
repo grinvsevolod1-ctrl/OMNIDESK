@@ -83,12 +83,62 @@ export async function runHealthCheck(serverId: string): Promise<void> {
       metrics as unknown as Record<string, unknown>,
       null,
     )
+    // Piggyback app probes on the already-open SSH session.
+    await probeApps(conn, serverId).catch((err) =>
+      logger.warn({ err, serverId }, 'app probes failed'),
+    )
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.warn({ err: msg, serverId }, 'health check failed')
     await repo.setServerHealth(serverId, 'offline', null, msg)
   } finally {
     if (conn) disconnect(conn.client)
+  }
+}
+
+/** Consecutive failed probes after which we auto-restart the app (once). */
+const RESTART_AFTER_FAILS = 2
+/** Consecutive failed probes after which we stop restarting and flag error. */
+const FLAG_AFTER_FAILS = 4
+
+/**
+ * HTTP-probe every "running" app on the server via the open SSH session.
+ * An app that fails RESTART_AFTER_FAILS consecutive probes gets ONE automatic
+ * restart; if it keeps failing to FLAG_AFTER_FAILS it is flagged 'error' so
+ * the panel/console surfaces it instead of restart-looping forever.
+ */
+async function probeApps(conn: SshConnection, serverId: string): Promise<void> {
+  const apps = await repo.listProbeableApps(serverId)
+  for (const app of apps) {
+    // -m 10: never hang the sweep; any HTTP response (even 500) proves the
+    // process is alive and listening — "unhealthy" here means connection refused
+    // or timeout, which curl reports with exit code != 0 and code 000.
+    const probe = await execCollect(
+      conn.client,
+      `curl -s -o /dev/null -m 10 -w '%{http_code}' http://127.0.0.1:${Number(app.port)}/`,
+    ).catch(() => null)
+    const httpCode = probe?.stdout.trim() ?? '000'
+    const healthy = probe !== null && probe.code === 0 && httpCode !== '000'
+    const fails = await repo.recordAppHealth(app.id, healthy)
+    if (healthy || fails < RESTART_AFTER_FAILS) continue
+
+    if (fails >= FLAG_AFTER_FAILS) {
+      await repo.setAppStatus(
+        app.id,
+        'error',
+        `Приложение не отвечает на порту ${app.port} (авто-рестарт не помог).`,
+      )
+      logger.warn({ appId: app.id, fails }, 'app flagged unhealthy')
+      continue
+    }
+    // One automatic restart attempt (pm2 or docker, matching how it was run).
+    logger.warn({ appId: app.id, fails }, 'app unhealthy, auto-restarting')
+    const name = `omnidesk-${app.id}`
+    const restart =
+      app.runtime === 'docker'
+        ? `docker restart ${sh(name)}`
+        : `pm2 restart ${sh(name)}`
+    await execCollect(conn.client, restart).catch(() => null)
   }
 }
 

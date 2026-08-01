@@ -55,6 +55,8 @@ export interface AppRecord {
   repoToken: string | null
   port: number | null
   status: string
+  /** Agent memory about THIS app (how it was built/run), or null. */
+  agent_notes: string | null
 }
 
 /* ------------------------------- Jobs ------------------------------- */
@@ -195,12 +197,13 @@ interface AppRow {
   repo_token_encrypted: string | null
   port: number | null
   status: string
+  agent_notes: string | null
 }
 
 export async function getApp(id: string): Promise<AppRecord | null> {
   const row = await one<AppRow>(
     `SELECT id, server_id, name, repo_url, branch, domain, runtime,
-            env_encrypted, repo_token_encrypted, port, status
+            env_encrypted, repo_token_encrypted, port, status, agent_notes
        FROM hosting_apps WHERE id = $1`,
     [id],
   )
@@ -232,7 +235,30 @@ export async function getApp(id: string): Promise<AppRecord | null> {
     repoToken,
     port: row.port === null ? null : Number(row.port),
     status: row.status,
+    agent_notes: row.agent_notes ?? null,
   }
+}
+
+/** Persist the agent's memory about an app (best-effort, truncated). */
+export async function setAppAgentNotes(
+  appId: string,
+  notes: string,
+): Promise<void> {
+  await query('UPDATE hosting_apps SET agent_notes = $2 WHERE id = $1', [
+    appId,
+    notes.slice(0, 4000),
+  ])
+}
+
+/** Record how many LLM tokens a deployment consumed (cost visibility). */
+export async function setDeploymentTokens(
+  deploymentId: string,
+  tokens: number,
+): Promise<void> {
+  await query('UPDATE hosting_deployments SET tokens_used = $2 WHERE id = $1', [
+    deploymentId,
+    Math.round(tokens),
+  ])
 }
 
 export async function setAppStatus(
@@ -255,6 +281,37 @@ export async function setAppStatus(
  */
 export async function deleteApp(appId: string): Promise<void> {
   await query('DELETE FROM hosting_apps WHERE id = $1', [appId])
+}
+
+/** Apps on a server that claim to be running and have a probeable port. */
+export async function listProbeableApps(
+  serverId: string,
+): Promise<Array<{ id: string; name: string; runtime: string; port: number; health_fail_count: number }>> {
+  return query(
+    `SELECT id, name, runtime, port, health_fail_count
+       FROM hosting_apps
+      WHERE server_id = $1 AND status = 'running' AND port IS NOT NULL`,
+    [serverId],
+  )
+}
+
+/**
+ * Record an app health-probe result. Returns the NEW consecutive-failure count
+ * (0 after a success) so the sweeper can decide to restart or flag the app.
+ */
+export async function recordAppHealth(
+  appId: string,
+  healthy: boolean,
+): Promise<number> {
+  const row = await one<{ health_fail_count: number }>(
+    `UPDATE hosting_apps
+        SET health_fail_count = CASE WHEN $2 THEN 0 ELSE health_fail_count + 1 END,
+            updated_at = now()
+      WHERE id = $1
+      RETURNING health_fail_count`,
+    [appId, healthy],
+  )
+  return row ? Number(row.health_fail_count) : 0
 }
 
 /* ----------------------------- Deployments -------------------------- */

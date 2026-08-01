@@ -24,6 +24,8 @@ export const AGENT_LIMITS = {
   cancelPollMs: 3_000,
   /** Max characters of a command's output fed back to the model per step. */
   maxOutputChars: 6000,
+  /** LLM token budget per deploy — hard stop against runaway model loops. */
+  maxTokens: 400_000,
 } as const
 
 /**

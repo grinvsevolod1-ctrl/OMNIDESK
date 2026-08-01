@@ -12,6 +12,9 @@ import {
   listAppsForServer,
   listDeploymentsForApp,
   listServers,
+  mergeAppEnv,
+  setAppAutoDeploy,
+  setAppDomain,
 } from '@/lib/data/hosting'
 import { appNameFromRepo, type RunState } from './run-state'
 
@@ -275,6 +278,92 @@ export function serversTools(state: RunState) {
         })
         state.dataChanged = true
         return { ok: true, serverId, hadApps: apps.length }
+      },
+    }),
+
+    set_app_env: tool({
+      description:
+        'Изменить переменные окружения приложения: set — задать/перезаписать пары ключ-значение, remove — удалить ключи. Изменения применяются к записи приложения; чтобы они попали на сервер, после этого предложи переустановку (start_ai_deploy с appId) или перезапуск. Возьми appId через get_server. Значения секретов, которые админ прислал в чат, можно записывать — но НЕ повторяй их в своих ответах.',
+      inputSchema: z.object({
+        appId: z.string().min(1),
+        set: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe('Пары КЛЮЧ=значение, которые надо задать или перезаписать.'),
+        remove: z
+          .array(z.string())
+          .optional()
+          .describe('Ключи, которые надо удалить.'),
+      }),
+      execute: async ({ appId, set, remove }) => {
+        const app = await getAppById(appId)
+        if (!app) return { ok: false, reason: 'app_not_found' }
+        if (!set && (!remove || remove.length === 0)) {
+          return { ok: false, reason: 'nothing_to_change' }
+        }
+        const keys = await mergeAppEnv(appId, set ?? {}, remove ?? [])
+        state.actions.push({
+          kind: 'info',
+          label: `Обновил переменные окружения ${app.name}`,
+        })
+        state.dataChanged = true
+        // Return KEYS only — values must never round-trip through the model.
+        return { ok: true, appId, envKeys: keys }
+      },
+    }),
+
+    set_app_domain: tool({
+      description:
+        'Задать или убрать домен приложения (domain=null очищает). Чтобы домен реально заработал (reverse-proxy + SSL), после смены предложи переустановку через start_ai_deploy с appId. Возьми appId через get_server.',
+      inputSchema: z.object({
+        appId: z.string().min(1),
+        domain: z
+          .string()
+          .max(200)
+          .nullable()
+          .describe('Новый домен (например site.ru) или null, чтобы убрать.'),
+      }),
+      execute: async ({ appId, domain }) => {
+        const app = await getAppById(appId)
+        if (!app) return { ok: false, reason: 'app_not_found' }
+        const cleaned = domain?.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') || null
+        await setAppDomain(appId, cleaned)
+        state.actions.push({
+          kind: 'info',
+          label: cleaned
+            ? `Домен ${app.name}: ${cleaned}`
+            : `Убрал домен у ${app.name}`,
+        })
+        state.dataChanged = true
+        return { ok: true, appId, domain: cleaned }
+      },
+    }),
+
+    set_auto_deploy: tool({
+      description:
+        'Включить/выключить авто-деплой приложения по push в GitHub (enabled=true/false). При включении объясни админу: в настройках репозитория надо добавить вебхук на /api/hosting/github-webhook с секретом GITHUB_WEBHOOK_SECRET (событие push, формат JSON). Возьми appId через get_server.',
+      inputSchema: z.object({
+        appId: z.string().min(1),
+        enabled: z.boolean(),
+      }),
+      execute: async ({ appId, enabled }) => {
+        const app = await getAppById(appId)
+        if (!app) return { ok: false, reason: 'app_not_found' }
+        await setAppAutoDeploy(appId, enabled)
+        state.actions.push({
+          kind: 'info',
+          label: enabled
+            ? `Включил авто-деплой ${app.name}`
+            : `Выключил авто-деплой ${app.name}`,
+        })
+        state.dataChanged = true
+        return {
+          ok: true,
+          appId,
+          enabled,
+          webhookPath: '/api/hosting/github-webhook',
+          branch: app.branch,
+        }
       },
     }),
 

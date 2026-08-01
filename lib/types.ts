@@ -694,6 +694,8 @@ export interface HostingApp {
   lastError: string | null
   /** True when a GitHub token is stored for cloning a private repo (masked). */
   hasRepoToken: boolean
+  /** Redeploy automatically on GitHub push to the tracked branch. */
+  autoDeploy: boolean
   createdAt: string
   updatedAt: string
 }

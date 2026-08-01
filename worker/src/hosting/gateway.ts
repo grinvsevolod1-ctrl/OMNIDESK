@@ -59,6 +59,8 @@ export interface ChatMessage {
 export interface ChatTurn {
   content: string | null
   toolCalls: ToolCall[]
+  /** Total tokens (prompt + completion) this round consumed, 0 if unreported. */
+  tokensUsed: number
 }
 
 interface GatewayResponse {
@@ -68,6 +70,9 @@ interface GatewayResponse {
       tool_calls?: ToolCall[]
     }
   }>
+  usage?: {
+    total_tokens?: number
+  }
 }
 
 /**
@@ -123,5 +128,6 @@ export async function chatWithTools(
   return {
     content: message?.content ?? null,
     toolCalls: message?.tool_calls ?? [],
+    tokensUsed: Number(data.usage?.total_tokens) || 0,
   }
 }

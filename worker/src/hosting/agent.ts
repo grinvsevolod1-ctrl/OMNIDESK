@@ -179,6 +179,11 @@ function toolDefs(): ToolDef[] {
               description:
                 'Короткая заметка о сервере на будущее (ОС, что уже установлено), чтобы ускорить следующие деплои.',
             },
+            appNotes: {
+              type: 'string',
+              description:
+                'Короткая заметка об ЭТОМ приложении: как оно собирается и запускается (менеджер процессов, имя процесса, порт, команда сборки, где .env, нюансы). Используется при переустановке, чтобы не изучать проект заново.',
+            },
           },
           required: ['success', 'summary'],
         },
@@ -357,9 +362,18 @@ async function runAgentLoop(ctx: {
     { role: 'user', content: userContext(app, server, appDir) },
   ]
 
+  let tokensUsed = 0
+  // Record whatever we consumed, even on failure/cancel paths (best-effort).
+  const recordTokens = (): void => {
+    if (tokensUsed > 0) {
+      void repo.setDeploymentTokens(deploymentId, tokensUsed).catch(() => {})
+    }
+  }
+
   for (let step = 0; step < AGENT_LIMITS.maxSteps; step++) {
     // Time budget.
     if (Date.now() - ctx.startedAt > AGENT_LIMITS.totalMs) {
+      recordTokens()
       return {
         success: false,
         summary: 'Превышено общее время установки.',
@@ -367,9 +381,20 @@ async function runAgentLoop(ctx: {
         serverNotes: null,
       }
     }
+    // Token budget: hard stop against runaway model loops burning money.
+    if (tokensUsed > AGENT_LIMITS.maxTokens) {
+      recordTokens()
+      return {
+        success: false,
+        summary: `Превышен бюджет токенов на установку (${AGENT_LIMITS.maxTokens}).`,
+        url: null,
+        serverNotes: null,
+      }
+    }
     // Cooperative cancellation: admin may have cancelled the deployment.
     const status = await repo.getDeploymentStatus(deploymentId)
     if (isTerminal(status)) {
+      recordTokens()
       return {
         success: false,
         summary: 'Установка остановлена.',
@@ -384,8 +409,10 @@ async function runAgentLoop(ctx: {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       await log('stderr', `Модель недоступна: ${msg}`)
+      recordTokens()
       return { success: false, summary: `Модель недоступна: ${msg}`, url: null, serverNotes: null }
     }
+    tokensUsed += turn.tokensUsed
 
     if (turn.content) await log('agent', turn.content)
 
@@ -424,10 +451,14 @@ async function runAgentLoop(ctx: {
         tool_call_id: call.id,
         content: JSON.stringify(result.payload),
       })
-      if (result.finish) return result.finish
+      if (result.finish) {
+        recordTokens()
+        return result.finish
+      }
     }
   }
 
+  recordTokens()
   return {
     success: false,
     summary: 'Агент не завершил установку за отведённое число шагов.',
@@ -618,7 +649,7 @@ function systemPrompt(): string {
     '',
     'ПЛАН (адаптируй под проект):',
     '1. Определи ОС и дистрибутив (cat /etc/os-release, uname -a), какой пакетный менеджер (apt/dnf/yum/apk).',
-    '2. Определи тип проекта по репозиторию (package.json → Node, Dockerfile → Docker, requirements.txt → Python, index.html → статика, composer.json → PHP и т.п.). Сначала set_status("cloning"), затем clone_repo, потом изучи файлы (ls, cat package.json).',
+    '2. Определи тип проекта по репозиторию (package.json → Node, Dockerfile �� Docker, requirements.txt → Python, index.html → статика, composer.json → PHP и т.п.). Сначала set_status("cloning"), затем clone_repo, потом изучи файлы (ls, cat package.json).',
     '3. set_status("building"): установи недостающее (node+npm, docker, nginx/caddy, git, сборочные зависимости), затем установи зависимости проекта и собери его.',
     '4. set_status("running"): запусти приложение устойчиво (pm2 для Node/PHP, docker run --restart для Docker, либо systemd-юнит). Для статики — отдай через веб-сервер.',
     '5. Если задан домен — сначала ПРОВЕРЬ DNS: домен должен указывать на IP этого сервера (dig +short <домен> или getent hosts <домен>, сравни с внешним IP: curl -s ifconfig.me). Если A-запись не совпадает — НЕ запускай certbot/выпуск сертификата (он упадёт из-за проверки Let\'s Encrypt): подними reverse-proxy по HTTP (порт 80) и в finish предупреди, что для HTTPS нужно направить домен на этот IP. Если DNS в порядке — настрой reverse-proxy и HTTPS (Caddy проще всего: сам берёт сертификат Let\'s Encrypt).',
@@ -628,7 +659,7 @@ function systemPrompt(): string {
     'ПРАВИЛА:',
     '• Работай маленькими шагами: одна команда — одно понятное действие, с пояснением в explanation.',
     '• Команды run_command выполняются в постоянной рабочей папке, и cd между вызовами СОХРАНЯЕТСЯ (в ответе приходит поле cwd — это твоя текущая папка). Всё равно предпочитай абсолютные пути для надёжности; в upload_file путь ВСЕГДА абсолютный.',
-    '• Всегда сначала проверяй (есть ли уже node? какой порт свободен — ss -ltnp | grep :<порт>?), потом ставь/занимай. Не переустанавливай уже установленное и не занимай уже занятый порт — выбери свободный и запиши его в serverNotes.',
+    '• Всегда сначала проверяй (есть ли уже node? свободен ли назначенный порт — ss -ltnp | grep :<порт>?), потом ставь/занимай. Не переустанавливай уже установленное. Приложение запускай на НАЗНАЧЕННОМ порту из контекста; если он внезапно занят чужим процессом — выясни кем (возможно, это прошлая версия этого же приложения: тогда останови её и переиспользуй порт).',
     '• Ставь пакеты неинтерактивно (DEBIAN_FRONTEND=noninteractive apt-get install -y …).',
     '• Если команда упала — прочитай вывод, пойми причину и исправь (другой пакет, sudo, нужный порт), не повторяй вслепую.',
     '• Никогда не выполняй разрушительных команд (удаление корня, форматирование, выключение) — они всё равно будут заблокированы.',
@@ -647,7 +678,9 @@ function userContext(
     server.agent_notes ? `Заметки о сервере: ${server.agent_notes}` : 'Заметок о сервере пока нет.',
     `Репозиторий: ${app.repo_url}, ветка ${app.branch || 'main'}.`,
     app.domain ? `Домен для сайта: ${app.domain}.` : 'Домен не задан — reverse-proxy можно пропустить или слушать по IP.',
-    app.port ? `Ожидаемый порт приложения: ${app.port}.` : '',
+    app.port
+      ? `НАЗНАЧЕННЫЙ ПОРТ приложения: ${app.port}. Этот порт зарезервирован за приложением в реестре — запускай приложение именно на нём (через PORT=${app.port} в env или конфиге) и настраивай reverse-proxy на 127.0.0.1:${app.port}. Не выбирай другой порт.`
+      : 'Порт не назначен (например, статика) — если нужен, выбери свободный и укажи его в serverNotes.',
     app.repoToken ? 'Репозиторий приватный — используй clone_repo (токен подставится сам).' : 'Репозиторий публичный.',
     Object.keys(app.env).length > 0
       ? `Заданы переменные окружения: ${Object.keys(app.env).join(', ')} (запиши их в .env приложения через upload_file, значения ниже).`

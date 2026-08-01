@@ -161,6 +161,7 @@ interface AppRow {
   port: number | null
   status: AppStatus
   last_error: string | null
+  auto_deploy: boolean
   created_at: string | Date
   updated_at: string | Date
 }
@@ -168,7 +169,7 @@ interface AppRow {
 const APP_COLUMN_NAMES = [
   'id', 'server_id', 'name', 'repo_url', 'branch', 'domain', 'runtime',
   'env_encrypted', 'repo_token_encrypted', 'port', 'status', 'last_error',
-  'created_at', 'updated_at',
+  'auto_deploy', 'created_at', 'updated_at',
 ] as const
 
 function appColumns(alias = 'hosting_apps'): string {
@@ -204,6 +205,7 @@ function toApp(r: AppRow): HostingApp {
     status: r.status,
     lastError: r.last_error ?? null,
     hasRepoToken: Boolean(r.repo_token_encrypted),
+    autoDeploy: Boolean(r.auto_deploy),
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   }
@@ -226,6 +228,31 @@ export async function getAppById(id: string): Promise<HostingApp | null> {
   return rows[0] ? toApp(rows[0]) : null
 }
 
+/** Port range reserved for hosted apps on a managed server. */
+const APP_PORT_MIN = 3001
+const APP_PORT_MAX = 3999
+
+/**
+ * Allocate the smallest free port for an app on a server. Ports are a real
+ * registry (unique index on server_id+port), so two concurrent deploys can't
+ * grab the same one — the loser of the race gets a constraint error at INSERT
+ * and the caller can retry. Returns null when the range is exhausted.
+ */
+export async function allocateAppPort(serverId: string): Promise<number | null> {
+  const rows = await query<{ p: number }>(
+    `SELECT p
+       FROM generate_series($2::int, $3::int) AS p
+      WHERE NOT EXISTS (
+        SELECT 1 FROM hosting_apps
+         WHERE server_id = $1 AND port = p
+      )
+      ORDER BY p
+      LIMIT 1`,
+    [serverId, APP_PORT_MIN, APP_PORT_MAX],
+  )
+  return rows[0] ? Number(rows[0].p) : null
+}
+
 export async function createApp(input: {
   serverId: string
   name: string
@@ -244,6 +271,9 @@ export async function createApp(input: {
       ? encryptJson(input.env)
       : null
   const tokenEnc = input.repoToken ? encrypt(input.repoToken) : null
+  // Every app gets a reserved port up front so the deploy agent never has to
+  // guess and parallel deploys can't collide. Static sites may not use it.
+  const port = input.port ?? (await allocateAppPort(input.serverId))
   const rows = await query<AppRow>(
     `INSERT INTO hosting_apps
        (id, server_id, name, repo_url, branch, domain, runtime, env_encrypted,
@@ -260,10 +290,83 @@ export async function createApp(input: {
       input.runtime,
       envEnc,
       tokenEnc,
-      input.port ?? null,
+      port,
     ],
   )
   return toApp(rows[0])
+}
+
+/**
+ * Merge a patch into the app's encrypted env map: set/overwrite the given
+ * keys, drop the ones in removeKeys. Returns the resulting key list (never
+ * values). Used by the console assistant so "добавь переменную X" doesn't
+ * wipe the rest of the map like updateAppEnv's whole-map replace would.
+ */
+export async function mergeAppEnv(
+  id: string,
+  patch: Record<string, string>,
+  removeKeys: string[] = [],
+): Promise<string[]> {
+  const rows = await query<{ env_encrypted: string | null }>(
+    'SELECT env_encrypted FROM hosting_apps WHERE id = $1 LIMIT 1',
+    [id],
+  )
+  if (!rows[0]) return []
+  let current: Record<string, string> = {}
+  try {
+    if (rows[0].env_encrypted) {
+      const decoded = decryptJson<Record<string, string>>(rows[0].env_encrypted)
+      if (decoded && typeof decoded === 'object') current = decoded
+    }
+  } catch {
+    current = {}
+  }
+  for (const key of removeKeys) delete current[key]
+  Object.assign(current, patch)
+  await updateAppEnv(id, current)
+  return Object.keys(current)
+}
+
+/** Set or clear the app's domain. */
+export async function setAppDomain(
+  id: string,
+  domain: string | null,
+): Promise<void> {
+  await query(
+    'UPDATE hosting_apps SET domain = $2, updated_at = now() WHERE id = $1',
+    [id, domain],
+  )
+}
+
+/** Opt an app in/out of GitHub-push auto redeploys. */
+export async function setAppAutoDeploy(
+  id: string,
+  enabled: boolean,
+): Promise<void> {
+  await query(
+    'UPDATE hosting_apps SET auto_deploy = $2, updated_at = now() WHERE id = $1',
+    [id, enabled],
+  )
+}
+
+/**
+ * Find apps that auto-deploy from a given repository+branch. Matching is
+ * normalized (case-insensitive, trailing `.git`/slash stripped) so the GitHub
+ * webhook payload's clone/html URL matches however the admin typed the repo.
+ */
+export async function listAutoDeployApps(
+  repoUrl: string,
+  branch: string,
+): Promise<HostingApp[]> {
+  const normalize = (u: string): string =>
+    u.toLowerCase().replace(/\.git$/, '').replace(/\/+$/, '')
+  const target = normalize(repoUrl)
+  const rows = await query<AppRow>(
+    `SELECT ${appColumns()} FROM hosting_apps
+      WHERE auto_deploy = true AND branch = $1`,
+    [branch],
+  )
+  return rows.filter((r) => normalize(r.repo_url) === target).map(toApp)
 }
 
 /** Replace the app's environment variables (whole-map replace, encrypted). */
