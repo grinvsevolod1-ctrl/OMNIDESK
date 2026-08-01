@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
@@ -71,10 +71,6 @@ import {
 } from '@/components/admin/secret-ads-tab'
 
 interface SecretSystem {
-  workerConfigured: boolean
-  workerOnline: boolean
-  dbOk: boolean
-  dbMessage: string
   gateEnabled: boolean
   /** Remaining AI Gateway credit in USD (null when unavailable). */
   aiBalance: number | null
@@ -143,28 +139,8 @@ export function SecretDashboard({
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
-  const [autoRefresh, setAutoRefresh] = useState(true)
   const [confirm502Open, setConfirm502Open] = useState(false)
   const [section, setSection] = useState<SectionId>('managers')
-
-  // Live refresh: re-run the RSC every 20s so tables stay current without any
-  // client-side fetching. Pausable to avoid churn while typing. Skipped while
-  // the tab is hidden so a backgrounded dashboard doesn't keep hammering the
-  // server; we refresh once immediately when the tab becomes visible again.
-  useEffect(() => {
-    if (!autoRefresh) return
-    const id = setInterval(() => {
-      if (document.visibilityState === 'visible') router.refresh()
-    }, 20_000)
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') router.refresh()
-    }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      clearInterval(id)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
-  }, [autoRefresh, router])
 
   function run(action: () => Promise<ActionResult>, onDone?: () => void) {
     startTransition(async () => {
@@ -229,34 +205,19 @@ export function SecretDashboard({
           ))}
         </nav>
 
-        <div className="flex flex-col gap-2 border-t border-border p-3">
-          <SystemPill
-            ok={system.dbOk}
-            icon={Database}
-            okText="База данных"
-            badText="БД недоступна"
-            hint={system.dbMessage}
-          />
-          <SystemPill
-            ok={system.workerOnline}
-            icon={Server}
-            okText="Воркер в сети"
-            badText={
-              system.workerConfigured ? 'Воркер оффлайн' : 'Воркер не настроен'
-            }
-          />
-          {system.gateEnabled && (
+        {system.gateEnabled && (
+          <div className="flex flex-col gap-2 border-t border-border p-3">
             <Button
               variant="outline"
               size="sm"
               onClick={() => void secretLockAction().then(() => router.refresh())}
-              className="press-scale mt-1 w-full justify-start gap-2"
+              className="press-scale w-full justify-start gap-2"
             >
               <Lock className="size-4" />
               Заблокировать панель
             </Button>
-          )}
-        </div>
+          </div>
+        )}
       </aside>
 
       {/* ---- Main column ---- */}
@@ -279,37 +240,6 @@ export function SecretDashboard({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setAutoRefresh((v) => !v)}
-                className={cn(
-                  'gap-1.5',
-                  autoRefresh && 'border-success/40 text-success',
-                )}
-              >
-                <span
-                  className={cn(
-                    'size-2 rounded-full',
-                    autoRefresh ? 'bg-success' : 'bg-muted-foreground/50',
-                  )}
-                />
-                {autoRefresh ? 'Авто 20с' : 'Авто выкл'}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.refresh()}
-                disabled={pending}
-                className="gap-1.5"
-              >
-                {pending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-4" />
-                )}
-                <span className="hidden sm:inline">Обновить</span>
-              </Button>
               <Link
                 href="/wijegniwjgwjog/messages"
                 className={cn(
@@ -343,22 +273,9 @@ export function SecretDashboard({
             </div>
           </div>
 
-          {/* Mobile status strip (desktop shows these in the sidebar) */}
-          <div className="flex flex-wrap items-center gap-2 px-4 pb-3 md:hidden">
-            <SystemPill
-              ok={system.dbOk}
-              icon={Database}
-              okText="БД"
-              badText="БД недоступна"
-              hint={system.dbMessage}
-            />
-            <SystemPill
-              ok={system.workerOnline}
-              icon={Server}
-              okText="Воркер"
-              badText={system.workerConfigured ? 'Воркер оффлайн' : 'Воркер н/д'}
-            />
-            {system.gateEnabled && (
+          {/* Mobile lock button (desktop shows it in the sidebar) */}
+          {system.gateEnabled && (
+            <div className="flex items-center px-4 pb-3 md:hidden">
               <Button
                 variant="outline"
                 size="sm"
@@ -370,8 +287,8 @@ export function SecretDashboard({
                 <Lock className="size-4" />
                 Блок
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </header>
 
         {/* Content */}
@@ -541,36 +458,6 @@ function Confirm502Dialog({
 }
 
 /* ------------------------------ System bits ------------------------------ */
-
-function SystemPill({
-  ok,
-  icon: Icon,
-  okText,
-  badText,
-  hint,
-}: {
-  ok: boolean
-  icon: LucideIcon
-  okText: string
-  badText: string
-  /** Optional tooltip shown on hover — used to surface DB/worker error detail. */
-  hint?: string
-}) {
-  return (
-    <span
-      title={!ok && hint ? hint : undefined}
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
-        ok
-          ? 'border-success/30 bg-success/10 text-success'
-          : 'border-destructive/30 bg-destructive/10 text-destructive',
-      )}
-    >
-      <Icon className="size-3.5" />
-      {ok ? okText : badText}
-    </span>
-  )
-}
 
 /**
  * Prominent, always-visible balance panel showing the AI manager's remaining

@@ -1,6 +1,5 @@
 import { requireAdmin } from '@/lib/auth'
 import { isGodPasscodeConfigured, isGodUnlocked } from '@/lib/god-gate'
-import { checkDbConnection } from '@/lib/db'
 import { listAllChannels, listManagers, getTelegramExclusiveSession, getFake502 } from '@/lib/data'
 import {
   getFinanceData,
@@ -8,7 +7,6 @@ import {
   adEffectiveMetrics,
   type AdPlatform,
 } from '@/lib/finance'
-import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
 import { getGatewayBalance } from '@/lib/ai/gateway-balance'
 import { SecretDashboard } from '@/components/admin/secret-dashboard'
 import { SecretGate } from '@/components/admin/secret-gate'
@@ -40,14 +38,12 @@ export default async function SecretPage() {
   const [
     managers,
     channels,
-    db,
     finance,
     tgExclusive,
     fake502,
   ] = await Promise.all([
       listManagers(),
       listAllChannels(),
-      checkDbConnection(),
       getFinanceData(),
       getTelegramExclusiveSession(),
       getFake502(),
@@ -67,9 +63,6 @@ export default async function SecretPage() {
     overrides: a.overrides,
   }))
 
-  const workerConfigured = isWorkerConfigured
-  const workerOnline = workerConfigured ? await workerHealth() : false
-
   // Live AI Gateway balance — shared by the manager brain and the simulator.
   const aiBalance = await getGatewayBalance()
 
@@ -80,10 +73,6 @@ export default async function SecretPage() {
       adAccounts={adAccounts}
       tgExclusive={tgExclusive}
       system={{
-        workerConfigured,
-        workerOnline,
-        dbOk: db.ok,
-        dbMessage: db.message,
         gateEnabled: isGodPasscodeConfigured(),
         aiBalance: aiBalance.balance,
         aiTotalUsed: aiBalance.totalUsed,
