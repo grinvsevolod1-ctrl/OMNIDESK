@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useTransition,
+  type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
@@ -14,11 +15,13 @@ import {
   Check,
   CheckCheck,
   ChevronLeft,
+  CornerUpLeft,
   Loader2,
   Plus,
   Radio,
   Search,
   Send,
+  X,
   MessagesSquare,
 } from 'lucide-react'
 import {
@@ -42,6 +45,29 @@ import {
 } from '@/components/admin/secret-console/utils'
 import { NewChatDialog } from './new-chat-dialog'
 import { NotifyButton } from './notify-button'
+
+/**
+ * Client-side reply convention. Since the god send action only persists a plain
+ * body (no reply column), a Telegram-style reply is embedded as a readable quote
+ * prefix: the manager still sees the context, and this messenger parses it back
+ * into a styled quote block. Kept intentionally simple and human-readable.
+ */
+const REPLY_RE = /^\[В ответ: "([\s\S]*?)"\]\n([\s\S]*)$/
+
+function parseReply(body: string): { quote: string | null; text: string } {
+  const m = body.match(REPLY_RE)
+  if (!m) return { quote: null, text: body }
+  return { quote: m[1], text: m[2] }
+}
+
+function snippetOf(message: Message): string {
+  const base = parseReply(message.body || '').text
+  return base.replace(/\s+/g, ' ').replace(/"/g, '').trim().slice(0, 90)
+}
+
+function buildReplyBody(target: Message, text: string): string {
+  return `[В ответ: "${snippetOf(target)}"]\n${text}`
+}
 
 /**
  * God messenger root. A phone-first, full-screen chat surface where the god
@@ -74,6 +100,7 @@ export function GodMessenger({
   const [live, setLive] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [draft, setDraft] = useState('')
+  const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [pending, startTransition] = useTransition()
 
   const selectedIdRef = useRef<string | null>(null)
@@ -83,6 +110,7 @@ export function GodMessenger({
 
   const listRefetch = useRef<ReturnType<typeof setTimeout> | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const deepLinkApplied = useRef(false)
 
   const managerNameOf = useMemo(() => {
@@ -134,6 +162,7 @@ export function GodMessenger({
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    setReplyTo(null)
     if (selectedId) void loadThread(selectedId)
     else {
       setConversation(null)
@@ -213,11 +242,20 @@ export function GodMessenger({
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  /* ----- reply handling ----- */
+  const startReply = useCallback((message: Message) => {
+    setReplyTo(message)
+    composerRef.current?.focus()
+  }, [])
+
   /* ----- send as client ----- */
   const sendMessage = useCallback(() => {
-    const body = draft.trim()
-    if (!body || !selectedIdRef.current) return
+    const text = draft.trim()
+    if (!text || !selectedIdRef.current) return
+    const target = replyTo
+    const body = target ? buildReplyBody(target, text) : text
     setDraft('')
+    setReplyTo(null)
     startTransition(async () => {
       const res = await secretSendMessageAction({
         conversationId: selectedIdRef.current as string,
@@ -229,12 +267,19 @@ export function GodMessenger({
         void loadList({ silent: true })
       } else {
         toast.error(res.message)
-        setDraft(body)
+        setDraft(text)
+        setReplyTo(target)
       }
     })
-  }, [draft, loadThread, loadList])
+  }, [draft, replyTo, loadThread, loadList])
 
   const showThread = selectedId !== null
+
+  const replyLabel = replyTo
+    ? replyTo.direction === 'in'
+      ? 'Вы'
+      : managerNameOf(conversation?.managerId ?? null)
+    : ''
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-background text-foreground">
@@ -246,7 +291,7 @@ export function GodMessenger({
             showThread ? 'hidden md:flex' : 'flex',
           )}
         >
-          <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-3">
+          <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
             <div className="flex items-center gap-2">
               <div
                 className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary"
@@ -271,7 +316,7 @@ export function GodMessenger({
               <NotifyButton available={pushAvailable} />
               <Button
                 size="icon"
-                className="size-9"
+                className="size-10"
                 onClick={() => setCreateOpen(true)}
                 aria-label="Новый диалог"
               >
@@ -282,17 +327,17 @@ export function GodMessenger({
 
           <div className="border-b border-border p-3">
             <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Поиск диалога"
-                className="pl-8"
+                className="h-11 pl-9 text-base md:text-sm"
               />
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {loadingList ? (
               <div className="flex items-center justify-center py-16 text-muted-foreground">
                 <Loader2 className="size-5 animate-spin" />
@@ -315,11 +360,11 @@ export function GodMessenger({
                       type="button"
                       onClick={() => setSelectedId(c.id)}
                       className={cn(
-                        'flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50',
+                        'flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50 active:bg-muted',
                         c.id === selectedId && 'bg-muted',
                       )}
                     >
-                      <Avatar className="size-11 shrink-0">
+                      <Avatar className="size-12 shrink-0">
                         <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
                           {initials(c.contactName || c.contactHandle)}
                         </AvatarFallback>
@@ -335,7 +380,7 @@ export function GodMessenger({
                         </div>
                         <div className="flex items-center justify-between gap-2">
                           <span className="truncate text-xs text-muted-foreground">
-                            {c.lastMessage || 'Нет сообщений'}
+                            {parseReply(c.lastMessage || '').text || 'Нет сообщений'}
                           </span>
                           {c.unread > 0 && (
                             <Badge className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[11px] tabular-nums">
@@ -372,16 +417,16 @@ export function GodMessenger({
             </div>
           ) : (
             <>
-              <header className="flex items-center gap-3 border-b border-border px-3 py-2.5">
+              <header className="flex items-center gap-2 border-b border-border px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-3">
                 <button
                   type="button"
                   onClick={() => setSelectedId(null)}
-                  className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+                  className="flex size-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
                   aria-label="Назад к списку"
                 >
-                  <ChevronLeft className="size-5" />
+                  <ChevronLeft className="size-6" />
                 </button>
-                <Avatar className="size-9 shrink-0">
+                <Avatar className="size-10 shrink-0">
                   <AvatarFallback className="bg-primary/10 text-xs font-medium text-primary">
                     {initials(conversation.contactName || conversation.contactHandle)}
                   </AvatarFallback>
@@ -397,7 +442,7 @@ export function GodMessenger({
                 </div>
               </header>
 
-              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto bg-muted/20 px-3 py-4">
+              <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain bg-muted/20 px-2 py-4 sm:px-3">
                 {loadingThread ? (
                   <div className="flex items-center justify-center py-16 text-muted-foreground">
                     <Loader2 className="size-5 animate-spin" />
@@ -412,39 +457,63 @@ export function GodMessenger({
                       key={m.id}
                       message={m}
                       prev={messages[i - 1]}
+                      onReply={startReply}
                     />
                   ))
                 )}
                 <div ref={endRef} />
               </div>
 
-              <div className="flex items-end gap-2 border-t border-border bg-background px-3 py-2.5">
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
-                      e.preventDefault()
-                      sendMessage()
-                    }
-                  }}
-                  rows={1}
-                  placeholder="Сообщение от имени клиента…"
-                  className="max-h-32 min-h-10 flex-1 resize-none rounded-2xl border border-input bg-card px-4 py-2.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                />
-                <Button
-                  size="icon"
-                  className="size-10 shrink-0 rounded-full"
-                  onClick={sendMessage}
-                  disabled={pending || !draft.trim()}
-                  aria-label="Отправить"
-                >
-                  {pending ? (
-                    <Loader2 className="size-5 animate-spin" />
-                  ) : (
-                    <Send className="size-5" />
-                  )}
-                </Button>
+              {/* --------------------- Composer --------------------- */}
+              <div className="border-t border-border bg-background px-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] pt-2 sm:px-3">
+                {replyTo && (
+                  <div className="mb-2 flex items-center gap-2 rounded-xl border-l-2 border-primary bg-muted/60 py-2 pl-3 pr-2">
+                    <CornerUpLeft className="size-4 shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-primary">{replyLabel}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {snippetOf(replyTo) || 'Сообщение'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setReplyTo(null)}
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      aria-label="Отменить ответ"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                )}
+                <div className="flex items-end gap-2">
+                  <textarea
+                    ref={composerRef}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
+                        e.preventDefault()
+                        sendMessage()
+                      }
+                    }}
+                    rows={1}
+                    placeholder="Сообщение от имени клиента…"
+                    className="max-h-40 min-h-[52px] flex-1 resize-none rounded-3xl border border-input bg-card px-4 py-3.5 text-base leading-relaxed outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                  <Button
+                    size="icon"
+                    className="size-12 shrink-0 rounded-full"
+                    onClick={sendMessage}
+                    disabled={pending || !draft.trim()}
+                    aria-label="Отправить"
+                  >
+                    {pending ? (
+                      <Loader2 className="size-5 animate-spin" />
+                    ) : (
+                      <Send className="size-5" />
+                    )}
+                  </Button>
+                </div>
               </div>
             </>
           )}
@@ -466,26 +535,87 @@ export function GodMessenger({
 
 /* --------------------------- Message bubble ---------------------------- */
 
+const DRAG_MAX = 84
+const DRAG_TRIGGER = 56
+
 /**
  * One message. Perspective is inverted vs. the manager inbox: an INBOUND message
  * (direction 'in') is what the god typed AS THE CLIENT, so it sits on the RIGHT
  * as "mine"; an OUTBOUND message (direction 'out') is the manager's reply, shown
- * on the LEFT as "theirs".
+ * on the LEFT as "theirs". Swipe a bubble left (like Telegram) to reply to it.
  */
 function MessageBubble({
   message,
   prev,
+  onReply,
 }: {
   message: Message
   prev?: Message
+  onReply: (message: Message) => void
 }) {
   const mine = message.direction === 'in'
+  const { quote, text } = parseReply(message.body)
+
+  const [dragX, setDragX] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const startX = useRef(0)
+  const startY = useRef(0)
+  const axis = useRef<null | 'h' | 'v'>(null)
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    startX.current = e.clientX
+    startY.current = e.clientY
+    axis.current = null
+  }
+
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (startX.current === 0 && startY.current === 0) return
+    const dx = e.clientX - startX.current
+    const dy = e.clientY - startY.current
+    if (axis.current === null) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+        axis.current = 'h'
+        setDragging(true)
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId)
+        } catch {
+          /* ignore */
+        }
+      } else if (Math.abs(dy) > 8) {
+        axis.current = 'v'
+      }
+    }
+    if (axis.current === 'h') {
+      // Swipe left to reply; clamp and add a little resistance past the trigger.
+      const next = Math.max(-DRAG_MAX, Math.min(0, dx))
+      setDragX(next)
+    }
+  }
+
+  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (axis.current === 'h') {
+      if (dragX <= -DRAG_TRIGGER) onReply(message)
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+    }
+    startX.current = 0
+    startY.current = 0
+    axis.current = null
+    setDragging(false)
+    setDragX(0)
+  }
 
   // Day separator when the calendar day changes.
   const showDay =
     !prev ||
     new Date(prev.createdAt).toDateString() !==
       new Date(message.createdAt).toDateString()
+
+  const revealProgress = Math.min(1, -dragX / DRAG_TRIGGER)
 
   return (
     <>
@@ -496,32 +626,75 @@ function MessageBubble({
           </span>
         </div>
       )}
-      <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
+      <div
+        className="relative select-none"
+        style={{ touchAction: 'pan-y' }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        {/* Reply affordance revealed while swiping. */}
         <div
-          className={cn(
-            'max-w-[80%] rounded-2xl px-3.5 py-2 text-sm shadow-sm',
-            mine
-              ? 'rounded-br-md bg-primary text-primary-foreground'
-              : 'rounded-bl-md bg-card text-card-foreground',
-          )}
+          className="pointer-events-none absolute inset-y-0 right-1 flex items-center"
+          style={{ opacity: revealProgress }}
+          aria-hidden="true"
         >
-          <p className="whitespace-pre-wrap break-words leading-relaxed">
-            {message.body}
-          </p>
-          <span
+          <div
             className={cn(
-              'mt-0.5 flex items-center justify-end gap-1 text-[10px]',
-              mine ? 'text-primary-foreground/70' : 'text-muted-foreground',
+              'flex size-8 items-center justify-center rounded-full transition-colors',
+              revealProgress >= 1
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground',
             )}
           >
-            {fmtTime(message.createdAt)}
-            {mine &&
-              (message.status === 'read' ? (
-                <CheckCheck className="size-3" />
-              ) : (
-                <Check className="size-3" />
-              ))}
-          </span>
+            <CornerUpLeft className="size-4" />
+          </div>
+        </div>
+
+        <div
+          className={cn('flex', mine ? 'justify-end' : 'justify-start')}
+          style={{
+            transform: `translateX(${dragX}px)`,
+            transition: dragging ? 'none' : 'transform 0.2s ease-out',
+          }}
+        >
+          <div
+            className={cn(
+              'max-w-[82%] rounded-2xl px-3.5 py-2 text-sm shadow-sm sm:max-w-[75%]',
+              mine
+                ? 'rounded-br-md bg-primary text-primary-foreground'
+                : 'rounded-bl-md bg-card text-card-foreground',
+            )}
+          >
+            {quote && (
+              <div
+                className={cn(
+                  'mb-1 rounded-md border-l-2 px-2 py-1 text-xs',
+                  mine
+                    ? 'border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/80'
+                    : 'border-primary/50 bg-muted text-muted-foreground',
+                )}
+              >
+                <span className="line-clamp-2 break-words">{quote}</span>
+              </div>
+            )}
+            <p className="whitespace-pre-wrap break-words leading-relaxed">{text}</p>
+            <span
+              className={cn(
+                'mt-0.5 flex items-center justify-end gap-1 text-[10px]',
+                mine ? 'text-primary-foreground/70' : 'text-muted-foreground',
+              )}
+            >
+              {fmtTime(message.createdAt)}
+              {mine &&
+                (message.status === 'read' ? (
+                  <CheckCheck className="size-3" />
+                ) : (
+                  <Check className="size-3" />
+                ))}
+            </span>
+          </div>
         </div>
       </div>
     </>
