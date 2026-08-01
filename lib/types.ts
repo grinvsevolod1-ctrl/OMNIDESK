@@ -644,6 +644,8 @@ export type DeployAction =
   | 'health_check'
   /** Autonomous AI deploy: the agent analyses the box and installs everything. */
   | 'ai_deploy'
+  /** Restore the pre-redeploy snapshot (<appDir>.prev) and restart. */
+  | 'rollback'
 /** How a deployment was carried out. */
 export type DeploymentMode = 'manual' | 'ai'
 

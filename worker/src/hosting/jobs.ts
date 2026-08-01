@@ -46,6 +46,7 @@ async function run(job: repo.DeployJob): Promise<void> {
       case 'stop':
       case 'restart':
       case 'remove':
+      case 'rollback':
         if (!job.app_id) throw new Error(`${job.action} without app_id`)
         await runLifecycle(job.action, job.app_id)
         break

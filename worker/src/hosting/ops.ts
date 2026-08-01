@@ -156,12 +156,15 @@ function sh(value: string): string {
 }
 
 /**
- * Start / stop / restart / remove a deployed app over SSH. Uses pm2 for
- * node/php runtimes and docker for the docker runtime, matching how the deploy
- * pipeline launched them.
+ * Start / stop / restart / remove / rollback a deployed app over SSH. Uses pm2
+ * for node/php runtimes and docker for the docker runtime, matching how the
+ * deploy pipeline launched them. `rollback` swaps the pre-redeploy snapshot
+ * (`<appDir>.prev`, taken by the agent's clone step) back into place and
+ * restarts — the replaced version becomes the new `.prev`, so you can roll
+ * forward again with another rollback.
  */
 export async function runLifecycle(
-  action: 'start' | 'stop' | 'restart' | 'remove',
+  action: 'start' | 'stop' | 'restart' | 'remove' | 'rollback',
   appId: string,
 ): Promise<void> {
   const app = await repo.getApp(appId)
@@ -171,9 +174,21 @@ export async function runLifecycle(
 
   const name = `omnidesk-${app.id}`
   const isDocker = app.runtime === 'docker'
+  const appDir = `/opt/omnidesk-apps/${app.id}`
+  const prevDir = `${appDir}.prev`
+  const tmpDir = `${appDir}.swap`
 
   let cmd: string
-  if (isDocker) {
+  if (action === 'rollback') {
+    const restart = isDocker
+      ? `docker restart ${sh(name)}`
+      : `pm2 restart ${sh(name)}`
+    cmd =
+      `[ -d ${sh(prevDir)} ] || { echo 'нет снапшота для отката' >&2; exit 41; }; ` +
+      `rm -rf ${sh(tmpDir)} && mv ${sh(appDir)} ${sh(tmpDir)} && ` +
+      `mv ${sh(prevDir)} ${sh(appDir)} && mv ${sh(tmpDir)} ${sh(prevDir)} && ` +
+      restart
+  } else if (isDocker) {
     switch (action) {
       case 'start':
         cmd = `docker start ${sh(name)}`
@@ -186,7 +201,7 @@ export async function runLifecycle(
         break
       case 'remove':
         cmd = `docker rm -f ${sh(name)} >/dev/null 2>&1 || true; ` +
-          `rm -rf ${sh(`/opt/omnidesk-apps/${app.id}`)}`
+          `rm -rf ${sh(appDir)} ${sh(prevDir)}`
         break
     }
   } else {
@@ -202,7 +217,7 @@ export async function runLifecycle(
         break
       case 'remove':
         cmd = `pm2 delete ${sh(name)} >/dev/null 2>&1 || true; pm2 save; ` +
-          `rm -rf ${sh(`/opt/omnidesk-apps/${app.id}`)}`
+          `rm -rf ${sh(appDir)} ${sh(prevDir)}`
         break
     }
   }
@@ -227,7 +242,7 @@ export async function runLifecycle(
     // Reflect the new state. For 'remove', the process and code are now gone
     // from the server, so delete the app record too — cleanup is atomic and the
     // console doesn't have to race the worker to drop the row.
-    if (action === 'start' || action === 'restart') {
+    if (action === 'start' || action === 'restart' || action === 'rollback') {
       await repo.setAppStatus(appId, 'running', null)
     } else if (action === 'stop') {
       await repo.setAppStatus(appId, 'stopped', null)

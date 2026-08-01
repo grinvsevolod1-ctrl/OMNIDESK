@@ -197,6 +197,8 @@ interface AgentOutcome {
   summary: string
   url: string | null
   serverNotes: string | null
+  /** Agent memory about THIS app (build/run specifics) for future redeploys. */
+  appNotes?: string | null
 }
 
 /** Entry point: run an autonomous deploy for a job. */
@@ -313,6 +315,9 @@ export async function runAiDeploy(job: repo.DeployJob): Promise<void> {
       await repo.setAppStatus(appId, 'running', null)
       if (outcome.serverNotes) {
         await repo.setServerAgentNotes(server.id, outcome.serverNotes)
+      }
+      if (outcome.appNotes) {
+        await repo.setAppAgentNotes(appId, outcome.appNotes)
       }
       await log('system', `Готово: ${outcome.summary}`)
     } else {
@@ -554,9 +559,14 @@ async function executeTool(
       const cloneUrl = buildCloneUrl(app.repo_url, token)
       // Build the command with the (possibly tokenized) URL, but NEVER log it —
       // announce a redacted version instead.
+      // On a redeploy, snapshot the working copy to `<appDir>.prev` BEFORE
+      // touching it, so "верни как было" (rollback) has something to restore —
+      // including node_modules/build artifacts, making rollback instant.
+      const prevDir = `${appDir}.prev`
       const command =
         `mkdir -p ${sh(APPS_ROOT)} && ` +
         `if [ -d ${sh(appDir)}/.git ]; then ` +
+        `rm -rf ${sh(prevDir)} && cp -a ${sh(appDir)} ${sh(prevDir)} && ` +
         `cd ${sh(appDir)} && git remote set-url origin ${sh(cloneUrl)} && ` +
         `git fetch --all --prune && git checkout ${sh(branch)} && ` +
         `git reset --hard ${sh('origin/' + branch)}; ` +
@@ -615,9 +625,10 @@ async function executeTool(
       const summary = String(args.summary ?? '').trim() || (success ? 'Готово.' : 'Не удалось.')
       const url = String(args.url ?? '').trim() || null
       const serverNotes = String(args.serverNotes ?? '').trim() || null
+      const appNotes = String(args.appNotes ?? '').trim() || null
       return {
         payload: { ok: true },
-        finish: { success, summary, url, serverNotes },
+        finish: { success, summary, url, serverNotes, appNotes },
       }
     }
 
@@ -654,7 +665,7 @@ function systemPrompt(): string {
     '4. set_status("running"): запусти приложение устойчиво (pm2 для Node/PHP, docker run --restart для Docker, либо systemd-юнит). Для статики — отдай через веб-сервер.',
     '5. Если задан домен — сначала ПРОВЕРЬ DNS: домен должен указывать на IP этого сервера (dig +short <домен> или getent hosts <домен>, сравни с внешним IP: curl -s ifconfig.me). Если A-запись не совпадает — НЕ запускай certbot/выпуск сертификата (он упадёт из-за проверки Let\'s Encrypt): подними reverse-proxy по HTTP (порт 80) и в finish предупреди, что для HTTPS нужно направить домен на этот IP. Если DNS в порядке — настрой reverse-proxy и HTTPS (Caddy проще всего: сам берёт сертификат Let\'s Encrypt).',
     '6. Проверь, что приложение реально отвечает: curl -fsS -o /dev/null -w "%{http_code}" http://127.0.0.1:<порт> (и, если есть домен и HTTPS, curl -I по домену). Успех — это не «процесс запущен», а «на запрос приходит ответ». Если код 5xx/нет ответа — смотри логи процесса (pm2 logs / docker logs / journalctl) и чини.',
-    '7. Вызови finish с итогом. Если сайт доступен — укажи url. Добавь serverNotes про ОС, установленное ПО, выбранный порт и способ запуска.',
+    '7. Вызови finish с итогом. Если сайт доступен — укажи url. Добавь serverNotes про ОС и установленное ПО, и appNotes про это приложение (как собирается, как запускается, имя процесса, порт) — они сэкономят время при переустановке.',
     '',
     'ПРАВИЛА:',
     '• Работай маленькими шагами: одна команда — одно понятное действие, с пояснением в explanation.',
@@ -676,6 +687,9 @@ function userContext(
   const lines = [
     `Сервер: ${server.name} (${server.ip_address}), пол��зователь ${server.ssh_username}.`,
     server.agent_notes ? `Заметки о сервере: ${server.agent_notes}` : 'Заметок о сервере пока нет.',
+    app.agent_notes
+      ? `Заметки об этом приложении с прошлой установки (проверь актуальность, но не изучай проект с нуля): ${app.agent_notes}`
+      : 'Это первая установка приложения — в конце запиши appNotes в finish.',
     `Репозиторий: ${app.repo_url}, ветка ${app.branch || 'main'}.`,
     app.domain ? `Домен для сайта: ${app.domain}.` : 'Домен не задан — reverse-proxy можно пропустить или слушать по IP.',
     app.port

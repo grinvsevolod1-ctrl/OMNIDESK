@@ -225,6 +225,31 @@ export function serversTools(state: RunState) {
       },
     }),
 
+    rollback_app: tool({
+      description:
+        'Откатить приложение к предыдущей версии («верни как было»): на сервере восстанавливается снапшот, сделанный перед последней переустановкой, и процесс перезапускается. Работает, только если после переустановки остался снапшот. Повторный откат возвращает обратно (версии меняются местами). Возьми appId через get_server.',
+      inputSchema: z.object({
+        appId: z.string().min(1),
+      }),
+      execute: async ({ appId }) => {
+        const app = await getAppById(appId)
+        if (!app) return { ok: false, reason: 'app_not_found' }
+        const server = await getServerById(app.serverId)
+        if (!server?.hasSecret) return { ok: false, reason: 'server_unavailable' }
+        await enqueueDeployJob({ action: 'rollback', serverId: app.serverId, appId })
+        state.actions.push({
+          kind: 'lifecycle',
+          label: `Откатываю ${app.name} к предыдущей версии`,
+        })
+        state.dataChanged = true
+        return {
+          ok: true,
+          appId,
+          note: 'Откат поставлен в очередь. Если снапшота нет (первая установка или он был удалён), задача завершится ошибкой — проверь статус через get_server.',
+        }
+      },
+    }),
+
     delete_app: tool({
       description:
         'Удалить приложение: остановить процесс, удалить его код с сервера и убрать запись. НЕОБРАТИМО — сначала явно подтверди у админа и вызывай только с confirm=true. Возьми appId через get_server.',
@@ -341,7 +366,7 @@ export function serversTools(state: RunState) {
 
     set_auto_deploy: tool({
       description:
-        'Включить/выключить авто-деплой приложения по push в GitHub (enabled=true/false). При включении объясни админу: в настройках репозитория надо добавить вебхук на /api/hosting/github-webhook с секретом GITHUB_WEBHOOK_SECRET (событие push, формат JSON). Возьми appId через get_server.',
+        'Включить/выключить авто-деплой при��ожения по push в GitHub (enabled=true/false). При включении объясни админу: в настройках репозитория надо добавить вебхук на /api/hosting/github-webhook с секретом GITHUB_WEBHOOK_SECRET (событие push, формат JSON). Возьми appId через get_server.',
       inputSchema: z.object({
         appId: z.string().min(1),
         enabled: z.boolean(),

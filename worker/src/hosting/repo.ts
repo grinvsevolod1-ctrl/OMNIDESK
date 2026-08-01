@@ -16,6 +16,7 @@ export type DeployAction =
   | 'remove'
   | 'health_check'
   | 'ai_deploy'
+  | 'rollback'
 
 export interface DeployJob {
   id: string
