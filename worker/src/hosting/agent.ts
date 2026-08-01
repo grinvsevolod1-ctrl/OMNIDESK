@@ -370,6 +370,7 @@ async function runAgentLoop(ctx: {
       const result = await executeTool(call, {
         app,
         appDir,
+        deploymentId,
         token,
         log,
         redact,
@@ -399,6 +400,7 @@ async function executeTool(
   ctx: {
     app: repo.AppRecord
     appDir: string
+    deploymentId: string
     token: string | null
     log: (
       stream: 'stdout' | 'stderr' | 'system' | 'agent' | 'command',
@@ -506,7 +508,7 @@ async function executeTool(
       const phase = String(args.phase ?? '').trim()
       const note = String(args.note ?? '').trim()
       if (phase === 'cloning' || phase === 'building' || phase === 'running') {
-        await repo.setDeploymentStatus(ctx.appId ?? '', phase).catch(() => {})
+        await repo.setDeploymentStatus(ctx.deploymentId, phase).catch(() => {})
       }
       if (note) await log('agent', note)
       return { payload: { ok: true } }

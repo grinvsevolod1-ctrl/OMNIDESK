@@ -2,6 +2,7 @@ import { logger } from '../logger.js'
 import * as repo from './repo.js'
 import { runDeploy } from './pipeline.js'
 import { runHealthCheck, runLifecycle } from './ops.js'
+import { runAiDeploy } from './agent.js'
 
 /**
  * Deploy-job consumer, parallel to the channel-job processor. The worker LISTENs
@@ -33,6 +34,9 @@ async function run(job: repo.DeployJob): Promise<void> {
     switch (job.action) {
       case 'deploy':
         await runDeploy(job)
+        break
+      case 'ai_deploy':
+        await runAiDeploy(job)
         break
       case 'health_check':
         if (!job.server_id) throw new Error('health_check without server_id')

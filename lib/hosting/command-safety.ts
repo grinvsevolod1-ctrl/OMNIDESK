@@ -1,9 +1,10 @@
 /**
  * Guardrails for the autonomous deploy agent. Pure and dependency-free so it can
- * be unit-tested in isolation. The agent runs real shell commands over SSH as a
- * privileged user, so before executing ANY command we screen it against a
- * denylist of catastrophic operations, and the agent loop is bounded by step,
- * per-command and total-time limits plus a cooperative cancellation check.
+ * be unit-tested in isolation and shared between the Next.js app and the worker.
+ * The agent runs real shell commands over SSH as a privileged user, so before
+ * executing ANY command we screen it against a denylist of catastrophic
+ * operations, and the agent loop is bounded by step, per-command and total-time
+ * limits plus a cooperative cancellation check.
  *
  * This is defence-in-depth, not a sandbox: it blocks the obvious foot-guns an
  * LLM might emit (wiping the disk, powering off the box, fork bombs) so a
