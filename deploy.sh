@@ -179,12 +179,32 @@ rm -rf .next.old
 # `git checkout` / `git pull --ff-only` would fail on local modifications.
 git checkout -- tsconfig.json next-env.d.ts 2>/dev/null || true
 
-# 6. Recreate the PM2 processes from ecosystem.config.js. A plain `pm2 restart`
-#    reuses whatever definition PM2 first saved (see the header of
-#    ecosystem.config.js), so we delete and start fresh to guarantee the correct
-#    fork mode, interpreter and injected env.
-pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads omnidesk-log-reporter 2>/dev/null || true
-pm2 start ecosystem.config.js
+# 6. Restart the PM2 processes FROM ecosystem.config.js. `pm2 startOrRestart
+#    <config>` re-applies the file's definition (script, interpreter, fork mode,
+#    env) on every restart — unlike a bare `pm2 restart <name>`, which reuses
+#    whatever definition PM2 first saved. So we get fresh definitions WITHOUT
+#    the old `pm2 delete` + `pm2 start` dance, which had two real failure modes:
+#      - a process-list race with the every-minute cron one-shots
+#        ("[PM2][ERROR] Process N not found",
+#         "Cannot read properties of undefined (reading 'pm2_env')")
+#        that could corrupt the daemon state until `pm2 update`;
+#      - a window between delete and start where the panel didn't exist at all.
+#    --only pins the exact app list: omnidesk-auto-deploy MUST stay out of it —
+#    it is the watcher whose child is this very script, and restarting it here
+#    would SIGINT the in-flight deploy (exit 130). It self-restarts after the
+#    deploy when its source changed.
+PM2_APPS="omnidesk-panel,omnidesk-worker,omnidesk-cron-sync-ads,omnidesk-cron-retry-dead-letters,omnidesk-cron-followup,omnidesk-log-reporter"
+if ! pm2 startOrRestart ecosystem.config.js --only "$PM2_APPS" --update-env; then
+  # A corrupted pm2 daemon fails every command until refreshed. `pm2 update`
+  # restarts the daemon in-place (processes keep running), then retry once.
+  echo "⚠️  pm2 startOrRestart failed — refreshing the pm2 daemon and retrying ..."
+  pm2 update || true
+  pm2 startOrRestart ecosystem.config.js --only "$PM2_APPS" --update-env
+fi
+# Create any app missing from the process list (e.g. a brand-new box or a new
+# app added to the config, including the auto-deploy watcher itself): plain
+# `pm2 start <config>` starts absent apps and leaves running ones untouched.
+pm2 start ecosystem.config.js 2>/dev/null || true
 pm2 save
 pm2 status
 
