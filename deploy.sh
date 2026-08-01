@@ -167,6 +167,12 @@ node --env-file=.env scripts/migrate.mjs up
 #    last moment; the final `mv` is an atomic rename on the same filesystem.
 #    NEXT_DIST_DIR is honoured by next.config.mjs (defaults to .next otherwise).
 rm -rf .next.new .next.old
+# Also drop the LIVE build's generated route types: tsconfig.json includes the
+# ".next/types/**" glob, so a stale .next/types/validator.ts referencing since-
+# deleted routes (e.g. the removed /api/wijegniwjgwjog/* endpoints) breaks the
+# NEW build's type check. Types are build-time only — the running panel never
+# reads them, so this is safe while the old build keeps serving.
+rm -rf .next/types
 NEXT_DIST_DIR=.next.new pnpm build
 # Swap: retire the current build and promote the freshly built one.
 [ -d .next ] && mv .next .next.old
