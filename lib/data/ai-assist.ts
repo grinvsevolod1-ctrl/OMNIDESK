@@ -248,8 +248,7 @@ export async function getAiModelStats(days = 7): Promise<AiModelStat[]> {
  * Most recent lessons for the ADMIN management UI (newest first). Auto-authored
  * lessons (source='auto') are excluded here — and, critically, they are ALSO
  * excluded from `listBrainLessons`, so the real manager's brain is trained only
- * by human-authored lessons. The simulator can never write into the manager's
- * knowledge; the two AIs are fully decoupled.
+ * by human-authored lessons.
  */
 export async function listLessons(limit = 50): Promise<AiAssistLesson[]> {
   const rows = await query<LessonRow>(
@@ -364,16 +363,9 @@ async function resolveMediaBody(row: {
  *         AND conversations.ai_enrolled    -- this dialog is AI-led
  *         AND NOT conversations.ai_paused   -- not temporarily paused
  *
- * IMPORTANT: simulated dialogs are intentionally NOT excluded here. To the AI
- * manager a simulator dialog must look exactly like a real client — same
- * participation rules, same brain, same replies. Simulated dialogs are also
- * treated as real everywhere else (inbox, status board, analytics, enrollment).
- * The is_simulated flag is used for only two things: (a) labeling a dialog as
- * simulated inside the secret panel, and (b) stopping the manager's reply from
- * being delivered to a real external channel (see the dispatch guards). New
- * dialogs are auto-enrolled at creation, so the AI leads them out of the box;
- * pre-existing dialogs stay manual until an admin enrolls them. A single CROSS
- * JOIN keeps this cheap.
+ * New dialogs are auto-enrolled at creation, so the AI leads them out of the
+ * box; pre-existing dialogs stay manual until an admin enrolls them. A single
+ * CROSS JOIN keeps this cheap.
  */
 export async function isConversationAiLed(
   conversationId: string,
@@ -440,8 +432,7 @@ function mapEnrollable(r: {
 
 /**
  * Dialogs the admin can enroll the AI into, newest-active first. Optional text
- * search over contact name. Simulated dialogs are treated as real and are
- * eligible like any other conversation.
+ * search over contact name.
  */
 export async function listEnrollableConversations(
   search: string,
@@ -491,8 +482,8 @@ export async function listAiEnrolledConversations(
 /**
  * Enroll the AI into a dialog (opt-in). Stamps the enrollment time and the
  * current latest message as the cutoff, so the brain only ever acts on messages
- * from now on and never replays the old backlog / drifts off-topic. Works for
- * any dialog, simulated or not. Returns true when it enrolled.
+ * from now on and never replays the old backlog / drifts off-topic. Returns
+ * true when it enrolled.
  */
 export async function enrollConversationAi(
   conversationId: string,

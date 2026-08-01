@@ -4,13 +4,11 @@ import { describe, expect, it } from 'vitest'
 
 /**
  * Isolation guard: the AI-manager co-pilot features (analytics, follow-up,
- * auto-lessons, deal-heat) must NEVER be coupled to the client simulator or the
- * god panel. This test statically scans each new module's source for forbidden
- * imports/references, so a future edit that reaches into `client-sim`,
- * `god-gate` or the secret panel fails CI instead of silently leaking.
- *
- * Note: this is about CODE coupling, not data. Simulated dialogs are ordinary
- * conversations for the AI; nothing here filters `is_simulated`.
+ * auto-lessons, deal-heat) must NEVER be coupled to the god panel — and must
+ * never re-introduce the removed client simulator. This test statically scans
+ * each module's source for forbidden imports/references, so a future edit that
+ * reaches into `client-sim`, `god-gate` or the secret panel fails CI instead of
+ * silently leaking.
  */
 
 const ROOT = join(__dirname, '..', '..')
@@ -174,10 +172,6 @@ describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
     'lib/ai-console/tools-quality.ts',
     'lib/autopilot/runtime.ts',
     'lib/data/ai-experiments.ts',
-    // Simulator prompt/message text (Russian, read verbatim by the model and
-    // posted into dialogs) — the same corruption class was found here too.
-    'lib/client-sim/engine.ts',
-    'lib/client-sim/generate.ts',
   ]
   for (const rel of PROMPT_FILES) {
     it(`${rel} contains no replacement characters`, () => {

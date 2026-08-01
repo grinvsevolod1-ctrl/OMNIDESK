@@ -349,7 +349,7 @@ function SecretHeader({
         </div>
         <div>
           <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
-            Панель супер-��дминистратора
+            Панель супер-администратора
           </h1>
           <p className="text-sm text-muted-foreground">
             Прямое управление менеджерами, каналами и диалогами
@@ -529,7 +529,7 @@ function AiBalanceBanner({ system }: { system: SecretSystem }) {
         </div>
         <div>
           <p className="text-xs font-medium text-muted-foreground">
-            Баланс ИИ (менеджер + симулятор)
+            Баланс ИИ (менеджер)
           </p>
           <p className={cn('text-2xl font-semibold tabular-nums', iconTone)}>
             {usd(aiBalance)}
