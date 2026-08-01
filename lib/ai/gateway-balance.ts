@@ -3,10 +3,9 @@ import 'server-only'
 /**
  * Live AI Gateway credit balance for the god-panel.
  *
- * Both AIs — the customer-facing manager brain (lib/ai/manager-brain.ts) and the
- * client simulator (lib/client-sim/generate.ts) — bill against the SAME Vercel
- * AI Gateway key, so a single balance figure covers everything the system spends
- * on inference. We read it straight from the Gateway credits endpoint.
+ * The customer-facing manager brain (lib/ai/manager-brain.ts) bills against the
+ * Vercel AI Gateway key, so this balance figure covers everything the system
+ * spends on inference. We read it straight from the Gateway credits endpoint.
  *
  * Docs: GET https://ai-gateway.vercel.sh/v1/credits with a Bearer key returns
  * `{ balance, total_used }` as decimal-dollar strings.

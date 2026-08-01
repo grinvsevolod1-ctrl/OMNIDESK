@@ -5,8 +5,8 @@ import type { ChannelType, Message, SessionUser } from '@/lib/types'
  * Shared, non-action helpers for the God-mode admin console server actions.
  *
  * This module deliberately does NOT carry the `'use server'` directive: the
- * per-domain action files (channels/conversations/managers/client-sim/ads) are
- * the `'use server'` boundaries, and they import these plain helpers. Keeping
+ * per-domain action files (channels/conversations/managers/ads) are the
+ * `'use server'` boundaries, and they import these plain helpers. Keeping
  * the shared constants + audit helper here lets each action group stay small and
  * focused while still funneling every privileged mutation through one audit
  * trail and one canonical admin path.
