@@ -7,7 +7,7 @@ import {
   reactionMessage,
   splitIntoMessages,
 } from './content'
-import { type Behavior, generateReply } from './generate'
+import { type Behavior, generateReply, isWebFormOpening } from './generate'
 import { ensureLock, releaseLock } from './lock'
 import {
   bumpNudgeBackoff,
@@ -222,7 +222,7 @@ async function tick(): Promise<void> {
         level: 'info',
         source: 'sim',
         event: 'reaped',
-        message: `Закрыто ${reaped} диалогов, где клиент перестал отвечать (за ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
+        message: `Закр��то ${reaped} диалогов, где клиент перестал отвечать (за ${CLIENT_GHOST_MINUTES} мин после ответа менеджера) — освободил место для новых.`,
       })
     }
 
@@ -386,7 +386,10 @@ async function maybeSpawn(settings: SimSettings): Promise<void> {
   // A real person often opens with a couple of short messages rather than one
   // line. Seed the conversation with the FIRST bubble, then post the rest with
   // typing gaps; the manager is triggered once, after the whole opening lands.
-  const bubbles = splitIntoMessages(body, persona.style)
+  // EXCEPTION: the web-form template opening is a PLATFORM NOTIFICATION, not
+  // typed chat — a real site sends it as one block, so it must never be split
+  // into bubbles (that read as an obvious fake).
+  const bubbles = isWebFormOpening(body) ? [body] : splitIntoMessages(body, persona.style)
   const firstBubble = bubbles[0] ?? body
   const conversationId = await createSimConversation(channel, persona, firstBubble)
   // Count the spawn only once the conversation actually exists, so the stat
