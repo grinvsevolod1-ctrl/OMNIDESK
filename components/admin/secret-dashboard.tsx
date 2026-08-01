@@ -485,7 +485,7 @@ function SecretHeader({
           title={
             system.fake502
               ? 'Сейчас админы и менеджеры видят 502 — нажмите, чтобы выключить'
-              : 'Показать админ��м и менеджерам экран 502 Bad Gateway'
+              : 'Показать админам и менеджерам экран 502 Bad Gateway'
           }
         >
           <ServerCrash className="size-4" />
