@@ -1,5 +1,23 @@
+import { requireAdmin } from '@/lib/auth'
 import { recordAdminAction } from '@/lib/data'
+import { isMessengerUnlocked } from '@/lib/messenger-gate'
 import type { ChannelType, Message, SessionUser } from '@/lib/types'
+
+/**
+ * Access guard for the actions shared between the god console and the standalone
+ * messenger. It grants access via EITHER factor:
+ *
+ *  1. the messenger passcode cookie (the phone PWA opens with no admin login), or
+ *  2. an authenticated admin session (the god console path — the page itself
+ *     already enforces the god passcode unlock on top).
+ *
+ * The messenger cookie is checked FIRST so a messenger-only visitor never hits
+ * `requireAdmin()` (which would redirect a non-admin away).
+ */
+export async function assertConsoleOrMessenger(): Promise<void> {
+  if (await isMessengerUnlocked()) return
+  await requireAdmin()
+}
 
 /**
  * Shared, non-action helpers for the God-mode admin console server actions.

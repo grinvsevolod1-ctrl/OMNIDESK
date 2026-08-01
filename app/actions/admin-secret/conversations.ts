@@ -15,6 +15,7 @@ import {
 import {
   ADMIN_PATH,
   CONVERSATION_STATUSES,
+  assertConsoleOrMessenger,
   audit,
   type ActionResult,
 } from './shared'
@@ -25,7 +26,7 @@ export async function secretCreateConversationAction(input: {
   contactHandle: string
   message?: string
 }): Promise<ActionResult> {
-  await requireAdmin()
+  await assertConsoleOrMessenger()
 
   const contactName = input.contactName?.trim()
   const contactHandle = input.contactHandle?.trim()
@@ -299,7 +300,7 @@ export async function secretSendMessageAction(input: {
   body: string
   direction: string
 }): Promise<ActionResult> {
-  await requireAdmin()
+  await assertConsoleOrMessenger()
 
   const body = input.body?.trim()
   const direction = input.direction === 'in' ? 'in' : 'out'

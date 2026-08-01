@@ -29,6 +29,7 @@ import {
 } from '@/lib/types'
 import {
   ADMIN_PATH,
+  assertConsoleOrMessenger,
   audit,
   type ActionResult,
 } from './shared'
@@ -245,7 +246,7 @@ export async function secretListConversationsAction(opts?: {
   search?: string
   channelType?: string
 }): Promise<ConversationWithManager[]> {
-  await requireAdmin()
+  await assertConsoleOrMessenger()
   const channelType =
     opts?.channelType && opts.channelType !== 'all'
       ? (opts.channelType as ChannelType)
@@ -264,7 +265,7 @@ export interface ThreadResult {
 export async function secretFetchThreadAction(
   conversationId: string,
 ): Promise<ThreadResult> {
-  await requireAdmin()
+  await assertConsoleOrMessenger()
   if (!conversationId)
     return { ok: false, message: 'Не указан диалог', conversation: null, messages: [] }
   const conversation = await getConversationAdmin(conversationId)

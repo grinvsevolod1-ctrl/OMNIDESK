@@ -1,9 +1,8 @@
 import type { Metadata, Viewport } from 'next'
-import { requireAdmin } from '@/lib/auth'
-import { isGodUnlocked } from '@/lib/god-gate'
+import { isMessengerUnlocked } from '@/lib/messenger-gate'
 import { listAllChannels, listManagers } from '@/lib/data'
 import { isPushConfigured } from '@/lib/push'
-import { SecretGate } from '@/components/admin/secret-gate'
+import { MessengerGate } from '@/components/admin/god-messenger/messenger-gate'
 import { GodMessenger } from '@/components/admin/god-messenger/god-messenger'
 
 export const dynamic = 'force-dynamic'
@@ -42,14 +41,14 @@ export const viewport: Viewport = {
 
 /**
  * God messenger — a phone-friendly, full-screen surface for chatting AS THE
- * CLIENT with your own managers. Same two-factor gate as the rest of the god
- * panel (admin + secret passcode). It reuses the god-console server actions, so
- * every message written here flows through the real conversations/messages
- * tables and lands live in the target manager's inbox.
+ * CLIENT with your own managers. Protected by its OWN standalone passcode
+ * (`MessengerGate`) — no admin login or god-panel unlock required, so it opens
+ * on a phone with just the messenger password. It reuses the god-console server
+ * actions, so every message written here flows through the real
+ * conversations/messages tables and lands live in the target manager's inbox.
  */
 export default async function GodMessagesPage() {
-  await requireAdmin()
-  if (!(await isGodUnlocked())) return <SecretGate />
+  if (!(await isMessengerUnlocked())) return <MessengerGate />
 
   const [channels, managers] = await Promise.all([
     listAllChannels(),

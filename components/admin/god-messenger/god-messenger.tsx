@@ -9,10 +9,8 @@ import {
   useTransition,
 } from 'react'
 import { useSearchParams } from 'next/navigation'
-import Link from 'next/link'
 import { toast } from 'sonner'
 import {
-  ArrowLeft,
   Check,
   CheckCheck,
   ChevronLeft,
@@ -250,14 +248,12 @@ export function GodMessenger({
         >
           <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-3">
             <div className="flex items-center gap-2">
-              <Link
-                href="/wijegniwjgwjog"
-                className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title="Назад в панель"
-                aria-label="Назад в панель"
+              <div
+                className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary"
+                aria-hidden="true"
               >
-                <ArrowLeft className="size-5" />
-              </Link>
+                <MessagesSquare className="size-5" />
+              </div>
               <div>
                 <h1 className="text-base font-semibold leading-none">Messages</h1>
                 <span

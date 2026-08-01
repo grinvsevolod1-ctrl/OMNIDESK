@@ -3,6 +3,7 @@
 import { headers } from 'next/headers'
 import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
+import { isMessengerUnlocked } from '@/lib/messenger-gate'
 import {
   getVapidPublicKey,
   isPushConfigured,
@@ -22,6 +23,9 @@ import type { ActionResult } from './shared'
  */
 
 async function assertGod(): Promise<boolean> {
+  // Standalone messenger passcode is sufficient (phone PWA, no admin login)...
+  if (await isMessengerUnlocked()) return true
+  // ...otherwise fall back to the god panel's two factors.
   await requireAdmin()
   return isGodUnlocked()
 }

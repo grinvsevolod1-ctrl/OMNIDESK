@@ -1,4 +1,5 @@
 import { guardGodApi } from '@/lib/god-gate'
+import { isMessengerUnlocked } from '@/lib/messenger-gate'
 import { type RealtimeEvent, subscribeRealtime } from '@/lib/realtime'
 
 export const runtime = 'nodejs'
@@ -19,8 +20,12 @@ export const dynamic = 'force-dynamic'
  * about persisted message/conversation/channel changes.
  */
 export async function GET(request: Request): Promise<Response> {
-  const denied = await guardGodApi()
-  if (denied) return denied
+  // The standalone messenger PWA (its own passcode, no admin login) may also
+  // consume this stream; otherwise enforce the god panel's two factors.
+  if (!(await isMessengerUnlocked())) {
+    const denied = await guardGodApi()
+    if (denied) return denied
+  }
 
   const encoder = new TextEncoder()
   let heartbeat: ReturnType<typeof setInterval> | null = null
