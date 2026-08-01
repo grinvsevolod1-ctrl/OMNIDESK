@@ -104,11 +104,12 @@ export function GodMessenger({
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [pending, startTransition] = useTransition()
 
-  // Edge-swipe-back: drag left from the right edge of the screen to return to
-  // the chat list (mobile). Confined to a right-edge strip so it never clashes
-  // with the swipe-to-reply gesture on message bubbles.
+  // Swipe-back: drag RIGHT anywhere in the thread (mobile, touch only) to
+  // return to the chat list — like Telegram/iOS. Doesn't clash with
+  // swipe-to-reply on bubbles because that gesture only claims LEFTWARD drags.
   const [backDrag, setBackDrag] = useState(0)
   const backStart = useRef<{ x: number; y: number } | null>(null)
+  const backAxis = useRef<null | 'h' | 'v'>(null)
 
   const selectedIdRef = useRef<string | null>(null)
   useEffect(() => {
@@ -255,25 +256,35 @@ export function GodMessenger({
     composerRef.current?.focus()
   }, [])
 
-  /* ----- edge-swipe back to list ----- */
+  /* ----- swipe right anywhere in the thread → back to list ----- */
   const onBackPointerDown = useCallback((e: React.PointerEvent) => {
+    // Touch only: a mouse drag on desktop must never slide the panel. Also
+    // skip on md+ layouts where the list is already visible beside the thread.
+    if (e.pointerType !== 'touch') return
+    if (window.matchMedia('(min-width: 768px)').matches) return
     backStart.current = { x: e.clientX, y: e.clientY }
-    e.currentTarget.setPointerCapture(e.pointerId)
+    backAxis.current = null
   }, [])
 
   const onBackPointerMove = useCallback((e: React.PointerEvent) => {
     if (!backStart.current) return
     const dx = e.clientX - backStart.current.x
     const dy = Math.abs(e.clientY - backStart.current.y)
-    // Only track a mostly-horizontal leftward drag.
-    if (dx < 0 && Math.abs(dx) > dy) {
-      setBackDrag(Math.min(Math.abs(dx), THREAD_DRAG_MAX))
+    // Lock the axis once, exactly like the bubble gesture: a mostly-vertical
+    // move is a scroll (give up), a mostly-horizontal RIGHTWARD move is ours.
+    if (backAxis.current === null) {
+      if (dx > 8 && dx > dy) backAxis.current = 'h'
+      else if (dy > 8 || dx < -8) backAxis.current = 'v'
+    }
+    if (backAxis.current === 'h') {
+      setBackDrag(Math.min(Math.max(dx, 0), THREAD_DRAG_MAX))
     }
   }, [])
 
   const onBackPointerEnd = useCallback(() => {
     if (!backStart.current) return
     backStart.current = null
+    backAxis.current = null
     setBackDrag((d) => {
       if (d >= THREAD_DRAG_TRIGGER) setSelectedId(null)
       return 0
@@ -470,21 +481,15 @@ export function GodMessenger({
             showThread ? 'flex' : 'hidden md:flex',
           )}
           style={{
-            transform: backDrag ? `translateX(-${backDrag}px)` : undefined,
+            transform: backDrag ? `translateX(${backDrag}px)` : undefined,
             transition: backDrag ? 'none' : 'transform 0.2s ease-out',
+            touchAction: 'pan-y',
           }}
+          onPointerDown={conversation ? onBackPointerDown : undefined}
+          onPointerMove={conversation ? onBackPointerMove : undefined}
+          onPointerUp={conversation ? onBackPointerEnd : undefined}
+          onPointerCancel={conversation ? onBackPointerEnd : undefined}
         >
-          {conversation && (
-            <div
-              className="absolute inset-y-0 right-0 z-30 w-6 md:hidden"
-              style={{ touchAction: 'pan-y' }}
-              onPointerDown={onBackPointerDown}
-              onPointerMove={onBackPointerMove}
-              onPointerUp={onBackPointerEnd}
-              onPointerCancel={onBackPointerEnd}
-              aria-hidden="true"
-            />
-          )}
           {!conversation ? (
             <div className="hidden flex-1 items-center justify-center p-6 md:flex">
               <div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
@@ -615,7 +620,7 @@ export function GodMessenger({
 const DRAG_MAX = 84
 const DRAG_TRIGGER = 56
 
-/* Edge-swipe-back thresholds (thread → list). */
+/* Swipe-right-back thresholds (thread → list, anywhere in the thread). */
 const THREAD_DRAG_MAX = 120
 const THREAD_DRAG_TRIGGER = 70
 
@@ -655,7 +660,9 @@ function MessageBubble({
     const dx = e.clientX - startX.current
     const dy = e.clientY - startY.current
     if (axis.current === null) {
-      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+      // Claim ONLY leftward drags (reply). A rightward drag must stay
+      // unclaimed so it bubbles up to the thread's swipe-back gesture.
+      if (dx < -8 && Math.abs(dx) > Math.abs(dy)) {
         axis.current = 'h'
         setDragging(true)
         try {
@@ -663,7 +670,7 @@ function MessageBubble({
         } catch {
           /* ignore */
         }
-      } else if (Math.abs(dy) > 8) {
+      } else if (Math.abs(dy) > 8 || dx > 8) {
         axis.current = 'v'
       }
     }
