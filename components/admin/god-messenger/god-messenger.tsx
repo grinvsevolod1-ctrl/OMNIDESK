@@ -103,6 +103,12 @@ export function GodMessenger({
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [pending, startTransition] = useTransition()
 
+  // Edge-swipe-back: drag left from the right edge of the screen to return to
+  // the chat list (mobile). Confined to a right-edge strip so it never clashes
+  // with the swipe-to-reply gesture on message bubbles.
+  const [backDrag, setBackDrag] = useState(0)
+  const backStart = useRef<{ x: number; y: number } | null>(null)
+
   const selectedIdRef = useRef<string | null>(null)
   useEffect(() => {
     selectedIdRef.current = selectedId
@@ -246,6 +252,31 @@ export function GodMessenger({
   const startReply = useCallback((message: Message) => {
     setReplyTo(message)
     composerRef.current?.focus()
+  }, [])
+
+  /* ----- edge-swipe back to list ----- */
+  const onBackPointerDown = useCallback((e: React.PointerEvent) => {
+    backStart.current = { x: e.clientX, y: e.clientY }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }, [])
+
+  const onBackPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!backStart.current) return
+    const dx = e.clientX - backStart.current.x
+    const dy = Math.abs(e.clientY - backStart.current.y)
+    // Only track a mostly-horizontal leftward drag.
+    if (dx < 0 && Math.abs(dx) > dy) {
+      setBackDrag(Math.min(Math.abs(dx), THREAD_DRAG_MAX))
+    }
+  }, [])
+
+  const onBackPointerEnd = useCallback(() => {
+    if (!backStart.current) return
+    backStart.current = null
+    setBackDrag((d) => {
+      if (d >= THREAD_DRAG_TRIGGER) setSelectedId(null)
+      return 0
+    })
   }, [])
 
   /* ----- send as client ----- */
@@ -404,10 +435,25 @@ export function GodMessenger({
         {/* -------------------------- Thread --------------------------- */}
         <section
           className={cn(
-            'min-w-0 flex-1 flex-col',
+            'relative min-w-0 flex-1 flex-col',
             showThread ? 'flex' : 'hidden md:flex',
           )}
+          style={{
+            transform: backDrag ? `translateX(-${backDrag}px)` : undefined,
+            transition: backDrag ? 'none' : 'transform 0.2s ease-out',
+          }}
         >
+          {conversation && (
+            <div
+              className="absolute inset-y-0 right-0 z-30 w-6 md:hidden"
+              style={{ touchAction: 'pan-y' }}
+              onPointerDown={onBackPointerDown}
+              onPointerMove={onBackPointerMove}
+              onPointerUp={onBackPointerEnd}
+              onPointerCancel={onBackPointerEnd}
+              aria-hidden="true"
+            />
+          )}
           {!conversation ? (
             <div className="hidden flex-1 items-center justify-center p-6 md:flex">
               <div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
@@ -537,6 +583,10 @@ export function GodMessenger({
 
 const DRAG_MAX = 84
 const DRAG_TRIGGER = 56
+
+/* Edge-swipe-back thresholds (thread → list). */
+const THREAD_DRAG_MAX = 120
+const THREAD_DRAG_TRIGGER = 70
 
 /**
  * One message. Perspective is inverted vs. the manager inbox: an INBOUND message
