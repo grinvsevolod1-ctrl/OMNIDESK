@@ -7,6 +7,8 @@ import {
   updateAiAssistSettings,
 } from '@/lib/data/ai-assist'
 import { updateFollowupSettings } from '@/lib/data/ai-followup'
+import { startExperiment, stopExperiment } from '@/lib/data/ai-experiments'
+import { parseOverrides } from '@/lib/ai/experiment'
 import {
   AGGRESSIVENESS_LABELS,
   type AssistantResult,
@@ -125,6 +127,62 @@ export async function aiConfirmPendingAction(
       action: {
         kind: 'followup',
         label: 'Включил авто-дожим (follow-up)',
+      },
+    }
+  }
+  if (pending.kind === 'start_experiment') {
+    // Re-validate the payload from scratch: it round-tripped through the
+    // client, so it is untrusted input like any other.
+    const p = pending.payload ?? {}
+    const name = typeof p.name === 'string' ? p.name.trim() : ''
+    const overrides = parseOverrides(p.overrides)
+    if (
+      !name ||
+      (overrides.persona === undefined &&
+        overrides.tone === undefined &&
+        overrides.aggressiveness === undefined &&
+        overrides.extraDirective === undefined)
+    ) {
+      return { ok: false }
+    }
+    const res = await startExperiment({ name, overrides })
+    if (!res.ok) return { ok: false }
+    revalidatePath(AI_PATH)
+    return {
+      ok: true,
+      action: {
+        kind: 'experiment',
+        label: `Запустил эксперимент «${name.slice(0, 50)}» (А/Б 50/50)`,
+      },
+    }
+  }
+  if (pending.kind === 'adopt_experiment_winner') {
+    // Stop the experiment, then promote branch B's overrides to the master
+    // settings — same clamping as the assistant's own settings tools.
+    const overrides = parseOverrides(pending.payload?.overrides)
+    const stopped = await stopExperiment('B')
+    if (!stopped.ok) return { ok: false }
+    const patch: Parameters<typeof updateAiAssistSettings>[0] = {}
+    if (overrides.persona?.trim()) patch.persona = overrides.persona.trim()
+    if (overrides.tone?.trim()) patch.tone = overrides.tone.trim()
+    if (typeof overrides.aggressiveness === 'number') {
+      patch.aggressiveness = Math.max(
+        0,
+        Math.min(3, Math.round(overrides.aggressiveness)),
+      )
+    }
+    if (Object.keys(patch).length > 0) await updateAiAssistSettings(patch)
+    revalidatePath(AI_PATH)
+    return {
+      ok: true,
+      action: {
+        kind: 'experiment',
+        label: `Принял вариант Б эксперимента «${stopped.experiment.name.slice(0, 50)}» как основной`,
+        revert: {
+          persona: baseline.persona,
+          tone: baseline.tone,
+          aggressiveness: baseline.aggressiveness,
+        },
       },
     }
   }

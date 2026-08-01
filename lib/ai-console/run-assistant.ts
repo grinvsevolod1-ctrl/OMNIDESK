@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import {
   analyzeDialogsForLessons,
+  analyzeLossPatterns,
   generateManagerReply,
   generateSalesScenario,
   isBrainConfigured,
@@ -31,8 +32,14 @@ import {
   getAiPerformanceSummary,
   getAiPerformanceTrend,
   getDialogTranscript,
+  listLostDialogs,
   listUnderperformingDialogs,
 } from '@/lib/data/ai-analytics'
+import {
+  getActiveExperiment,
+  getExperimentResults,
+  stopExperiment as stopExperimentData,
+} from '@/lib/data/ai-experiments'
 import { getSystemHealth } from '@/lib/data/ai-health'
 import {
   addCheckCase,
@@ -266,7 +273,7 @@ export async function prepareAssistantRun(
 
     generateScenario: tool({
       description:
-        'Собрать ИИ-продавца «с нуля» по описанию бизнеса. Вызывай, когда админ описывает свою компанию/продукт и просит «настрой продавца», «сделай сценарий», «собери под мой бизнес». Модель сгенерирует персону (сценарий) и набор правил, применит персону (перезаписав старую) и сохра��ит правила как прямые указания. Передай businessDescription — всё, что админ рассказал о бизнесе.',
+        'Собрать ИИ-продавца «с нуля» по описанию бизнеса. Вызывай, когда админ описывает свою компанию/продукт и просит «настрой продавца», «сделай сценарий», «со��ери под мой бизнес». Модель сгенерирует персону (сценарий) и набор правил, применит персону (перезаписав старую) и сохра��ит правила как прямые указания. Передай businessDescription — всё, что админ рассказал о бизнесе.',
       inputSchema: z.object({
         businessDescription: z.string().min(10).max(4000),
       }),
@@ -1272,6 +1279,115 @@ export async function prepareAssistantRun(
       },
     }),
 
+    startExperiment: tool({
+      description:
+        'Запустить A/B-эксперимент над продавцом: половина клиентов остаётся на текущих настройках (ветка А, контроль), половина получает вариант (ветка Б) — другую персону, тон, агрессивность и/или дополнительное правило. Клиент детерминированно закрепляется за веткой на весь диалог во всех каналах. Одновременно может идти только ОДИН эксперимент. Вызывай, когда админ говорит «попробуй на половине клиентов…», «проверь, что сработает лучше», «запусти эксперимент». Запуск требует подтверждения (вернётся needsConfirmation) — эксперимент меняет живое общение с реальными клиентами. Передавай только те поля варианта, которые реально меняются.',
+      inputSchema: z.object({
+        name: z.string().min(1).max(200),
+        persona: z.string().max(2000).optional(),
+        tone: z.enum(['professional', 'friendly', 'persuasive']).optional(),
+        aggressiveness: z.number().int().min(0).max(3).optional(),
+        extraDirective: z.string().max(1000).optional(),
+      }),
+      execute: async ({ name, persona, tone, aggressiveness, extraDirective }) => {
+        const existing = await getActiveExperiment()
+        if (existing) {
+          return {
+            ok: false,
+            reason: 'already_active',
+            activeName: existing.name,
+          }
+        }
+        if (
+          persona === undefined &&
+          tone === undefined &&
+          aggressiveness === undefined &&
+          extraDirective === undefined
+        ) {
+          return { ok: false, reason: 'empty_overrides' }
+        }
+        // Aggressiveness 3 inside an experiment is the same ethical threshold
+        // as setAggressiveness(3) — it must not sneak past the guard via B.
+        const overrides = { persona, tone, aggressiveness, extraDirective }
+        pending = {
+          kind: 'start_experiment',
+          label: `Запустить эксперимент «${truncate(name, 60)}»`,
+          detail:
+            aggressiveness === 3
+              ? 'Половина клиентов получит вариант Б, включая МАКСИМАЛЬНЫЙ дожим (уровень 3). Контрольная половина останется как есть.'
+              : 'Половина реальных клиентов начнёт получать ответы с настройками варианта Б. Контрольная половина останется как есть.',
+          payload: { name, overrides },
+        }
+        return { ok: true, needsConfirmation: true }
+      },
+    }),
+
+    getExperimentStatus: tool({
+      description:
+        'Показать текущий (или последний завершённый) A/B-эксперимент и его результаты по веткам: сколько диалогов, сколько ликвидных лидов и передач человеку в контроле (А) и в варианте (Б). Вызывай на вопросы «как идёт эксперимент», «какая ветка побеждает», «что показал тест». Делай честный вывод: при малой выборке (меньше ~20 диалогов на ветку) прямо говори, что данных пока мало для решения.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const results = await getExperimentResults()
+        if (!results) return { ok: true, experiment: null }
+        return { ok: true, ...results }
+      },
+    }),
+
+    stopExperiment: tool({
+      description:
+        'Остановить активный A/B-эксперимент. winner — какая ветка победила («A», «B» или не передавай, если ничья/просто остановка). Остановка с победителем А или без победителя применяется сразу: все клиенты возвращаются на основные настройки. Если победила ветка Б и админ хочет ПРИНЯТЬ её настройки как основные — это требует подтверждения (needsConfirmation), потому что меняет продавца для всех клиентов. Вызывай, когда админ говорит «останови эксперимент», «принимаем вариант Б», «оставляем как было».',
+      inputSchema: z.object({
+        winner: z.enum(['A', 'B']).optional(),
+        /** true = победившие настройки Б станут основными для всех. */
+        adoptWinner: z.boolean().optional(),
+      }),
+      execute: async ({ winner, adoptWinner }) => {
+        const active = await getActiveExperiment()
+        if (!active) return { ok: false, reason: 'no_active' }
+        if (winner === 'B' && adoptWinner) {
+          pending = {
+            kind: 'adopt_experiment_winner',
+            label: `Принять вариант Б эксперимента «${truncate(active.name, 50)}»`,
+            detail:
+              'Эксперимент остановится, и настройки победившей ветки Б станут основными для ВСЕХ клиентов.',
+            payload: { overrides: active.overrides },
+          }
+          return { ok: true, needsConfirmation: true }
+        }
+        const res = await stopExperimentData(winner ?? null)
+        if (!res.ok) return res
+        actions.push({
+          kind: 'experiment',
+          label: `Остановил эксперимент «${truncate(res.experiment.name, 50)}»${winner ? ` — победа ветки ${winner}` : ''}`,
+        })
+        return { ok: true, stopped: res.experiment.name, winner: winner ?? null }
+      },
+    }),
+
+    analyzeLosses: tool({
+      description:
+        'Пакетный разбор ПРОИГРЫШЕЙ: прочитать слитые диалоги за период (клиент ушёл, не ликвид, передан человеку), сгруппировать причины по кластерам с долями («40% погибло на возражении по цене, 25% — долго не отвечали») и получить конкретное контр-предложение по каждому кластеру. Вызывай, когда админ спрашивает «где мы теряем клиентов», «почему сливаются», «разбери проигрыши за месяц». Это глубже findWeakSpots (тот даёт точечные уроки): здесь — карта утечек с приоритетами. Доложи кластеры от большего к меньшему и предложи закрыть самый крупный первым; правила/уроки сохраняй только с согласия админа (rememberDirective/addLesson).',
+      inputSchema: z.object({
+        days: z.number().int().min(1).max(180).optional(),
+        limit: z.number().int().min(3).max(20).optional(),
+      }),
+      execute: async ({ days, limit }) => {
+        const dialogs = await listLostDialogs(days ?? 30, limit ?? 15)
+        if (dialogs.length === 0) {
+          return { ok: true, dialogsAnalyzed: 0, patterns: [] }
+        }
+        const patterns = await analyzeLossPatterns(
+          dialogs.map((d) => d.transcript),
+        )
+        return {
+          ok: true,
+          windowDays: days ?? 30,
+          dialogsAnalyzed: dialogs.length,
+          patterns,
+        }
+      },
+    }),
+
     openPanel: tool({
       description:
         'Открыть админу рабочую панель для действий, которые лучше делать руками: settings (все настройки), aggressiveness (ползунок дожима), knowledge (база знаний), training (обучение ассистента на реальных диалогах), corrections (правки к конкретным сообщениям), dialogs (подключение ИИ к диалогам), logs (журнал). Вызывай, когда задача требует ручной работы или админ просит «покажи/открой».',
@@ -1391,7 +1507,7 @@ const SYSTEM_INSTRUCTIONS = [
   '• добавлять факты в базу знаний и обучающие уроки;',
   '• открывать рабочие панели для ручных задач (диалоги, правки, логи, обучение).',
   '',
-  'ТЫ — СОВЕТНИК, А НЕ МОЛЧАЛИВЫЙ ИСПОЛНИТЕЛЬ: если правило или настройка, которую просит админ, вредит продажам, противоречит уже сохранённым правилам или звучит как ошибка — прямо скажи об этом простым живым языком («слушай, так делать не стоит, потому что…») и предложи, как правильно. Но решение за админом: если он настаивает — выполни и сохрани дословно. Спорить = один раз честно предупредить, а не саботировать.',
+  'ТЫ — СОВЕТНИК, А НЕ МОЛЧАЛИВЫЙ ИСПОЛНИТЕЛЬ: если правило или настройка, которую просит админ, вредит продажам, противоречит уже сохранённым правилам или звучит как ошибка — прямо скажи об этом простым живым языком («слушай, так делать не стоит, потому что…») и предложи, как правильно. Но ��ешение за админом: если он настаивает — выполни и сохрани дословно. Спорить = один раз честно предупредить, а не саботировать.',
   '',
   'ЖЁСТКИЕ ГРАНИЦЫ:',
   '• Ты НИЧЕГО не знаешь ни про какой «симулятор», «тренажёр клиентов», «песочницу для теста бота на фейковых клиентах» или подобное. Такой функции для тебя не существует. Если про это спрашивают — скажи, что не занимаешься этим, и вернись к настройке ИИ-менеджера.',

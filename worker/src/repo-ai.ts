@@ -4,6 +4,12 @@ import {
   toVectorLiteral,
   understandMedia,
 } from '../../lib/ai/manager-brain.js'
+import {
+  applyExperimentBranch,
+  assignExperimentBranch,
+  parseOverrides,
+  type OverridableSettings,
+} from '../../lib/ai/experiment.js'
 import { getStoredMediaBytes } from './repo-media.js'
 
 /**
@@ -176,6 +182,39 @@ export async function getAiAssistConfig(): Promise<AiAssistConfig> {
         ? 2
         : Math.max(0, Math.min(3, Math.round(Number(row!.aggressiveness)))),
     directives,
+  }
+}
+
+/**
+ * Overlay the active A/B experiment (if any) onto a settings snapshot for one
+ * conversation, recording the branch assignment. Mirrors the panel-side
+ * lib/data/ai-experiments.ts#applyActiveExperiment — same deterministic hash
+ * (shared pure core), same fail-open contract: any error, including a pre-088
+ * schema, returns the settings untouched so messenger replies never break.
+ */
+export async function applyActiveExperiment<T extends OverridableSettings>(
+  settings: T,
+  conversationId: string,
+): Promise<{ settings: T; extraDirectives: string[] }> {
+  try {
+    const row = await one<{ id: string; name: string; overrides: unknown }>(
+      `SELECT id, name, overrides FROM ai_experiments
+        WHERE status = 'active' LIMIT 1`,
+    )
+    if (!row) return { settings, extraDirectives: [] }
+    const branch = assignExperimentBranch(row.id, conversationId)
+    void query(
+      `INSERT INTO ai_experiment_assignments (experiment_id, conversation_id, branch)
+       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      [row.id, conversationId, branch],
+    ).catch(() => {})
+    return applyExperimentBranch(
+      settings,
+      { id: row.id, name: row.name, overrides: parseOverrides(row.overrides) },
+      branch,
+    )
+  } catch {
+    return { settings, extraDirectives: [] }
   }
 }
 

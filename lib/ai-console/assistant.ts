@@ -54,6 +54,7 @@ export interface ExecutedAction {
     | 'report'
     | 'memory'
     | 'check'
+    | 'experiment'
   /** Short human summary, e.g. «Включил ИИ» or «Агрессивность → Максимум». */
   label: string
   /**
@@ -116,11 +117,22 @@ export interface AssistantResult {
  * admin explicitly confirms it. Executed via aiConfirmPendingAction.
  */
 export interface PendingConfirmation {
-  kind: 'disable' | 'max_aggressiveness' | 'enable_followup'
+  kind:
+    | 'disable'
+    | 'max_aggressiveness'
+    | 'enable_followup'
+    | 'start_experiment'
+    | 'adopt_experiment_winner'
   /** Button/label text, e.g. «Выключить ИИ-менеджера». */
   label: string
   /** One-sentence consequence so the admin knows what they're approving. */
   detail: string
+  /**
+   * Action parameters that must survive the confirmation round-trip (e.g. the
+   * experiment name/overrides for start_experiment, or the winning overrides
+   * for adopt_experiment_winner). Plain JSON — validated again on execution.
+   */
+  payload?: Record<string, unknown>
 }
 
 /** Max turns of history we send to the model (keeps latency + cost bounded). */

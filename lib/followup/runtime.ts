@@ -10,6 +10,7 @@ import {
   retrieveKnowledge,
 } from '../data/ai-assist'
 import { directiveTexts } from '../data/ai-directives'
+import { applyActiveExperiment } from '../data/ai-experiments'
 import {
   findFollowupCandidates,
   getFollowupSettings,
@@ -177,17 +178,29 @@ export async function runFollowupSweep(
         `не дави и не извиняйся навязчиво. Если по истории уже ясно, что клиент ` +
         `отказался — не пиши ничего лишнего, просто оставь короткое уместное касание.`
 
-      const reply = await generateManagerReply(
+      // A/B: keep the nudge on the same experiment branch as the client's
+      // regular replies (deterministic per conversation), so one client never
+      // hears two different personas mid-thread.
+      const exp = await applyActiveExperiment(
         {
           persona: master.persona,
           tone: master.tone,
+          aggressiveness: master.aggressiveness,
+        },
+        cand.conversationId,
+      )
+
+      const reply = await generateManagerReply(
+        {
+          persona: exp.settings.persona,
+          tone: exp.settings.tone,
           playbook: master.playbook,
-          directives: [followupDirective, ...directives],
+          directives: [followupDirective, ...exp.extraDirectives, ...directives],
           lessons,
           corrections,
           memory: memory.summary,
           knowledge,
-          aggressiveness: master.aggressiveness,
+          aggressiveness: exp.settings.aggressiveness,
           history,
         },
         undefined,

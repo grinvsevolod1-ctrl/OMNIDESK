@@ -1,6 +1,7 @@
 import 'server-only'
 import { query } from '../db'
 import { addMessage, getLivechatWorkingHoursByChannelId } from '../data'
+import { applyActiveExperiment } from '../data/ai-experiments'
 import {
   getAiAssistSettings,
   getConversationAiMemory,
@@ -223,7 +224,7 @@ async function runLivechatAiLead(input: {
       level: 'debug',
       source: 'ai-lead',
       event: 'inbound',
-      message: `Новое сообщение клиента: "${input.text.slice(0, 200)}" — готовлю ответ.`,
+      message: `Новое сообщение клиен��а: "${input.text.slice(0, 200)}" — готовлю ответ.`,
       conversationId: input.conversationId,
       channelType: 'livechat',
     })
@@ -261,17 +262,29 @@ async function runLivechatAiLead(input: {
       return true
     }
 
-    const reply = await generateManagerReply(
+    // A/B: overlay the active experiment (if any) for this conversation's
+    // branch. Control (A) passes through untouched; failures degrade to the
+    // master settings — an experiment can never block replying to a client.
+    const exp = await applyActiveExperiment(
       {
         persona: settings.persona,
         tone: settings.tone,
+        aggressiveness: settings.aggressiveness,
+      },
+      input.conversationId,
+    )
+
+    const reply = await generateManagerReply(
+      {
+        persona: exp.settings.persona,
+        tone: exp.settings.tone,
         playbook: settings.playbook,
-        directives,
+        directives: [...exp.extraDirectives, ...directives],
         lessons,
         corrections,
         memory: memory.summary,
         knowledge,
-        aggressiveness: settings.aggressiveness,
+        aggressiveness: exp.settings.aggressiveness,
         history,
       },
       log,

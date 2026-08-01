@@ -188,7 +188,7 @@ export function isBrainConfigured(): boolean {
 
 const TRANSCRIPTION_URL = 'https://ai-gateway.vercel.sh/v1/audio/transcriptions'
 
-// A multimodal model reads the client's photos (passport, receipt, screenshot…)
+// A multimodal model reads the client's photos (passport, receipt, screenshot���)
 // so the manager reacts to what was actually sent, not a blind "[Фото]".
 const VISION_MODEL = process.env.MANAGER_AI_VISION_MODEL || 'openai/gpt-4.1-mini'
 // Speech-to-text for voice notes / audio. whisper-1 is cheap and solid on RU.
@@ -402,7 +402,7 @@ const OBJECTION_FRAMEWORK: string[] = [
   '3. Переформулируй и сними страх: отвечай на настоящую причину, а не на формулировку. Дай конкретный факт/пример/гарантию из сценария и справочной информации, которые закрывают именно этот страх.',
   '4. Свяжи с выгодой клиента: покажи, что даёт следующий шаг лично ему (деньги, время, спокойствие, безопасность) — на его языке, его словами из переписки.',
   '5. Верни инициативу: заверши одним лёгким конкретным шагом или вопросом, на который легко ответить «да».',
-  'Приёмы (используй уместно, естественно, не как список): «чувствовал-понял-оказалось» (другие тоже так думали, а потом убедились), дробление большого шага на маленький и безопасный, вопрос вместо утверждения, спокойное повторение выгоды под новым углом, лёгкое подведение итога договорённостей.',
+  'Приёмы (используй уместно, естественно, не как список): «чувствовал-понял-оказалось» (другие тоже так думали, а потом убедились), дробление большого шага на маленький и безопасный, вопрос вместо утверждения, спокойное повторение выгоды под ��овым углом, лёгкое подведение итога договорённостей.',
   'ЭТИЧЕСКИЙ ПОРОГ (нельзя нарушать ни на каком уровне настойчивости): не лги о фактах, не выдумывай цифры, гарантии и условия сверх сценария и справочной информации; не угрожай, не оскорбляй, не дави страхом или чувством вины; не фабрикуй ложную срочность и несуществующие «последние места». Убеждай ценностью и правдой, а не обманом.',
 ]
 
@@ -518,7 +518,7 @@ function buildSystemPrompt(input: ManagerBrainInput): string {
   if (directives.length > 0) {
     parts.push(
       '',
-      'ПРЯМЫЕ УКАЗАНИЯ РУКОВОДИТЕЛЯ (заданы в чате управления, высший приоритет наравне со сценарием — соблюдать неукоснительно, каждое):',
+      'ПРЯМЫЕ УКАЗАНИЯ РУКОВОДИТЕЛЯ (заданы в чате управления, высший приоритет ��аравне со сценарием — соблюдать неукоснительно, каждое):',
       ...directives.slice(0, 100).map((d) => `!! ${d}`),
     )
   }
@@ -1487,6 +1487,100 @@ export async function analyzeDialogsForLessons(
   } catch (err) {
     console.warn(
       '[manager-brain] lesson analysis failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return []
+  }
+}
+
+/** One clustered loss cause across a batch of failed dialogs. */
+export interface LossPattern {
+  /** Human name of the failure cause, e.g. «Возражение по цене». */
+  reason: string
+  /** How many of the analyzed dialogs died on this cause. */
+  dialogCount: number
+  /** Share of analyzed dialogs, 0..100 (integer). */
+  sharePct: number
+  /** A representative (anonymized) client line from the dialogs. */
+  evidence: string
+  /** Concrete rule/lesson text that would counter this pattern. */
+  suggestion: string
+}
+
+/**
+ * Batch post-mortem: cluster WHY a set of lost dialogs died, with shares and a
+ * concrete counter-suggestion per cluster. Differs from analyzeDialogsForLessons
+ * (which extracts individual reply-level lessons): this answers the manager
+ * question «где мы теряем клиентов и сколько» — 40% на цене, 25% на молчании —
+ * so the admin can attack the biggest leak first. Suggestions are proposals
+ * only; the caller decides what becomes a rule or lesson.
+ */
+export async function analyzeLossPatterns(
+  transcripts: string[],
+): Promise<LossPattern[]> {
+  const key = process.env.AI_GATEWAY_API_KEY
+  const clean = transcripts.map((t) => t.trim()).filter(Boolean).slice(0, 20)
+  if (!key || clean.length === 0) return []
+
+  const corpus = clean
+    .map((t, i) => `=== Диалог ${i + 1} ===\n${t.slice(0, 2000)}`)
+    .join('\n\n')
+
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          {
+            role: 'system',
+            content:
+              `Ты — руководитель отдела продаж, делаешь разбор проигрышей. Тебе дают ${clean.length} реальных диалогов, где клиент не купил (ушёл, замолчал или диалог передали человеку). ` +
+              'Сгруппируй ПРИЧИНЫ проигрыша в 2–6 кластеров и оцени, сколько диалогов погибло на каждой причине. Верни СТРОГО JSON без пояснений: ' +
+              '{"patterns": [{"reason": "...", "dialogCount": N, "evidence": "...", "suggestion": "..."}]}. ' +
+              'reason — короткое имя причины («Возражение по цене», «Долго не отвечали», «Не отработан запрос на примеры»). ' +
+              'dialogCount — целое число диалогов этого кластера (сумма по кластерам не больше числа диалогов). ' +
+              'evidence — одна характерная реплика клиента, обезличенная. ' +
+              'suggestion — конкретное правило или урок для продавца, который закроет эту причину (готовая формулировка). ' +
+              'Сортируй кластеры от самой частой причины к редкой. Не выдумывай причин, которых нет в диалогах. Только JSON.',
+          },
+          { role: 'user', content: corpus },
+        ],
+        temperature: 0.3,
+        max_tokens: 1500,
+        response_format: { type: 'json_object' },
+      }),
+    })
+    if (!res.ok) throw new Error(`gateway HTTP ${res.status}`)
+    const data = (await res.json()) as GatewayResponse
+    const raw = data.choices?.[0]?.message?.content ?? ''
+    const parsed = JSON.parse(raw) as { patterns?: unknown }
+    if (!Array.isArray(parsed.patterns)) return []
+    return parsed.patterns
+      .map((p) => {
+        const o = (p ?? {}) as Record<string, unknown>
+        const dialogCount =
+          typeof o.dialogCount === 'number' && Number.isFinite(o.dialogCount)
+            ? Math.max(0, Math.min(clean.length, Math.round(o.dialogCount)))
+            : 0
+        return {
+          reason: typeof o.reason === 'string' ? o.reason.trim() : '',
+          dialogCount,
+          sharePct: Math.round((dialogCount / clean.length) * 100),
+          evidence: typeof o.evidence === 'string' ? o.evidence.trim() : '',
+          suggestion:
+            typeof o.suggestion === 'string' ? o.suggestion.trim() : '',
+        }
+      })
+      .filter((p) => p.reason && p.dialogCount > 0)
+      .slice(0, 6)
+  } catch (err) {
+    console.warn(
+      '[manager-brain] loss-pattern analysis failed:',
       err instanceof Error ? err.message : String(err),
     )
     return []

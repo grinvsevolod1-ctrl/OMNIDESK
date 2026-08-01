@@ -311,3 +311,55 @@ export async function listUnderperformingDialogs(
   }
   return out
 }
+
+/**
+ * LOST dialogs within a period, with transcripts — the raw material for the
+ * batch post-mortem (analyzeLossPatterns). Broader than
+ * listUnderperformingDialogs: includes unsubscribed too, and is period-scoped
+ * so «разбери проигрыши за месяц» means exactly that. Two-way dialogs only.
+ */
+export async function listLostDialogs(
+  days = 30,
+  limit = 15,
+): Promise<WeakDialog[]> {
+  const windowDays = Math.max(1, Math.min(180, Math.round(days)))
+  const cap = Math.max(1, Math.min(20, Math.round(limit)))
+  const convs = await query<{ id: string; status: string }>(
+    `SELECT c.id, ${effectiveStatusSql('c')} AS status
+       FROM conversations c
+       JOIN messages m ON m.conversation_id = c.id
+                       AND m.deleted_at IS NULL AND m.body <> ''
+      WHERE c.ai_enrolled = true
+        AND ${effectiveStatusSql('c')} IN ('handoff', 'not_liquid', 'unsubscribed')
+        AND c.last_message_at >= now() - ($2 || ' days')::interval
+      GROUP BY c.id, c.status, c.last_message_at
+     HAVING COUNT(*) FILTER (WHERE m.direction = 'in')  > 0
+        AND COUNT(*) FILTER (WHERE m.direction = 'out') > 0
+      ORDER BY c.last_message_at DESC
+      LIMIT $1`,
+    [cap, String(windowDays)],
+  )
+
+  const out: WeakDialog[] = []
+  for (const conv of convs) {
+    const rows = await query<{ direction: 'in' | 'out'; body: string }>(
+      `SELECT direction, body FROM messages
+        WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
+        ORDER BY created_at ASC
+        LIMIT 40`,
+      [conv.id],
+    )
+    if (rows.length < 2) continue
+    out.push({
+      conversationId: conv.id,
+      status: conv.status as LeadStatus,
+      transcript: rows
+        .map(
+          (r) =>
+            `${r.direction === 'in' ? 'Клиент' : 'Менеджер'}: ${r.body.trim()}`,
+        )
+        .join('\n'),
+    })
+  }
+  return out
+}

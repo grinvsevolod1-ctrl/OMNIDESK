@@ -340,17 +340,29 @@ async function fireAiLead(params: {
       return true
     }
 
-    const reply = await generateManagerReply(
+    // A/B: overlay the active experiment for this conversation's branch.
+    // Deterministic hash — agrees with the panel and follow-up paths, so a
+    // client stays on one branch across every channel. Fail-open by contract.
+    const exp = await repo.applyActiveExperiment(
       {
         persona: config.persona,
         tone: config.tone,
+        aggressiveness: config.aggressiveness,
+      },
+      conversationId,
+    )
+
+    const reply = await generateManagerReply(
+      {
+        persona: exp.settings.persona,
+        tone: exp.settings.tone,
         playbook: config.playbook,
-        directives: config.directives,
+        directives: [...exp.extraDirectives, ...config.directives],
         lessons,
         corrections,
         memory: memory.summary,
         knowledge,
-        aggressiveness: config.aggressiveness,
+        aggressiveness: exp.settings.aggressiveness,
         history,
       },
       log,
