@@ -84,39 +84,114 @@ function mapRow(r: DbRow): AiLogRow {
   }
 }
 
+// ── Micro-batched write path ──────────────────────────────────────────────────
+// Entries are buffered in-process and flushed as ONE multi-row INSERT, so a
+// burst of log calls costs a single round-trip and the caller NEVER waits on
+// the database. This is what fixed the ">500ms slow INSERT" reports: even
+// callers that `await logAi(...)` on hot paths now return immediately — the
+// write happens behind a short timer off the request path.
+
+/** Flush after this many buffered entries, or after FLUSH_AFTER_MS — whichever
+ * comes first. 20 rows / 250ms keeps the "Логи" tab effectively real-time. */
+const FLUSH_AT = 20
+const FLUSH_AFTER_MS = 250
+/** Hard cap on buffered entries while the DB is down/unmigrated: drop the
+ * OLDEST beyond this so diagnostics can never leak memory unbounded. */
+const BUFFER_CAP = 500
+/** Trim roughly every N flushes (not every insert as before). */
+const TRIM_EVERY_FLUSHES = 25
+
+type PendingRow = [
+  string, // level
+  string, // source
+  string, // event
+  string, // message
+  string | null, // conversation_id
+  string | null, // channel_type
+  string | null, // meta json
+]
+
+// Module-level state; survives across requests within one server process.
+// (Reused across hot reloads is unnecessary — worst case a dev reload drops a
+// few buffered diagnostics rows.)
+const buffer: PendingRow[] = []
+let flushTimer: NodeJS.Timeout | null = null
+let flushing = false
+let flushCount = 0
+
+async function flushNow(): Promise<void> {
+  if (flushing) return // a running flush will pick up late rows via re-check
+  flushing = true
+  try {
+    while (buffer.length > 0) {
+      const batch = buffer.splice(0, FLUSH_AT * 5)
+      // One statement per batch: unnest zips the per-column arrays into rows.
+      await query(
+        `INSERT INTO ai_logs
+           (level, source, event, message, conversation_id, channel_type, meta)
+         SELECT * FROM unnest(
+           $1::text[], $2::text[], $3::text[], $4::text[],
+           $5::uuid[], $6::text[], $7::jsonb[]
+         )`,
+        [0, 1, 2, 3, 4, 5, 6].map((col) => batch.map((row) => row[col])),
+      )
+      flushCount++
+      if (flushCount % TRIM_EVERY_FLUSHES === 0) {
+        // Watermark trim: a pure PK range delete (no OFFSET walk). bigserial
+        // ids may have gaps, so 2×MAX_ROWS keeps AT LEAST MAX_ROWS live rows;
+        // the point is a bound, not an exact count.
+        await query(
+          `DELETE FROM ai_logs
+            WHERE id < (SELECT COALESCE(max(id), 0) FROM ai_logs) - $1`,
+          [MAX_ROWS * 2],
+        )
+      }
+    }
+  } catch {
+    // Diagnostics must never break the observed path. Rows still in `buffer`
+    // will ride along with the next flush; rows in the failed batch are lost.
+  } finally {
+    flushing = false
+  }
+}
+
+function scheduleFlush(): void {
+  if (buffer.length >= FLUSH_AT) {
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    void flushNow()
+    return
+  }
+  if (flushTimer) return
+  flushTimer = setTimeout(() => {
+    flushTimer = null
+    void flushNow()
+  }, FLUSH_AFTER_MS)
+  // Never keep the process alive just to write diagnostics.
+  flushTimer.unref?.()
+}
+
 /**
  * Append one entry. Fire-and-forget friendly: callers may `void logAi(...)`.
- * Swallows every error (including a not-yet-migrated table) so it is always
- * safe to call from hot paths.
+ * Resolves IMMEDIATELY — the row is buffered and written in a micro-batch off
+ * the caller's path. Swallows every error (including a not-yet-migrated
+ * table) so it is always safe to call from hot paths.
  */
 export async function logAi(input: AiLogInput): Promise<void> {
   try {
-    const message = (input.message ?? '').slice(0, 4000)
-    await query(
-      `INSERT INTO ai_logs
-         (level, source, event, message, conversation_id, channel_type, meta)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
-      [
-        input.level ?? 'info',
-        input.source ?? 'ai',
-        input.event,
-        message,
-        input.conversationId ?? null,
-        input.channelType ?? null,
-        input.meta ? JSON.stringify(input.meta) : null,
-      ],
-    )
-    // Opportunistic trim (~4% of writes) so the ring buffer stays bounded
-    // without paying the cost on every insert.
-    if (Math.random() < 0.04) {
-      await query(
-        `DELETE FROM ai_logs
-          WHERE id <= (
-            SELECT id FROM ai_logs ORDER BY id DESC OFFSET $1 LIMIT 1
-          )`,
-        [MAX_ROWS],
-      )
-    }
+    buffer.push([
+      input.level ?? 'info',
+      input.source ?? 'ai',
+      input.event,
+      (input.message ?? '').slice(0, 4000),
+      input.conversationId ?? null,
+      input.channelType ?? null,
+      input.meta ? JSON.stringify(input.meta) : null,
+    ])
+    if (buffer.length > BUFFER_CAP) buffer.splice(0, buffer.length - BUFFER_CAP)
+    scheduleFlush()
   } catch {
     // Diagnostics must never break the observed path.
   }
