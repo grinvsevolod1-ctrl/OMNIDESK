@@ -10,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { toast } from 'sonner'
 import {
   Check,
@@ -322,37 +323,48 @@ export function GodMessenger({
             showThread ? 'hidden md:flex' : 'flex',
           )}
         >
-          <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
-            <div className="flex items-center gap-2">
-              <div
-                className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary"
-                aria-hidden="true"
-              >
-                <MessagesSquare className="size-5" />
-              </div>
-              <div>
-                <h1 className="text-base font-semibold leading-none">Messages</h1>
-                <span
-                  className={cn(
-                    'mt-1 inline-flex items-center gap-1 text-xs',
-                    live ? 'text-success' : 'text-muted-foreground',
-                  )}
+          <header className="border-b border-border bg-card/40 px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+            <Link
+              href="/wijegniwjgwjog"
+              className="mb-2.5 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ChevronLeft className="size-4" />
+              К панели
+            </Link>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary"
+                  aria-hidden="true"
                 >
-                  <Radio className={cn('size-3', live && 'animate-pulse')} />
-                  {live ? 'В сети' : 'Подключение…'}
-                </span>
+                  <MessagesSquare className="size-5" />
+                </div>
+                <div>
+                  <h1 className="text-base font-semibold leading-none tracking-tight">
+                    Мессенджер
+                  </h1>
+                  <span
+                    className={cn(
+                      'mt-1.5 inline-flex items-center gap-1 text-xs',
+                      live ? 'text-success' : 'text-muted-foreground',
+                    )}
+                  >
+                    <Radio className={cn('size-3', live && 'animate-pulse')} />
+                    {live ? 'В сети' : 'Подключение…'}
+                  </span>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <NotifyButton available={pushAvailable} />
-              <Button
-                size="icon"
-                className="size-10"
-                onClick={() => setCreateOpen(true)}
-                aria-label="Новый диалог"
-              >
-                <Plus className="size-5" />
-              </Button>
+              <div className="flex items-center gap-1">
+                <NotifyButton available={pushAvailable} />
+                <Button
+                  size="icon"
+                  className="size-10 rounded-xl"
+                  onClick={() => setCreateOpen(true)}
+                  aria-label="Новый диалог"
+                >
+                  <Plus className="size-5" />
+                </Button>
+              </div>
             </div>
           </header>
 
@@ -363,7 +375,7 @@ export function GodMessenger({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Поиск диалога"
-                className="h-11 pl-9 text-base md:text-sm"
+                className="h-11 rounded-xl pl-9 text-base md:text-sm"
               />
             </div>
           </div>
@@ -384,25 +396,37 @@ export function GodMessenger({
                 </Button>
               </div>
             ) : (
-              <ul className="divide-y divide-border">
+              <ul className="space-y-0.5 p-2">
                 {conversations.map((c) => (
                   <li key={c.id}>
                     <button
                       type="button"
                       onClick={() => setSelectedId(c.id)}
                       className={cn(
-                        'flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50 active:bg-muted',
-                        c.id === selectedId && 'bg-muted',
+                        'flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-muted/60 active:bg-muted',
+                        c.id === selectedId
+                          ? 'bg-primary/10 ring-1 ring-inset ring-primary/20'
+                          : 'bg-transparent',
                       )}
                     >
-                      <Avatar className="size-12 shrink-0">
+                      <Avatar
+                        className={cn(
+                          'size-12 shrink-0',
+                          c.unread > 0 && 'ring-2 ring-primary/40 ring-offset-2 ring-offset-background',
+                        )}
+                      >
                         <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
                           {initials(c.contactName || c.contactHandle)}
                         </AvatarFallback>
                       </Avatar>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-sm font-medium">
+                          <span
+                            className={cn(
+                              'truncate text-sm',
+                              c.unread > 0 ? 'font-semibold' : 'font-medium',
+                            )}
+                          >
                             {c.contactName || c.contactHandle}
                           </span>
                           <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -410,7 +434,14 @@ export function GodMessenger({
                           </span>
                         </div>
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-xs text-muted-foreground">
+                          <span
+                            className={cn(
+                              'truncate text-xs',
+                              c.unread > 0
+                                ? 'font-medium text-foreground'
+                                : 'text-muted-foreground',
+                            )}
+                          >
                             {parseReply(c.lastMessage || '').text || 'Нет сообщений'}
                           </span>
                           {c.unread > 0 && (
@@ -419,7 +450,7 @@ export function GodMessenger({
                             </Badge>
                           )}
                         </div>
-                        <span className="mt-0.5 inline-block text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                        <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                           {TYPE_LABEL[c.channelType] ?? c.channelType} ·{' '}
                           {managerNameOf(c.managerId)}
                         </span>
@@ -463,11 +494,11 @@ export function GodMessenger({
             </div>
           ) : (
             <>
-              <header className="flex items-center gap-2 border-b border-border px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-3">
+              <header className="flex items-center gap-2 border-b border-border bg-card/40 px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] backdrop-blur sm:px-3">
                 <button
                   type="button"
                   onClick={() => setSelectedId(null)}
-                  className="flex size-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+                  className="flex size-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
                   aria-label="Назад к списку"
                 >
                   <ChevronLeft className="size-6" />

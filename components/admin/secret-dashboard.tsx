@@ -2,11 +2,9 @@
 
 import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import {
-  Activity,
   Antenna,
   ArrowLeftRight,
   ArrowUpRight,
@@ -29,7 +27,7 @@ import {
   Trash2,
   Users,
   Wallet,
-  Zap,
+  type LucideIcon,
 } from 'lucide-react'
 import {
   secretClearManagerTempPasswordAction,
@@ -40,7 +38,7 @@ import {
   secretSetManagerTempPasswordAction,
   type ActionResult,
 } from '@/app/actions/admin-secret'
-import { StatCard, EmptyState } from '@/components/page-parts'
+import { EmptyState } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -54,7 +52,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Table,
   TableBody,
@@ -65,68 +62,13 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import type { Channel, Manager } from '@/lib/types'
-import {
-  convStatusLabel,
-  copyText,
-  CONV_STATUS_STYLE,
-} from '@/components/admin/secret-dashboard/utils'
+import { copyText } from '@/components/admin/secret-dashboard/utils'
 import { ChannelsTab } from '@/components/admin/secret-dashboard/channels-tab'
-import { MassImportTab } from '@/components/admin/secret-dashboard/mass-import-tab'
-// Recharts is heavy; keep it out of the initial secret-dashboard bundle and
-// load each chart lazily when the dashboard renders. ssr:false because the
-// charts measure their container and produce no useful server HTML.
-const MessagesTrendChart = dynamic(
-  () =>
-    import('@/components/admin/secret-charts').then(
-      (m) => m.MessagesTrendChart,
-    ),
-  {
-    ssr: false,
-    loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
-  },
-)
-const ChannelsTypeChart = dynamic(
-  () =>
-    import('@/components/admin/secret-charts').then((m) => m.ChannelsTypeChart),
-  {
-    ssr: false,
-    loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
-  },
-)
-// The console is large, rarely the first tab an admin opens, and pulls its own
-// tree of sub-components. Radix TabsContent doesn't mount inactive tabs, so
-// loading it lazily means its JS only downloads when the admin actually
-// switches to that tab. ssr:false since it's interactive-only.
-const SecretConsole = dynamic(
-  () =>
-    import('@/components/admin/secret-console').then((m) => m.SecretConsole),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="h-96 animate-pulse rounded-lg bg-muted/40" />
-    ),
-  },
-)
 import { SecretTransferTab } from '@/components/admin/secret-transfer-tab'
 import {
   SecretAdsTab,
   type SecretAdAccount,
 } from '@/components/admin/secret-ads-tab'
-
-export interface SecretStats {
-  managersTotal: number
-  managersActive: number
-  managersOnLunch: number
-  channelsTotal: number
-  channelsConnected: number
-  conversationsTotal: number
-  unreadTotal: number
-  messagesTotal: number
-  messages24h: number
-  channelsByType: { type: string; count: number }[]
-  conversationsByStatus: { status: string; count: number }[]
-  messages7d: { day: string; label: string; incoming: number; outgoing: number }[]
-}
 
 interface SecretSystem {
   workerConfigured: boolean
@@ -147,21 +89,55 @@ interface SecretSystem {
   fake502: boolean
 }
 
+type SectionId = 'managers' | 'transfer' | 'channels' | 'ads'
+
+const SECTIONS: {
+  id: SectionId
+  label: string
+  short: string
+  icon: LucideIcon
+  desc: string
+}[] = [
+  {
+    id: 'managers',
+    label: 'Менеджеры',
+    short: 'Люди',
+    icon: Users,
+    desc: 'Доступ, статусы и временные пароли',
+  },
+  {
+    id: 'transfer',
+    label: 'Передача',
+    short: 'Передача',
+    icon: ArrowLeftRight,
+    desc: 'Перераспределение диалогов между менеджерами',
+  },
+  {
+    id: 'channels',
+    label: 'Каналы',
+    short: 'Каналы',
+    icon: Antenna,
+    desc: 'Подключения, привязки и настройки каналов',
+  },
+  {
+    id: 'ads',
+    label: 'Реклама',
+    short: 'Реклама',
+    icon: Target,
+    desc: 'Рекламные кабинеты и метрики',
+  },
+]
 
 export function SecretDashboard({
   managers,
   channels,
-  stats,
   system,
-  namesHidden,
   adAccounts,
   tgExclusive,
 }: {
   managers: Manager[]
   channels: Channel[]
-  stats: SecretStats
   system: SecretSystem
-  namesHidden: boolean
   adAccounts: SecretAdAccount[]
   /** Current value of the Telegram exclusive-session enforcement flag. */
   tgExclusive: boolean
@@ -170,12 +146,12 @@ export function SecretDashboard({
   const [pending, startTransition] = useTransition()
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [confirm502Open, setConfirm502Open] = useState(false)
+  const [section, setSection] = useState<SectionId>('managers')
 
-  // Live refresh: re-run the RSC every 20s so metrics/tables stay current
-  // without any client-side fetching. Pausable to avoid churn while typing.
-  // Skipped while the tab is hidden so a backgrounded dashboard doesn't keep
-  // hammering the server (each refresh re-runs the whole RSC + its DB queries);
-  // we refresh once immediately when the tab becomes visible again.
+  // Live refresh: re-run the RSC every 20s so tables stay current without any
+  // client-side fetching. Pausable to avoid churn while typing. Skipped while
+  // the tab is hidden so a backgrounded dashboard doesn't keep hammering the
+  // server; we refresh once immediately when the tab becomes visible again.
   useEffect(() => {
     if (!autoRefresh) return
     const id = setInterval(() => {
@@ -213,26 +189,224 @@ export function SecretDashboard({
     return (id: string | null) => (id ? map.get(id) ?? '—' : '—')
   }, [managers])
 
+  const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]
+
+  function onToggle502() {
+    if (system.fake502) {
+      // Turning it OFF is safe — no confirmation needed.
+      run(() => secretSetFake502Action(false))
+    } else {
+      setConfirm502Open(true)
+    }
+  }
+
   return (
-    <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 p-4 md:p-8">
-      <SecretHeader
-        system={system}
-        pending={pending}
-        autoRefresh={autoRefresh}
-        onToggleAuto={() => setAutoRefresh((v) => !v)}
-        onRefresh={() => router.refresh()}
-        onLock={() => {
-          void secretLockAction().then(() => router.refresh())
-        }}
-        onToggle502={() => {
-          if (system.fake502) {
-            // Turning it OFF is safe — no confirmation needed.
-            run(() => secretSetFake502Action(false))
-          } else {
-            setConfirm502Open(true)
-          }
-        }}
-      />
+    <div className="flex min-h-screen bg-background text-foreground">
+      {/* ---- Desktop sidebar ---- */}
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card/40 md:flex">
+        <div className="flex items-center gap-3 border-b border-border px-5 py-5">
+          <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-muted/50">
+            <ShieldCheck className="size-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold tracking-tight">
+              Супер-админ
+            </p>
+            <p className="truncate text-xs text-muted-foreground">
+              Скрытая панель
+            </p>
+          </div>
+        </div>
+
+        <nav className="flex flex-1 flex-col gap-1 p-3">
+          {SECTIONS.map((s) => (
+            <SideNavItem
+              key={s.id}
+              icon={s.icon}
+              label={s.label}
+              active={s.id === section}
+              onClick={() => setSection(s.id)}
+            />
+          ))}
+        </nav>
+
+        <div className="flex flex-col gap-2 border-t border-border p-3">
+          <SystemPill
+            ok={system.dbOk}
+            icon={Database}
+            okText="База данных"
+            badText="БД недоступна"
+          />
+          <SystemPill
+            ok={system.workerOnline}
+            icon={Server}
+            okText="Воркер в сети"
+            badText={
+              system.workerConfigured ? 'Воркер оффлайн' : 'Воркер не настроен'
+            }
+          />
+          {system.gateEnabled && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void secretLockAction().then(() => router.refresh())}
+              className="press-scale mt-1 w-full justify-start gap-2"
+            >
+              <Lock className="size-4" />
+              Заблокировать панель
+            </Button>
+          )}
+        </div>
+      </aside>
+
+      {/* ---- Main column ---- */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Top toolbar */}
+        <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+          <div className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between md:px-8 md:py-5">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-muted/40 md:hidden">
+                <active.icon className="size-5" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="truncate text-lg font-semibold tracking-tight md:text-xl">
+                  {active.label}
+                </h1>
+                <p className="truncate text-xs text-muted-foreground md:text-sm">
+                  {active.desc}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setAutoRefresh((v) => !v)}
+                className={cn(
+                  'gap-1.5',
+                  autoRefresh && 'border-success/40 text-success',
+                )}
+              >
+                <span
+                  className={cn(
+                    'size-2 rounded-full',
+                    autoRefresh ? 'bg-success' : 'bg-muted-foreground/50',
+                  )}
+                />
+                {autoRefresh ? 'Авто 20с' : 'Авто выкл'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.refresh()}
+                disabled={pending}
+                className="gap-1.5"
+              >
+                {pending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                <span className="hidden sm:inline">Обновить</span>
+              </Button>
+              <Link
+                href="/wijegniwjgwjog/messages"
+                className={cn(
+                  buttonVariants({ variant: 'default', size: 'sm' }),
+                  'gap-1.5',
+                )}
+                title="Открыть мессенджер — диалоги от имени клиента"
+              >
+                <MessagesSquare className="size-4" />
+                <span className="hidden sm:inline">Мессенджер</span>
+              </Link>
+              <Button
+                variant={system.fake502 ? 'destructive' : 'outline'}
+                size="sm"
+                onClick={onToggle502}
+                disabled={pending}
+                className={cn(
+                  'press-scale gap-1.5',
+                  !system.fake502 &&
+                    'border-destructive/40 text-destructive hover:text-destructive',
+                )}
+                title={
+                  system.fake502
+                    ? 'Сейчас админы и менеджеры видят 502 — нажмите, чтобы выключить'
+                    : 'Показать админам и менеджерам экран 502 Bad Gateway'
+                }
+              >
+                <ServerCrash className="size-4" />
+                {system.fake502 ? '502 вкл' : '502'}
+              </Button>
+            </div>
+          </div>
+
+          {/* Mobile status strip (desktop shows these in the sidebar) */}
+          <div className="flex flex-wrap items-center gap-2 px-4 pb-3 md:hidden">
+            <SystemPill
+              ok={system.dbOk}
+              icon={Database}
+              okText="БД"
+              badText="БД недоступна"
+            />
+            <SystemPill
+              ok={system.workerOnline}
+              icon={Server}
+              okText="Воркер"
+              badText={system.workerConfigured ? 'Воркер оффлайн' : 'Воркер н/д'}
+            />
+            {system.gateEnabled && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  void secretLockAction().then(() => router.refresh())
+                }
+                className="press-scale ml-auto gap-1.5"
+              >
+                <Lock className="size-4" />
+                Блок
+              </Button>
+            )}
+          </div>
+        </header>
+
+        {/* Content */}
+        <main className="flex-1 space-y-5 p-4 pb-24 md:p-8 md:pb-8">
+          <AiBalanceBanner system={system} />
+
+          {section === 'managers' && (
+            <ManagersTab managers={managers} pending={pending} run={run} />
+          )}
+          {section === 'transfer' && <SecretTransferTab managers={managers} />}
+          {section === 'channels' && (
+            <ChannelsTab
+              channels={channels}
+              managers={managers}
+              managerName={managerName}
+              pending={pending}
+              run={run}
+              tgExclusive={tgExclusive}
+            />
+          )}
+          {section === 'ads' && <SecretAdsTab accounts={adAccounts} />}
+        </main>
+      </div>
+
+      {/* ---- Mobile bottom nav ---- */}
+      <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-border bg-card/95 backdrop-blur md:hidden">
+        {SECTIONS.map((s) => (
+          <BottomNavItem
+            key={s.id}
+            icon={s.icon}
+            label={s.short}
+            active={s.id === section}
+            onClick={() => setSection(s.id)}
+          />
+        ))}
+      </nav>
 
       <Confirm502Dialog
         open={confirm502Open}
@@ -242,107 +416,72 @@ export function SecretDashboard({
           run(() => secretSetFake502Action(true), () => setConfirm502Open(false))
         }
       />
-
-      <AiBalanceBanner system={system} />
-
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard
-          label="Менеджеры"
-          value={stats.managersTotal}
-          icon={Users}
-          hint={`${stats.managersActive} активны · ${stats.managersOnLunch} на обеде`}
-        />
-        <StatCard
-          label="Каналы"
-          value={stats.channelsTotal}
-          icon={Antenna}
-          hint={`${stats.channelsConnected} подключено`}
-        />
-        <StatCard
-          label="Диалоги"
-          value={stats.conversationsTotal}
-          icon={MessagesSquare}
-          hint={`${stats.unreadTotal} непрочитанных`}
-        />
-        <StatCard
-          label="Сообщения (24ч)"
-          value={stats.messages24h}
-          icon={Activity}
-          hint={`${stats.messagesTotal} всего`}
-        />
-      </div>
-
-      <Tabs defaultValue="console" className="w-full">
-        {/*
-          Single-row, horizontally-scrollable tab strip. On narrow screens the
-          7 triggers used to wrap into a ragged 3-row block; a scrollable strip
-          keeps them on one clean line (with a subtle overflow hint) and lets
-          them size naturally on desktop. `shrink-0` stops labels from being
-          squeezed; `-mx-1 px-1` gives the focus ring room at the edges.
-        */}
-        <TabsList className="no-scrollbar -mx-1 flex w-[calc(100%+0.5rem)] justify-start gap-1 overflow-x-auto px-1 md:mx-0 md:w-full md:flex-wrap">
-          <TabsTrigger value="console" className="shrink-0">
-            Диалоги
-          </TabsTrigger>
-          <TabsTrigger value="bulk" className="shrink-0 gap-1.5">
-            <Zap className="size-3.5" />
-            Наплыв
-          </TabsTrigger>
-          <TabsTrigger value="overview" className="shrink-0">
-            Обзор
-          </TabsTrigger>
-          <TabsTrigger value="managers" className="shrink-0">
-            Менеджеры
-          </TabsTrigger>
-          <TabsTrigger value="transfer" className="shrink-0 gap-1.5">
-            <ArrowLeftRight className="size-3.5" />
-            Передача
-          </TabsTrigger>
-          <TabsTrigger value="channels" className="shrink-0">
-            Каналы
-          </TabsTrigger>
-          <TabsTrigger value="ads" className="shrink-0 gap-1.5">
-            <Target className="size-3.5" />
-            Реклама
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="overview" className="mt-4">
-          <OverviewTab stats={stats} />
-        </TabsContent>
-        <TabsContent value="managers" className="mt-4">
-          <ManagersTab managers={managers} pending={pending} run={run} />
-        </TabsContent>
-        <TabsContent value="transfer" className="mt-4">
-          <SecretTransferTab managers={managers} />
-        </TabsContent>
-        <TabsContent value="channels" className="mt-4">
-          <ChannelsTab
-            channels={channels}
-            managers={managers}
-            managerName={managerName}
-            pending={pending}
-            run={run}
-            tgExclusive={tgExclusive}
-          />
-        </TabsContent>
-        <TabsContent value="ads" className="mt-4">
-          <SecretAdsTab accounts={adAccounts} />
-        </TabsContent>
-        <TabsContent value="console" className="mt-4">
-          <SecretConsole channels={channels} managers={managers} />
-        </TabsContent>
-        <TabsContent value="bulk" className="mt-4">
-          <MassImportTab
-            channels={channels}
-            managerName={managerName}
-            pending={pending}
-            run={run}
-            namesHidden={namesHidden}
-          />
-        </TabsContent>
-      </Tabs>
     </div>
+  )
+}
+
+/* ------------------------------ Navigation ------------------------------ */
+
+function SideNavItem({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: LucideIcon
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'press-scale flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+        active
+          ? 'bg-primary/10 text-primary'
+          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+      )}
+    >
+      <Icon className="size-5 shrink-0" />
+      {label}
+    </button>
+  )
+}
+
+function BottomNavItem({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: LucideIcon
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'flex flex-1 flex-col items-center gap-1 py-2.5 text-[0.7rem] font-medium transition-colors',
+        active ? 'text-primary' : 'text-muted-foreground',
+      )}
+    >
+      <span
+        className={cn(
+          'flex h-8 w-12 items-center justify-center rounded-full transition-colors',
+          active && 'bg-primary/10',
+        )}
+      >
+        <Icon className="size-5" />
+      </span>
+      {label}
+    </button>
   )
 }
 
@@ -400,112 +539,7 @@ function Confirm502Dialog({
   )
 }
 
-/* ------------------------------- Header ------------------------------- */
-
-function SecretHeader({
-  system,
-  pending,
-  autoRefresh,
-  onToggleAuto,
-  onRefresh,
-  onLock,
-  onToggle502,
-}: {
-  system: SecretSystem
-  pending: boolean
-  autoRefresh: boolean
-  onToggleAuto: () => void
-  onRefresh: () => void
-  onLock: () => void
-  onToggle502: () => void
-}) {
-  return (
-    <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex items-center gap-3">
-        <div className="flex size-11 items-center justify-center rounded-xl border border-border bg-muted/40">
-          <ShieldCheck className="size-5 text-foreground" />
-        </div>
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
-            Панель супер-администратора
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Прямое управление менеджерами, каналами и диалогами
-          </p>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <SystemPill
-          ok={system.dbOk}
-          icon={Database}
-          okText="База данных"
-          badText="БД недоступна"
-        />
-        <SystemPill
-          ok={system.workerOnline}
-          icon={Server}
-          okText="Воркер в сети"
-          badText={system.workerConfigured ? 'Воркер оффлайн' : 'Воркер не настроен'}
-        />
-        <AiBalancePill system={system} />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onToggleAuto}
-          className={cn('gap-1.5', autoRefresh && 'border-success/40 text-success')}
-        >
-          <Activity className="size-4" />
-          {autoRefresh ? 'Авто 20с' : 'Авто выкл'}
-        </Button>
-        <Button variant="outline" size="sm" onClick={onRefresh} disabled={pending} className="gap-1.5">
-          {pending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <RefreshCw className="size-4" />
-          )}
-          Обновить
-        </Button>
-        <Link
-          href="/wijegniwjgwjog/messages"
-          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'gap-1.5')}
-          title="Открыть мессенджер — диалоги от имени клиента"
-        >
-          <MessagesSquare className="size-4" />
-          Messages
-        </Link>
-        <Button
-          variant={system.fake502 ? 'destructive' : 'outline'}
-          size="sm"
-          onClick={onToggle502}
-          disabled={pending}
-          className={cn(
-            'press-scale gap-1.5',
-            !system.fake502 && 'border-destructive/40 text-destructive hover:text-destructive',
-          )}
-          title={
-            system.fake502
-              ? 'Сейчас админы и менеджеры видят 502 — нажмите, чтобы выключить'
-              : 'Показать админам и менеджерам экран 502 Bad Gateway'
-          }
-        >
-          <ServerCrash className="size-4" />
-          {system.fake502 ? 'Выключить 502' : 'Показать 502'}
-        </Button>
-        {system.gateEnabled && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onLock}
-            className="press-scale gap-1.5"
-          >
-            <Lock className="size-4" />
-            Заблокировать
-          </Button>
-        )}
-      </div>
-    </div>
-  )
-}
+/* ------------------------------ System bits ------------------------------ */
 
 function SystemPill({
   ok,
@@ -514,7 +548,7 @@ function SystemPill({
   badText,
 }: {
   ok: boolean
-  icon: typeof Database
+  icon: LucideIcon
   okText: string
   badText: string
 }) {
@@ -534,55 +568,8 @@ function SystemPill({
 }
 
 /**
- * Live AI Gateway balance pill — the manager brain's remaining AI budget on the
- * shared key. Turns amber when funds run low and red when unavailable/empty.
- */
-function AiBalancePill({ system }: { system: SecretSystem }) {
-  const { aiBalanceOk, aiBalance, aiTotalUsed, aiBalanceMessage } = system
-
-  if (!aiBalanceOk || aiBalance == null) {
-    return (
-      <span
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground"
-        title={aiBalanceMessage ?? 'Баланс ИИ недоступен'}
-      >
-        <Wallet className="size-3.5" />
-        Баланс ИИ н/д
-      </span>
-    )
-  }
-
-  const low = aiBalance < 5
-  const empty = aiBalance <= 0
-  const usd = (n: number) =>
-    `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
-        empty
-          ? 'border-destructive/30 bg-destructive/10 text-destructive'
-          : low
-            ? 'border-warning/30 bg-warning/10 text-warning'
-            : 'border-success/30 bg-success/10 text-success',
-      )}
-      title={
-        aiTotalUsed != null
-          ? `Остаток на ИИ. Потрачено всего: ${usd(aiTotalUsed)}`
-          : 'Остаток на ИИ'
-      }
-    >
-      <Wallet className="size-3.5" />
-      Баланс ИИ: {usd(aiBalance)}
-    </span>
-  )
-}
-
-/**
  * Prominent, always-visible balance panel showing the AI manager's remaining
- * AI Gateway budget. Shown right under the header so it can't be missed on
- * mobile.
+ * AI Gateway budget. Shown at the top of every section so it can't be missed.
  */
 function AiBalanceBanner({ system }: { system: SecretSystem }) {
   const { aiBalanceOk, aiBalance, aiTotalUsed, aiBalanceMessage } = system
@@ -646,9 +633,7 @@ function AiBalanceBanner({ system }: { system: SecretSystem }) {
           <p className="text-xs font-medium text-muted-foreground">
             Потрачено всего
           </p>
-          <p className="text-lg font-semibold tabular-nums">
-            {usd(aiTotalUsed)}
-          </p>
+          <p className="text-lg font-semibold tabular-nums">{usd(aiTotalUsed)}</p>
         </div>
       )}
 
@@ -663,58 +648,6 @@ function AiBalanceBanner({ system }: { system: SecretSystem }) {
         </p>
       ) : null}
     </Card>
-  )
-}
-
-/* ------------------------------ Overview ------------------------------ */
-
-function OverviewTab({ stats }: { stats: SecretStats }) {
-  return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card className="p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-medium">Сообщения за 7 дней</h3>
-          <MessagesSquare className="size-4 text-muted-foreground" />
-        </div>
-        <MessagesTrendChart data={stats.messages7d} />
-      </Card>
-
-      <Card className="p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-medium">Каналы по типам</h3>
-          <Antenna className="size-4 text-muted-foreground" />
-        </div>
-        {stats.channelsByType.length ? (
-          <ChannelsTypeChart data={stats.channelsByType} />
-        ) : (
-          <p className="py-10 text-center text-sm text-muted-foreground">
-            Нет каналов
-          </p>
-        )}
-      </Card>
-
-      <Card className="p-5 lg:col-span-2">
-        <h3 className="mb-4 font-medium">Диалоги по статусам</h3>
-        {stats.conversationsByStatus.length ? (
-          <div className="flex flex-wrap gap-2">
-            {stats.conversationsByStatus.map((s) => (
-              <span
-                key={s.status}
-                className={cn(
-                  'inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium',
-                  CONV_STATUS_STYLE[s.status] ?? 'bg-muted text-muted-foreground',
-                )}
-              >
-                {convStatusLabel(s.status)}
-                <span className="tabular-nums opacity-80">{s.count}</span>
-              </span>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">Нет диалогов</p>
-        )}
-      </Card>
-    </div>
   )
 }
 
@@ -750,7 +683,10 @@ function ManagersTab({
         </div>
         <Link
           href="/admin/managers"
-          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'gap-1.5')}
+          className={cn(
+            buttonVariants({ variant: 'outline', size: 'sm' }),
+            'gap-1.5',
+          )}
         >
           Управление менеджерами
           <ArrowUpRight className="size-4" />
@@ -775,13 +711,18 @@ function ManagersTab({
                     <div className="flex items-center gap-2">
                       {m.name}
                       {m.onLunch ? (
-                        <Badge variant="outline" className="border-warning/40 text-warning">
+                        <Badge
+                          variant="outline"
+                          className="border-warning/40 text-warning"
+                        >
                           На обеде
                         </Badge>
                       ) : null}
                     </div>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{m.email}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {m.email}
+                  </TableCell>
                   <TableCell>
                     <Badge
                       variant="outline"
@@ -974,7 +915,9 @@ function ManagerTempPassword({ manager }: { manager: Manager }) {
               <div className="flex items-center gap-2">
                 <Input
                   readOnly
-                  value={reveal ? password : '•'.repeat(Math.min(password.length, 16))}
+                  value={
+                    reveal ? password : '•'.repeat(Math.min(password.length, 16))
+                  }
                   className="font-mono"
                 />
                 <Button
@@ -984,7 +927,11 @@ function ManagerTempPassword({ manager }: { manager: Manager }) {
                   onClick={() => setReveal((v) => !v)}
                   aria-label={reveal ? 'Скрыть' : 'Показать'}
                 >
-                  {reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  {reveal ? (
+                    <EyeOff className="size-4" />
+                  ) : (
+                    <Eye className="size-4" />
+                  )}
                 </Button>
                 <Button
                   type="button"
@@ -1059,4 +1006,3 @@ function ManagerTempPassword({ manager }: { manager: Manager }) {
     </Dialog>
   )
 }
-
