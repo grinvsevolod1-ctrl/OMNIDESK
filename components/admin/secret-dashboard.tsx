@@ -75,7 +75,6 @@ interface SecretSystem {
   workerOnline: boolean
   dbOk: boolean
   dbMessage: string
-  generatedAt: string
   gateEnabled: boolean
   /** Remaining AI Gateway credit in USD (null when unavailable). */
   aiBalance: number | null
@@ -236,6 +235,7 @@ export function SecretDashboard({
             icon={Database}
             okText="База данных"
             badText="БД недоступна"
+            hint={system.dbMessage}
           />
           <SystemPill
             ok={system.workerOnline}
@@ -350,6 +350,7 @@ export function SecretDashboard({
               icon={Database}
               okText="БД"
               badText="БД недоступна"
+              hint={system.dbMessage}
             />
             <SystemPill
               ok={system.workerOnline}
@@ -546,14 +547,18 @@ function SystemPill({
   icon: Icon,
   okText,
   badText,
+  hint,
 }: {
   ok: boolean
   icon: LucideIcon
   okText: string
   badText: string
+  /** Optional tooltip shown on hover — used to surface DB/worker error detail. */
+  hint?: string
 }) {
   return (
     <span
+      title={!ok && hint ? hint : undefined}
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
         ok

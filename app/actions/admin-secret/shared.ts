@@ -1,7 +1,7 @@
 import { requireAdmin } from '@/lib/auth'
 import { recordAdminAction } from '@/lib/data'
 import { isMessengerUnlocked } from '@/lib/messenger-gate'
-import type { ChannelType, Message, SessionUser } from '@/lib/types'
+import type { ChannelType, SessionUser } from '@/lib/types'
 
 /**
  * Access guard for the actions shared between the god console and the standalone
@@ -39,17 +39,6 @@ export interface ActionResult {
   message: string
 }
 
-/** Result of an action that writes a message, exposing the created row. */
-export interface SendResult extends ActionResult {
-  createdMessage: Message | null
-  /**
-   * True when this manual message caused the simulator to detach from THIS
-   * dialogue (it was actively driving it and is now paused). Lets the console
-   * surface a one-off "you've stepped in" toast without a refetch.
-   */
-  simDetached?: boolean
-}
-
 /** Record a privileged God-panel action to the audit trail (best-effort). */
 export function audit(
   admin: SessionUser,
@@ -77,11 +66,3 @@ export const CHANNEL_TYPES: ChannelType[] = [
   'max',
   'livechat',
 ]
-
-/** Conversation lead-statuses selectable in the panel. */
-export const CONVERSATION_STATUSES = [
-  'liquid',
-  'not_liquid',
-  'unsubscribed',
-  'transferred',
-] as const

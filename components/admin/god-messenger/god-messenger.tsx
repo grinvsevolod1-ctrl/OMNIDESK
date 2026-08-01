@@ -43,7 +43,7 @@ import {
   fmtTime,
   initials,
   isComposing,
-} from '@/components/admin/secret-console/utils'
+} from './utils'
 import { NewChatDialog } from './new-chat-dialog'
 import { NotifyButton } from './notify-button'
 

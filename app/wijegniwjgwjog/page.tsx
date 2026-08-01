@@ -84,7 +84,6 @@ export default async function SecretPage() {
         workerOnline,
         dbOk: db.ok,
         dbMessage: db.message,
-        generatedAt: new Date().toISOString(),
         gateEnabled: isGodPasscodeConfigured(),
         aiBalance: aiBalance.balance,
         aiTotalUsed: aiBalance.totalUsed,

@@ -14,7 +14,7 @@
  * with fresh data instead of relying on client-side cache juggling.
  */
 
-export type { ActionResult, SendResult } from './admin-secret/shared'
+export type { ActionResult } from './admin-secret/shared'
 
 export * from './admin-secret/gate'
 export * from './admin-secret/channels'

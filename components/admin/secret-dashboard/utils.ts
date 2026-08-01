@@ -1,9 +1,9 @@
 'use client'
 
 /**
- * Shared label/style maps and small helpers for the secret dashboard, extracted
- * from the secret-dashboard monolith so the root component and its per-tab
- * sub-modules (channels, mass-import, …) can share them without duplication.
+ * Shared label/style maps and small helpers for the secret dashboard so the
+ * root component and its per-tab sub-modules (channels, …) can share them
+ * without duplication.
  */
 
 import { toast } from 'sonner'

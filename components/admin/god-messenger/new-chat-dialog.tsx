@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { TYPE_LABEL } from '@/components/admin/secret-console/utils'
+import { TYPE_LABEL } from './utils'
 import type { Channel } from '@/lib/types'
 
 /**
