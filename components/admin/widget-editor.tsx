@@ -425,6 +425,8 @@ function AppearanceTab({ config, patch }: TabProps) {
                 src={a.agentAvatar || '/placeholder.svg'}
                 alt="Аватар агента"
                 className="size-full object-cover"
+                loading="lazy"
+                decoding="async"
               />
             ) : (
               <MessageSquare className="size-5 text-muted-foreground" />
@@ -706,7 +708,7 @@ function MessengersTab({ config, patch }: TabProps) {
             <Input
               value={m.label}
               onChange={(e) => update(i, { label: e.target.value })}
-              placeholder="Подпись кнопки"
+              placeholder="П��дпись кнопки"
               className="flex-1"
             />
             <Button

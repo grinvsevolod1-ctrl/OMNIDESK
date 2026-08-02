@@ -179,6 +179,8 @@ function EditVersion({
             src={mediaUrl || '/placeholder.svg'}
             alt={mediaKindLabel(mediaType)}
             className="mb-1.5 max-h-40 rounded-md object-contain"
+            loading="lazy"
+            decoding="async"
           />
         ) : (
           <a

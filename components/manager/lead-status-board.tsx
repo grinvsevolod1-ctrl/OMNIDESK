@@ -452,6 +452,8 @@ function LeadBoardDialog({
                                 alt={m.mediaName || 'Вложение'}
                                 className="mb-1 max-h-60 rounded-lg object-cover"
                                 crossOrigin="anonymous"
+                                loading="lazy"
+                                decoding="async"
                               />
                             ) : m.mediaType ? (
                               <span className="mb-1 flex items-center gap-1.5 text-xs opacity-80">
