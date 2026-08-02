@@ -1,5 +1,6 @@
 import 'server-only'
 import { query } from '../db'
+import { fetchMessageSlicesBatch } from './shared'
 
 /**
  * AI-assist training-corpus data layer, extracted from the ai-assist monolith
@@ -107,14 +108,24 @@ export async function buildTrainingCorpusForConversationIds(
   const transcripts: string[] = []
   const exchanges: Array<{ situation: string; corrected: string }> = []
 
-  for (const id of conversationIds) {
-    const rows = await query<{ direction: 'in' | 'out'; body: string }>(
-      `SELECT direction, body FROM messages
-        WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
-        ORDER BY created_at ASC
-        LIMIT 60`,
-      [id],
+  // Batched window query instead of one query per conversation (N+1). Chunked
+  // so the full-history trainer (hundreds of ids) keeps each result set sane:
+  // 50 ids x 60 messages = at most 3 000 rows per round-trip.
+  const CHUNK = 50
+  const slices = new Map<
+    string,
+    Array<{ direction: 'in' | 'out'; body: string }>
+  >()
+  for (let i = 0; i < conversationIds.length; i += CHUNK) {
+    const part = await fetchMessageSlicesBatch(
+      conversationIds.slice(i, i + CHUNK),
+      { perConversation: 60, order: 'asc' },
     )
+    for (const [id, rows] of part) slices.set(id, rows)
+  }
+
+  for (const id of conversationIds) {
+    const rows = slices.get(id) ?? []
     if (rows.length < 2) continue
 
     const lines = rows.map(

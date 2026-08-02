@@ -498,6 +498,55 @@ export function sanitizeConversationMeta(
 }
 
 /**
+ * Batch-fetch a per-conversation slice of messages for MANY conversations in
+ * ONE query (row_number window over `PARTITION BY conversation_id`). This is
+ * the shared cure for the N+1 pattern of looping over conversation ids and
+ * running a per-id transcript query — with 20-50 dialogs that was 20-50
+ * sequential round-trips to Postgres.
+ *
+ * `order: 'asc'` returns the FIRST `perConversation` messages (transcripts /
+ * training corpora), `'desc'` the LAST ones — but always sorted ascending
+ * within each conversation so callers can render chronologically either way.
+ */
+export async function fetchMessageSlicesBatch(
+  conversationIds: string[],
+  opts: { perConversation: number; order: 'asc' | 'desc' },
+): Promise<Map<string, Array<{ direction: 'in' | 'out'; body: string }>>> {
+  const out = new Map<
+    string,
+    Array<{ direction: 'in' | 'out'; body: string }>
+  >()
+  if (conversationIds.length === 0) return out
+  const cap = Math.max(1, Math.min(200, Math.round(opts.perConversation)))
+  const dir = opts.order === 'desc' ? 'DESC' : 'ASC'
+  const rows = await query<{
+    conversation_id: string
+    direction: 'in' | 'out'
+    body: string
+  }>(
+    `SELECT conversation_id, direction, body FROM (
+       SELECT m.conversation_id, m.direction, m.body, m.created_at,
+              row_number() OVER (
+                PARTITION BY m.conversation_id
+                ORDER BY m.created_at ${dir}
+              ) AS rn
+         FROM messages m
+        WHERE m.conversation_id = ANY($1)
+          AND m.deleted_at IS NULL AND m.body <> ''
+     ) t
+     WHERE rn <= $2
+     ORDER BY conversation_id, created_at ASC`,
+    [conversationIds, cap],
+  )
+  for (const r of rows) {
+    const list = out.get(r.conversation_id)
+    if (list) list.push({ direction: r.direction, body: r.body })
+    else out.set(r.conversation_id, [{ direction: r.direction, body: r.body }])
+  }
+  return out
+}
+
+/**
  * Atomically take the next index from a named round-robin counter. The counter
  * grows forever; callers apply `% length` so distribution wraps around the
  * configured list ("when links run out, continue from the start").

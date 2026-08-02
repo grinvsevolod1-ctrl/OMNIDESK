@@ -2,6 +2,7 @@ import 'server-only'
 import { query } from '../db'
 import type { MediaType } from '../types'
 import { mediaPlaceholder, type TrainingSample } from './ai-assist-shared'
+import { fetchMessageSlicesBatch } from './shared'
 
 /**
  * AI-assist corrections & review data layer, extracted from the ai-assist
@@ -267,22 +268,22 @@ export async function sampleTrainingConversations(
     [Math.max(1, Math.min(20, limit))],
   )
 
+  // One batched window query instead of a per-conversation loop (N+1).
+  // order:'desc' takes the LAST 12 messages; the helper returns them already
+  // sorted ascending (chronological) within each conversation.
+  const slices = await fetchMessageSlicesBatch(
+    convs.map((c) => c.id),
+    { perConversation: 12, order: 'desc' },
+  )
   const samples: TrainingSample[] = []
   for (const c of convs) {
-    const rows = await query<{ direction: 'in' | 'out'; body: string }>(
-      `SELECT direction, body FROM messages
-        WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
-        ORDER BY created_at DESC LIMIT 12`,
-      [c.id],
-    )
-    const history = rows
-      .reverse()
-      .map((r) => ({
-        role: (r.direction === 'in' ? 'client' : 'manager') as
-          | 'client'
-          | 'manager',
-        body: r.body,
-      }))
+    const rows = slices.get(c.id) ?? []
+    const history = rows.map((r) => ({
+      role: (r.direction === 'in' ? 'client' : 'manager') as
+        | 'client'
+        | 'manager',
+      body: r.body,
+    }))
     const lastClient = [...history].reverse().find((m) => m.role === 'client')
     if (!lastClient) continue
     samples.push({

@@ -159,15 +159,69 @@ export function InboxView({
   telemostEnabled?: boolean
 }) {
   const router = useRouter()
+  // Optimistic lead-status overrides (conversationId -> status snapshot).
+  // Applied in the merge memo below so EVERY consumer (filters, labels, the
+  // status dropdown) sees the new status instantly — this replaced a
+  // router.refresh() that re-ran the whole inbox page (~8 DB queries) on
+  // every single status change.
+  const [statusOverrides, setStatusOverrides] = useState<
+    Record<
+      string,
+      {
+        status: LeadStatus
+        statusDetail: NotLiquidReason | null
+        statusManual: boolean
+      }
+    >
+  >({})
+  // Drop a status override once the server catches up (fresh props carry the
+  // same status) so stale overrides can never mask NEWER server-side changes.
+  useEffect(() => {
+    // Returns the same reference when nothing changed — no cascading renders.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setStatusOverrides((prev) => {
+      const ids = Object.keys(prev)
+      if (ids.length === 0) return prev
+      let changed = false
+      const next = { ...prev }
+      for (const id of ids) {
+        const server = rawConversations.find((c) => c.id === id)
+        if (
+          server &&
+          server.status === prev[id].status &&
+          (server.statusDetail ?? null) === prev[id].statusDetail
+        ) {
+          delete next[id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [rawConversations])
   // Hide foreign account names: blank the channel name for any lead whose
   // channel this manager doesn't own, so the other account stays invisible.
   const conversations = useMemo(() => {
-    if (ownedChannelIds.length === 0) return rawConversations
-    const owned = new Set(ownedChannelIds)
-    return rawConversations.map((c) =>
-      owned.has(c.channelId) ? c : { ...c, channelName: undefined },
-    )
-  }, [rawConversations, ownedChannelIds])
+    const owned =
+      ownedChannelIds.length > 0 ? new Set(ownedChannelIds) : null
+    const hasStatusOverrides = Object.keys(statusOverrides).length > 0
+    if (!owned && !hasStatusOverrides) return rawConversations
+    return rawConversations.map((c) => {
+      let next = c
+      if (owned && !owned.has(c.channelId)) {
+        next = { ...next, channelName: undefined }
+      }
+      const so = statusOverrides[c.id]
+      if (so) {
+        next = {
+          ...next,
+          status: so.status,
+          statusDetail: so.statusDetail ?? undefined,
+          statusManual: so.statusManual,
+        }
+      }
+      return next
+    })
+  }, [rawConversations, ownedChannelIds, statusOverrides])
   const [activeId, setActiveId] = useState<string | null>(null)
   // Per-conversation composer drafts. Like Telegram, an unsent message is kept
   // when you switch to another conversation and restored when you come back.
@@ -630,14 +684,37 @@ export function InboxView({
         status = optionValue as LeadStatus
       }
     }
+    // Optimistic: manual statuses update instantly through statusOverrides.
+    // 'auto' means the SERVER recomputes the status — we can't know the result
+    // client-side, so that (rare) branch is the only one that still refreshes.
+    const prevOverride = statusOverrides[conversationId]
+    if (status !== 'auto') {
+      setStatusOverrides((prev) => ({
+        ...prev,
+        [conversationId]: {
+          status,
+          statusDetail: reason,
+          statusManual: true,
+        },
+      }))
+    }
     startStatusTransition(async () => {
       const res = await setLeadStatusAction(conversationId, status, reason)
       if (!res.ok) {
         toast.error(res.message)
+        // Roll back the optimistic status on failure.
+        if (status !== 'auto') {
+          setStatusOverrides((prev) => {
+            const next = { ...prev }
+            if (prevOverride) next[conversationId] = prevOverride
+            else delete next[conversationId]
+            return next
+          })
+        }
         return
       }
       toast.success(res.message)
-      router.refresh()
+      if (status === 'auto') router.refresh()
     })
   }
 
@@ -665,7 +742,8 @@ export function InboxView({
         return
       }
       toast.success(res.message)
-      router.refresh()
+      // No router.refresh(): the dismissedOverrides map already drives the
+      // badge/sorting, and the server flag arrives with the next natural sync.
     })
   }
 
@@ -687,7 +765,7 @@ export function InboxView({
         return
       }
       toast.success(res.message)
-      router.refresh()
+      // No router.refresh(): mutedOverrides already covers every consumer.
     })
   }
 
@@ -709,7 +787,7 @@ export function InboxView({
         return
       }
       toast.success(res.message)
-      router.refresh()
+      // No router.refresh(): aiOverrides already drives the composer state.
     })
   }
 
@@ -768,7 +846,8 @@ export function InboxView({
         return
       }
       toast.success(res.message)
-      router.refresh()
+      // No router.refresh(): the meeting-link message lands in the thread via
+      // the SSE stream like any other outbound message.
     })
   }
 
@@ -1054,7 +1133,8 @@ export function InboxView({
           toast.error(res.message)
         } else {
           toast.success(res.message)
-          router.refresh()
+          // No router.refresh(): the sent media message arrives back through
+          // the SSE stream and is patched into localMessages there.
         }
       } catch (err) {
         // Any transport/framework failure (e.g. body limit, dropped connection)

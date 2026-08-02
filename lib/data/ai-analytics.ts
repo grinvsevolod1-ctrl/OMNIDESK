@@ -8,7 +8,7 @@
  * way, exactly like the rest of the app. There is no special-casing here.
  */
 import { query } from '../db'
-import { effectiveStatusSql } from './shared'
+import { effectiveStatusSql, fetchMessageSlicesBatch } from './shared'
 import type { LeadStatus } from '../types'
 
 /** A performance snapshot over a trailing window of real AI-led dialogs. */
@@ -287,15 +287,14 @@ export async function listUnderperformingDialogs(
     [cap],
   )
 
+  // One batched window query instead of a per-conversation loop (N+1).
+  const slices = await fetchMessageSlicesBatch(
+    convs.map((c) => c.id),
+    { perConversation: 40, order: 'asc' },
+  )
   const out: WeakDialog[] = []
   for (const conv of convs) {
-    const rows = await query<{ direction: 'in' | 'out'; body: string }>(
-      `SELECT direction, body FROM messages
-        WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
-        ORDER BY created_at ASC
-        LIMIT 40`,
-      [conv.id],
-    )
+    const rows = slices.get(conv.id) ?? []
     if (rows.length < 2) continue
     const transcript = rows
       .map(
@@ -340,15 +339,14 @@ export async function listLostDialogs(
     [cap, String(windowDays)],
   )
 
+  // One batched window query instead of a per-conversation loop (N+1).
+  const slices = await fetchMessageSlicesBatch(
+    convs.map((c) => c.id),
+    { perConversation: 40, order: 'asc' },
+  )
   const out: WeakDialog[] = []
   for (const conv of convs) {
-    const rows = await query<{ direction: 'in' | 'out'; body: string }>(
-      `SELECT direction, body FROM messages
-        WHERE conversation_id = $1 AND deleted_at IS NULL AND body <> ''
-        ORDER BY created_at ASC
-        LIMIT 40`,
-      [conv.id],
-    )
+    const rows = slices.get(conv.id) ?? []
     if (rows.length < 2) continue
     out.push({
       conversationId: conv.id,
