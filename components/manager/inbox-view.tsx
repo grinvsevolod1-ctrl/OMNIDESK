@@ -20,6 +20,7 @@ import {
   BrainCircuit,
   MessageCircle,
   MoreVertical,
+  Pencil,
   Reply,
   Trash2,
   UserPlus,
@@ -37,6 +38,7 @@ import {
   replyMessageAction,
   reactMessageAction,
   deleteMessageAction,
+  editMessageAction,
   forwardMessageAction,
   toggleConversationAiAction,
   acknowledgeAiHandoffAction,
@@ -255,6 +257,9 @@ export function InboxView({
     }
   }, [])
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
+  /** Message being edited (own outgoing text only). Mutually exclusive with
+   *  replyTarget — starting one cancels the other, Telegram-style. */
+  const [editTarget, setEditTarget] = useState<Message | null>(null)
   // Message whose edit history is open in the dialog (null = closed).
   const [historyMessage, setHistoryMessage] = useState<Message | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -988,6 +993,43 @@ export function InboxView({
       toast.error('ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.')
       return
     }
+    // Edit mode: overwrite the target message optimistically, send the edit to
+    // Telegram, and roll the bubble back if the server rejects it.
+    if (editTarget) {
+      const target = editTarget
+      const prevBody = target.body
+      if (body === prevBody.trim()) {
+        setEditTarget(null)
+        return
+      }
+      setLocalMessages((prev) => ({
+        ...prev,
+        [activeId]: (prev[activeId] ?? []).map((m) =>
+          m.id === target.id
+            ? {
+                ...m,
+                body,
+                editedAt: new Date().toISOString(),
+                editCount: (m.editCount ?? 0) + 1,
+              }
+            : m,
+        ),
+      }))
+      setEditTarget(null)
+      startTransition(async () => {
+        const res = await editMessageAction(target.id, body)
+        if (!res.ok) {
+          toast.error(res.message)
+          setLocalMessages((prev) => ({
+            ...prev,
+            [activeId]: (prev[activeId] ?? []).map((m) =>
+              m.id === target.id ? { ...m, body: prevBody } : m,
+            ),
+          }))
+        }
+      })
+      return
+    }
     const replyTo = replyTarget
     const optimistic: Message = {
       id: `tmp_${Date.now()}`,
@@ -1146,10 +1188,11 @@ export function InboxView({
     })
   }
 
-  // Clear any pending reply when switching conversations.
+  // Clear any pending reply/edit when switching conversations.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setReplyTarget(null)
+    setEditTarget(null)
   }, [activeId])
 
   // Other Telegram conversations a message can be forwarded into.
@@ -1604,10 +1647,21 @@ export function InboxView({
                                 <MessageContextMenu
                                   message={m}
                                   forwardTargets={forwardTargets}
-                                  onReply={(msg) => setReplyTarget(msg)}
+                                  onReply={(msg) => {
+                                    setEditTarget(null)
+                                    setReplyTarget(msg)
+                                  }}
                                   onReact={reactTo}
                                   onCopy={copyMessageText}
                                   onForward={forwardMessage}
+                                  onEdit={
+                                    isOut
+                                      ? (msg) => {
+                                          setReplyTarget(null)
+                                          setEditTarget(msg)
+                                        }
+                                      : undefined
+                                  }
                                   onDelete={deleteMessage}
                                 >
                                   {bubble}
@@ -1636,7 +1690,7 @@ export function InboxView({
                                           ? 'bg-primary/15 ring-primary/40'
                                           : 'bg-muted ring-border',
                                       )}
-                                      aria-label={`Реакция ${r.emoji}`}
+                                      aria-label={`Реа��ция ${r.emoji}`}
                                     >
                                       <span>{r.emoji}</span>
                                     </button>
@@ -1672,6 +1726,31 @@ export function InboxView({
                 <div ref={messagesEndRef} />
               </div>
             </div>
+
+            {/* Edit banner — mirrors the reply banner, Telegram-style. */}
+            {editTarget ? (
+              <div className="flex items-center gap-2 border-t border-border bg-muted/40 px-3 py-2">
+                <Pencil className="size-4 shrink-0 text-primary" />
+                <div className="min-w-0 flex-1 border-l-2 border-primary/60 pl-2">
+                  <p className="text-xs font-semibold text-primary">
+                    Редактирование
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {editTarget.body}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 shrink-0"
+                  onClick={() => setEditTarget(null)}
+                  aria-label="Отменить редактирование"
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            ) : null}
 
             {/* Reply preview banner */}
             {replyTarget ? (
@@ -1726,7 +1805,10 @@ export function InboxView({
               telemostEnabled={telemostEnabled}
               onStartMeeting={startVideoMeeting}
               meetingPending={meetingPending}
-              replyActive={!!replyTarget}
+              replyActive={!!replyTarget || !!editTarget}
+              editing={
+                editTarget ? { id: editTarget.id, body: editTarget.body } : null
+              }
             />
           </>
         ) : (

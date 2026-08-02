@@ -966,7 +966,33 @@ export function GodMessenger({
           onPointerUp={conversation ? onBackPointerEnd : undefined}
           onPointerCancel={conversation ? onBackPointerEnd : undefined}
         >
-          {!conversation ? (
+          {!conversation && selectedId ? (
+            /* Selected but conversation data still loading. This MUST be
+               visible on mobile: the list pane is already hidden the moment a
+               dialog is tapped, so `hidden md:flex` here left the user staring
+               at a pitch-black screen with no way back (the reported bug).
+               Show a skeleton header with a working back button + spinner. */
+            <div className="flex flex-1 flex-col">
+              <header className="flex items-center gap-2 border-b border-border bg-card/40 px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-3">
+                <button
+                  type="button"
+                  onClick={() => selectThread(null)}
+                  className="flex size-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+                  aria-label="Назад к списку"
+                >
+                  <ChevronLeft className="size-6" />
+                </button>
+                <div className="size-10 shrink-0 animate-pulse rounded-full bg-muted" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="h-3.5 w-32 animate-pulse rounded bg-muted" />
+                  <div className="h-3 w-44 animate-pulse rounded bg-muted/70" />
+                </div>
+              </header>
+              <div className="flex flex-1 items-center justify-center bg-muted/20">
+                <Loader2 className="size-6 animate-spin text-muted-foreground" />
+              </div>
+            </div>
+          ) : !conversation ? (
             <div className="hidden flex-1 items-center justify-center p-6 md:flex">
               <div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
                 <MessagesSquare className="size-12 opacity-40" />

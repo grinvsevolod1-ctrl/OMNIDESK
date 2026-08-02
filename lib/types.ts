@@ -140,10 +140,11 @@ export type JobAction =
   | 'send_message'
   // Send a sticker (Telegram only) by its document descriptor.
   | 'send_sticker'
-  // Telegram-only message actions: react with an emoji, delete (revoke), and
-  // forward to another chat.
+  // Telegram-only message actions: react with an emoji, delete (revoke),
+  // edit the text of an already-sent message, and forward to another chat.
   | 'react_message'
   | 'delete_message'
+  | 'edit_message'
   | 'forward_message'
   // Soft pause: keep the session connected but stop writing inbound to the
   // inbox (pause), then resume inbound persistence (resume).

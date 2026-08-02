@@ -571,6 +571,20 @@ export class TelegramSession {
   }
 
   /**
+   * Edit the text of an already-sent message (Telegram only). The contact sees
+   * the native "edited" mark, exactly like editing in the official client.
+   */
+  async editMessage(
+    target: string,
+    msgId: number,
+    body: string,
+  ): Promise<void> {
+    if (!this.client) throw new Error('Session not started')
+    const entity = await this.resolveTarget(target)
+    await this.client.editMessage(entity, { message: msgId, text: body })
+  }
+
+  /**
    * Forward a message from one chat to another. Returns the new Telegram
    * message id in the destination chat. Telegram-only.
    */

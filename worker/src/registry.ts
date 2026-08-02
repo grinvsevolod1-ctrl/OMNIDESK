@@ -179,6 +179,18 @@ class Registry {
         await session.deleteMessage(target, providerMessageId, true)
         return { deleted: true }
       }
+      case 'edit_message': {
+        const target = String(payload.target ?? '')
+        const providerMessageId = Number(payload.providerMessageId ?? 0)
+        const body = String(payload.body ?? '')
+        if (!target || !providerMessageId || !body) {
+          throw new Error(
+            'edit_message requires target, providerMessageId and body',
+          )
+        }
+        await session.editMessage(target, providerMessageId, body)
+        return { edited: true }
+      }
       case 'forward_message': {
         const fromTarget = String(payload.fromTarget ?? '')
         const toTarget = String(payload.toTarget ?? '')

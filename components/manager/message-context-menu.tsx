@@ -16,6 +16,7 @@ import {
   SmilePlus,
   Copy,
   Forward,
+  Pencil,
   Trash2,
   X,
 } from 'lucide-react'
@@ -42,6 +43,7 @@ export function MessageContextMenu({
   onReact,
   onCopy,
   onForward,
+  onEdit,
   onDelete,
   children,
 }: {
@@ -51,6 +53,8 @@ export function MessageContextMenu({
   onReact: (m: Message, emoji: string) => void
   onCopy: (m: Message) => void
   onForward: (m: Message, toConversationId: string) => void
+  /** Present only for the manager's own outgoing text messages. */
+  onEdit?: (m: Message) => void
   onDelete: (m: Message) => void
   children: ReactNode
 }) {
@@ -122,6 +126,13 @@ export function MessageContextMenu({
             ) : null}
           </ContextMenuSubContent>
         </ContextMenuSub>
+
+        {onEdit && hasText ? (
+          <ContextMenuItem onClick={() => onEdit(message)}>
+            <Pencil />
+            Редактировать
+          </ContextMenuItem>
+        ) : null}
 
         {hasText ? (
           <ContextMenuItem onClick={() => onCopy(message)}>

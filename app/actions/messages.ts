@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { requireManager } from '@/lib/auth'
 import {
   addMessage,
+  editMessageBody,
   enqueueJob,
   getConversation,
   getMessageDispatch,
@@ -147,6 +148,54 @@ export async function deleteMessageAction(
 
   revalidatePath('/app/inbox')
   return { ok: true, message: 'Сообщение удалено.' }
+}
+
+/**
+ * Edit the text of the manager's OWN outgoing message (Telegram only),
+ * Telegram-style. The previous version is snapshotted into the append-only
+ * `message_edits` history, the live row is overwritten, and an edit_message
+ * job tells the worker to apply the edit in Telegram so the contact sees the
+ * native "edited" mark. Manager-scoped: only messages in own conversations,
+ * and only outbound ones.
+ */
+export async function editMessageAction(
+  messageId: string,
+  body: string,
+): Promise<SimpleResult> {
+  const session = await requireManager()
+  const text = body.trim()
+  if (!text) return { ok: false, message: 'Текст не может быть пустым.' }
+
+  const dispatch = await getMessageDispatch(messageId, session.sub)
+  if (!dispatch) return { ok: false, message: 'Сообщение не найдено.' }
+  if (dispatch.direction !== 'out') {
+    return { ok: false, message: 'Можно редактировать только свои сообщения.' }
+  }
+  if (dispatch.channelType !== 'telegram') {
+    return { ok: false, message: 'Редактирование доступно только для Telegram.' }
+  }
+  if (!dispatch.providerMessageId) {
+    return { ok: false, message: 'Сообщение ещё не доставлено.' }
+  }
+
+  const changed = await editMessageBody(messageId, session.sub, text)
+  if (!changed) return { ok: true, message: 'Без изменений.' }
+
+  await enqueueJob({
+    channelId: dispatch.channelId,
+    managerId: session.sub,
+    action: 'edit_message',
+    payload: {
+      target: dispatch.contactHandle,
+      providerMessageId: dispatch.providerMessageId,
+      body: text,
+    },
+  }).catch((err) => {
+    console.error('[panel] failed to enqueue edit job:', err)
+  })
+
+  revalidatePath('/app/inbox')
+  return { ok: true, message: 'Сообщение изменено.' }
 }
 
 /**

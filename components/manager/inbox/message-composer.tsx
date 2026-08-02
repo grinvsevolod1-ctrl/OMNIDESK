@@ -53,6 +53,11 @@ export interface MessageComposerProps {
   onStartMeeting: () => void
   meetingPending: boolean
   replyActive: boolean
+  /** When set, the composer is editing an existing message: the input is
+   *  prefilled with its body and submit calls onSend with the new text (the
+   *  parent routes it to the edit action). The unsent draft is stashed and
+   *  restored when editing ends. */
+  editing?: { id: string; body: string } | null
 }
 
 /**
@@ -86,6 +91,7 @@ export const MessageComposer = memo(function MessageComposer({
   onStartMeeting,
   meetingPending,
   replyActive,
+  editing = null,
 }: MessageComposerProps) {
   const [text, setText] = useState(() => getInitialDraft(conversationId))
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(false)
@@ -104,17 +110,32 @@ export const MessageComposer = memo(function MessageComposer({
     persistRef.current = onPersistDraft
   }, [onPersistDraft])
   useEffect(() => {
-    // On unmount (i.e. switching to another conversation) save the unsent draft.
-    return () => persistRef.current(textRef.current)
+    // On unmount (i.e. switching to another conversation) save the unsent
+    // draft. If the manager was mid-edit, the input holds the EDIT text — save
+    // the stashed real draft instead so the edit never leaks into drafts.
+    return () =>
+      persistRef.current(
+        editingRef.current ? (stashedDraftRef.current ?? '') : textRef.current,
+      )
   }, [])
+  // Mirror `editing` in a ref so the persistence paths below can check it
+  // without adding it to their deps.
+  const editingRef = useRef(editing)
+  useEffect(() => {
+    editingRef.current = editing
+  }, [editing])
+
   // ALSO persist while typing (debounced). Unmount-only persistence loses the
   // draft whenever the tree never unmounts cleanly — a hard reload, a crash,
   // navigating via browser chrome — which managers reported as vanished text.
-  // 400ms of idle keeps this far from the per-keystroke hot path.
+  // 400ms of idle keeps this far from the per-keystroke hot path. Suspended
+  // while editing an existing message: the edit text must never overwrite the
+  // unsent draft.
   useEffect(() => {
+    if (editing) return
     const t = setTimeout(() => persistRef.current(text), 400)
     return () => clearTimeout(t)
-  }, [text])
+  }, [text, editing])
 
   const resizeComposer = useCallback(() => {
     const el = composerRef.current
@@ -122,6 +143,38 @@ export const MessageComposer = memo(function MessageComposer({
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
+
+  // Entering edit mode: stash the current unsent draft and prefill the input
+  // with the message being edited. Leaving edit mode (submit or cancel):
+  // restore the stashed draft, Telegram-style.
+  const stashedDraftRef = useRef<string | null>(null)
+  const editingId = editing?.id ?? null
+  const editingBody = editing?.body ?? ''
+  useEffect(() => {
+    if (editingId) {
+      if (stashedDraftRef.current === null) {
+        stashedDraftRef.current = textRef.current
+      }
+      setText(editingBody)
+      requestAnimationFrame(() => {
+        const el = composerRef.current
+        if (el) {
+          el.focus()
+          const end = el.value.length
+          el.setSelectionRange(end, end)
+        }
+        resizeComposer()
+      })
+    } else if (stashedDraftRef.current !== null) {
+      setText(stashedDraftRef.current)
+      stashedDraftRef.current = null
+      requestAnimationFrame(resizeComposer)
+    }
+    // editingBody intentionally read only when editingId changes: retargeting
+    // to another message updates it, re-renders of the same edit do not reset
+    // the manager's in-progress changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingId, resizeComposer])
 
   const submit = useCallback(() => {
     if (aiLed) {
@@ -134,7 +187,9 @@ export const MessageComposer = memo(function MessageComposer({
     setText('')
     // Clear the persisted draft immediately — otherwise the debounced persist
     // (or a stale localStorage entry) could resurrect an already-sent message.
-    persistRef.current('')
+    // Skipped while editing: submitting an edit must not wipe the stashed
+    // unsent draft (it is restored by the edit effect right after).
+    if (!editingRef.current) persistRef.current('')
     requestAnimationFrame(resizeComposer)
   }, [aiLed, text, onSend, onBlockedInteract, resizeComposer])
 

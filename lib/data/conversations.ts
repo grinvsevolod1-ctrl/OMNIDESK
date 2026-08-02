@@ -508,6 +508,81 @@ export async function markMessageDeleted(
 }
 
 /**
+ * Edit the body of the manager's own outgoing message, Telegram-style. The
+ * previous version is snapshotted into the append-only `message_edits` history
+ * before the live row is overwritten (same trail the god-panel edits use), and
+ * the conversation list preview is refreshed when the edited message is the
+ * newest one. Scoped to the owning manager and outbound messages only.
+ * Returns false when nothing changed (not found, foreign, deleted, same text).
+ */
+export async function editMessageBody(
+  messageId: string,
+  managerId: string,
+  body: string,
+): Promise<boolean> {
+  const rows = await query<{
+    id: string
+    conversation_id: string
+    body: string
+    media_type: string | null
+    media_mime: string | null
+    media_name: string | null
+    media_blob_id: string | null
+    edit_count: number
+    deleted_at: string | null
+  }>(
+    `SELECT m.id, m.conversation_id, m.body, m.media_type, m.media_mime,
+            m.media_name, m.media_blob_id, m.edit_count, m.deleted_at
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.id = $1 AND c.manager_id = $2 AND m.direction = 'out'
+      LIMIT 1`,
+    [messageId, managerId],
+  )
+  const prev = rows[0]
+  if (!prev || prev.deleted_at || prev.body === body) return false
+
+  const nextVersion = (prev.edit_count ?? 0) + 1
+  await withTransaction(async (db) => {
+    await db.query(
+      `INSERT INTO message_edits
+         (message_id, version, body, media_type, media_mime, media_name, media_blob_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (message_id, version) DO NOTHING`,
+      [
+        prev.id,
+        nextVersion,
+        prev.body,
+        prev.media_type,
+        prev.media_mime,
+        prev.media_name,
+        prev.media_blob_id,
+      ],
+    )
+    await db.query(
+      `UPDATE messages
+          SET body = $2, edited_at = now(), edit_count = $3
+        WHERE id = $1`,
+      [prev.id, body, nextVersion],
+    )
+    // Refresh the list preview only when this message IS the latest one.
+    await db.query(
+      `UPDATE conversations c
+          SET last_message = $2
+        WHERE c.id = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM messages n
+             WHERE n.conversation_id = c.id
+               AND n.deleted_at IS NULL
+               AND n.created_at > (SELECT created_at FROM messages WHERE id = $3)
+          )`,
+      [prev.conversation_id, body, prev.id],
+    )
+  })
+  return true
+}
+
+/**
  * Resolve the channel a message belongs to, but only if it is owned by the
  * given manager. Used by the media proxy route to authorize streaming.
  * Returns the channel id + type, or null when the manager doesn't own it.
