@@ -43,7 +43,7 @@ interface RealtimeStreamEvent {
 }
 
 /** Live "visitor is typing" state for a conversation. */
-interface VisitorTyping {
+export interface VisitorTyping {
   draft: string
   name: string
   /** Epoch ms when this ping arrived; used to auto-expire a stale indicator. */
@@ -54,7 +54,7 @@ interface VisitorTyping {
 const TYPING_TTL_MS = 6_000
 
 /** Live "visitor presence" state for a conversation. */
-interface VisitorPresence {
+export interface VisitorPresence {
   state: PresenceState
   /** Epoch ms of the last ping; a stale entry is downgraded to 'left'. */
   at: number

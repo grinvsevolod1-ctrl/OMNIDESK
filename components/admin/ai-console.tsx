@@ -1,46 +1,21 @@
 'use client'
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import dynamic from 'next/dynamic'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowUp,
-  BookOpen,
-  Check,
-  Copy,
-  BellRing,
-  FileDown,
-  Flame,
-  FlaskConical,
-  GraduationCap,
-  Highlighter,
-  ListChecks,
-  Loader2,
-  MessagesSquare,
-  NotebookPen,
   Mic,
-  Plus,
-  Power,
-  ScrollText,
-  Settings2,
-  ShieldAlert,
-  BrainCircuit,
   Square,
-  Undo2,
   Volume2,
   VolumeX,
-  X,
 } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import type { AiAssistLesson, AiAssistSettings } from '@/lib/data/ai-assist'
 import { INTENT_BY_ID, type ConsoleIntent } from '@/lib/ai-console/intents'
-import {
-  AGGRESSIVENESS_LABELS,
-  type AssistantReport,
-  type AssistantResult,
-  type AssistantTurn,
-  type ExecutedAction,
-  type PendingConfirmation,
+import type {
+  AssistantResult,
+  AssistantTurn,
+  ExecutedAction,
+  PendingConfirmation,
 } from '@/lib/ai-console/assistant'
 import { presetSummary, type ConsolePreset } from '@/lib/ai-console/presets'
 import {
@@ -404,7 +379,7 @@ export function AiConsole({
         await refreshSettings()
         toast.success('Изменение отменено.')
       } catch {
-        toast.error('Не уд��лось отменить изменение.')
+        toast.error('Не удалось отменить изменение.')
       }
     },
     [refreshSettings],

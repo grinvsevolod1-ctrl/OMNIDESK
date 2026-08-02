@@ -1,73 +1,28 @@
 'use client'
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
 import {
   ArrowUp,
-  Check,
-  Copy,
-  ExternalLink,
-  KeyRound,
-  Loader2,
   Mic,
-  Plus,
-  Rocket,
-  Server,
-  ServerCog,
   Square,
   Volume2,
   VolumeX,
-  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type {
   AssistantResult,
   AssistantTurn,
-  CredentialRequest,
-  ExecutedAction,
-  LaunchedDeploy,
   OpenPanel,
 } from '@/lib/servers-console/assistant'
 import { INTENT_CATALOGUE } from '@/lib/servers-console/intents'
 import {
-  cancelAiDeployAction,
   refreshServersAction,
-  saveRepoTokenAction,
-  saveServerCredentialsAction,
   serversAssistantAction,
 } from '@/app/actions/hosting-console'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import dynamic from 'next/dynamic'
-import { DeploymentLogs } from '@/components/admin/hosting/deployment-logs'
-
-// The full servers table (with its dialogs and forms) is only needed when the
-// assistant opens an inline panel — keep it out of the console's initial chunk
-// so the chat itself loads faster.
-const ServersAdmin = dynamic(
-  () =>
-    import('@/components/admin/hosting/servers-admin').then(
-      (m) => m.ServersAdmin,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center py-10 text-muted-foreground">
-        <Loader2 className="size-5 animate-spin" />
-      </div>
-    ),
-  },
-)
 import { useSpeechInput } from '@/components/admin/ai-console/use-speech-input'
 import type { HostingServer } from '@/lib/types'
 import type { ChatMessage } from './chat-types'
@@ -77,7 +32,6 @@ import {
   EmptyHero,
   MessageBubble,
   StatusStrip,
-  pluralServers,
 } from './bubbles'
 import { CredentialCard } from './credential-card'
 import { DeployCard, InlinePanel } from './deploy-card'
@@ -483,7 +437,7 @@ export function ServersConsole({
                   setVoiceMode((v) => !v)
                 }}
                 aria-label={
-                  voiceMode ? 'Отключить озвучку ответов' : 'Озвучи��ать ответы'
+                  voiceMode ? 'Отключить озвучку ответов' : 'Озвучивать ответы'
                 }
                 aria-pressed={voiceMode}
                 title={voiceMode ? 'Озвучка включена' : 'Озвучивать ответы'}

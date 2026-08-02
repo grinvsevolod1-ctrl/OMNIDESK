@@ -8,12 +8,9 @@ import {
   FileDown,
   Flame,
   GraduationCap,
-  Loader2,
   Plus,
   Power,
-  ShieldAlert,
   Undo2,
-  X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
