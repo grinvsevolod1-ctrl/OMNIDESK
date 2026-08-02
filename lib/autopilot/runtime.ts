@@ -381,10 +381,7 @@ async function runLivechatAiLead(input: {
       if (ready) {
         const promoted = await markAiHandoffToHuman(input.conversationId)
         if (promoted) {
-          console.log(
-            'AI handed lead to a human («Передан человеку»):',
-            input.conversationId,
-          )
+          // logAi below is the durable record; no stdout duplicate needed.
           void logAi({
             level: 'info',
             source: 'handoff',
