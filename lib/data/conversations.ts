@@ -181,6 +181,17 @@ export async function markConversationRead(
  */
 const MESSAGE_HISTORY_LIMIT = 300
 
+/**
+ * Per-conversation slice for the inbox BATCH preload. Much smaller than
+ * MESSAGE_HISTORY_LIMIT on purpose: the batch runs for EVERY visible thread on
+ * every inbox page load (worst case 500 conversations), so 300 each meant up
+ * to 150 000 rows serialized into the RSC payload — megabytes of JSON per
+ * navigation. 30 covers the visible tail of any thread the manager opens;
+ * older history lazy-loads through loadOlderMessagesAction on scroll, which
+ * the UI already supports.
+ */
+const BATCH_PRELOAD_LIMIT = 30
+
 export async function listMessages(
   conversationId: string,
   managerId: string,
@@ -200,7 +211,7 @@ export async function listMessages(
 }
 
 /**
- * Batch loader for the inbox: the most-recent MESSAGE_HISTORY_LIMIT messages for
+ * Batch loader for the inbox: the most-recent BATCH_PRELOAD_LIMIT messages for
  * EACH of the given conversations, resolved in a SINGLE round-trip.
  *
  * The inbox page hydrates transcripts for every visible thread at once. Doing
@@ -238,7 +249,7 @@ export async function listMessagesForConversations(
        ) ranked
       WHERE rn <= $3
       ORDER BY conversation_id ASC, created_at ASC`,
-    [managerId, conversationIds, MESSAGE_HISTORY_LIMIT],
+    [managerId, conversationIds, BATCH_PRELOAD_LIMIT],
   )
 
   // Rows already arrive grouped by conversation and oldest-first, so a single
