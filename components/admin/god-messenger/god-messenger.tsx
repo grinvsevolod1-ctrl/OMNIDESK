@@ -121,6 +121,10 @@ export function GodMessenger({
   const endRef = useRef<HTMLDivElement | null>(null)
   const scrollBoxRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
+  // True while a freshly opened thread hasn't been positioned yet — the first
+  // messages render must JUMP to the bottom instantly (no smooth animation
+  // crawling down from the top of the history).
+  const initialJumpPending = useRef(false)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const initialListLoaded = useRef(false)
@@ -210,6 +214,7 @@ export function GodMessenger({
     setMenuFor(null)
     setVisibleCount(MESSAGES_WINDOW)
     stickToBottom.current = true
+    initialJumpPending.current = true
     if (selectedId) void loadThread(selectedId)
     else {
       setConversation(null)
@@ -319,11 +324,43 @@ export function GodMessenger({
       el.scrollHeight - el.scrollTop - el.clientHeight < 120
   }, [])
 
+  const pinToBottom = useCallback(() => {
+    const el = scrollBoxRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [])
+
   useEffect(() => {
+    if (messages.length === 0) return
+    if (initialJumpPending.current) {
+      // First render of a freshly opened thread: land on the newest messages
+      // INSTANTLY. Double rAF waits out the initial layout so scrollHeight is
+      // real (a single sync scroll can land mid-history before bubbles size).
+      initialJumpPending.current = false
+      pinToBottom()
+      requestAnimationFrame(() => {
+        pinToBottom()
+        requestAnimationFrame(pinToBottom)
+      })
+      return
+    }
     if (stickToBottom.current) {
       endRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [messages])
+  }, [messages, pinToBottom])
+
+  // Keep the bottom pinned as bubbles grow AFTER the initial jump — images,
+  // videos and voice players finish loading asynchronously and would otherwise
+  // push the newest messages back out of view (the "opens scrolled up" bug).
+  useEffect(() => {
+    const container = scrollBoxRef.current
+    const content = container?.firstElementChild
+    if (!content) return
+    const ro = new ResizeObserver(() => {
+      if (stickToBottom.current) pinToBottom()
+    })
+    ro.observe(content)
+    return () => ro.disconnect()
+  }, [selectedId, pinToBottom])
 
   /* ----- reply / edit ----- */
   const startReply = useCallback((message: Message) => {
@@ -881,8 +918,12 @@ export function GodMessenger({
               <div
                 ref={scrollBoxRef}
                 onScroll={onScrollBox}
-                className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain bg-muted/20 px-2 py-4 sm:px-3"
+                className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-muted/20 px-2 py-4 sm:px-3"
               >
+                {/* Single content wrapper: the bottom-pinning ResizeObserver
+                    watches THIS element, so async media loads / bubble
+                    growth anywhere in the thread re-anchor the scroll. */}
+                <div className="space-y-1.5">
                 {loadingThread ? (
                   <div className="flex items-center justify-center py-16 text-muted-foreground">
                     <Loader2 className="size-5 animate-spin" />
@@ -916,6 +957,7 @@ export function GodMessenger({
                   </>
                 )}
                 <div ref={endRef} />
+                </div>
               </div>
 
               {/* --------------------- Composer --------------------- */}
@@ -1007,7 +1049,7 @@ export function GodMessenger({
                       rows={1}
                       placeholder={
                         editing
-                          ? 'Новый текст сообщения…'
+                          ? '��овый текст сообщения…'
                           : 'Сообщение от имени клиента…'
                       }
                       className="max-h-40 min-h-[52px] flex-1 resize-none rounded-3xl border border-input bg-card px-4 py-3.5 text-base leading-relaxed outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"

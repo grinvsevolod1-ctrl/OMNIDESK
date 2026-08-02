@@ -107,6 +107,14 @@ export const MessageComposer = memo(function MessageComposer({
     // On unmount (i.e. switching to another conversation) save the unsent draft.
     return () => persistRef.current(textRef.current)
   }, [])
+  // ALSO persist while typing (debounced). Unmount-only persistence loses the
+  // draft whenever the tree never unmounts cleanly — a hard reload, a crash,
+  // navigating via browser chrome — which managers reported as vanished text.
+  // 400ms of idle keeps this far from the per-keystroke hot path.
+  useEffect(() => {
+    const t = setTimeout(() => persistRef.current(text), 400)
+    return () => clearTimeout(t)
+  }, [text])
 
   const resizeComposer = useCallback(() => {
     const el = composerRef.current
@@ -124,6 +132,9 @@ export const MessageComposer = memo(function MessageComposer({
     if (!body) return
     onSend(body)
     setText('')
+    // Clear the persisted draft immediately — otherwise the debounced persist
+    // (or a stale localStorage entry) could resurrect an already-sent message.
+    persistRef.current('')
     requestAnimationFrame(resizeComposer)
   }, [aiLed, text, onSend, onBlockedInteract, resizeComposer])
 
@@ -230,6 +241,7 @@ export const MessageComposer = memo(function MessageComposer({
                 if (f) {
                   onSendMediaFile(f, text.trim())
                   setText('')
+                  persistRef.current('')
                 }
                 e.target.value = ''
               }}

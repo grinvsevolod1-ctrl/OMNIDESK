@@ -174,12 +174,32 @@ export function InboxView({
   // Kept in a ref (not state) so the MessageComposer — which is keyed by
   // conversation id and owns the live text in local state — can seed from and
   // write back to it WITHOUT ever re-rendering this large parent on a keystroke.
+  //
+  // Drafts are ALSO mirrored to localStorage: the in-memory ref dies with the
+  // component (router.refresh storms, navigating away via a notification, a
+  // full reload, a crash), and losing a half-written reply is exactly the
+  // "текст исчезает" complaint. localStorage survives all of those. This is
+  // ephemeral UI state (like Telegram Web's drafts), not app data.
   const draftsRef = useRef<Record<string, string>>({})
   const persistDraft = useCallback((id: string, text: string) => {
     if (text) draftsRef.current[id] = text
     else delete draftsRef.current[id]
+    try {
+      if (text) localStorage.setItem(`od_draft_${id}`, text)
+      else localStorage.removeItem(`od_draft_${id}`)
+    } catch {
+      // Storage full / privacy mode — the in-memory copy still works.
+    }
   }, [])
-  const getDraft = useCallback((id: string) => draftsRef.current[id] ?? '', [])
+  const getDraft = useCallback((id: string) => {
+    const inMemory = draftsRef.current[id]
+    if (inMemory !== undefined) return inMemory
+    try {
+      return localStorage.getItem(`od_draft_${id}`) ?? ''
+    } catch {
+      return ''
+    }
+  }, [])
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
   // Message whose edit history is open in the dialog (null = closed).
   const [historyMessage, setHistoryMessage] = useState<Message | null>(null)
@@ -787,13 +807,58 @@ export function InboxView({
     [conversations, activeId],
   )
 
-  // Auto-scroll the thread to the newest message (and as the visitor's live
-  // typing draft grows, so the preview stays in view).
+  // ----- thread auto-scroll (Telegram semantics) -----
+  // stickToBottom: follow new content ONLY while the manager is already at (or
+  // near) the bottom. If they scrolled up to read history, new messages /
+  // visitor-typing previews must NOT yank them back down.
+  const stickToBottom = useRef(true)
+  const pinToBottom = useCallback(() => {
+    const el = messagesScrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [])
+  const handleThreadScroll = useCallback(() => {
+    const el = messagesScrollRef.current
+    if (!el) return
+    stickToBottom.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }, [])
+
+  // Opening a thread: jump STRAIGHT to the newest messages, instantly. A double
+  // rAF waits out the first real layout pass — with `content-visibility: auto`
+  // bubbles, the initial scrollHeight is based on 56px placeholder sizes, so a
+  // single synchronous scroll lands mid-history (the "opens at the top" bug).
+  useEffect(() => {
+    if (!activeId) return
+    stickToBottom.current = true
+    pinToBottom()
+    requestAnimationFrame(() => {
+      pinToBottom()
+      requestAnimationFrame(pinToBottom)
+    })
+  }, [activeId, pinToBottom])
+
+  // While pinned, keep the bottom in view as content grows AFTER the initial
+  // scroll: image/video/voice bubbles finish loading, content-visibility
+  // placeholders get their real heights, the visitor's live draft expands. A
+  // ResizeObserver on the scroll content catches all of those without polling.
+  useEffect(() => {
+    const container = messagesScrollRef.current
+    const content = container?.firstElementChild
+    if (!content) return
+    const ro = new ResizeObserver(() => {
+      if (stickToBottom.current) pinToBottom()
+    })
+    ro.observe(content)
+    return () => ro.disconnect()
+  }, [activeId, pinToBottom])
+
+  // New message appended / visitor draft preview changed → follow, but only
+  // when already at the bottom.
   const activeTypingDraft =
     activeId && typingByConv[activeId] ? typingByConv[activeId].draft : ''
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [activeId, thread.length, activeTypingDraft])
+    if (stickToBottom.current) pinToBottom()
+  }, [thread.length, activeTypingDraft, pinToBottom])
 
   // NOTE: The outbound "agent is typing" indicator (a server action fired on
   // every keystroke) was removed for performance - a network round-trip per
@@ -1247,6 +1312,7 @@ export function InboxView({
             {/* Messages */}
             <div
               ref={messagesScrollRef}
+              onScroll={handleThreadScroll}
               className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-muted/20 px-3 py-4 sm:px-6"
               style={{
                 backgroundImage:
