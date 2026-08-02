@@ -29,14 +29,11 @@ export const EmojiPicker = memo(function EmojiPicker({
 }) {
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          aria-label="Эмодзи"
-        >
-          <Smile className="size-5" />
-        </button>
+      <PopoverTrigger
+        className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        aria-label="Эмодзи"
+      >
+        <Smile className="size-5" />
       </PopoverTrigger>
       <PopoverContent
         side="top"

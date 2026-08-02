@@ -282,7 +282,6 @@ function MediaContent({ message, mine }: { message: Message; mine: boolean }) {
     case 'video':
     case 'video_note':
       return (
-        // eslint-disable-next-line jsx-a11y/media-has-caption
         <video
           src={url}
           controls
@@ -294,7 +293,6 @@ function MediaContent({ message, mine }: { message: Message; mine: boolean }) {
     case 'voice':
     case 'audio':
       return (
-        // eslint-disable-next-line jsx-a11y/media-has-caption
         <audio src={url} controls preload="metadata" className="mb-1 w-56 max-w-full" />
       )
     default:
