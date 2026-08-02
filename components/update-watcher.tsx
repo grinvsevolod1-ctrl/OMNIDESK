@@ -26,6 +26,14 @@ const POLL_MS = 20_000
 const FAST_POLL_MS = 3_000
 /** Give the "reloading" overlay a beat to paint before the hard reload. */
 const RELOAD_DELAY_MS = 1_200
+/**
+ * Consecutive `disk !== runtime` observations required before showing the
+ * "installing" overlay. A single mismatched poll can be a transient artifact
+ * of the deploy swap window or a flaky read — never worth alarming users.
+ */
+const INSTALL_CONFIRM_POLLS = 2
+/** sessionStorage key remembering which build id we already reloaded into. */
+const RELOADED_FOR_KEY = 'od:update-reloaded-for'
 
 type Phase = 'idle' | 'installing' | 'reloading'
 
@@ -37,6 +45,8 @@ export function UpdateWatcher() {
     let currentPhase: Phase = 'idle'
     let timer: ReturnType<typeof setTimeout> | null = null
     let disposed = false
+    /** Consecutive polls that saw disk !== runtime (see INSTALL_CONFIRM_POLLS). */
+    let diskMismatchStreak = 0
 
     const applyPhase = (next: Phase) => {
       if (currentPhase === next) return
@@ -65,18 +75,47 @@ export function UpdateWatcher() {
         if (baseline === null) baseline = runtime
 
         if (runtime !== baseline) {
-          // The NEW build is serving requests: reload into it.
+          // The NEW build is serving requests. Reload into it — but only ONCE
+          // per build id: if we already reloaded for this exact id this
+          // session, the backend is flapping between builds (e.g. a broken
+          // deploy loop or mixed server instances), and reload-looping every
+          // open tab would make the outage worse. Adopt it as the new
+          // baseline and stay quiet instead.
+          let alreadyReloadedFor: string | null = null
+          try {
+            alreadyReloadedFor = sessionStorage.getItem(RELOADED_FOR_KEY)
+          } catch {
+            /* sessionStorage unavailable (privacy mode) — fall through */
+          }
+          if (alreadyReloadedFor === runtime) {
+            baseline = runtime
+            diskMismatchStreak = 0
+            applyPhase('idle')
+            schedule(POLL_MS)
+            return
+          }
+          try {
+            sessionStorage.setItem(RELOADED_FOR_KEY, runtime)
+          } catch {
+            /* best-effort guard only */
+          }
           applyPhase('reloading')
           if (timer) clearTimeout(timer)
           setTimeout(() => window.location.reload(), RELOAD_DELAY_MS)
           return
         }
         if (disk && disk !== runtime) {
-          // Build swapped on disk, PM2 restart imminent.
-          applyPhase('installing')
+          // Build swapped on disk, PM2 restart imminent. Require the mismatch
+          // to persist across consecutive polls before alarming: a one-off
+          // reading during the atomic swap window is not worth an overlay.
+          diskMismatchStreak += 1
+          if (diskMismatchStreak >= INSTALL_CONFIRM_POLLS) {
+            applyPhase('installing')
+          }
           schedule(FAST_POLL_MS)
           return
         }
+        diskMismatchStreak = 0
         applyPhase('idle')
         schedule(POLL_MS)
       } catch {

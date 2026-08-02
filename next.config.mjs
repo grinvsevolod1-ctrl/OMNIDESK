@@ -1,4 +1,31 @@
+import { execSync } from 'node:child_process'
+
 /** @type {import('next').NextConfig} */
+
+// Deterministic BUILD_ID = deployed git commit sha.
+//
+// WHY: without generateBuildId, `next build` invents a RANDOM id on every
+// build. The update-watcher (components/update-watcher.tsx + /api/version)
+// compares BUILD_IDs to decide "an update landed — show the overlay and
+// reload". With random ids, ANY rebuild/redeploy of the SAME commit (an
+// auto-deploy retry loop, a manual ./deploy.sh re-run, a pm2 recovery path)
+// changed the id and flashed the "Устанавливается обновление" modal in every
+// open tab even though nothing actually updated. Pinning the id to the commit
+// sha means the overlay fires ONLY when a genuinely new commit from the
+// deploy branch (main) goes live.
+function gitCommitBuildId() {
+  try {
+    const sha = execSync('git rev-parse HEAD', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null
+  } catch {
+    // Not a git checkout (e.g. a tarball deploy) — null falls back to
+    // Next's default random id.
+    return null
+  }
+}
 
 // Widget loaders + service workers must never be cached aggressively, or
 // browsers/CDNs keep serving an old (possibly broken) copy after a fix ships.
@@ -42,6 +69,9 @@ const nextConfig = {
   // so the currently-running server keeps serving the old build (no crash-loop
   // while '.next' would otherwise be missing mid-rebuild).
   distDir: process.env.NEXT_DIST_DIR || '.next',
+  // See gitCommitBuildId() above: stable id per commit so the update overlay
+  // only fires when the deployed code ACTUALLY changed.
+  generateBuildId: gitCommitBuildId,
   // Do not advertise the framework in response headers (X-Powered-By: Next.js).
   poweredByHeader: false,
   // React Compiler (stable in Next 16, React 19.2). The codebase is written for

@@ -425,14 +425,25 @@ function buildReport(redact) {
 
   if (pm2.ok) {
     for (const p of pm2.procs) {
-      // Crash / restart detection.
+      // Scheduled one-shots (ecosystem.config.js: autorestart=false +
+      // cron_restart, names omnidesk-cron-*) live their whole life as
+      // "stopped" between runs, and PM2 bumps restart_time on EVERY scheduled
+      // launch. Treating either as a crash produced a false "new issue" push
+      // to runtime-logs on nearly every scan cycle. Only a genuinely errored
+      // state should alarm for them.
+      const isCronOneShot = /^omnidesk-cron-/.test(p.name)
+
+      // Crash / restart detection (long-lived processes only).
       const prev = state.restarts.get(p.name)
-      if (prev != null && p.restarts > prev) {
+      if (prev != null && p.restarts > prev && !isCronOneShot) {
         newError = true
         reasons.push(`${p.name}: restarts ${prev} → ${p.restarts}`)
       }
       state.restarts.set(p.name, p.restarts)
-      if (p.status && p.status !== 'online') {
+      const abnormalStatus = isCronOneShot
+        ? p.status === 'errored'
+        : Boolean(p.status && p.status !== 'online')
+      if (abnormalStatus) {
         newError = true
         reasons.push(`${p.name}: status=${p.status}`)
       }
