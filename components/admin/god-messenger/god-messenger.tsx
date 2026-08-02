@@ -12,19 +12,28 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import {
+  Check,
   ChevronLeft,
+  Copy,
   CornerUpLeft,
   Loader2,
+  Mic,
+  Paperclip,
+  Pencil,
   Plus,
   Radio,
   Search,
   Send,
+  Trash2,
   X,
   MessagesSquare,
 } from 'lucide-react'
 import {
+  secretEditMessageAction,
   secretFetchThreadAction,
   secretListConversationsAction,
+  secretMessengerDeleteMessageAction,
+  secretSendMediaMessageAction,
   secretSendMessageAction,
   type ConversationWithManager,
 } from '@/app/actions/admin-secret'
@@ -33,12 +42,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import type { Channel, Manager, Message } from '@/lib/types'
+import type { Channel, Manager, MediaType, Message } from '@/lib/types'
 import { TYPE_LABEL, fmtTime, initials, isComposing } from './utils'
 import { NewChatDialog } from './new-chat-dialog'
 import { NotifyButton } from './notify-button'
 import { MessageBubble } from './message-bubble'
-import { buildReplyBody, parseReply, snippetOf } from './reply'
+import { parseReply, snippetOf } from './reply'
+import { EmojiPicker } from './emoji-picker'
 
 /**
  * God messenger root. A phone-first, full-screen chat surface where the god
@@ -46,6 +56,10 @@ import { buildReplyBody, parseReply, snippetOf } from './reply'
  * replies (direction 'out') on the left — the mirror image of the manager inbox.
  * Reuses the god-console server actions + the admin SSE stream, so everything is
  * live and lands in the real manager inbox.
+ *
+ * Telegram-parity features: real quoted replies, edit/delete own messages,
+ * emoji palette, file/photo/video attachments, voice notes, optimistic sends,
+ * SSE reconnect resync, smart autoscroll and a long-press action sheet.
  */
 export function GodMessenger({
   channels,
@@ -63,7 +77,7 @@ export function GodMessenger({
   const [loadingList, setLoadingList] = useState(true)
   const [search, setSearch] = useState('')
 
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(deepLinkId)
   const [conversation, setConversation] = useState<ConversationWithManager | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   // Render window: only the newest N messages hit the DOM. Long chats
@@ -76,7 +90,18 @@ export function GodMessenger({
   const [createOpen, setCreateOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [replyTo, setReplyTo] = useState<Message | null>(null)
+  const [editing, setEditing] = useState<Message | null>(null)
+  const [menuFor, setMenuFor] = useState<Message | null>(null)
+  const [uploading, setUploading] = useState(false)
   const [pending, startTransition] = useTransition()
+
+  // Voice note recording (MediaRecorder).
+  const [recording, setRecording] = useState(false)
+  const [recordSecs, setRecordSecs] = useState(0)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const recordChunks = useRef<Blob[]>([])
+  const recordTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const recordCancelled = useRef(false)
 
   // Swipe-back: drag RIGHT anywhere in the thread (mobile, touch only) to
   // return to the chat list — like Telegram/iOS. Doesn't clash with
@@ -85,31 +110,54 @@ export function GodMessenger({
   const backStart = useRef<{ x: number; y: number } | null>(null)
   const backAxis = useRef<null | 'h' | 'v'>(null)
 
-  const selectedIdRef = useRef<string | null>(null)
+  const selectedIdRef = useRef<string | null>(selectedId)
   useEffect(() => {
     selectedIdRef.current = selectedId
   }, [selectedId])
 
   const listRefetch = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const threadRefetch = useRef<ReturnType<typeof setTimeout> | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
+  const scrollBoxRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottom = useRef(true)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
-  const deepLinkApplied = useRef(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const initialListLoaded = useRef(false)
+  const hadConnected = useRef(false)
 
   const managerNameOf = useMemo(() => {
     const map = new Map(managers.map((m) => [m.id, m.name]))
     return (id: string | null) => (id ? map.get(id) ?? '—' : '—')
   }, [managers])
 
+  /* ----- selection ⇄ URL sync -----
+   * The open thread id lives in ?c=. If ANYTHING remounts this component
+   * (router refresh, HMR, tab restore), the open dialog is restored instead of
+   * kicking the user back to the chat list mid-conversation. replaceState only
+   * — no navigation, no RSC round-trip. */
+  const selectThread = useCallback((id: string | null) => {
+    setSelectedId(id)
+    try {
+      const url = new URL(window.location.href)
+      if (id) url.searchParams.set('c', id)
+      else url.searchParams.delete('c')
+      window.history.replaceState(null, '', url.toString())
+    } catch {
+      /* URL sync is best-effort */
+    }
+  }, [])
+
   /* ----- list loading ----- */
   const loadList = useCallback(
     async (opts?: { silent?: boolean }) => {
-      if (!opts?.silent) setLoadingList(true)
+      if (!opts?.silent && !initialListLoaded.current) setLoadingList(true)
       try {
         const rows = await secretListConversationsAction({
           search,
           channelType: 'all',
         })
         setConversations(rows)
+        initialListLoaded.current = true
       } catch {
         toast.error('Не удалось загрузить диалоги')
       } finally {
@@ -119,33 +167,48 @@ export function GodMessenger({
     [search],
   )
 
+  // Initial load fires immediately; subsequent search keystrokes are debounced
+  // and SILENT (the previous list stays on screen — no spinner flash per key).
   useEffect(() => {
-    const id = setTimeout(() => void loadList(), 300)
+    if (!initialListLoaded.current) {
+      void loadList()
+      return
+    }
+    const id = setTimeout(() => void loadList({ silent: true }), 300)
     return () => clearTimeout(id)
   }, [loadList])
 
   /* ----- thread loading ----- */
-  const loadThread = useCallback(async (id: string) => {
-    setLoadingThread(true)
-    try {
-      const res = await secretFetchThreadAction(id)
-      if (res.ok) {
-        setConversation(res.conversation)
-        setMessages(res.messages)
-      } else {
-        toast.error(res.message ?? 'Диалог недоступен')
+  const loadThread = useCallback(
+    async (id: string, opts?: { silent?: boolean }) => {
+      if (!opts?.silent) setLoadingThread(true)
+      try {
+        const res = await secretFetchThreadAction(id)
+        // Race guard: the user may have switched threads while we were loading.
+        if (selectedIdRef.current !== id) return
+        if (res.ok) {
+          setConversation(res.conversation)
+          setMessages(res.messages)
+        } else {
+          toast.error(res.message ?? 'Диалог недоступен')
+        }
+      } catch {
+        if (selectedIdRef.current === id)
+          toast.error('Не удалось загрузить переписку')
+      } finally {
+        if (selectedIdRef.current === id) setLoadingThread(false)
       }
-    } catch {
-      toast.error('Не удалось загрузить переписку')
-    } finally {
-      setLoadingThread(false)
-    }
-  }, [])
+    },
+    [],
+  )
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setReplyTo(null)
+    setEditing(null)
+    setMenuFor(null)
     setVisibleCount(MESSAGES_WINDOW)
+    stickToBottom.current = true
     if (selectedId) void loadThread(selectedId)
     else {
       setConversation(null)
@@ -154,17 +217,23 @@ export function GodMessenger({
   }, [selectedId, loadThread])
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Apply the ?c=<id> deep link (from a push notification) once.
-  useEffect(() => {
-    if (deepLinkApplied.current || !deepLinkId) return
-    deepLinkApplied.current = true
-    setSelectedId(deepLinkId)
-  }, [deepLinkId])
-
   /* ----- live updates via admin SSE ----- */
   useEffect(() => {
     const es = new EventSource('/api/wijegniwjgwjog/stream')
-    es.addEventListener('ready', () => setLive(true))
+
+    es.addEventListener('ready', () => {
+      setLive(true)
+      // RECONNECT resync: any message that arrived while the stream was down
+      // would otherwise be silently missing until the user re-opened the
+      // thread. On every reconnect (not the first connect) refetch both the
+      // open thread and the list, silently.
+      if (hadConnected.current) {
+        const id = selectedIdRef.current
+        if (id) void loadThread(id, { silent: true })
+        void loadList({ silent: true })
+      }
+      hadConnected.current = true
+    })
     es.onerror = () => setLive(false)
 
     es.addEventListener('update', (ev) => {
@@ -184,27 +253,38 @@ export function GodMessenger({
         return
       }
 
-      if (
-        data.type === 'message' &&
-        data.event !== 'update' &&
-        data.conversationId &&
-        data.conversationId === selectedIdRef.current &&
-        data.id
-      ) {
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === data.id)) return prev
-          return [
-            ...prev,
-            {
-              id: data.id as string,
-              conversationId: data.conversationId as string,
-              direction: (data.direction ?? 'out') as 'in' | 'out',
-              body: data.body ?? '',
-              author: data.author ?? '',
-              createdAt: data.createdAt ?? new Date().toISOString(),
-            },
-          ]
-        })
+      const forSelected =
+        Boolean(data.conversationId) &&
+        data.conversationId === selectedIdRef.current
+
+      if (data.type === 'message' && forSelected) {
+        if (data.event !== 'update' && data.id) {
+          // New message in the open thread → append (dedup by id: our own
+          // optimistic sends arrive here a second time).
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === data.id)) return prev
+            return [
+              ...prev,
+              {
+                id: data.id as string,
+                conversationId: data.conversationId as string,
+                direction: (data.direction ?? 'out') as 'in' | 'out',
+                body: data.body ?? '',
+                author: data.author ?? '',
+                createdAt: data.createdAt ?? new Date().toISOString(),
+              },
+            ]
+          })
+        } else {
+          // A message changed IN PLACE (edited / deleted / reaction). The SSE
+          // payload doesn't carry the full new state, so refetch the thread
+          // silently (debounced — bursts collapse to one request).
+          if (threadRefetch.current) clearTimeout(threadRefetch.current)
+          threadRefetch.current = setTimeout(() => {
+            const id = selectedIdRef.current
+            if (id) void loadThread(id, { silent: true })
+          }, 300)
+        }
       }
 
       if (data.type === 'message' || data.type === 'conversation') {
@@ -216,27 +296,106 @@ export function GodMessenger({
     return () => {
       es.close()
       if (listRefetch.current) clearTimeout(listRefetch.current)
+      if (threadRefetch.current) clearTimeout(threadRefetch.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /* ----- auto-scroll ----- */
+  /* ----- smart auto-scroll -----
+   * Follow new messages ONLY while the user is already at (or near) the
+   * bottom. If they scrolled up to read history, an incoming SSE message must
+   * not yank them back down (classic Telegram behaviour). */
+  const onScrollBox = useCallback(() => {
+    const el = scrollBoxRef.current
+    if (!el) return
+    stickToBottom.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }, [])
+
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (stickToBottom.current) {
+      endRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages])
 
-  /* ----- reply handling ----- */
+  /* ----- reply / edit ----- */
   const startReply = useCallback((message: Message) => {
+    if (message.deletedAt) return
+    setEditing(null)
     setReplyTo(message)
     composerRef.current?.focus()
   }, [])
 
+  const startEdit = useCallback((message: Message) => {
+    setReplyTo(null)
+    setEditing(message)
+    setDraft(parseReply(message.body).text)
+    composerRef.current?.focus()
+  }, [])
+
+  const cancelComposeExtras = useCallback(() => {
+    setReplyTo(null)
+    if (editing) setDraft('')
+    setEditing(null)
+  }, [editing])
+
+  /* ----- message action sheet ----- */
+  const menuAction = useCallback(
+    (action: 'reply' | 'copy' | 'edit' | 'delete') => {
+      const msg = menuFor
+      setMenuFor(null)
+      if (!msg) return
+      switch (action) {
+        case 'reply':
+          startReply(msg)
+          break
+        case 'copy': {
+          const text = parseReply(msg.body).text
+          void navigator.clipboard
+            ?.writeText(text)
+            .then(() => toast.success('Скопировано'))
+            .catch(() => toast.error('Не удалось скопировать'))
+          break
+        }
+        case 'edit':
+          startEdit(msg)
+          break
+        case 'delete':
+          startTransition(async () => {
+            const res = await secretMessengerDeleteMessageAction({
+              messageId: msg.id,
+              conversationId: msg.conversationId,
+            })
+            if (res.ok) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === msg.id
+                    ? { ...m, deletedAt: new Date().toISOString(), deletedOrigin: 'remote' as const }
+                    : m,
+                ),
+              )
+              void loadList({ silent: true })
+            } else {
+              toast.error(res.message)
+            }
+          })
+          break
+      }
+    },
+    [menuFor, startReply, startEdit, loadList],
+  )
+
   /* ----- swipe right anywhere in the thread → back to list ----- */
   const onBackPointerDown = useCallback((e: React.PointerEvent) => {
     // Touch only: a mouse drag on desktop must never slide the panel. Also
-    // skip on md+ layouts where the list is already visible beside the thread.
+    // skip on md+ layouts where the list is already visible beside the thread,
+    // and NEVER claim gestures that start on interactive controls (composer,
+    // buttons, media players) — that's how typing could "kick" the user back.
     if (e.pointerType !== 'touch') return
     if (window.matchMedia('(min-width: 768px)').matches) return
+    const target = e.target as HTMLElement | null
+    if (target?.closest('textarea, input, button, a, audio, video, [data-no-swipe]'))
+      return
     backStart.current = { x: e.clientX, y: e.clientY }
     backAxis.current = null
   }, [])
@@ -261,35 +420,227 @@ export function GodMessenger({
     backStart.current = null
     backAxis.current = null
     setBackDrag((d) => {
-      if (d >= THREAD_DRAG_TRIGGER) setSelectedId(null)
+      if (d >= THREAD_DRAG_TRIGGER) selectThread(null)
       return 0
     })
-  }, [])
+  }, [selectThread])
 
-  /* ----- send as client ----- */
+  /* ----- send / save edit (as the client) ----- */
   const sendMessage = useCallback(() => {
     const text = draft.trim()
     if (!text || !selectedIdRef.current) return
+    const convId = selectedIdRef.current
+
+    if (editing) {
+      const target = editing
+      setDraft('')
+      setEditing(null)
+      startTransition(async () => {
+        const res = await secretEditMessageAction({
+          messageId: target.id,
+          conversationId: convId,
+          body: text,
+        })
+        if (res.ok) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === target.id
+                ? {
+                    ...m,
+                    body: text,
+                    editedAt: new Date().toISOString(),
+                    editCount: (m.editCount ?? 0) + 1,
+                  }
+                : m,
+            ),
+          )
+          void loadList({ silent: true })
+        } else {
+          toast.error(res.message)
+          // Restore edit state only if the user hasn't started typing anew.
+          setDraft((cur) => cur || text)
+          setEditing((cur) => cur ?? target)
+        }
+      })
+      return
+    }
+
     const target = replyTo
-    const body = target ? buildReplyBody(target, text) : text
     setDraft('')
     setReplyTo(null)
+    stickToBottom.current = true
     startTransition(async () => {
       const res = await secretSendMessageAction({
-        conversationId: selectedIdRef.current as string,
-        body,
+        conversationId: convId,
+        body: text,
         direction: 'in',
+        replyToMessageId: target?.id,
       })
-      if (res.ok) {
-        void loadThread(selectedIdRef.current as string)
+      if (res.ok && res.id) {
+        // Optimistic local append — no full-thread refetch. The SSE echo of
+        // this same message is deduped by id.
+        const newMsg: Message = {
+          id: res.id,
+          conversationId: convId,
+          direction: 'in',
+          body: text,
+          author: conversation?.contactName || 'Клиент',
+          createdAt: res.createdAt ?? new Date().toISOString(),
+          ...(target
+            ? {
+                replyTo: {
+                  id: target.id,
+                  author:
+                    target.direction === 'in'
+                      ? conversation?.contactName || 'Клиент'
+                      : 'Менеджер',
+                  body: snippetOf(target),
+                  ...(target.mediaType ? { mediaType: target.mediaType } : {}),
+                },
+              }
+            : {}),
+        }
+        setMessages((prev) =>
+          prev.some((m) => m.id === newMsg.id) ? prev : [...prev, newMsg],
+        )
         void loadList({ silent: true })
-      } else {
+      } else if (!res.ok) {
         toast.error(res.message)
-        setDraft(text)
-        setReplyTo(target)
+        // Don't clobber text the user typed while the request was in flight.
+        setDraft((cur) => cur || text)
+        setReplyTo((cur) => cur ?? target)
       }
     })
-  }, [draft, replyTo, loadThread, loadList])
+  }, [draft, replyTo, editing, conversation, loadList])
+
+  /* ----- attachments ----- */
+  const uploadFile = useCallback(
+    (file: File, kind?: 'voice') => {
+      const convId = selectedIdRef.current
+      if (!convId) return
+      const fd = new FormData()
+      fd.set('file', file)
+      fd.set('conversationId', convId)
+      fd.set('direction', 'in')
+      if (kind) fd.set('kind', kind)
+      const caption = kind ? '' : draft.trim()
+      if (caption) {
+        fd.set('caption', caption)
+        setDraft('')
+      }
+      setUploading(true)
+      stickToBottom.current = true
+      void secretSendMediaMessageAction(fd)
+        .then((res) => {
+          if (res.ok && res.id) {
+            const mediaType: MediaType =
+              kind === 'voice'
+                ? 'voice'
+                : file.type.startsWith('image/')
+                  ? 'image'
+                  : file.type.startsWith('video/')
+                    ? 'video'
+                    : file.type.startsWith('audio/')
+                      ? 'audio'
+                      : 'document'
+            const newMsg: Message = {
+              id: res.id,
+              conversationId: convId,
+              direction: 'in',
+              body: caption,
+              author: conversation?.contactName || 'Клиент',
+              createdAt: res.createdAt ?? new Date().toISOString(),
+              mediaType,
+              mediaMime: file.type || undefined,
+              mediaName: file.name || undefined,
+              mediaUrl: `/api/media/${res.id}`,
+            }
+            setMessages((prev) =>
+              prev.some((m) => m.id === newMsg.id) ? prev : [...prev, newMsg],
+            )
+            void loadList({ silent: true })
+          } else if (!res.ok) {
+            toast.error(res.message)
+          }
+        })
+        .catch(() => toast.error('Не удалось отправить файл'))
+        .finally(() => setUploading(false))
+    },
+    [draft, conversation, loadList],
+  )
+
+  const onFilePicked = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (file) uploadFile(file)
+    },
+    [uploadFile],
+  )
+
+  /* ----- voice notes ----- */
+  const stopRecordTimer = () => {
+    if (recordTimer.current) clearInterval(recordTimer.current)
+    recordTimer.current = null
+  }
+
+  const startRecording = useCallback(async () => {
+    if (recording) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : ''
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
+      recordChunks.current = []
+      recordCancelled.current = false
+      rec.ondataavailable = (ev) => {
+        if (ev.data.size > 0) recordChunks.current.push(ev.data)
+      }
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop())
+        stopRecordTimer()
+        setRecording(false)
+        setRecordSecs(0)
+        if (recordCancelled.current || recordChunks.current.length === 0) return
+        const type = rec.mimeType || 'audio/webm'
+        const ext = type.includes('mp4') ? 'm4a' : 'webm'
+        const blob = new Blob(recordChunks.current, { type })
+        if (blob.size === 0) return
+        uploadFile(new File([blob], `voice.${ext}`, { type }), 'voice')
+      }
+      recorderRef.current = rec
+      rec.start(250)
+      setRecording(true)
+      setRecordSecs(0)
+      recordTimer.current = setInterval(
+        () => setRecordSecs((s) => s + 1),
+        1000,
+      )
+    } catch {
+      toast.error('Нет доступа к микрофону')
+    }
+  }, [recording, uploadFile])
+
+  const finishRecording = useCallback((cancel: boolean) => {
+    recordCancelled.current = cancel
+    const rec = recorderRef.current
+    recorderRef.current = null
+    if (rec && rec.state !== 'inactive') rec.stop()
+  }, [])
+
+  // Never leave the mic open on unmount.
+  useEffect(
+    () => () => {
+      recordCancelled.current = true
+      const rec = recorderRef.current
+      if (rec && rec.state !== 'inactive') rec.stop()
+      stopRecordTimer()
+    },
+    [],
+  )
 
   const showThread = selectedId !== null
 
@@ -387,7 +738,7 @@ export function GodMessenger({
                   <li key={c.id}>
                     <button
                       type="button"
-                      onClick={() => setSelectedId(c.id)}
+                      onClick={() => selectThread(c.id)}
                       className={cn(
                         'flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-muted/60 active:bg-muted',
                         c.id === selectedId
@@ -395,24 +746,14 @@ export function GodMessenger({
                           : 'bg-transparent',
                       )}
                     >
-                      <Avatar
-                        className={cn(
-                          'size-12 shrink-0',
-                          c.unread > 0 && 'ring-2 ring-primary/40 ring-offset-2 ring-offset-background',
-                        )}
-                      >
+                      <Avatar className="size-12 shrink-0">
                         <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
                           {initials(c.contactName || c.contactHandle)}
                         </AvatarFallback>
                       </Avatar>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <span
-                            className={cn(
-                              'truncate text-sm',
-                              c.unread > 0 ? 'font-semibold' : 'font-medium',
-                            )}
-                          >
+                          <span className="truncate text-sm font-medium">
                             {c.contactName || c.contactHandle}
                           </span>
                           <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -420,18 +761,19 @@ export function GodMessenger({
                           </span>
                         </div>
                         <div className="flex items-center justify-between gap-2">
-                          <span
-                            className={cn(
-                              'truncate text-xs',
-                              c.unread > 0
-                                ? 'font-medium text-foreground'
-                                : 'text-muted-foreground',
-                            )}
-                          >
+                          <span className="truncate text-xs text-muted-foreground">
                             {parseReply(c.lastMessage || '').text || 'Нет сообщений'}
                           </span>
+                          {/* From the CLIENT's perspective `unread` counts what
+                              the MANAGER hasn't read yet — show it as a muted
+                              "delivered, unread by manager" hint, not as an
+                              attention-grabbing alert. */}
                           {c.unread > 0 && (
-                            <Badge className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[11px] tabular-nums">
+                            <Badge
+                              variant="secondary"
+                              className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[11px] tabular-nums text-muted-foreground"
+                              title="Не прочитано менеджером"
+                            >
                               {c.unread}
                             </Badge>
                           )}
@@ -480,7 +822,7 @@ export function GodMessenger({
               <header className="flex items-center gap-2 border-b border-border bg-card/40 px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] backdrop-blur sm:px-3">
                 <button
                   type="button"
-                  onClick={() => setSelectedId(null)}
+                  onClick={() => selectThread(null)}
                   className="flex size-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
                   aria-label="Назад к списку"
                 >
@@ -502,7 +844,11 @@ export function GodMessenger({
                 </div>
               </header>
 
-              <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain bg-muted/20 px-2 py-4 sm:px-3">
+              <div
+                ref={scrollBoxRef}
+                onScroll={onScrollBox}
+                className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain bg-muted/20 px-2 py-4 sm:px-3"
+              >
                 {loadingThread ? (
                   <div className="flex items-center justify-center py-16 text-muted-foreground">
                     <Loader2 className="size-5 animate-spin" />
@@ -530,6 +876,7 @@ export function GodMessenger({
                         message={m}
                         prev={visible[i - 1]}
                         onReply={startReply}
+                        onMenu={setMenuFor}
                       />
                     ))}
                   </>
@@ -538,71 +885,241 @@ export function GodMessenger({
               </div>
 
               {/* --------------------- Composer --------------------- */}
-              <div className="border-t border-border bg-background px-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] pt-2 sm:px-3">
-                {replyTo && (
+              <div
+                className="border-t border-border bg-background px-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] pt-2 sm:px-3"
+                data-no-swipe
+              >
+                {(replyTo || editing) && (
                   <div className="mb-2 flex items-center gap-2 rounded-xl border-l-2 border-primary bg-muted/60 py-2 pl-3 pr-2">
-                    <CornerUpLeft className="size-4 shrink-0 text-primary" />
+                    {editing ? (
+                      <Pencil className="size-4 shrink-0 text-primary" />
+                    ) : (
+                      <CornerUpLeft className="size-4 shrink-0 text-primary" />
+                    )}
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-primary">{replyLabel}</p>
+                      <p className="text-xs font-medium text-primary">
+                        {editing ? 'Редактирование' : replyLabel}
+                      </p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {snippetOf(replyTo) || 'Сообщение'}
+                        {editing
+                          ? snippetOf(editing) || 'Сообщение'
+                          : replyTo
+                            ? snippetOf(replyTo) || 'Сообщение'
+                            : ''}
                       </p>
                     </div>
                     <button
                       type="button"
-                      onClick={() => setReplyTo(null)}
+                      onClick={cancelComposeExtras}
                       className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                      aria-label="Отменить ответ"
+                      aria-label={editing ? 'Отменить редактирование' : 'Отменить ответ'}
                     >
                       <X className="size-4" />
                     </button>
                   </div>
                 )}
-                <div className="flex items-end gap-2">
-                  <textarea
-                    ref={composerRef}
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
-                        e.preventDefault()
-                        sendMessage()
+
+                {recording ? (
+                  <div className="flex items-center gap-3 rounded-3xl border border-input bg-card px-4 py-2.5">
+                    <span className="flex items-center gap-2 text-sm text-destructive">
+                      <span className="size-2.5 animate-pulse rounded-full bg-destructive" />
+                      Запись…{' '}
+                      <span className="tabular-nums">
+                        {String(Math.floor(recordSecs / 60)).padStart(1, '0')}:
+                        {String(recordSecs % 60).padStart(2, '0')}
+                      </span>
+                    </span>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-10 rounded-full"
+                        onClick={() => finishRecording(true)}
+                        aria-label="Отменить запись"
+                      >
+                        <Trash2 className="size-5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        className="size-11 rounded-full"
+                        onClick={() => finishRecording(false)}
+                        aria-label="Отправить голосовое"
+                      >
+                        <Send className="size-5" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-end gap-1.5">
+                    <EmojiPicker
+                      onPick={(emoji) => {
+                        setDraft((d) => d + emoji)
+                        composerRef.current?.focus()
+                      }}
+                    />
+                    <textarea
+                      ref={composerRef}
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
+                          e.preventDefault()
+                          sendMessage()
+                        }
+                        if (e.key === 'Escape' && (editing || replyTo)) {
+                          cancelComposeExtras()
+                        }
+                      }}
+                      rows={1}
+                      placeholder={
+                        editing
+                          ? 'Новый текст сообщения…'
+                          : 'Сообщение от имени клиента…'
                       }
-                    }}
-                    rows={1}
-                    placeholder="Сообщение от имени клиента…"
-                    className="max-h-40 min-h-[52px] flex-1 resize-none rounded-3xl border border-input bg-card px-4 py-3.5 text-base leading-relaxed outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                  <Button
-                    size="icon"
-                    className="size-12 shrink-0 rounded-full"
-                    onClick={sendMessage}
-                    disabled={pending || !draft.trim()}
-                    aria-label="Отправить"
-                  >
-                    {pending ? (
-                      <Loader2 className="size-5 animate-spin" />
-                    ) : (
-                      <Send className="size-5" />
+                      className="max-h-40 min-h-[52px] flex-1 resize-none rounded-3xl border border-input bg-card px-4 py-3.5 text-base leading-relaxed outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      onChange={onFilePicked}
+                      aria-hidden="true"
+                      tabIndex={-1}
+                    />
+                    {!editing && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                        className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                        aria-label="Прикрепить файл"
+                      >
+                        {uploading ? (
+                          <Loader2 className="size-5 animate-spin" />
+                        ) : (
+                          <Paperclip className="size-5" />
+                        )}
+                      </button>
                     )}
-                  </Button>
-                </div>
+                    {draft.trim() || editing ? (
+                      <Button
+                        size="icon"
+                        className="size-12 shrink-0 rounded-full"
+                        onClick={sendMessage}
+                        disabled={pending || !draft.trim()}
+                        aria-label={editing ? 'Сохранить' : 'Отправить'}
+                      >
+                        {pending ? (
+                          <Loader2 className="size-5 animate-spin" />
+                        ) : editing ? (
+                          <Check className="size-5" />
+                        ) : (
+                          <Send className="size-5" />
+                        )}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="icon"
+                        variant="secondary"
+                        className="size-12 shrink-0 rounded-full"
+                        onClick={startRecording}
+                        disabled={uploading}
+                        aria-label="Записать голосовое сообщение"
+                      >
+                        <Mic className="size-5" />
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}
         </section>
       </div>
 
+      {/* --------------- Message action sheet (long-press) --------------- */}
+      {menuFor && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 md:items-center"
+          onClick={() => setMenuFor(null)}
+          role="presentation"
+        >
+          <div
+            className="w-full max-w-sm rounded-t-2xl bg-card p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-lg md:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+            role="menu"
+            aria-label="Действия с сообщением"
+          >
+            <p className="truncate px-3 py-2 text-xs text-muted-foreground">
+              {snippetOf(menuFor) || 'Сообщение'}
+            </p>
+            <SheetButton
+              icon={<CornerUpLeft className="size-4" />}
+              label="Ответить"
+              onClick={() => menuAction('reply')}
+            />
+            <SheetButton
+              icon={<Copy className="size-4" />}
+              label="Копировать"
+              onClick={() => menuAction('copy')}
+            />
+            {menuFor.direction === 'in' && !menuFor.mediaType && (
+              <SheetButton
+                icon={<Pencil className="size-4" />}
+                label="Изменить"
+                onClick={() => menuAction('edit')}
+              />
+            )}
+            <SheetButton
+              icon={<Trash2 className="size-4" />}
+              label="Удалить"
+              destructive
+              onClick={() => menuAction('delete')}
+            />
+          </div>
+        </div>
+      )}
+
       <NewChatDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
         channels={channels}
-        onCreated={() => {
+        onCreated={(id) => {
           setCreateOpen(false)
           void loadList({ silent: true })
+          // Open the freshly created thread right away (as documented).
+          if (id) selectThread(id)
         }}
       />
     </div>
+  )
+}
+
+/** One row of the message action sheet. */
+function SheetButton({
+  icon,
+  label,
+  onClick,
+  destructive,
+}: {
+  icon: React.ReactNode
+  label: string
+  onClick: () => void
+  destructive?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className={cn(
+        'flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-colors hover:bg-muted',
+        destructive ? 'text-destructive' : 'text-foreground',
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   )
 }
 
@@ -612,4 +1129,3 @@ const THREAD_DRAG_TRIGGER = 70
 
 /* How many newest messages are rendered initially / added per "show more". */
 const MESSAGES_WINDOW = 50
-

@@ -30,7 +30,7 @@ export function fmtTime(iso: string): string {
   return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 
-/** Day + time label used as the thread date divider. */
+/** Day + time label used in tooltips / compact rows. */
 export function fmtDay(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
@@ -39,6 +39,25 @@ export function fmtDay(iso: string): string {
     month: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+  })
+}
+
+/**
+ * Telegram-style date chip for the thread divider: «Сегодня», «Вчера» or a
+ * human date («2 августа»). Date ONLY — never a dangling «, 12:34» tail.
+ */
+export function fmtDayChip(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+  if (d.toDateString() === today.toDateString()) return 'Сегодня'
+  if (d.toDateString() === yesterday.toDateString()) return 'Вчера'
+  return d.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}),
   })
 }
 

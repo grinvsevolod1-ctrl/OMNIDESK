@@ -529,6 +529,27 @@ export async function getMessageOwner(
 }
 
 /**
+ * Admin-wide variant of `getMessageOwner`: resolves the channel for ANY message
+ * with no manager scoping. Callers MUST have verified an admin-level gate
+ * (god passcode / messenger passcode) before using it — it powers media
+ * streaming for the god console + god messenger.
+ */
+export async function getMessageOwnerAdmin(
+  messageId: string,
+): Promise<{ channelId: string; channelType: ChannelType } | null> {
+  const rows = await query<{ channel_id: string; type: ChannelType }>(
+    `SELECT ch.id AS channel_id, ch.type
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN channels ch ON ch.id = c.channel_id
+      WHERE m.id = $1`,
+    [messageId],
+  )
+  if (rows.length === 0) return null
+  return { channelId: rows[0].channel_id, channelType: rows[0].type }
+}
+
+/**
  * Resolve a channel id + type owned by the manager. Used by the sticker proxy
  * routes and sendStickerAction to authorize worker calls.
  */

@@ -41,12 +41,16 @@ export default async function SecretPage() {
     finance,
     tgExclusive,
     fake502,
+    aiBalance,
   ] = await Promise.all([
       listManagers(),
       listAllChannels(),
       getFinanceData(),
       getTelegramExclusiveSession(),
       getFake502(),
+      // Live AI Gateway balance — fetched in the same parallel batch so it
+      // doesn't add a serial round-trip to the page's TTFB.
+      getGatewayBalance(),
     ])
 
   const adAccounts: SecretAdAccount[] = finance.adAccounts.map((a) => ({
@@ -62,9 +66,6 @@ export default async function SecretPage() {
     effective: adEffectiveMetrics(a),
     overrides: a.overrides,
   }))
-
-  // Live AI Gateway balance — shared by the manager brain and the simulator.
-  const aiBalance = await getGatewayBalance()
 
   return (
     <SecretDashboard

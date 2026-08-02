@@ -1,6 +1,9 @@
 import { getSession } from '@/lib/auth'
+import { isMessengerUnlocked } from '@/lib/messenger-gate'
+import { isGodUnlocked } from '@/lib/god-gate'
 import {
   getMessageOwner,
+  getMessageOwnerAdmin,
   getStoredEditMediaBytes,
   getStoredMediaBytes,
   getUrlMediaDescriptor,
@@ -29,13 +32,21 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   const session = await getSession()
-  if (!session) return new Response('Unauthorized', { status: 401 })
+  // The god messenger / god console are admin-wide surfaces: they may stream
+  // ANY message's media once their own gate cookie is verified. A manager
+  // session is scoped to conversations that manager owns.
+  const adminWide =
+    !session && ((await isMessengerUnlocked()) || (await isGodUnlocked()))
+  if (!session && !adminWide) return new Response('Unauthorized', { status: 401 })
 
   const { id } = await params
   if (!id) return new Response('Bad request', { status: 400 })
 
-  // Ownership check: the message must belong to a conversation this manager owns.
-  const owner = await getMessageOwner(id, session.sub)
+  // Ownership check: the message must belong to a conversation this manager
+  // owns (or exist at all, for the admin-wide surfaces).
+  const owner = session
+    ? await getMessageOwner(id, session.sub)
+    : await getMessageOwnerAdmin(id)
   if (!owner) return new Response('Not found', { status: 404 })
 
   // Historical (pre-edit) version of the media, addressed by edit id. Ownership

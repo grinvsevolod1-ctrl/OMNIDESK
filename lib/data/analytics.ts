@@ -550,14 +550,23 @@ export async function getConversationAdmin(
  */
 export async function listMessagesAdmin(
   conversationId: string,
+  opts?: { limit?: number },
 ): Promise<Message[]> {
+  // Bounded: fetch only the NEWEST N rows (via the DESC subquery), then flip
+  // back to ascending for display. An unbounded transcript makes every open /
+  // refresh of a long thread ship the entire history over the wire.
+  const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 2000)
   const rows = await query<MessageRow>(
-    `SELECT ${MESSAGE_SELECT}
-       FROM messages m
-       ${MESSAGE_REPLY_JOIN}
-      WHERE m.conversation_id = $1
-      ORDER BY m.created_at ASC`,
-    [conversationId],
+    `SELECT * FROM (
+        SELECT ${MESSAGE_SELECT}
+          FROM messages m
+          ${MESSAGE_REPLY_JOIN}
+         WHERE m.conversation_id = $1
+         ORDER BY m.created_at DESC
+         LIMIT $2
+     ) newest
+     ORDER BY newest.created_at ASC`,
+    [conversationId, limit],
   )
   return rows.map(toMessage)
 }

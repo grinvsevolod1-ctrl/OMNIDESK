@@ -181,6 +181,11 @@ export async function forwardMessageAction(
     body: '[Пересланное сообщение]',
     author: session.name,
   })
+  // Without the placeholder there is nowhere to write the delivery status —
+  // abort instead of enqueueing a job whose result would be silently lost.
+  if (!placeholder) {
+    return { ok: false, message: 'Не удалось создать сообщение в диалоге получателя.' }
+  }
 
   await enqueueJob({
     channelId: dest.channelId,
@@ -190,14 +195,14 @@ export async function forwardMessageAction(
       fromTarget: source.contactHandle,
       toTarget: dest.contactHandle,
       providerMessageId: source.providerMessageId,
-      messageId: placeholder?.id,
+      messageId: placeholder.id,
     },
   }).catch((err) => {
     console.error('[panel] failed to enqueue forward job:', err)
   })
 
   revalidatePath('/app/inbox')
-  return { ok: true, message: `Переслано: ${dest.contactName}` }
+  return { ok: true, message: `Переслано: ${dest.contactName || dest.contactHandle}` }
 }
 
 /**

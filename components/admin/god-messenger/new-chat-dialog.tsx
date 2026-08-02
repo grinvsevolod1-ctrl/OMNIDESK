@@ -40,7 +40,8 @@ export function NewChatDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
   channels: Channel[]
-  onCreated: () => void
+  /** Called with the created conversation id so the parent can open it. */
+  onCreated: (id?: string) => void
 }) {
   const ownedChannels = useMemo(
     () => channels.filter((c) => c.managerId),
@@ -74,7 +75,7 @@ export function NewChatDialog({
       if (res.ok) {
         toast.success(res.message)
         reset()
-        onCreated()
+        onCreated(res.id)
       } else {
         toast.error(res.message)
       }
