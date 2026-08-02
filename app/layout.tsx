@@ -47,6 +47,7 @@ export default function RootLayout({
   return (
     <html
       lang="ru"
+      data-scroll-behavior="smooth"
       className={`dark ${geistSans.variable} ${geistMono.variable}`}
     >
       <body className="bg-background text-foreground font-sans antialiased">
