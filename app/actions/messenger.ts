@@ -2,6 +2,7 @@
 
 import { cookies, headers } from 'next/headers'
 import {
+  isMessengerPasswordConfigured,
   MESSENGER_COOKIE,
   messengerCookieOptions,
   signMessengerToken,
@@ -24,9 +25,13 @@ export async function messengerUnlockAction(
   passcode: string,
 ): Promise<MessengerUnlockResult> {
   const hdrs = await headers()
+  // Trust the proxy-set header first; from x-forwarded-for take the LAST hop
+  // (appended by our own reverse proxy) — the first entry is client-claimed
+  // and trivially spoofable, which would let an attacker rotate rate-limit keys.
+  const fwd = hdrs.get('x-forwarded-for')
   const ip =
-    hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    hdrs.get('x-real-ip') ||
+    hdrs.get('x-real-ip')?.trim() ||
+    fwd?.split(',').at(-1)?.trim() ||
     'unknown'
 
   const rl = await rateLimit(`messenger-unlock:${ip}`, 8, 5 * 60_000)
@@ -34,6 +39,12 @@ export async function messengerUnlockAction(
     return {
       ok: false,
       message: `Слишком много попыток. Повторите через ${rl.retryAfterSec} с.`,
+    }
+
+  if (!isMessengerPasswordConfigured())
+    return {
+      ok: false,
+      message: 'Пароль мессенджера не настроен на сервере (MESSENGER_PASSWORD)',
     }
 
   if (!verifyMessengerPasscode((passcode || '').trim()))

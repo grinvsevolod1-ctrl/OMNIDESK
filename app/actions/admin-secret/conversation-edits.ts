@@ -100,9 +100,14 @@ export async function secretDeleteMessageAction(input: {
   if (!input.messageId || !input.conversationId)
     return { ok: false, message: 'Не указано сообщение' }
 
-  await query('DELETE FROM messages WHERE id = $1', [input.messageId])
+  const deleted = await query<{ direction: 'in' | 'out' }>(
+    'DELETE FROM messages WHERE id = $1 RETURNING direction',
+    [input.messageId],
+  )
 
-  // Re-sync the conversation's last-message preview from whatever remains.
+  // Re-sync the conversation's last-message preview from whatever remains, and
+  // keep the unread counter honest when an unread inbound message was removed
+  // (clamped at zero — we can't know if it was already read).
   await query(
     `UPDATE conversations c
         SET last_message = COALESCE(m.body, ''),
@@ -126,6 +131,12 @@ export async function secretDeleteMessageAction(input: {
         AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id = $1)`,
     [input.conversationId],
   )
+  if (deleted[0]?.direction === 'in') {
+    await query(
+      `UPDATE conversations SET unread = GREATEST(unread - 1, 0) WHERE id = $1`,
+      [input.conversationId],
+    )
+  }
 
   revalidatePath(ADMIN_PATH)
   return { ok: true, message: 'Сообщение удалено' }

@@ -13,23 +13,20 @@ import { getAuthSecret } from './session'
  * passcode sets a long-lived (30d, phone-friendly) HMAC-signed httpOnly cookie;
  * the passcode itself is never stored client-side.
  *
- * The passcode is hardcoded below so it works immediately, but a
- * `MESSENGER_PASSWORD` env var takes precedence so it can be rotated without a
- * code change later.
+ * The passcode comes EXCLUSIVELY from the `MESSENGER_PASSWORD` env var. There is
+ * deliberately no hardcoded fallback: if the variable is not set, the gate is
+ * fail-closed and nobody can unlock the messenger.
  */
 
 export const MESSENGER_COOKIE = 'omnidesk_msg'
 const MESSENGER_MAX_AGE = 60 * 60 * 24 * 30 // 30 days
 
-/**
- * Hardcoded fallback passcode. Anyone with repo access can read this, so treat
- * it as low-security convenience — set `MESSENGER_PASSWORD` in the environment
- * to override it with a real secret.
- */
-const HARDCODED_MESSENGER_PASSWORD = 'Omni-Msg-7K2p'
+const MESSENGER_PASSWORD = process.env.MESSENGER_PASSWORD || ''
 
-const MESSENGER_PASSWORD =
-  process.env.MESSENGER_PASSWORD || HARDCODED_MESSENGER_PASSWORD
+/** True when the messenger passcode is configured on the server. */
+export function isMessengerPasswordConfigured(): boolean {
+  return MESSENGER_PASSWORD.length > 0
+}
 
 /**
  * Constant-time comparison. Both sides are SHA-256 hashed first so
