@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
+import { UpdateWatcher } from '@/components/update-watcher'
+import { ErrorReporter } from '@/components/error-reporter'
 import './globals.css'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -53,6 +55,8 @@ export default function RootLayout({
       <body className="bg-background text-foreground font-sans antialiased">
         {children}
         <Toaster />
+        <UpdateWatcher />
+        <ErrorReporter />
       </body>
     </html>
   )

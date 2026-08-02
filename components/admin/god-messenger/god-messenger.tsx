@@ -130,6 +130,31 @@ export function GodMessenger({
   const initialListLoaded = useRef(false)
   const hadConnected = useRef(false)
 
+  /* In-memory cache of already-visited threads. Re-opening a dialog paints
+   * instantly from cache (zero skeleton, zero black screen) while a silent
+   * refetch brings it up to date — the Telegram pattern. Bounded LRU-ish:
+   * oldest entry evicted past CACHE_MAX to keep memory flat over a long
+   * god-panel session. */
+  const threadCache = useRef(
+    new Map<
+      string,
+      { conversation: ConversationWithManager; messages: Message[] }
+    >(),
+  )
+  const cacheThread = useCallback(
+    (id: string, conversation: ConversationWithManager, messages: Message[]) => {
+      const cache = threadCache.current
+      cache.delete(id)
+      cache.set(id, { conversation, messages })
+      const CACHE_MAX = 30
+      if (cache.size > CACHE_MAX) {
+        const oldest = cache.keys().next().value
+        if (oldest !== undefined) cache.delete(oldest)
+      }
+    },
+    [],
+  )
+
   const managerNameOf = useMemo(() => {
     const map = new Map(managers.map((m) => [m.id, m.name]))
     return (id: string | null) => (id ? map.get(id) ?? '—' : '—')
@@ -243,9 +268,14 @@ export function GodMessenger({
           if (res.ok) {
             setConversation(res.conversation)
             setMessages(res.messages)
+            if (res.conversation) cacheThread(id, res.conversation, res.messages)
           } else {
             // Business-level "not found" — retrying won't change the answer.
+            // Send the user back to the list instead of leaving them stuck on
+            // an endless skeleton for a thread that will never load.
             toast.error(res.message ?? 'Диалог недоступен')
+            threadCache.current.delete(id)
+            selectThread(null)
           }
           setLoadingThread(false)
           return
@@ -263,7 +293,7 @@ export function GodMessenger({
         duration: 8000,
       })
     },
-    [],
+    [cacheThread, selectThread],
   )
   useEffect(() => {
     loadThreadRef.current = (id, opts) => void loadThread(id, opts)
@@ -277,8 +307,22 @@ export function GodMessenger({
     setVisibleCount(MESSAGES_WINDOW)
     stickToBottom.current = true
     initialJumpPending.current = true
-    if (selectedId) void loadThread(selectedId)
-    else {
+    if (selectedId) {
+      const cached = threadCache.current.get(selectedId)
+      if (cached) {
+        // Instant paint from cache, then a silent refetch reconciles. No
+        // skeleton, no black screen, no flash of the previous thread.
+        setConversation(cached.conversation)
+        setMessages(cached.messages)
+        void loadThread(selectedId, { silent: true })
+      } else {
+        // First visit: clear the PREVIOUS thread's data so the skeleton
+        // shows instead of stale messages under the wrong header.
+        setConversation(null)
+        setMessages([])
+        void loadThread(selectedId)
+      }
+    } else {
       setConversation(null)
       setMessages([])
     }
@@ -864,7 +908,17 @@ export function GodMessenger({
             ) : (
               <ul className="space-y-0.5 p-2">
                 {conversations.map((c) => (
-                  <li key={c.id}>
+                  // content-visibility: the browser skips layout/paint for
+                  // rows outside the viewport — keeps the list instant even
+                  // with hundreds of dialogs. intrinsic-size ≈ row height so
+                  // the scrollbar stays stable.
+                  <li
+                    key={c.id}
+                    style={{
+                      contentVisibility: 'auto',
+                      containIntrinsicSize: 'auto 68px',
+                    }}
+                  >
                     <button
                       type="button"
                       onClick={() => selectThread(c.id)}
@@ -989,7 +1043,24 @@ export function GodMessenger({
                 </div>
               </header>
               <div className="flex flex-1 items-center justify-center bg-muted/20">
-                <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                {loadingThread ? (
+                  <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                ) : (
+                  /* Retries exhausted and nothing loaded: give the user a way
+                     out instead of an eternal spinner. */
+                  <div className="flex flex-col items-center gap-3 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      Не удалось загрузить переписку
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => selectedId && loadThreadRef.current(selectedId)}
+                      className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                    >
+                      Повторить
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ) : !conversation ? (
