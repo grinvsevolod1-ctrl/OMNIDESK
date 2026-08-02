@@ -366,7 +366,7 @@ export function serversTools(state: RunState) {
 
     set_auto_deploy: tool({
       description:
-        'Включить/выключить авто-деплой при��ожения по push в GitHub (enabled=true/false). При включении объясни админу: в настройках репозитория надо добавить вебхук на /api/hosting/github-webhook с секретом GITHUB_WEBHOOK_SECRET (событие push, формат JSON). Возьми appId через get_server.',
+        'Включить/выключить авто-деплой приложения по push в GitHub (enabled=true/false). При включении объясни админу: в настройках репозитория надо добавить вебхук на /api/hosting/github-webhook с секретом GITHUB_WEBHOOK_SECRET (событие push, формат JSON). Возьми appId через get_server.',
       inputSchema: z.object({
         appId: z.string().min(1),
         enabled: z.boolean(),

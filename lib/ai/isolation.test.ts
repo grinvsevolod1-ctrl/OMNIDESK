@@ -172,6 +172,12 @@ describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
     'lib/ai-console/tools-quality.ts',
     'lib/autopilot/runtime.ts',
     'lib/data/ai-experiments.ts',
+    // The servers co-pilot: its system prompt and tool descriptions are also
+    // Russian text the model reads verbatim (a mangled char shipped here once).
+    'lib/servers-console/assistant.ts',
+    'lib/servers-console/tools.ts',
+    'lib/servers-console/prompt.ts',
+    'lib/servers-console/intents.ts',
   ]
   for (const rel of PROMPT_FILES) {
     it(`${rel} contains no replacement characters`, () => {
