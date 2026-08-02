@@ -152,25 +152,65 @@ export function GodMessenger({
     }
   }, [])
 
-  /* ----- list loading ----- */
+  /* ----- list loading -----
+   * Resilient by design. Server actions fail transiently ALL the time on
+   * mobile (phone sleeping, network switching, dev-server recompiles) and the
+   * old code turned every single hiccup into an error toast — even for
+   * background refetches where perfectly good data was already on screen.
+   *
+   * Policy:
+   *  - every load retries up to 3 times with exponential backoff (0.5s/1.5s/3s)
+   *  - background (silent) failures NEVER toast: stale data stays visible and
+   *    the next SSE tick / resync retries anyway
+   *  - only a failed INITIAL load (nothing on screen yet) surfaces an error,
+   *    with a retry button so the user isn't stuck staring at a dead screen */
+  const listSeq = useRef(0)
+  // Stable self-references for the toast retry buttons (a useCallback can't
+  // legally reference itself before declaration).
+  const loadListRef = useRef<(opts?: { silent?: boolean }) => void>(() => {})
+  const loadThreadRef = useRef<(id: string, opts?: { silent?: boolean }) => void>(
+    () => {},
+  )
   const loadList = useCallback(
     async (opts?: { silent?: boolean }) => {
+      const seq = ++listSeq.current
       if (!opts?.silent && !initialListLoaded.current) setLoadingList(true)
-      try {
-        const rows = await secretListConversationsAction({
-          search,
-          channelType: 'all',
-        })
-        setConversations(rows)
-        initialListLoaded.current = true
-      } catch {
-        toast.error('Не удалось загрузить диалоги')
-      } finally {
-        setLoadingList(false)
+      let lastError: unknown = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, 500 * 3 ** (attempt - 1)))
+          // A newer load superseded this one while we were backing off.
+          if (listSeq.current !== seq) return
+        }
+        try {
+          const rows = await secretListConversationsAction({
+            search,
+            channelType: 'all',
+          })
+          if (listSeq.current !== seq) return
+          setConversations(rows)
+          initialListLoaded.current = true
+          setLoadingList(false)
+          return
+        } catch (err) {
+          lastError = err
+        }
       }
+      if (listSeq.current !== seq) return
+      setLoadingList(false)
+      console.error('[messenger] list load failed after retries:', lastError)
+      // Data already on screen → fail silently, background refresh will win.
+      if (initialListLoaded.current || opts?.silent) return
+      toast.error('Не удалось загрузить диалоги', {
+        action: { label: 'Повторить', onClick: () => loadListRef.current() },
+        duration: 8000,
+      })
     },
     [search],
   )
+  useEffect(() => {
+    loadListRef.current = (opts) => void loadList(opts)
+  }, [loadList])
 
   // Initial load fires immediately; subsequent search keystrokes are debounced
   // and SILENT (the previous list stays on screen — no spinner flash per key).
@@ -183,29 +223,51 @@ export function GodMessenger({
     return () => clearTimeout(id)
   }, [loadList])
 
-  /* ----- thread loading ----- */
+  /* ----- thread loading -----
+   * Same resilience policy as the list: retry with backoff, never toast for a
+   * background refresh (messages already on screen), retry button otherwise. */
   const loadThread = useCallback(
     async (id: string, opts?: { silent?: boolean }) => {
       if (!opts?.silent) setLoadingThread(true)
-      try {
-        const res = await secretFetchThreadAction(id)
-        // Race guard: the user may have switched threads while we were loading.
-        if (selectedIdRef.current !== id) return
-        if (res.ok) {
-          setConversation(res.conversation)
-          setMessages(res.messages)
-        } else {
-          toast.error(res.message ?? 'Диалог недоступен')
+      let lastError: unknown = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, 500 * 3 ** (attempt - 1)))
+          // The user switched threads while we were backing off — abandon.
+          if (selectedIdRef.current !== id) return
         }
-      } catch {
-        if (selectedIdRef.current === id)
-          toast.error('Не удалось загрузить переписку')
-      } finally {
-        if (selectedIdRef.current === id) setLoadingThread(false)
+        try {
+          const res = await secretFetchThreadAction(id)
+          // Race guard: the user may have switched threads while loading.
+          if (selectedIdRef.current !== id) return
+          if (res.ok) {
+            setConversation(res.conversation)
+            setMessages(res.messages)
+          } else {
+            // Business-level "not found" — retrying won't change the answer.
+            toast.error(res.message ?? 'Диалог недоступен')
+          }
+          setLoadingThread(false)
+          return
+        } catch (err) {
+          lastError = err
+        }
       }
+      if (selectedIdRef.current !== id) return
+      setLoadingThread(false)
+      console.error('[messenger] thread load failed after retries:', lastError)
+      // Messages already on screen (silent refresh) → keep them, no toast.
+      if (opts?.silent) return
+      toast.error('Не удалось загрузить переписку', {
+        action: { label: 'Повторить', onClick: () => loadThreadRef.current(id) },
+        duration: 8000,
+      })
     },
     [],
   )
+  useEffect(() => {
+    loadThreadRef.current = (id, opts) => void loadThread(id, opts)
+  }, [loadThread])
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
@@ -222,6 +284,29 @@ export function GodMessenger({
     }
   }, [selectedId, loadThread])
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* ----- network / tab-visibility resync -----
+   * The most common real failure mode on the phone: the tab goes to
+   * background, the OS drops the connection, the user comes back and the
+   * screen is stale (or the next refetch fails and used to toast an error).
+   * Instead: the moment the browser reports we're back online — or the tab
+   * becomes visible again — silently resync everything. */
+  useEffect(() => {
+    const resync = () => {
+      void loadList({ silent: true })
+      const id = selectedIdRef.current
+      if (id) void loadThread(id, { silent: true })
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') resync()
+    }
+    window.addEventListener('online', resync)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('online', resync)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [loadList, loadThread])
 
   /* ----- live updates via admin SSE ----- */
   useEffect(() => {
