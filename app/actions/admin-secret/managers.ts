@@ -239,6 +239,13 @@ export async function secretReassignConversationsAction(input: {
 
 export type ConversationWithManager = Conversation & {
   managerName: string | null
+  /**
+   * Messages FROM the manager that the god user hasn't seen yet
+   * (direction='out' newer than conversations.god_read_at). This is the
+   * counter the chat list highlights — NOT `unread`, which counts what the
+   * MANAGER hasn't read.
+   */
+  godUnread?: number
 }
 
 /** Live-searchable list of every conversation (admin-wide, no manager scope). */
@@ -272,5 +279,25 @@ export async function secretFetchThreadAction(
   if (!conversation)
     return { ok: false, message: 'Диалог не найден', conversation: null, messages: [] }
   const messages = await listMessagesAdmin(conversationId)
+  // Opening the thread means the god user has SEEN everything in it — clear
+  // the god-side unread marker (manager replies newer than god_read_at).
+  await query(`UPDATE conversations SET god_read_at = now() WHERE id = $1`, [
+    conversationId,
+  ])
   return { ok: true, conversation, messages }
+}
+
+/**
+ * Lightweight god-side read receipt. Called from the client when a manager
+ * message arrives over SSE while the thread is ALREADY open on screen, so the
+ * list badge doesn't light up for a dialog the user is actively reading.
+ */
+export async function secretMarkThreadReadAction(
+  conversationId: string,
+): Promise<void> {
+  await assertConsoleOrMessenger()
+  if (!conversationId) return
+  await query(`UPDATE conversations SET god_read_at = now() WHERE id = $1`, [
+    conversationId,
+  ])
 }

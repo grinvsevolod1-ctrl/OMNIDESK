@@ -32,6 +32,7 @@ import {
   secretEditMessageAction,
   secretFetchThreadAction,
   secretListConversationsAction,
+  secretMarkThreadReadAction,
   secretMessengerDeleteMessageAction,
   secretSendMediaMessageAction,
   secretSendMessageAction,
@@ -275,6 +276,12 @@ export function GodMessenger({
               },
             ]
           })
+          // A manager reply landed while this thread is open on screen — the
+          // user is reading it right now, so stamp the god-side read receipt
+          // before the debounced list refetch computes the unread badge.
+          if (data.direction === 'out') {
+            void secretMarkThreadReadAction(data.conversationId as string)
+          }
         } else {
           // A message changed IN PLACE (edited / deleted / reaction). The SSE
           // payload doesn't carry the full new state, so refetch the thread
@@ -746,35 +753,62 @@ export function GodMessenger({
                           : 'bg-transparent',
                       )}
                     >
-                      <Avatar className="size-12 shrink-0">
+                      <Avatar
+                        className={cn(
+                          'size-12 shrink-0',
+                          (c.godUnread ?? 0) > 0 &&
+                            'ring-2 ring-primary ring-offset-2 ring-offset-background',
+                        )}
+                      >
                         <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
                           {initials(c.contactName || c.contactHandle)}
                         </AvatarFallback>
                       </Avatar>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-sm font-medium">
+                          <span
+                            className={cn(
+                              'truncate text-sm',
+                              (c.godUnread ?? 0) > 0
+                                ? 'font-semibold'
+                                : 'font-medium',
+                            )}
+                          >
                             {c.contactName || c.contactHandle}
                           </span>
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                          <span
+                            className={cn(
+                              'shrink-0 text-[11px]',
+                              (c.godUnread ?? 0) > 0
+                                ? 'font-medium text-primary'
+                                : 'text-muted-foreground',
+                            )}
+                          >
                             {c.lastMessageAt ? fmtTime(c.lastMessageAt) : ''}
                           </span>
                         </div>
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-xs text-muted-foreground">
+                          <span
+                            className={cn(
+                              'truncate text-xs',
+                              (c.godUnread ?? 0) > 0
+                                ? 'font-medium text-foreground'
+                                : 'text-muted-foreground',
+                            )}
+                          >
                             {parseReply(c.lastMessage || '').text || 'Нет сообщений'}
                           </span>
-                          {/* From the CLIENT's perspective `unread` counts what
-                              the MANAGER hasn't read yet — show it as a muted
-                              "delivered, unread by manager" hint, not as an
-                              attention-grabbing alert. */}
-                          {c.unread > 0 && (
+                          {/* Telegram semantics: the badge counts what YOU (the
+                              god user, писавший от имени клиента) haven't read
+                              yet — i.e. manager replies newer than your last
+                              visit. NOT `unread`, which is the manager-side
+                              counter and lights up after your own messages. */}
+                          {(c.godUnread ?? 0) > 0 && (
                             <Badge
-                              variant="secondary"
-                              className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[11px] tabular-nums text-muted-foreground"
-                              title="Не прочитано менеджером"
+                              className="h-5 min-w-5 shrink-0 justify-center rounded-full bg-primary px-1.5 text-[11px] tabular-nums text-primary-foreground"
+                              title="Непрочитанные сообщения от менеджера"
                             >
-                              {c.unread}
+                              {c.godUnread}
                             </Badge>
                           )}
                         </div>

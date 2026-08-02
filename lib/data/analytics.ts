@@ -583,7 +583,7 @@ export async function listConversationsAdmin(opts?: {
   channelType?: ChannelType
   limit?: number
 }): Promise<
-  Array<Conversation & { managerName: string | null }>
+  Array<Conversation & { managerName: string | null; godUnread: number }>
 > {
   const params: unknown[] = []
   const where: string[] = []
@@ -609,9 +609,15 @@ export async function listConversationsAdmin(opts?: {
     ConversationRow & {
       channel_name: string | null
       manager_name: string | null
+      god_unread: number | string
     }
   >(
-    `SELECT ${conversationColumns('c')}, ch.name AS channel_name, m.name AS manager_name
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name, m.name AS manager_name,
+            (SELECT count(*)
+               FROM messages mm
+              WHERE mm.conversation_id = c.id
+                AND mm.direction = 'out'
+                AND mm.created_at > c.god_read_at) AS god_unread
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers m ON m.id = c.manager_id
@@ -624,6 +630,7 @@ export async function listConversationsAdmin(opts?: {
     ...toConversation(r),
     channelName: r.channel_name ?? undefined,
     managerName: r.manager_name ?? null,
+    godUnread: Number(r.god_unread),
   }))
 }
 
