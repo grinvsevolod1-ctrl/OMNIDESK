@@ -1,7 +1,6 @@
 'use client'
 
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -11,35 +10,10 @@ import {
 } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
-import {
-  ArrowLeft,
-  ChevronUp,
-  History,
-  Info,
-  Loader2,
-  BrainCircuit,
-  MessageCircle,
-  MoreVertical,
-  Pencil,
-  Reply,
-  Trash2,
-  UserPlus,
-  X,
-} from 'lucide-react'
+import { MessageCircle } from 'lucide-react'
 import { toast } from 'sonner'
+import { markConversationReadAction } from '@/app/actions/account'
 import {
-  markConversationReadAction,
-  sendMessageAction,
-  sendStickerAction,
-  sendVkMediaAction,
-  sendWhatsappMediaAction,
-} from '@/app/actions/account'
-import {
-  replyMessageAction,
-  reactMessageAction,
-  deleteMessageAction,
-  editMessageAction,
-  forwardMessageAction,
   toggleConversationAiAction,
   acknowledgeAiHandoffAction,
   loadOlderMessagesAction,
@@ -53,22 +27,7 @@ import {
   createMeetingAction,
   transferConversationAction,
 } from '@/app/actions/conversations'
-import {
-  MessageContextMenu,
-  type ForwardTarget,
-} from '@/components/manager/message-context-menu'
-import { Button } from '@/components/ui/button'
-import { ContextMenuRadioItem } from '@/components/ui/context-menu'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import type { ForwardTarget } from '@/components/manager/message-context-menu'
 // Edit-history is opened on demand (message context menu), so defer its JS and
 // its SWR fetcher until an operator actually opens it — see the conditional
 // render below, which only mounts it once historyMessage is set.
@@ -88,38 +47,20 @@ import type {
   Message,
   NotLiquidReason,
   QuickReply,
-  StickerItem,
 } from '@/lib/types'
-import {
-  isMediaPlaceholder,
-  MessageMedia,
-} from '@/components/manager/inbox/message-media'
-import {
-  CHANNEL_VISUAL,
-  dayLabel,
-  sourceLabel,
-  timeShort,
-  visitorTag,
-  type SortMode,
-} from '@/components/manager/inbox/visual'
-import {
-  ContactAvatar,
-  DetailsPanel,
-  DeliveryTicks,
-  PresenceBadge,
-  SourceChip,
-  StatusChip,
-  StatusRadioItems,
-} from '@/components/manager/inbox/atoms'
+import { sourceLabel, type SortMode } from '@/components/manager/inbox/visual'
+import { DetailsPanel } from '@/components/manager/inbox/atoms'
 import { MessageComposer } from '@/components/manager/inbox/message-composer'
 import { TransferDialog } from '@/components/manager/inbox/transfer-dialog'
 import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
 import { ConversationList } from '@/components/manager/inbox/conversation-list'
 import { filterAndSortConversations } from '@/components/manager/inbox/filtering'
-
-
-
-
+import { AiHandoffBanner } from '@/components/manager/inbox/ai-handoff-banner'
+import { ThreadHeader } from '@/components/manager/inbox/thread-header'
+import { MessageList } from '@/components/manager/inbox/message-list'
+import { ComposerBanners } from '@/components/manager/inbox/composer-banners'
+import { useThreadScroll } from '@/components/manager/inbox/use-thread-scroll'
+import { useMessageActions } from '@/components/manager/inbox/use-message-actions'
 
 /* -------------------------------------------------------------------------- */
 /*  Main component                                                            */
@@ -256,10 +197,6 @@ export function InboxView({
       return ''
     }
   }, [])
-  const [replyTarget, setReplyTarget] = useState<Message | null>(null)
-  /** Message being edited (own outgoing text only). Mutually exclusive with
-   *  replyTarget — starting one cancels the other, Telegram-style. */
-  const [editTarget, setEditTarget] = useState<Message | null>(null)
   // Message whose edit history is open in the dialog (null = closed).
   const [historyMessage, setHistoryMessage] = useState<Message | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -348,41 +285,6 @@ export function InboxView({
   // the scroll container ref preserves the reading position across a prepend.
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [noOlder, setNoOlder] = useState<Record<string, boolean>>({})
-  const messagesScrollRef = useRef<HTMLDivElement | null>(null)
-
-  const handleLoadOlder = useCallback(async () => {
-    if (!activeId || loadingOlder) return
-    const current = localMessages[activeId] ?? []
-    const oldest = current[0]
-    if (!oldest) return
-    setLoadingOlder(true)
-    const container = messagesScrollRef.current
-    const prevHeight = container?.scrollHeight ?? 0
-    try {
-      const before = new Date(oldest.createdAt).toISOString()
-      const res = await loadOlderMessagesAction(activeId, before)
-      if (res.ok && res.messages.length > 0) {
-        setLocalMessages((prev) => {
-          const existing = prev[activeId] ?? []
-          const known = new Set(existing.map((m) => m.id))
-          const older = res.messages.filter((m) => !known.has(m.id))
-          if (older.length === 0) return prev
-          return { ...prev, [activeId]: [...older, ...existing] }
-        })
-        // Keep the viewport anchored to the same message after older ones are
-        // prepended above it (otherwise the list would jump to the top).
-        requestAnimationFrame(() => {
-          const c = messagesScrollRef.current
-          if (c) c.scrollTop = c.scrollHeight - prevHeight
-        })
-      }
-      if (!res.hasMore) setNoOlder((p) => ({ ...p, [activeId]: true }))
-    } catch {
-      toast.error('Не удалось загрузить историю')
-    } finally {
-      setLoadingOlder(false)
-    }
-  }, [activeId, loadingOlder, localMessages])
 
   // Optimistic "no reply needed" dismissals (conversationId -> dismissal time in
   // ms). Lets the badge/sorting update instantly before the server round-trip,
@@ -413,8 +315,6 @@ export function InboxView({
   }, [])
   // Whether to reveal muted/silenced threads in the list (hidden by default).
   const [showMuted, setShowMuted] = useState(false)
-
-  const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
   // Latest values for the reminder interval to read without re-subscribing, plus
   // a per-conversation throttle so we never spam the same unanswered thread.
@@ -891,62 +791,55 @@ export function InboxView({
     [conversations, activeId],
   )
 
-  // ----- thread auto-scroll (Telegram semantics) -----
-  // stickToBottom: follow new content ONLY while the manager is already at (or
-  // near) the bottom. If they scrolled up to read history, new messages /
-  // visitor-typing previews must NOT yank them back down.
-  const stickToBottom = useRef(true)
-  const pinToBottom = useCallback(() => {
-    const el = messagesScrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [])
-  const handleThreadScroll = useCallback(() => {
-    const el = messagesScrollRef.current
-    if (!el) return
-    stickToBottom.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 120
-  }, [])
-
-  // Opening a thread: jump STRAIGHT to the newest messages, instantly. A double
-  // rAF waits out the first real layout pass — with `content-visibility: auto`
-  // bubbles, the initial scrollHeight is based on 56px placeholder sizes, so a
-  // single synchronous scroll lands mid-history (the "opens at the top" bug).
-  useEffect(() => {
-    if (!activeId) return
-    stickToBottom.current = true
-    pinToBottom()
-    requestAnimationFrame(() => {
-      pinToBottom()
-      requestAnimationFrame(pinToBottom)
-    })
-  }, [activeId, pinToBottom])
-
-  // While pinned, keep the bottom in view as content grows AFTER the initial
-  // scroll: image/video/voice bubbles finish loading, content-visibility
-  // placeholders get their real heights, the visitor's live draft expands. A
-  // ResizeObserver on the scroll content catches all of those without polling.
-  useEffect(() => {
-    const container = messagesScrollRef.current
-    const content = container?.firstElementChild
-    if (!content) return
-    const ro = new ResizeObserver(() => {
-      if (stickToBottom.current) pinToBottom()
-    })
-    ro.observe(content)
-    return () => ro.disconnect()
-  }, [activeId, pinToBottom])
-
-  // New message appended / visitor draft preview changed → follow, but only
-  // when already at the bottom.
-  const activeTypingDraft =
-    activeId && typingByConv[activeId] ? typingByConv[activeId].draft : ''
-  useEffect(() => {
-    if (stickToBottom.current) pinToBottom()
-  }, [thread.length, activeTypingDraft, pinToBottom])
-
   // NOTE: The outbound "agent is typing" indicator (a server action fired on
   // every keystroke) was removed for performance - a network round-trip per
   // character made the composer feel laggy. Typing is now purely local.
+
+  // New message appended / visitor draft preview changed → follow, but only
+  // when already at the bottom (see useThreadScroll).
+  const activeTypingDraft =
+    activeId && typingByConv[activeId] ? typingByConv[activeId].draft : ''
+
+  // Thread auto-scroll (Telegram semantics) — owns the scroll container ref.
+  const { messagesScrollRef, handleThreadScroll } = useThreadScroll({
+    activeId,
+    threadLength: thread.length,
+    activeTypingDraft,
+  })
+
+  const handleLoadOlder = useCallback(async () => {
+    if (!activeId || loadingOlder) return
+    const current = localMessages[activeId] ?? []
+    const oldest = current[0]
+    if (!oldest) return
+    setLoadingOlder(true)
+    const container = messagesScrollRef.current
+    const prevHeight = container?.scrollHeight ?? 0
+    try {
+      const before = new Date(oldest.createdAt).toISOString()
+      const res = await loadOlderMessagesAction(activeId, before)
+      if (res.ok && res.messages.length > 0) {
+        setLocalMessages((prev) => {
+          const existing = prev[activeId] ?? []
+          const known = new Set(existing.map((m) => m.id))
+          const older = res.messages.filter((m) => !known.has(m.id))
+          if (older.length === 0) return prev
+          return { ...prev, [activeId]: [...older, ...existing] }
+        })
+        // Keep the viewport anchored to the same message after older ones are
+        // prepended above it (otherwise the list would jump to the top).
+        requestAnimationFrame(() => {
+          const c = messagesScrollRef.current
+          if (c) c.scrollTop = c.scrollHeight - prevHeight
+        })
+      }
+      if (!res.hasMore) setNoOlder((p) => ({ ...p, [activeId]: true }))
+    } catch {
+      toast.error('Не удалось загрузить историю')
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [activeId, loadingOlder, localMessages, messagesScrollRef])
 
   // Live "visitor is typing" state for the open thread (auto-expired by sweep).
   const activeTyping =
@@ -980,220 +873,30 @@ export function InboxView({
     void acknowledgeAiHandoffAction(activeId)
   }, [activeId, conversations])
 
-  // Called by the composer with the trimmed text. The composer owns the draft
-  // and clears its own input after invoking this.
-  function handleSend(text: string) {
-    if (!activeId) return
-    const body = text.trim()
-    if (!body) return
-    // While the AI is leading this thread, manual sends are blocked. Nudge the
-    // manager to pause the AI first (the AI button vibrates as the hint).
-    if (activeAiLed) {
-      pulseAiButton()
-      toast.error('ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.')
-      return
-    }
-    // Edit mode: overwrite the target message optimistically, send the edit to
-    // Telegram, and roll the bubble back if the server rejects it.
-    if (editTarget) {
-      const target = editTarget
-      const prevBody = target.body
-      if (body === prevBody.trim()) {
-        setEditTarget(null)
-        return
-      }
-      setLocalMessages((prev) => ({
-        ...prev,
-        [activeId]: (prev[activeId] ?? []).map((m) =>
-          m.id === target.id
-            ? {
-                ...m,
-                body,
-                editedAt: new Date().toISOString(),
-                editCount: (m.editCount ?? 0) + 1,
-              }
-            : m,
-        ),
-      }))
-      setEditTarget(null)
-      startTransition(async () => {
-        const res = await editMessageAction(target.id, body)
-        if (!res.ok) {
-          toast.error(res.message)
-          setLocalMessages((prev) => ({
-            ...prev,
-            [activeId]: (prev[activeId] ?? []).map((m) =>
-              m.id === target.id ? { ...m, body: prevBody } : m,
-            ),
-          }))
-        }
-      })
-      return
-    }
-    const replyTo = replyTarget
-    const optimistic: Message = {
-      id: `tmp_${Date.now()}`,
-      conversationId: activeId,
-      direction: 'out',
-      body,
-      author: currentUser,
-      createdAt: new Date().toISOString(),
-      status: 'sent',
-      ...(replyTo
-        ? {
-            replyTo: {
-              id: replyTo.id,
-              author: replyTo.author,
-              body: replyTo.body,
-              ...(replyTo.mediaType ? { mediaType: replyTo.mediaType } : {}),
-            },
-          }
-        : {}),
-    }
-    setLocalMessages((prev) => ({
-      ...prev,
-      [activeId]: [...(prev[activeId] ?? []), optimistic],
-    }))
-    setReplyTarget(null)
-    startTransition(async () => {
-      const res =
-        replyTo && active?.channelType === 'telegram'
-          ? await replyMessageAction(activeId, replyTo.id, body)
-          : await sendMessageAction(activeId, body)
-      if (!res.ok) toast.error(res.message)
-    })
-  }
-
-  /** Set (or clear) the operator's emoji reaction on a message, optimistically. */
-  function reactTo(message: Message, emoji: string) {
-    if (!activeId) return
-    setLocalMessages((prev) => ({
-      ...prev,
-      [activeId]: (prev[activeId] ?? []).map((m) => {
-        if (m.id !== message.id) return m
-        const others = (m.reactions ?? []).filter((r) => !r.fromMe)
-        const reactions = emoji ? [...others, { emoji, fromMe: true }] : others
-        return { ...m, reactions: reactions.length ? reactions : undefined }
-      }),
-    }))
-    startTransition(async () => {
-      const res = await reactMessageAction(message.id, emoji)
-      if (!res.ok) toast.error(res.message)
-    })
-  }
-
-  /** Soft-delete a message (revoke in Telegram), optimistically. */
-  function deleteMessage(message: Message) {
-    if (!activeId) return
-    setLocalMessages((prev) => ({
-      ...prev,
-      [activeId]: (prev[activeId] ?? []).map((m) =>
-        m.id === message.id
-          ? {
-              ...m,
-              body: '',
-              deletedAt: new Date().toISOString(),
-              reactions: undefined,
-            }
-          : m,
-      ),
-    }))
-    startTransition(async () => {
-      const res = await deleteMessageAction(message.id)
-      if (res.ok) toast.success(res.message)
-      else toast.error(res.message)
-    })
-  }
-
-  /** Forward a message to another Telegram conversation. */
-  function forwardMessage(message: Message, toConversationId: string) {
-    startTransition(async () => {
-      const res = await forwardMessageAction(message.id, toConversationId)
-      if (res.ok) toast.success(res.message)
-      else toast.error(res.message)
-    })
-  }
-
-  /** Copy a message's text to the clipboard. */
-  function copyMessageText(message: Message) {
-    navigator.clipboard
-      ?.writeText(message.body)
-      .then(() => toast.success('Текст скопирован'))
-      .catch(() => toast.error('Не удалось скопировать'))
-  }
-
-  function sendSticker(sticker: StickerItem) {
-    if (!activeId) return
-    const optimistic: Message = {
-      id: `tmp_${Date.now()}`,
-      conversationId: activeId,
-      direction: 'out',
-      body: sticker.emoji || '[Стикер]',
-      author: currentUser,
-      createdAt: new Date().toISOString(),
-      status: 'sent',
-      mediaType: 'sticker',
-      mediaMime: sticker.mime,
-    }
-    setLocalMessages((prev) => ({
-      ...prev,
-      [activeId]: [...(prev[activeId] ?? []), optimistic],
-    }))
-    startTransition(async () => {
-      const res = await sendStickerAction(activeId, sticker)
-      if (!res.ok) toast.error(res.message)
-    })
-  }
-
-  // Attach + send a file on a WhatsApp or VK conversation. The bytes are
-  // uploaded provider-side (through the account's proxy); on success the realtime
-  // insert (or refresh) shows the new message with its media bubble.
-  function handleSendMediaFile(file: File, caption: string) {
-    if (!activeId) return
-    const channelType = active?.channelType
-    if (channelType !== 'whatsapp' && channelType !== 'vk') return
-    // Client-side guard so an over-large file fails with a clear message instead
-    // of blowing past the Server Action body limit (which returns an opaque
-    // framework error and would otherwise crash the inbox to the error page).
-    // 200 MB matches the app's largest server-side allowance (VK docs).
-    const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
-    if (file.size > MAX_UPLOAD_BYTES) {
-      toast.error('Файл слишком большой (максимум 200 МБ).')
-      return
-    }
-    const fd = new FormData()
-    fd.append('file', file)
-    const trimmed = caption.trim()
-    if (trimmed) fd.append('caption', trimmed)
-    startTransition(async () => {
-      try {
-        const res =
-          channelType === 'vk'
-            ? await sendVkMediaAction(activeId, fd)
-            : await sendWhatsappMediaAction(activeId, fd)
-        if (!res.ok) {
-          toast.error(res.message)
-        } else {
-          toast.success(res.message)
-          // No router.refresh(): the sent media message arrives back through
-          // the SSE stream and is patched into localMessages there.
-        }
-      } catch (err) {
-        // Any transport/framework failure (e.g. body limit, dropped connection)
-        // is contained here as a toast — never bubbled to the error boundary,
-        // which would replace the whole inbox with the crash page.
-        console.error('[v0] media upload failed:', err)
-        toast.error('Не удалось отправить файл. Попробуйте ещё раз.')
-      }
-    })
-  }
-
-  // Clear any pending reply/edit when switching conversations.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setReplyTarget(null)
-    setEditTarget(null)
-  }, [activeId])
+  // Everything a manager can do to messages: send / reply / edit / react /
+  // delete / forward / copy / stickers / media uploads, with optimistic
+  // updates. Also owns the reply/edit target state.
+  const {
+    replyTarget,
+    setReplyTarget,
+    editTarget,
+    setEditTarget,
+    handleSend,
+    reactTo,
+    deleteMessage,
+    forwardMessage,
+    copyMessageText,
+    sendSticker,
+    handleSendMediaFile,
+  } = useMessageActions({
+    activeId,
+    active,
+    currentUser,
+    activeAiLed,
+    pulseAiButton,
+    setLocalMessages,
+    startTransition,
+  })
 
   // Other Telegram conversations a message can be forwarded into.
   const forwardTargets: ForwardTarget[] = useMemo(
@@ -1230,29 +933,12 @@ export function InboxView({
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-card">
-      {/* ------------------------------------------------------------------ */}
-      {/* AI hand-off banner — leads the AI promoted to «Ликвид» and handed   */}
-      {/* to a human. Click to jump to the newest; opening a thread clears it. */}
-      {/* ------------------------------------------------------------------ */}
-      {pendingHandoffs.length > 0 ? (
-        <button
-          type="button"
-          onClick={() => setActiveId(pendingHandoffs[0].id)}
-          className="flex shrink-0 items-center gap-2.5 border-b border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-left text-sm text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-300"
-        >
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-emerald-50">
-            <BrainCircuit className="size-3.5" />
-          </span>
-          <span className="flex-1 font-medium">
-            {pendingHandoffs.length === 1
-              ? `ИИ передал лид «${pendingHandoffs[0].contactName}» — готов к работе (Ликвид).`
-              : `ИИ передал ${pendingHandoffs.length} лид(ов) — готовы к работе (Ликвид).`}
-          </span>
-          <span className="shrink-0 rounded-full bg-emerald-500 px-2.5 py-0.5 text-xs font-semibold text-emerald-50">
-            Открыть
-          </span>
-        </button>
-      ) : null}
+      {/* AI hand-off banner — leads the AI promoted to «Ликвид» and handed
+          to a human. Click to jump to the newest; opening a thread clears it. */}
+      <AiHandoffBanner
+        pendingHandoffs={pendingHandoffs}
+        onOpen={setActiveId}
+      />
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
       {/* ------------------------------------------------------------------ */}
@@ -1313,470 +999,54 @@ export function InboxView({
       >
         {active ? (
           <>
-            {/* Thread header */}
-            <div className="flex h-14 items-center gap-3 border-b border-border px-3 sm:px-4">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="md:hidden"
-                onClick={() => setActiveId(null)}
-                aria-label="Назад к списку"
-              >
-                <ArrowLeft className="size-4" />
-              </Button>
-              <button
-                type="button"
-                onClick={() => setDetailsOpen(true)}
-                className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                aria-label="Открыть данные о контакте"
-              >
-                <ContactAvatar
-                  name={active.contactName}
-                  channel={active.channelType}
-                  channelId={active.channelId}
-                />
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <p className="flex items-center gap-2 truncate text-sm font-semibold">
-                    {active.contactName}
-                    {visitorTag(active) ? (
-                      <span className="shrink-0 rounded bg-muted px-1 text-[11px] font-medium tabular-nums text-muted-foreground">
-                        {visitorTag(active)}
-                      </span>
-                    ) : null}
-                    {activePresence ? (
-                      <PresenceBadge state={activePresence} />
-                    ) : null}
-                  </p>
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <SourceChip conversation={active} size="xs" />
-                  </div>
-                </div>
-              </button>
+            <ThreadHeader
+              active={active}
+              activePresence={activePresence}
+              activeAiLed={activeAiLed}
+              aiButtonPulse={aiButtonPulse}
+              statusPending={statusPending}
+              activeStatusValue={activeStatusValue}
+              hasTransferTargets={transferTargets.length > 0}
+              onBack={() => setActiveId(null)}
+              onOpenDetails={() => setDetailsOpen(true)}
+              onToggleDetails={() => setDetailsOpen((v) => !v)}
+              onToggleAi={() => toggleAi(active.id, !activeAiLed)}
+              onChangeStatus={(v) => changeStatus(active.id, v)}
+              onOpenTransfer={() => openTransfer(active.id)}
+            />
 
-              <div className="flex items-center gap-1.5">
-                <Button
-                  variant={activeAiLed ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => toggleAi(active.id, !activeAiLed)}
-                  disabled={statusPending}
-                  aria-pressed={activeAiLed}
-                  title={
-                    activeAiLed
-                      ? 'ИИ ведёт этот диалог. Нажмите, чтобы отключить и ответить самому.'
-                      : 'Включить ИИ: он проанализирует переписку и продолжит общение.'
-                  }
-                  className={cn(
-                    'gap-1.5',
-                    aiButtonPulse && 'animate-shake ring-2 ring-primary',
-                  )}
-                >
-                  <BrainCircuit className="size-4" />
-                  <span className="hidden sm:inline">
-                    {activeAiLed ? 'ИИ ведёт' : 'ИИ'}
-                  </span>
-                </Button>
-                <StatusChip
-                  status={active.status}
-                  auto={!active.statusManual}
-                  className="hidden sm:inline-flex"
-                />
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => setDetailsOpen((v) => !v)}
-                  aria-label="Данные о контакте"
-                  className="hidden md:inline-flex"
-                >
-                  <Info className="size-4" />
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Действия с диалогом"
-                      >
-                        <MoreVertical className="size-4" />
-                      </Button>
-                    }
-                  />
-                  <DropdownMenuContent align="end" className="w-52">
-                    <DropdownMenuLabel>Статус лида</DropdownMenuLabel>
-                    <DropdownMenuRadioGroup
-                      value={activeStatusValue}
-                      onValueChange={(v) => changeStatus(active.id, v ?? 'auto')}
-                    >
-                      <StatusRadioItems
-                        Item={
-                          DropdownMenuRadioItem as unknown as typeof ContextMenuRadioItem
-                        }
-                      />
-                    </DropdownMenuRadioGroup>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => setDetailsOpen(true)}>
-                      <Info className="size-4" />
-                      Данные и источник
-                    </DropdownMenuItem>
-                    {transferTargets.length > 0 ? (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => openTransfer(active.id)}>
-                          <UserPlus className="size-4" />
-                          Передать менеджеру
-                        </DropdownMenuItem>
-                      </>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </div>
-
-            {/* Messages */}
-            <div
-              ref={messagesScrollRef}
-              onScroll={handleThreadScroll}
-              className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-muted/20 px-3 py-4 sm:px-6"
-              style={{
-                backgroundImage:
-                  'radial-gradient(color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 1px)',
-                backgroundSize: '22px 22px',
+            <MessageList
+              active={active}
+              activeId={activeId}
+              thread={thread}
+              noOlder={noOlder}
+              loadingOlder={loadingOlder}
+              onLoadOlder={handleLoadOlder}
+              forwardTargets={forwardTargets}
+              activeTyping={activeTyping}
+              messagesScrollRef={messagesScrollRef}
+              onThreadScroll={handleThreadScroll}
+              onReply={(msg) => {
+                setEditTarget(null)
+                setReplyTarget(msg)
               }}
-            >
-              <div className="mx-auto flex max-w-3xl flex-col gap-1">
-                {/* Older-history loader: shown only when the thread was truncated
-                    to the most-recent slice and there may be more to fetch. */}
-                {activeId && thread.length >= 300 && !noOlder[activeId] ? (
-                  <div className="mb-2 flex justify-center">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleLoadOlder}
-                      disabled={loadingOlder}
-                      className="gap-1.5 text-xs text-muted-foreground"
-                    >
-                      {loadingOlder ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : (
-                        <ChevronUp className="size-3.5" />
-                      )}
-                      Загрузить ранние сообщения
-                    </Button>
-                  </div>
-                ) : null}
-                {thread.map((m, i) => {
-                  const prev = thread[i - 1]
-                  const showDay =
-                    !prev || dayLabel(prev.createdAt) !== dayLabel(m.createdAt)
-                  const isOut = m.direction === 'out'
-                  const prevSameSide =
-                    prev && prev.direction === m.direction && !showDay
-                  return (
-                    // content-visibility lets the browser skip layout/paint of
-                    // off-screen bubbles — a large win on 300-message threads.
-                    <div
-                      key={m.id}
-                      style={{
-                        contentVisibility: 'auto',
-                        containIntrinsicSize: 'auto 56px',
-                      }}
-                    >
-                      {showDay ? (
-                        <div className="my-3 flex justify-center">
-                          <span className="rounded-full bg-card/90 px-2.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm ring-1 ring-border/50">
-                            {dayLabel(m.createdAt)}
-                          </span>
-                        </div>
-                      ) : null}
-                      <div
-                        className={cn(
-                          'flex',
-                          isOut ? 'justify-end' : 'justify-start',
-                          prevSameSide ? 'mt-0.5' : 'mt-2',
-                        )}
-                      >
-                        {(() => {
-                          const isDeleted = Boolean(m.deletedAt)
-                          // Deleted messages KEEP their content; we just append a
-                          // marker so nothing is lost. Label reflects who deleted
-                          // it (the contact vs. us), defaulting when unknown.
-                          const deletedLabel = isDeleted
-                            ? m.deletedOrigin === 'self'
-                              ? 'Вы удалили это сообщение'
-                              : m.deletedOrigin === 'remote'
-                                ? 'Удалено собеседником'
-                                : 'Сообщение удалено'
-                            : null
-                          // Stickers render even without a URL (optimistic
-                          // outgoing ones fall back to their emoji).
-                          const hasMedia = Boolean(
-                            m.mediaType &&
-                              (m.mediaUrl || m.mediaType === 'sticker'),
-                          )
-                          // Stickers float free (no bubble chrome); everything
-                          // else keeps the normal bubble styling.
-                          const bare = m.mediaType === 'sticker'
-                          // Hide the text body for stickers (the sticker itself
-                          // conveys it) and for synthetic media placeholders.
-                          const showBody =
-                            m.body &&
-                            m.mediaType !== 'sticker' &&
-                            !(hasMedia && isMediaPlaceholder(m.body))
-                          const canAct = active.channelType === 'telegram'
-                          const reactions = m.reactions ?? []
+              onEdit={(msg) => {
+                setReplyTarget(null)
+                setEditTarget(msg)
+              }}
+              onReact={reactTo}
+              onCopy={copyMessageText}
+              onForward={forwardMessage}
+              onDelete={deleteMessage}
+              onShowHistory={setHistoryMessage}
+            />
 
-                          const bubble = (
-                            <div
-                              className={cn(
-                                'text-sm',
-                                bare
-                                  ? ''
-                                  : cn(
-                                      'px-3 py-2 shadow-sm',
-                                      isOut
-                                        ? 'rounded-2xl rounded-br-sm bg-primary text-primary-foreground'
-                                        : 'rounded-2xl rounded-bl-sm border border-border bg-card text-foreground',
-                                    ),
-                              )}
-                            >
-                              {!isOut && m.author && !prevSameSide ? (
-                                <p
-                                  className={cn(
-                                    'mb-0.5 text-[11px] font-semibold',
-                                    CHANNEL_VISUAL[active.channelType].accentText,
-                                  )}
-                                >
-                                  {m.author}
-                                </p>
-                              ) : null}
-                              {m.replyTo ? (
-                                <div
-                                  className={cn(
-                                    'mb-1 rounded-md border-l-2 px-2 py-1 text-left text-xs',
-                                    isOut
-                                      ? 'border-primary-foreground/50 bg-primary-foreground/10'
-                                      : 'border-primary/60 bg-muted/60',
-                                  )}
-                                >
-                                  <p className="font-semibold opacity-90">
-                                    {m.replyTo.author || 'Сообщение'}
-                                  </p>
-                                  <p className="truncate opacity-75">
-                                    {m.replyTo.body ||
-                                      (m.replyTo.mediaType ? '[вложение]' : '')}
-                                  </p>
-                                </div>
-                              ) : null}
-                              {hasMedia ? (
-                                <div
-                                  className={cn(
-                                    showBody && !bare ? 'mb-1' : '',
-                                    // Dim preserved media when the message was
-                                    // deleted, but keep it openable/saveable.
-                                    isDeleted ? 'opacity-60' : '',
-                                  )}
-                                >
-                                  <MessageMedia message={m} />
-                                </div>
-                              ) : null}
-                              {deletedLabel ? (
-                                <p
-                                  className={cn(
-                                    'mb-0.5 flex items-center gap-1 text-[11px] font-medium italic',
-                                    isOut
-                                      ? 'text-primary-foreground/80'
-                                      : 'text-muted-foreground',
-                                  )}
-                                >
-                                  <Trash2 className="size-3 shrink-0" />
-                                  {deletedLabel}
-                                </p>
-                              ) : null}
-                              <div className="flex flex-wrap items-end justify-end gap-x-2">
-                                {showBody ? (
-                                  <p
-                                    className={cn(
-                                      'whitespace-pre-wrap break-words text-left leading-relaxed [overflow-wrap:anywhere]',
-                                      isDeleted ? 'italic opacity-60' : '',
-                                    )}
-                                  >
-                                    {m.body}
-                                  </p>
-                                ) : null}
-                                <span
-                                  className={cn(
-                                    'ml-auto flex shrink-0 items-center gap-0.5 text-[10px] leading-none',
-                                    bare
-                                      ? 'text-muted-foreground'
-                                      : isOut
-                                        ? 'text-primary-foreground/70'
-                                        : 'text-muted-foreground',
-                                  )}
-                                >
-                                  {m.editedAt ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => setHistoryMessage(m)}
-                                      title="Показать историю изменений"
-                                      className={cn(
-                                        'mr-0.5 flex items-center gap-0.5 rounded px-0.5 italic underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80',
-                                        isOut
-                                          ? 'text-primary-foreground/70'
-                                          : 'text-muted-foreground',
-                                      )}
-                                    >
-                                      <History className="size-2.5" />
-                                      изменено
-                                    </button>
-                                  ) : null}
-                                  {timeShort(m.createdAt)}
-                                  {isOut ? <DeliveryTicks status={m.status} /> : null}
-                                </span>
-                              </div>
-                            </div>
-                          )
-
-                          return (
-                            <div
-                              className={cn(
-                                'flex max-w-[80%] flex-col gap-1 sm:max-w-[70%]',
-                                isOut ? 'items-end' : 'items-start',
-                              )}
-                            >
-                              {canAct ? (
-                                <MessageContextMenu
-                                  message={m}
-                                  forwardTargets={forwardTargets}
-                                  onReply={(msg) => {
-                                    setEditTarget(null)
-                                    setReplyTarget(msg)
-                                  }}
-                                  onReact={reactTo}
-                                  onCopy={copyMessageText}
-                                  onForward={forwardMessage}
-                                  onEdit={
-                                    isOut
-                                      ? (msg) => {
-                                          setReplyTarget(null)
-                                          setEditTarget(msg)
-                                        }
-                                      : undefined
-                                  }
-                                  onDelete={deleteMessage}
-                                >
-                                  {bubble}
-                                </MessageContextMenu>
-                              ) : (
-                                bubble
-                              )}
-                              {reactions.length ? (
-                                <div
-                                  className={cn(
-                                    'flex flex-wrap gap-1',
-                                    isOut ? 'justify-end' : 'justify-start',
-                                  )}
-                                >
-                                  {reactions.map((r, ri) => (
-                                    <button
-                                      key={`${r.emoji}_${ri}`}
-                                      type="button"
-                                      onClick={() =>
-                                        canAct &&
-                                        reactTo(m, r.fromMe ? '' : r.emoji)
-                                      }
-                                      className={cn(
-                                        'flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs ring-1 transition-colors',
-                                        r.fromMe
-                                          ? 'bg-primary/15 ring-primary/40'
-                                          : 'bg-muted ring-border',
-                                      )}
-                                      aria-label={`Реа��ция ${r.emoji}`}
-                                    >
-                                      <span>{r.emoji}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              ) : null}
-                            </div>
-                          )
-                        })()}
-                      </div>
-                    </div>
-                  )
-                })}
-                {activeTyping ? (
-                  <div className="flex flex-col items-start gap-1">
-                    <div className="flex items-center gap-2 rounded-2xl rounded-bl-md bg-muted px-3 py-2">
-                      <span className="inline-flex gap-1" aria-hidden>
-                        <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-0.3s]" />
-                        <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-0.15s]" />
-                        <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/60" />
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {activeTyping.name} печатает
-                      </span>
-                    </div>
-                    {activeTyping.draft ? (
-                      <div className="max-w-[80%] rounded-2xl rounded-bl-md border border-dashed border-border bg-card px-3 py-2 text-sm italic text-muted-foreground">
-                        {activeTyping.draft}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                <div ref={messagesEndRef} />
-              </div>
-            </div>
-
-            {/* Edit banner — mirrors the reply banner, Telegram-style. */}
-            {editTarget ? (
-              <div className="flex items-center gap-2 border-t border-border bg-muted/40 px-3 py-2">
-                <Pencil className="size-4 shrink-0 text-primary" />
-                <div className="min-w-0 flex-1 border-l-2 border-primary/60 pl-2">
-                  <p className="text-xs font-semibold text-primary">
-                    Редактирование
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {editTarget.body}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 shrink-0"
-                  onClick={() => setEditTarget(null)}
-                  aria-label="Отменить редактирование"
-                >
-                  <X className="size-4" />
-                </Button>
-              </div>
-            ) : null}
-
-            {/* Reply preview banner */}
-            {replyTarget ? (
-              <div className="flex items-center gap-2 border-t border-border bg-muted/40 px-3 py-2">
-                <Reply className="size-4 shrink-0 text-primary" />
-                <div className="min-w-0 flex-1 border-l-2 border-primary/60 pl-2">
-                  <p className="text-xs font-semibold text-primary">
-                    Ответ · {replyTarget.author || 'Сообщение'}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {replyTarget.body ||
-                      (replyTarget.mediaType ? '[вложение]' : '')}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 shrink-0"
-                  onClick={() => setReplyTarget(null)}
-                  aria-label="Отменить ответ"
-                >
-                  <X className="size-4" />
-                </Button>
-              </div>
-            ) : null}
+            <ComposerBanners
+              editTarget={editTarget}
+              replyTarget={replyTarget}
+              onCancelEdit={() => setEditTarget(null)}
+              onCancelReply={() => setReplyTarget(null)}
+            />
 
             {/* Composer — isolated component so typing never re-renders the
                 whole inbox. Keyed by conversation id so each thread gets its own
