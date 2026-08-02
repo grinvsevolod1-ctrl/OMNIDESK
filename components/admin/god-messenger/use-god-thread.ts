@@ -217,7 +217,6 @@ export function useGodThread({
     loadThreadRef.current = (id, opts) => void loadThread(id, opts)
   }, [loadThread])
 
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     onThreadSwitchRef.current()
     if (selectedId) {
@@ -240,7 +239,6 @@ export function useGodThread({
       setMessages([])
     }
   }, [selectedId, loadThread])
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   /* ----- network / tab-visibility resync -----
    * The most common real failure mode on the phone: the tab goes to
