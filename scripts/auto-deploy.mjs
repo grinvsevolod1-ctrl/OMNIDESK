@@ -102,6 +102,32 @@ let deploying = false
 // on any success so a NEW breakage on the next commit is reported again.
 let failNotifiedSha = ''
 
+// Exponential retry backoff for a commit that keeps failing to deploy.
+// WHY: a deploy restarts the pm2 apps (including the Telegram worker, which
+// force-reconnects every personal account) EARLY in the script, so retrying a
+// persistently broken commit every 30s used to bounce the whole stack — and
+// every Telegram session with it — in an endless loop. Retrying is still
+// mandatory (a transient failure must self-heal), but repeated failures of
+// the SAME sha back off: 1m, 2m, 4m, ... capped at 15m. Any new commit or a
+// success resets the backoff instantly.
+const FAIL_BACKOFF_BASE_MS = 60_000
+const FAIL_BACKOFF_MAX_MS = 15 * 60_000
+let failBackoff = { sha: '', failures: 0, notBefore: 0 }
+
+function noteDeployFailure(sha) {
+  if (failBackoff.sha !== sha) failBackoff = { sha, failures: 0, notBefore: 0 }
+  failBackoff.failures += 1
+  const delay = Math.min(
+    FAIL_BACKOFF_MAX_MS,
+    FAIL_BACKOFF_BASE_MS * 2 ** (failBackoff.failures - 1),
+  )
+  failBackoff.notBefore = Date.now() + delay
+  log(
+    `deploy of ${sha.slice(0, 8)} failed ${failBackoff.failures}x — ` +
+      `next retry in ${Math.round(delay / 1000)}s.`,
+  )
+}
+
 // Commit of the last deploy that finished END-TO-END. deploy.sh writes this
 // marker as its very last step, past every failure point (build, swap, pm2
 // restart). We compare origin/<branch> against THIS — never against `git
@@ -340,6 +366,10 @@ async function tick() {
     const local = deployedSha()
     if (local === remote) return // already up to date
 
+    // Same sha keeps failing? Honor the backoff window instead of restarting
+    // the whole stack (worker + Telegram sessions) every single tick.
+    if (failBackoff.sha === remote && Date.now() < failBackoff.notBefore) return
+
     log(
       `local ${local ? local.slice(0, 8) : 'none'} != remote ` +
         `${remote.slice(0, 8)} — deploying.`,
@@ -353,13 +383,17 @@ async function tick() {
     const deployedNow = deployedSha()
     if (deployedNow === remote) {
       failNotifiedSha = '' // new outcome — re-arm failure notices
+      failBackoff = { sha: '', failures: 0, notBefore: 0 }
       await tgSendMessage(
         `✅ OMNIDESK обновлён без ошибок\n` +
           `Ветка: ${cfg.branch}\n` +
           `Коммит: ${commitSummary(remote)}\n` +
           `Панель перезапущена, всё работает.`,
       )
-    } else if (!ok && failNotifiedSha !== remote) {
+    } else if (!ok) {
+      noteDeployFailure(remote)
+    }
+    if (!ok && deployedNow !== remote && failNotifiedSha !== remote) {
       failNotifiedSha = remote
       await tgSendMessage(
         `❌ Ошибка автообновления OMNIDESK\n` +

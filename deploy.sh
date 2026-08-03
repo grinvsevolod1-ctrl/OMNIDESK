@@ -219,8 +219,6 @@ fi
 # app added to the config, including the auto-deploy watcher itself): plain
 # `pm2 start <config>` starts absent apps and leaves running ones untouched.
 pm2 start ecosystem.config.js 2>/dev/null || true
-pm2 save
-pm2 status
 
 # 7. Record the commit that was ACTUALLY deployed end-to-end. The auto-deploy
 #    watcher compares origin/<branch> against THIS marker (not `git rev-parse
@@ -228,8 +226,20 @@ pm2 status
 #    remote sha long before the build/restart succeed, so a deploy killed
 #    mid-flight used to leave HEAD == remote and the watcher never retried —
 #    the panel stayed down until a human intervened. The marker is only written
-#    here, past every failure point, so a failed deploy is always retried.
+#    past every REAL failure point (build, swap, pm2 restart).
+#
+#    IMPORTANT ordering + `|| true` on the cosmetic pm2 commands below: this
+#    script runs under `set -e`, and `pm2 save` / `pm2 status` used to sit
+#    UNGUARDED between the worker restart and this marker. Any transient pm2
+#    hiccup there aborted the script AFTER the apps were already restarted but
+#    BEFORE the marker was written — so the watcher retried the "failed" deploy
+#    every 30s, each retry restarting the worker and force-reconnecting every
+#    Telegram account in an endless loop. The apps are running at this point;
+#    nothing after the restart may be allowed to fail the deploy.
 git rev-parse HEAD > .deploy.last-success 2>/dev/null || true
+
+pm2 save || true
+pm2 status || true
 
 DEPLOY_OK=1
 echo "✅ Deploy complete!"
