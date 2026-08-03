@@ -17,7 +17,7 @@
 //   definition forever. Always recreate from this file after a code update:
 //     rm -rf .next && pnpm install && pnpm build
 //     pm2 delete omnidesk-panel omnidesk-worker omnidesk-cron-sync-ads \
-//       omnidesk-cron-retry-dead-letters omnidesk-cron-followup omnidesk-log-reporter
+//       omnidesk-cron-retry-dead-letters omnidesk-cron-followup
 //     pm2 start ecosystem.config.js
 //     pm2 save
 //
