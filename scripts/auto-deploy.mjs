@@ -10,8 +10,7 @@
  *   - No inbound port / firewall rule / public HTTPS endpoint to expose and
  *     secure on the VPS.
  *   - The box already has a git remote with pull credentials, so nothing else is
- *     required. This mirrors the log-reporter, which likewise talks to git only
- *     outbound.
+ *     required — all git traffic is outbound.
  *
  * Config (all env vars optional):
  *   AUTO_DEPLOY_ENABLED     "false" to keep the process registered but idle.

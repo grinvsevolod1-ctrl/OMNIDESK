@@ -199,7 +199,15 @@ git checkout -- tsconfig.json next-env.d.ts 2>/dev/null || true
 #    it is the watcher whose child is this very script, and restarting it here
 #    would SIGINT the in-flight deploy (exit 130). It self-restarts after the
 #    deploy when its source changed.
-PM2_APPS="omnidesk-panel,omnidesk-worker,omnidesk-cron-sync-ads,omnidesk-cron-retry-dead-letters,omnidesk-cron-followup,omnidesk-log-reporter"
+# One-time cleanup of the RETIRED log-reporter (see ecosystem.config.js note):
+# delete its pm2 process, its git worktree and the remote-tracking clutter it
+# left behind. Every step is idempotent and safe on boxes that never had it.
+pm2 delete omnidesk-log-reporter 2>/dev/null || true
+git worktree remove --force .runtime-logs 2>/dev/null || true
+rm -rf .runtime-logs
+git branch -D runtime-logs 2>/dev/null || true
+
+PM2_APPS="omnidesk-panel,omnidesk-worker,omnidesk-cron-sync-ads,omnidesk-cron-retry-dead-letters,omnidesk-cron-followup"
 if ! pm2 startOrRestart ecosystem.config.js --only "$PM2_APPS" --update-env; then
   # A corrupted pm2 daemon fails every command until refreshed. `pm2 update`
   # restarts the daemon in-place (processes keep running), then retry once.
