@@ -38,6 +38,14 @@ export async function secretCreateConversationAction(input: {
   contactName: string
   contactHandle: string
   message?: string
+  /**
+   * Optional backdated creation time (ISO string) — used by the scenario
+   * picker so a "client" thread can appear as if it started earlier. Applied
+   * to BOTH the conversation's last_message_at and the first message's
+   * created_at so list ordering and the thread timeline stay consistent.
+   * Clamped server-side: never in the future, never older than 2 years.
+   */
+  createdAt?: string
 }): Promise<CreateConversationResult> {
   await assertConsoleOrMessenger()
 
@@ -45,6 +53,17 @@ export async function secretCreateConversationAction(input: {
   const contactHandle = input.contactHandle?.trim()
   if (!input.channelId || !contactName || !contactHandle)
     return { ok: false, message: 'Заполните канал, имя и хэндл контакта' }
+
+  // Validate/clamp the optional backdate BEFORE touching the DB.
+  let createdAt: Date | null = null
+  if (input.createdAt) {
+    const d = new Date(input.createdAt)
+    if (Number.isNaN(d.getTime()))
+      return { ok: false, message: 'Некорректное время создания диалога' }
+    const now = Date.now()
+    const oldest = now - 2 * 365 * 24 * 60 * 60 * 1000
+    createdAt = new Date(Math.min(Math.max(d.getTime(), oldest), now))
+  }
 
   const channel = await query<{ id: string; type: string; manager_id: string | null }>(
     'SELECT id, type, manager_id FROM channels WHERE id = $1 LIMIT 1',
@@ -66,7 +85,7 @@ export async function secretCreateConversationAction(input: {
     await db.query(
       `INSERT INTO conversations
          (id, channel_id, channel_type, manager_id, contact_name, contact_handle, last_message, last_message_at, status, unread)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'liquid', $8)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($9::timestamptz, now()), 'liquid', $8)`,
       [
         id,
         channel[0].id,
@@ -76,13 +95,20 @@ export async function secretCreateConversationAction(input: {
         contactHandle,
         firstMessage,
         firstMessage ? 1 : 0,
+        createdAt ? createdAt.toISOString() : null,
       ],
     )
     if (firstMessage) {
       await db.query(
-        `INSERT INTO messages (id, conversation_id, direction, body, author)
-         VALUES ($1, $2, 'in', $3, $4)`,
-        [randomUUID(), id, firstMessage, contactName],
+        `INSERT INTO messages (id, conversation_id, direction, body, author, created_at)
+         VALUES ($1, $2, 'in', $3, $4, COALESCE($5::timestamptz, now()))`,
+        [
+          randomUUID(),
+          id,
+          firstMessage,
+          contactName,
+          createdAt ? createdAt.toISOString() : null,
+        ],
       )
     }
   })

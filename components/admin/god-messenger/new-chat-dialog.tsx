@@ -23,7 +23,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { TYPE_LABEL } from './utils'
+import { ScenarioPicker } from './scenario-picker'
 import type { Channel } from '@/lib/types'
 
 /**
@@ -84,7 +86,7 @@ export function NewChatDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[92dvh] max-w-md overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Новый диалог</DialogTitle>
           <DialogDescription>
@@ -93,6 +95,19 @@ export function NewChatDialog({
           </DialogDescription>
         </DialogHeader>
 
+        <Tabs defaultValue="manual">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="manual">{'Вручную'}</TabsTrigger>
+            <TabsTrigger value="scenarios">{'Сценарии'}</TabsTrigger>
+          </TabsList>
+
+          {/* -------- Tab 2: 1000 generated candidate scenarios -------- */}
+          <TabsContent value="scenarios" className="mt-3">
+            <ScenarioPicker channels={channels} onCreated={onCreated} />
+          </TabsContent>
+
+          {/* ------------------- Tab 1: manual form -------------------- */}
+          <TabsContent value="manual" className="mt-3">
         <div className="grid gap-3">
           <div className="grid gap-1.5">
             <Label className="text-xs text-muted-foreground">Канал</Label>
@@ -148,7 +163,7 @@ export function NewChatDialog({
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="mt-3">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
             Отмена
           </Button>
@@ -157,6 +172,8 @@ export function NewChatDialog({
             Создать
           </Button>
         </DialogFooter>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   )
