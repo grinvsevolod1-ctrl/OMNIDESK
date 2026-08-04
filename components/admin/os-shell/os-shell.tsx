@@ -149,7 +149,8 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
           }
         }
         if (!gotMeta) throw new Error('no meta')
-      } catch {
+      } catch (err) {
+        console.log('[v0] SSE path failed, falling back:', err)
         // Fallback: one-shot server action (works without SSE / AI gateway).
         try {
           const result: AssistantResult = await runShellAssistantAction(
@@ -164,7 +165,8 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
           )
           applyMeta(asstId, meta, reply)
           gotMeta = true
-        } catch {
+        } catch (err2) {
+          console.log('[v0] fallback action failed too:', err2)
           setMessages((prev) =>
             prev.map((m) =>
               m.id === asstId

@@ -14,13 +14,25 @@ import {
 
 export const DICTIONARIES_SETTINGS_KEY = 'dictionaries'
 
-/** Read + resolve the dictionaries (always returns a complete shape). */
+/**
+ * Read + resolve the dictionaries (always returns a complete shape).
+ *
+ * FAIL-OPEN by design: dictionaries are cosmetic captions. This is called
+ * from the admin LAYOUT, so a DB hiccup here would otherwise take down every
+ * admin page — including ones that don't need the DB at all (login redirect,
+ * error screens). Defaults are always safe to render.
+ */
 export async function getDictionaries(): Promise<Dictionaries> {
-  const rows = await query<{ value: unknown }>(
-    `SELECT value FROM app_settings WHERE key = $1`,
-    [DICTIONARIES_SETTINGS_KEY],
-  )
-  return resolveDictionaries(rows[0]?.value)
+  try {
+    const rows = await query<{ value: unknown }>(
+      `SELECT value FROM app_settings WHERE key = $1`,
+      [DICTIONARIES_SETTINGS_KEY],
+    )
+    return resolveDictionaries(rows[0]?.value)
+  } catch (err) {
+    console.error('[dictionaries] falling back to defaults:', err)
+    return resolveDictionaries(null)
+  }
 }
 
 /** Raw stored override (for seeding / diffing), may be null. */
