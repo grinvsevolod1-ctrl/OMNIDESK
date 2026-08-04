@@ -191,6 +191,7 @@ export function InboxView({
     toggleType,
     sourceFilter,
     toggleSource,
+    pruneSources,
     statusFilter,
     toggleStatus,
     reasonFilter,
@@ -466,18 +467,13 @@ export function InboxView({
   // longer belong to a visible type, so stale selections can't hide everything.
   useEffect(() => {
     if (typeFilter.size === 0) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSourceFilter((prev) => {
-      if (prev.size === 0) return prev
-      const valid = new Set(
-        conversations
-          .filter((c) => typeFilter.has(c.channelType))
-          .map((c) => c.channelId),
-      )
-      const next = new Set([...prev].filter((id) => valid.has(id)))
-      return next.size === prev.size ? prev : next
-    })
-  }, [typeFilter, conversations])
+    const valid = new Set(
+      conversations
+        .filter((c) => typeFilter.has(c.channelType))
+        .map((c) => c.channelId),
+    )
+    pruneSources(valid)
+  }, [typeFilter, conversations, pruneSources])
 
   const unreadTotal = useMemo(
     () => conversations.reduce((n, c) => n + (c.unread > 0 ? 1 : 0), 0),

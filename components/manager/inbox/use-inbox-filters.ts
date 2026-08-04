@@ -41,6 +41,16 @@ export function useInboxFilters() {
     setReasonFilter((prev) => toggled(prev, value))
   }, [])
 
+  // Drop selected sources that are no longer valid (e.g. after the
+  // channel-type filter changed), so stale selections can't hide everything.
+  const pruneSources = useCallback((valid: Set<string>) => {
+    setSourceFilter((prev) => {
+      if (prev.size === 0) return prev
+      const next = new Set([...prev].filter((id) => valid.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [])
+
   const hasActiveFilters =
     typeFilter.size > 0 ||
     sourceFilter.size > 0 ||
@@ -61,6 +71,7 @@ export function useInboxFilters() {
     toggleType,
     sourceFilter,
     toggleSource,
+    pruneSources,
     statusFilter,
     toggleStatus,
     reasonFilter,
