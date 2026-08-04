@@ -49,7 +49,9 @@ import type {
   NotLiquidReason,
   QuickReply,
 } from '@/lib/types'
-import { sourceLabel, type SortMode } from '@/components/manager/inbox/visual'
+import { sourceLabel } from '@/components/manager/inbox/visual'
+import { useInboxFilters } from '@/components/manager/inbox/use-inbox-filters'
+import { useDrafts } from '@/components/manager/inbox/use-drafts'
 import { DetailsPanel } from '@/components/manager/inbox/atoms'
 import { MessageComposer } from '@/components/manager/inbox/message-composer'
 import { TransferDialog } from '@/components/manager/inbox/transfer-dialog'
@@ -167,37 +169,8 @@ export function InboxView({
     })
   }, [rawConversations, ownedChannelIds, statusOverrides])
   const [activeId, setActiveId] = useState<string | null>(null)
-  // Per-conversation composer drafts. Like Telegram, an unsent message is kept
-  // when you switch to another conversation and restored when you come back.
-  // Kept in a ref (not state) so the MessageComposer — which is keyed by
-  // conversation id and owns the live text in local state — can seed from and
-  // write back to it WITHOUT ever re-rendering this large parent on a keystroke.
-  //
-  // Drafts are ALSO mirrored to localStorage: the in-memory ref dies with the
-  // component (router.refresh storms, navigating away via a notification, a
-  // full reload, a crash), and losing a half-written reply is exactly the
-  // "текст исчезает" complaint. localStorage survives all of those. This is
-  // ephemeral UI state (like Telegram Web's drafts), not app data.
-  const draftsRef = useRef<Record<string, string>>({})
-  const persistDraft = useCallback((id: string, text: string) => {
-    if (text) draftsRef.current[id] = text
-    else delete draftsRef.current[id]
-    try {
-      if (text) localStorage.setItem(`od_draft_${id}`, text)
-      else localStorage.removeItem(`od_draft_${id}`)
-    } catch {
-      // Storage full / privacy mode — the in-memory copy still works.
-    }
-  }, [])
-  const getDraft = useCallback((id: string) => {
-    const inMemory = draftsRef.current[id]
-    if (inMemory !== undefined) return inMemory
-    try {
-      return localStorage.getItem(`od_draft_${id}`) ?? ''
-    } catch {
-      return ''
-    }
-  }, [])
+  // Per-conversation composer drafts (in-memory + localStorage mirror).
+  const { persistDraft, getDraft } = useDrafts()
   // Message whose edit history is open in the dialog (null = closed).
   const [historyMessage, setHistoryMessage] = useState<Message | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -210,68 +183,23 @@ export function InboxView({
   // Telemost video-meeting creation in progress (disables the composer button).
   const [meetingPending, setMeetingPending] = useState(false)
 
-  const [search, setSearch] = useState('')
-  // Multi-select filters. An empty Set means "no filter" (show everything),
-  // which keeps the common case cheap and avoids a magic 'all' sentinel.
-  const [typeFilter, setTypeFilter] = useState<Set<ChannelType>>(
-    () => new Set(),
-  )
-  const [sourceFilter, setSourceFilter] = useState<Set<string>>(() => new Set())
-  const [statusFilter, setStatusFilter] = useState<Set<LeadStatus>>(
-    () => new Set(),
-  )
-  // «Не ликвид» reason refinement (Гео / -18 / NA / TRASH). When non-empty it
-  // narrows the list to not-liquid leads matching the chosen reasons.
-  const [reasonFilter, setReasonFilter] = useState<Set<NotLiquidReason>>(
-    () => new Set(),
-  )
-  const [sortMode, setSortMode] = useState<SortMode>('recent')
-
-  // Toggle a value in/out of a Set-based filter (immutably, for React).
-  const toggleType = useCallback((value: ChannelType) => {
-    setTypeFilter((prev) => {
-      const next = new Set(prev)
-      if (next.has(value)) {
-        next.delete(value)
-      } else {
-        next.add(value)
-      }
-      return next
-    })
-  }, [])
-  const toggleSource = useCallback((value: string) => {
-    setSourceFilter((prev) => {
-      const next = new Set(prev)
-      if (next.has(value)) {
-        next.delete(value)
-      } else {
-        next.add(value)
-      }
-      return next
-    })
-  }, [])
-  const toggleStatus = useCallback((value: LeadStatus) => {
-    setStatusFilter((prev) => {
-      const next = new Set(prev)
-      if (next.has(value)) {
-        next.delete(value)
-      } else {
-        next.add(value)
-      }
-      return next
-    })
-  }, [])
-  const toggleReason = useCallback((value: NotLiquidReason) => {
-    setReasonFilter((prev) => {
-      const next = new Set(prev)
-      if (next.has(value)) {
-        next.delete(value)
-      } else {
-        next.add(value)
-      }
-      return next
-    })
-  }, [])
+  // List filtering + sorting state (search, Set filters, sort mode).
+  const {
+    search,
+    setSearch,
+    typeFilter,
+    toggleType,
+    sourceFilter,
+    toggleSource,
+    statusFilter,
+    toggleStatus,
+    reasonFilter,
+    toggleReason,
+    sortMode,
+    setSortMode,
+    hasActiveFilters,
+    clearFilters,
+  } = useInboxFilters()
 
   // Per-conversation message cache, patched live by the SSE handler. Declared
   // here (above the list memo) so sorting can detect threads whose last message
@@ -949,19 +877,6 @@ export function InboxView({
   const availableTypes = (
     ['telegram', 'whatsapp', 'livechat', 'max', 'vk'] as ChannelType[]
   ).filter((t) => typeCounts[t] > 0)
-
-  const hasActiveFilters =
-    typeFilter.size > 0 ||
-    sourceFilter.size > 0 ||
-    statusFilter.size > 0 ||
-    reasonFilter.size > 0
-
-  const clearFilters = useCallback(() => {
-    setTypeFilter(new Set())
-    setSourceFilter(new Set())
-    setStatusFilter(new Set())
-    setReasonFilter(new Set())
-  }, [])
 
   const activeStatusValue =
     active && active.statusManual
