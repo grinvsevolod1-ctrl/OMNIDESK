@@ -41,12 +41,14 @@ import { AutopilotToggle } from '@/components/manager/autopilot-toggle'
 import { VirtualList } from '@/components/manager/virtual-list'
 import { cn } from '@/lib/utils'
 import {
-  LEAD_STATUS_META,
   LEAD_STATUS_ORDER,
-  NOT_LIQUID_REASON_META,
   NOT_LIQUID_REASON_ORDER,
   leadStatusOptionValue,
 } from '@/lib/types'
+import {
+  useLeadStatusMeta,
+  useNotLiquidReasonMeta,
+} from '@/components/dictionaries-provider'
 import type {
   ChannelType,
   Conversation,
@@ -163,6 +165,8 @@ export function ConversationList({
   openTransfer: (conversationId: string) => void
   changeStatus: (conversationId: string, optionValue: string) => void
 }) {
+  const LEAD_STATUS_META = useLeadStatusMeta()
+  const NOT_LIQUID_REASON_META = useNotLiquidReasonMeta()
   return (
       <div
         className={cn(

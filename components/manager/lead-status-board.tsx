@@ -28,15 +28,19 @@ import {
   type LeadTranscript,
 } from '@/app/actions/leads'
 import {
-  LEAD_STATUS_META,
   LEAD_STATUS_OPTIONS,
   LEAD_STATUS_ORDER,
-  NOT_LIQUID_REASON_META,
   NOT_LIQUID_REASON_ORDER,
   leadStatusOptionValue,
   type LeadStatus,
   type NotLiquidReason,
 } from '@/lib/types'
+import {
+  useChannelTypeLabels,
+  useLeadStatusMeta,
+  useLeadStatusOptions,
+  useNotLiquidReasonMeta,
+} from '@/components/dictionaries-provider'
 
 const STATUS_ACCENT: Record<LeadStatus, { dot: string; bar: string }> = {
   unsubscribed: { dot: 'bg-sky-500', bar: 'bg-sky-500' },
@@ -44,13 +48,6 @@ const STATUS_ACCENT: Record<LeadStatus, { dot: string; bar: string }> = {
   liquid: { dot: 'bg-teal-500', bar: 'bg-teal-500' },
   not_liquid: { dot: 'bg-muted-foreground', bar: 'bg-muted-foreground' },
   transferred: { dot: 'bg-emerald-500', bar: 'bg-emerald-500' },
-}
-
-const CHANNEL_LABEL: Record<string, string> = {
-  telegram: 'Telegram',
-  whatsapp: 'WhatsApp',
-  livechat: 'Онлайн-чат',
-  max: 'MAX',
 }
 
 function formatTime(iso: string): string {
@@ -74,6 +71,8 @@ export function LeadStatusBoard({
   byReason: Record<NotLiquidReason, number>
   total: number
 }) {
+  const LEAD_STATUS_META = useLeadStatusMeta()
+  const NOT_LIQUID_REASON_META = useNotLiquidReasonMeta()
   const [selection, setSelection] = useState<Selection | null>(null)
 
   return (
@@ -162,6 +161,10 @@ function LeadBoardDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const LEAD_STATUS_META = useLeadStatusMeta()
+  const NOT_LIQUID_REASON_META = useNotLiquidReasonMeta()
+  const CHANNEL_LABEL = useChannelTypeLabels()
+  const statusOptions = useLeadStatusOptions()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<LeadTranscript | null>(null)
   const [transcriptLoading, setTranscriptLoading] = useState(false)
@@ -383,7 +386,7 @@ function LeadBoardDialog({
                     Статус лида
                   </p>
                   <div className="flex flex-wrap gap-1.5">
-                    {LEAD_STATUS_OPTIONS.map((opt) => {
+                    {statusOptions.map((opt) => {
                       const active = currentValue === opt.value
                       return (
                         <button

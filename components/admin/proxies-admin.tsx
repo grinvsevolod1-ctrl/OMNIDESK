@@ -43,6 +43,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { useProxyStatusLabels } from '@/components/dictionaries-provider'
 import type {
   Manager,
   ManagerProxySummary,
@@ -500,6 +501,7 @@ function AllProxiesView({
   onCheck: (id: string) => void
   onRemove: (id: string) => void
 }) {
+  const STATUS_LABEL = useProxyStatusLabels()
   return (
     <div className="flex flex-col gap-4">
       {/* Filters */}

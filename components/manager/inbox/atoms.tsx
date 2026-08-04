@@ -25,12 +25,12 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { ContextMenuRadioItem } from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
+import { leadStatusOptionValue } from '@/lib/types'
 import {
-  LEAD_STATUS_META,
-  LEAD_STATUS_OPTIONS,
-  NOT_LIQUID_REASON_META,
-  leadStatusOptionValue,
-} from '@/lib/types'
+  useLeadStatusMeta,
+  useLeadStatusOptions,
+  useNotLiquidReasonMeta,
+} from '@/components/dictionaries-provider'
 import type {
   ChannelType,
   Conversation,
@@ -70,6 +70,8 @@ export function StatusChip({
   className?: string
 }) {
   const v = LEAD_STATUS_VISUAL[status]
+  const statusMeta = useLeadStatusMeta()
+  const reasonMeta = useNotLiquidReasonMeta()
   return (
     <span
       className={cn(
@@ -80,9 +82,9 @@ export function StatusChip({
       title={auto ? 'Статус по умолчанию' : 'Статус задан вручную'}
     >
       <span className={cn('size-1.5 rounded-full', v.dot)} />
-      {LEAD_STATUS_META[status].label}
+      {statusMeta[status].label}
       {detail ? (
-        <span className="opacity-70">· {NOT_LIQUID_REASON_META[detail].label}</span>
+        <span className="opacity-70">· {reasonMeta[detail].label}</span>
       ) : null}
       {auto ? <span className="opacity-60">· авто</span> : null}
     </span>
@@ -344,6 +346,7 @@ export function DetailsPanel({
   onStatus: (optionValue: string) => void
   statusPending: boolean
 }) {
+  const LEAD_STATUS_OPTIONS = useLeadStatusOptions()
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
@@ -471,6 +474,7 @@ export function DetailsPanel({
 /* -------------------------------------------------------------------------- */
 
 export function StatusRadioItems({ Item }: { Item: typeof ContextMenuRadioItem }) {
+  const LEAD_STATUS_OPTIONS = useLeadStatusOptions()
   return (
     <>
       <Item value="auto">

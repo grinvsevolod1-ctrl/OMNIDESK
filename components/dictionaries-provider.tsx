@@ -58,3 +58,8 @@ export function useLeadStatusOptions(): LeadStatusOption[] {
 export function useChannelTypeLabels() {
   return useDictionaries().channelTypes
 }
+
+/** Proxy status captions (replacement for the local STATUS_LABEL maps). */
+export function useProxyStatusLabels() {
+  return useDictionaries().proxyStatuses
+}

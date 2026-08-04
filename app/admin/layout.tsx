@@ -2,8 +2,10 @@ import type { ReactNode } from 'react'
 import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
 import { SWRProvider } from '@/components/swr-provider'
 import { Fake502 } from '@/components/fake-502'
+import { DictionariesProvider } from '@/components/dictionaries-provider'
 import { requireAdmin } from '@/lib/auth'
 import { getFake502 } from '@/lib/data'
+import { getDictionaries } from '@/lib/data/dictionaries'
 
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
@@ -41,15 +43,21 @@ export default async function AdminLayout({
   // of the dashboard. The god panel is never gated by this, so it can be undone.
   if (await getFake502()) return <Fake502 />
 
+  // Managed dictionaries (lead-status labels, channel captions...) resolved
+  // server-side once per request — no client fetch, no default-label flash.
+  const dictionaries = await getDictionaries()
+
   return (
     <SWRProvider>
-      <DashboardShell
-        nav={nav}
-        roleLabel="Администратор"
-        user={{ name: user.name, email: user.email }}
-      >
-        {children}
-      </DashboardShell>
+      <DictionariesProvider value={dictionaries}>
+        <DashboardShell
+          nav={nav}
+          roleLabel="Администратор"
+          user={{ name: user.name, email: user.email }}
+        >
+          {children}
+        </DashboardShell>
+      </DictionariesProvider>
     </SWRProvider>
   )
 }

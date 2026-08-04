@@ -6,8 +6,10 @@ import { NotificationGate } from '@/components/manager/notification-gate'
 import { HeaderNotificationBell } from '@/components/manager/header-notification-bell'
 import { LunchToggle } from '@/components/manager/lunch-toggle'
 import { Fake502 } from '@/components/fake-502'
+import { DictionariesProvider } from '@/components/dictionaries-provider'
 import { requireManager } from '@/lib/auth'
 import { getFake502, getManagerOnLunch } from '@/lib/data'
+import { getDictionaries } from '@/lib/data/dictionaries'
 
 const nav: NavItem[] = [
   { href: '/app', label: 'Обзор', icon: 'overview' },
@@ -32,8 +34,12 @@ export default async function ManagerLayout({
   if (await getFake502()) return <Fake502 />
 
   const onLunch = await getManagerOnLunch(user.sub)
+  // Managed dictionaries (lead-status labels etc.) are resolved server-side
+  // once per request so client components never flash default captions.
+  const dictionaries = await getDictionaries()
   return (
     <SWRProvider>
+    <DictionariesProvider value={dictionaries}>
     <NotificationProvider>
       <DashboardShell
         nav={nav}
@@ -49,6 +55,7 @@ export default async function ManagerLayout({
         <NotificationGate>{children}</NotificationGate>
       </DashboardShell>
     </NotificationProvider>
+    </DictionariesProvider>
     </SWRProvider>
   )
 }
