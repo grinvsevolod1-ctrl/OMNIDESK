@@ -12,26 +12,36 @@ import type { AssistantTurn } from '@/lib/admin-console/assistant'
 /** How many turns survive a reload (matches the model context budget). */
 const SESSION_TURNS_LIMIT = 24
 
-/** Load the saved dialog for this admin identity ([] when none). */
+/**
+ * Load the saved dialog for this admin identity ([] when none).
+ *
+ * FAIL-OPEN: called from the admin layout on every /admin load. Before the
+ * migration runs (or during a DB hiccup) this must degrade to "no memory",
+ * never to a 500 for the whole admin panel.
+ */
 export async function loadConsoleSession(
   userId: string,
 ): Promise<AssistantTurn[]> {
-  const rows = await query<{ turns: unknown }>(
-    `SELECT turns FROM console_sessions WHERE user_id = $1`,
-    [userId],
-  )
-  const raw = rows[0]?.turns
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter(
-      (t): t is AssistantTurn =>
-        !!t &&
-        typeof t === 'object' &&
-        ((t as AssistantTurn).role === 'user' ||
-          (t as AssistantTurn).role === 'assistant') &&
-        typeof (t as AssistantTurn).content === 'string',
+  try {
+    const rows = await query<{ turns: unknown }>(
+      `SELECT turns FROM console_sessions WHERE user_id = $1`,
+      [userId],
     )
-    .slice(-SESSION_TURNS_LIMIT)
+    const raw = rows[0]?.turns
+    if (!Array.isArray(raw)) return []
+    return raw
+      .filter(
+        (t): t is AssistantTurn =>
+          !!t &&
+          typeof t === 'object' &&
+          ((t as AssistantTurn).role === 'user' ||
+            (t as AssistantTurn).role === 'assistant') &&
+          typeof (t as AssistantTurn).content === 'string',
+      )
+      .slice(-SESSION_TURNS_LIMIT)
+  } catch {
+    return []
+  }
 }
 
 /** Persist the dialog (trimmed). Upsert keeps exactly one row per admin. */

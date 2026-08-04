@@ -13,7 +13,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowUp, LayoutPanelLeft, LogOut } from 'lucide-react'
+import {
+  ArrowUp,
+  LayoutPanelLeft,
+  LogOut,
+  MessageSquarePlus,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import type { Dictionaries } from '@/lib/dictionaries'
@@ -24,24 +29,46 @@ import {
   type PendingConfirmation,
 } from '@/lib/admin-console/assistant'
 import { SHELL_SECTIONS, type ShellSection } from '@/lib/admin-console/intents'
+import type { ShellInsight } from '@/lib/admin-console/insights'
 import {
+  clearShellSessionAction,
   confirmShellPendingAction,
   runShellAssistantAction,
+  saveShellSessionAction,
   setShellModeAction,
 } from '@/app/actions/admin-console'
 import { logoutAction } from '@/app/actions/auth'
 import { nextMessageId, type ShellMessage, type ShellMeta } from './chat-types'
 import { ShellHero, ShellMessageRow } from './feed'
 
-export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
+export function OsShell({
+  dictionaries,
+  insights = [],
+  savedSession = null,
+}: {
+  dictionaries: Dictionaries
+  insights?: ShellInsight[]
+  savedSession?: AssistantTurn[] | null
+}) {
   const router = useRouter()
-  const [messages, setMessages] = useState<ShellMessage[]>([])
+  // Restore the persisted dialog (server memory) as plain text bubbles.
+  // Structured panels/receipts are not replayed — they reflect live data and
+  // would be stale; the text transcript preserves the conversational context.
+  const [messages, setMessages] = useState<ShellMessage[]>(() =>
+    (savedSession ?? []).map((t) => ({
+      id: nextMessageId(),
+      role: t.role,
+      content: t.content,
+    })),
+  )
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
-  const historyRef = useRef<AssistantTurn[]>([])
+  const historyRef = useRef<AssistantTurn[]>(
+    (savedSession ?? []).slice(-ASSISTANT_HISTORY_LIMIT),
+  )
 
   /* --------------------------- send pipeline --------------------------- */
 
@@ -179,6 +206,9 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
             { role: 'assistant', content: reply },
           ]
         }
+        // Persist the dialog so a reload / other browser keeps context.
+        // Fire-and-forget: memory must never slow down or break the chat.
+        void saveShellSessionAction(historyRef.current)
         setBusy(false)
       }
     },
@@ -249,6 +279,13 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
     router.refresh()
   }, [router])
 
+  const newDialog = useCallback(() => {
+    setMessages([])
+    historyRef.current = []
+    void clearShellSessionAction()
+    inputRef.current?.focus()
+  }, [])
+
   const hasChat = messages.length > 0
 
   /* ------------------------------ render ------------------------------ */
@@ -271,6 +308,17 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
             Копилот-админка
           </span>
           <div className="ml-auto flex items-center gap-1">
+            {hasChat ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={newDialog}
+                className="gap-1.5 text-muted-foreground"
+              >
+                <MessageSquarePlus className="size-4" />
+                <span className="hidden sm:inline">Новый диалог</span>
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               size="sm"
@@ -319,7 +367,11 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4 px-4 py-6">
         {!hasChat ? (
           <>
-            <ShellHero greeting={dictionaries.shellGreeting} />
+            <ShellHero
+              greeting={dictionaries.shellGreeting}
+              insights={insights}
+              onInsight={(prompt) => void send(prompt)}
+            />
             <div className="flex flex-wrap justify-center gap-1.5">
               {dictionaries.shellQuickCommands.map((c) => (
                 <button

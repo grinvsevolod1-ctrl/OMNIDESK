@@ -18,6 +18,8 @@ import { Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
 import type { Dictionaries } from '@/lib/dictionaries'
+import type { ShellInsight } from '@/lib/admin-console/insights'
+import type { AssistantTurn } from '@/lib/admin-console/assistant'
 import { setShellModeAction } from '@/app/actions/admin-console'
 import { OsShell } from './os-shell'
 
@@ -26,12 +28,16 @@ export function AdminChrome({
   nav,
   user,
   dictionaries,
+  insights = [],
+  savedSession = null,
   children,
 }: {
   shellEnabled: boolean
   nav: NavItem[]
   user: { name: string; email: string }
   dictionaries: Dictionaries
+  insights?: ShellInsight[]
+  savedSession?: AssistantTurn[] | null
   children: ReactNode
 }) {
   const pathname = usePathname()
@@ -40,7 +46,13 @@ export function AdminChrome({
   // The shell replaces the DASHBOARD (root) only; deep routes stay classic so
   // the copilot can navigate into them.
   if (shellEnabled && pathname === '/admin') {
-    return <OsShell dictionaries={dictionaries} />
+    return (
+      <OsShell
+        dictionaries={dictionaries}
+        insights={insights}
+        savedSession={savedSession}
+      />
+    )
   }
 
   const enableShell = async () => {

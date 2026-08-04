@@ -41,9 +41,65 @@ function renderBody(view: DataView) {
       return <FinancePanel payload={view.payload} />
     case 'dictionaries':
       return <DictionariesPanel payload={view.payload} />
+    case 'schedules':
+      return <SchedulesPanel payload={view.payload} />
     default:
       return null
   }
+}
+
+/* ---------------------------- schedules ----------------------------- */
+
+interface ScheduleRow {
+  id: string
+  label: string
+  human: string
+  enabled: boolean
+  lastRunAt: string | null
+  lastResult: string | null
+}
+
+function SchedulesPanel({ payload }: { payload: unknown }) {
+  const obj = (payload ?? {}) as { schedules?: unknown }
+  const rows = asArray<ScheduleRow>(obj.schedules).filter((r) => r?.id)
+  if (rows.length === 0)
+    return (
+      <p className="text-sm text-muted-foreground">
+        Запланированных команд пока нет. Скажите, например: «каждый понедельник
+        в 9 присылай отчёт по лидам».
+      </p>
+    )
+  return (
+    <ul className="flex flex-col gap-2">
+      {rows.map((r) => (
+        <li
+          key={r.id}
+          className="flex items-start gap-3 rounded-lg border border-border bg-background/40 px-3 py-2.5"
+        >
+          <span
+            aria-hidden="true"
+            className={
+              r.enabled
+                ? 'mt-1.5 size-2 shrink-0 rounded-full bg-success'
+                : 'mt-1.5 size-2 shrink-0 rounded-full bg-muted-foreground/50'
+            }
+          />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-foreground">{r.label}</p>
+            <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+              {r.human}
+              {!r.enabled ? ' · выключено' : ''}
+            </p>
+            {r.lastResult ? (
+              <p className="mt-1 truncate text-xs text-muted-foreground">
+                Последний запуск: {r.lastResult}
+              </p>
+            ) : null}
+          </div>
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 /* ------------------------------ stats ------------------------------ */

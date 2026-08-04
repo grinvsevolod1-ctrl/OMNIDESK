@@ -14,6 +14,7 @@ import type {
   ExecutedAction,
   PendingConfirmation,
 } from '@/lib/admin-console/assistant'
+import type { ShellInsight } from '@/lib/admin-console/insights'
 import type { ShellMessage } from './chat-types'
 import { DataViewPanel } from './data-views'
 
@@ -187,19 +188,83 @@ function Dot({ delay }: { delay: string }) {
   )
 }
 
-/** Hero shown before the first exchange. */
-export function ShellHero({ greeting }: { greeting: string }) {
+/**
+ * Hero shown before the first exchange. When the anomaly detector found
+ * problems, the copilot leads with them («я нашёл проблему — разберём?»)
+ * instead of a bland greeting; each insight is clickable and turns into a
+ * command.
+ */
+export function ShellHero({
+  greeting,
+  insights = [],
+  onInsight,
+}: {
+  greeting: string
+  insights?: ShellInsight[]
+  onInsight?: (prompt: string) => void
+}) {
+  const hasProblems = insights.length > 0
   return (
     <div className="flex flex-col items-center gap-4 py-10 text-center duration-500 animate-in fade-in">
-      <span className="flex size-14 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 text-primary">
-        <Sparkles className="size-7" />
+      <span
+        className={cn(
+          'flex size-14 items-center justify-center rounded-2xl border',
+          hasProblems
+            ? 'border-warning/40 bg-warning/10 text-warning'
+            : 'border-primary/30 bg-primary/10 text-primary',
+        )}
+      >
+        {hasProblems ? (
+          <ShieldAlert className="size-7" />
+        ) : (
+          <Sparkles className="size-7" />
+        )}
       </span>
       <h2 className="max-w-lg text-2xl font-semibold tracking-tight text-balance sm:text-3xl">
         OMNIDESK OS
       </h2>
       <p className="max-w-md text-sm leading-relaxed text-pretty text-muted-foreground">
-        {greeting}
+        {hasProblems
+          ? `Я проверил систему и нашёл ${insights.length === 1 ? 'проблему' : 'проблемы'}. Разберём?`
+          : greeting}
       </p>
+
+      {hasProblems ? (
+        <ul className="flex w-full max-w-md flex-col gap-2 text-left">
+          {insights.map((ins, i) => (
+            <li key={i}>
+              <button
+                type="button"
+                onClick={() => onInsight?.(ins.prompt)}
+                className={cn(
+                  'flex w-full items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-sm transition-colors',
+                  ins.level === 'problem'
+                    ? 'border-destructive/40 bg-destructive/10 text-foreground hover:bg-destructive/20'
+                    : ins.level === 'warning'
+                      ? 'border-warning/40 bg-warning/10 text-foreground hover:bg-warning/20'
+                      : 'border-border bg-card/50 text-muted-foreground hover:bg-card',
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'size-2 shrink-0 rounded-full',
+                    ins.level === 'problem'
+                      ? 'bg-destructive'
+                      : ins.level === 'warning'
+                        ? 'bg-warning'
+                        : 'bg-muted-foreground',
+                  )}
+                />
+                <span className="flex-1 text-pretty">{ins.text}</span>
+                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  Разобрать
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   )
 }

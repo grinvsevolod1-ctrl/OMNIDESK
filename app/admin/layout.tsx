@@ -9,6 +9,8 @@ import { requireAdmin } from '@/lib/auth'
 import { getFake502 } from '@/lib/data'
 import { getDictionaries } from '@/lib/data/dictionaries'
 import { SHELL_MODE_COOKIE } from '@/lib/admin-console/assistant'
+import { detectShellInsights } from '@/lib/admin-console/insights'
+import { loadConsoleSession } from '@/lib/data/console-shell'
 
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
@@ -55,6 +57,12 @@ export default async function AdminLayout({
   const jar = await cookies()
   const shellEnabled = jar.get(SHELL_MODE_COOKIE)?.value !== '0'
 
+  // Proactive insights + saved dialog: only pay the cost when the shell is on.
+  // Both are fail-open — a hiccup degrades to a plain greeting, never a 500.
+  const [insights, savedSession] = shellEnabled
+    ? await Promise.all([detectShellInsights(), loadConsoleSession(user.sub)])
+    : [[], null]
+
   return (
     <SWRProvider>
       <DictionariesProvider value={dictionaries}>
@@ -63,6 +71,8 @@ export default async function AdminLayout({
           nav={nav}
           user={{ name: user.name, email: user.email }}
           dictionaries={dictionaries}
+          insights={insights}
+          savedSession={savedSession}
         >
           {children}
         </AdminChrome>
