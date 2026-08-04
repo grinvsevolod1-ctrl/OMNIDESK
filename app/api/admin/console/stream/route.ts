@@ -12,9 +12,10 @@ import {
 /**
  * Streaming endpoint for the OMNIDESK OS shell copilot. Same SSE line protocol
  * as /api/admin/ai-console/stream:
- *   { t: 'delta', v: string }   incremental reply text
- *   { t: 'meta',  v: {...} }     structured AssistantResult (minus reply)
- *   { t: 'error' }              generation failed — client should fall back
+ *   { t: 'delta',  v: string }   incremental reply text
+ *   { t: 'status', v: string }   tool progress line («Ищу диалоги…»)
+ *   { t: 'meta',   v: {...} }    structured AssistantResult (minus reply)
+ *   { t: 'error' }               generation failed — client should fall back
  *   [DONE]                       stream finished
  */
 
@@ -52,11 +53,23 @@ export async function POST(req: Request): Promise<Response> {
     return new Response(stream, { headers: sseHeaders() })
   }
 
-  const run = prepareAssistantRun(turns, user.sub)
+  // Tool-status frames need the stream controller, which doesn't exist yet
+  // when the agent is built — bridge through a mutable sink.
+  let statusSink: ((label: string) => void) | null = null
+  const run = prepareAssistantRun(turns, user.sub, (label) =>
+    statusSink?.(label),
+  )
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let full = ''
+      statusSink = (label) => {
+        try {
+          controller.enqueue(sse({ t: 'status', v: label }))
+        } catch {
+          // Stream already closed — drop the status silently.
+        }
+      }
       try {
         const result = await run.agent.stream({ messages: run.messages })
         for await (const delta of result.textStream) {
@@ -85,6 +98,7 @@ export async function POST(req: Request): Promise<Response> {
       } catch {
         controller.enqueue(sse({ t: 'error' }))
       } finally {
+        statusSink = null
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
         controller.close()
       }

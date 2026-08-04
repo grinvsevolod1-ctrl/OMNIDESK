@@ -13,6 +13,8 @@ export interface ShellMessage {
   content: string
   /** True while SSE deltas are still arriving. */
   streaming?: boolean
+  /** Live tool-progress line («Ищу диалоги…») shown while streaming. */
+  status?: string
   /** Receipts for the mutations performed during this turn. */
   actions?: ExecutedAction[]
   /** Structured data panels rendered under the reply. */

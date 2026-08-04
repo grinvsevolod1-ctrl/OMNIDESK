@@ -585,6 +585,10 @@ export async function listConversationsAdmin(opts?: {
   managerId?: string
   /** Only conversations with activity at/after this ISO timestamp. */
   activeSince?: string
+  /** Only conversations with unread inbound messages (клиент ждёт ответа). */
+  unansweredOnly?: boolean
+  /** Only conversations with NO activity since this ISO timestamp («висят»). */
+  quietSince?: string
   limit?: number
 }): Promise<
   Array<Conversation & { managerName: string | null; godUnread: number }>
@@ -611,6 +615,13 @@ export async function listConversationsAdmin(opts?: {
   if (opts?.activeSince) {
     params.push(opts.activeSince)
     where.push(`c.last_message_at >= $${params.length}`)
+  }
+  if (opts?.unansweredOnly) {
+    where.push(`c.unread > 0`)
+  }
+  if (opts?.quietSince) {
+    params.push(opts.quietSince)
+    where.push(`c.last_message_at <= $${params.length}`)
   }
 
   const limit = Math.min(Math.max(opts?.limit ?? 300, 1), 1000)

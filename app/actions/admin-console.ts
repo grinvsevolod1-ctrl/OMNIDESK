@@ -4,16 +4,21 @@ import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { requireAdmin } from '@/lib/auth'
 import {
+  addMessage,
   adminReassignConversations,
   deleteChannelById,
   deleteManager,
   deleteProxy,
+  enqueueJob,
   getChannelById,
+  getConversationAdmin,
   getManagerById,
   listConversationIdsForManager,
   reassignChannelManager,
   updateManagerStatus,
 } from '@/lib/data'
+import { removeDirective } from '@/lib/data/ai-directives'
+import { deleteKnowledge } from '@/lib/data/ai-assist'
 import { deleteFinanceEntry } from '@/lib/finance'
 import {
   SHELL_MODE_COOKIE,
@@ -23,8 +28,12 @@ import {
 } from '@/lib/admin-console/assistant'
 import { runAssistantOnce } from '@/lib/admin-console/run-assistant'
 import {
+  archiveConsoleSession,
   clearConsoleSession,
+  listConsoleSessionArchive,
+  restoreConsoleSession,
   saveConsoleSession,
+  type ConsoleSessionArchiveItem,
 } from '@/lib/data/console-shell'
 
 /**
@@ -51,9 +60,13 @@ export async function confirmShellPendingAction(
 ): Promise<{ ok: boolean; message: string }> {
   await requireAdmin()
   const id = typeof pending?.payload?.id === 'string' ? pending.payload.id : ''
-  // reassign_dialogs identifies its targets via manager/conversation ids, not
-  // a single `id`; every other kind still requires one.
-  if (!id && pending?.kind !== 'reassign_dialogs')
+  // Kinds that identify their targets through richer payloads, not a single `id`.
+  const NO_SINGLE_ID = new Set([
+    'reassign_dialogs',
+    'send_message',
+    'block_managers',
+  ])
+  if (!id && !NO_SINGLE_ID.has(pending?.kind))
     return { ok: false, message: 'Некорректное подтверждение' }
 
   try {
@@ -152,6 +165,84 @@ export async function confirmShellPendingAction(
               : 'Диалоги уже принадлежат этому менеджеру',
         }
       }
+      case 'send_message': {
+        // Re-validate everything server-side: the payload crossed the client.
+        const conversationId =
+          typeof pending.payload?.conversationId === 'string'
+            ? pending.payload.conversationId
+            : ''
+        const body =
+          typeof pending.payload?.body === 'string'
+            ? pending.payload.body.trim().slice(0, 2000)
+            : ''
+        if (!conversationId || !body)
+          return { ok: false, message: 'Некорректное подтверждение' }
+        const conv = await getConversationAdmin(conversationId)
+        if (!conv) return { ok: false, message: 'Диалог не найден' }
+        if (!conv.managerId)
+          return { ok: false, message: 'У диалога нет менеджера-владельца' }
+        // Persisted as an ordinary manager reply (byAi=false => AI-lead
+        // pauses and the thread is marked handed to a human — an admin
+        // stepping in IS a human takeover).
+        const msg = await addMessage({
+          conversationId,
+          managerId: conv.managerId,
+          body,
+          author: conv.managerName ?? 'Менеджер',
+        })
+        if (!msg) return { ok: false, message: 'Не удалось сохранить сообщение' }
+        await enqueueJob({
+          channelId: conv.channelId,
+          managerId: conv.managerId,
+          action: 'send_message',
+          payload: {
+            target: conv.contactHandle,
+            body,
+            messageId: msg.id,
+          },
+        }).catch((err) => {
+          console.error('[shell] failed to enqueue send job:', err)
+        })
+        return {
+          ok: true,
+          message: `Сообщение отправлено: ${conv.contactName || conv.contactHandle}`,
+        }
+      }
+      case 'block_managers': {
+        const ids = Array.isArray(pending.payload?.ids)
+          ? (pending.payload.ids as unknown[]).filter(
+              (v): v is string => typeof v === 'string',
+            )
+          : []
+        if (ids.length === 0)
+          return { ok: false, message: 'Некорректное подтверждение' }
+        let blocked = 0
+        for (const managerId of ids.slice(0, 100)) {
+          const m = await getManagerById(managerId)
+          if (!m || m.status !== 'active') continue
+          await updateManagerStatus(managerId, 'blocked')
+          blocked += 1
+        }
+        revalidatePath('/admin/managers')
+        return {
+          ok: blocked > 0,
+          message:
+            blocked > 0
+              ? `Заблокировано менеджеров: ${blocked}`
+              : 'Никто не заблокирован (уже неактивны?)',
+        }
+      }
+      case 'delete_directive': {
+        const removed = await removeDirective(id)
+        if (!removed) return { ok: false, message: 'Директива не найдена' }
+        revalidatePath('/admin/ai')
+        return { ok: true, message: 'Директива удалена' }
+      }
+      case 'delete_knowledge': {
+        await deleteKnowledge(id)
+        revalidatePath('/admin/ai')
+        return { ok: true, message: 'Статья удалена из базы знаний' }
+      }
       case 'delete_proxy': {
         await deleteProxy(id)
         revalidatePath('/admin/proxies')
@@ -185,13 +276,37 @@ export async function saveShellSessionAction(
   }
 }
 
-/** «Новый диалог»: forget the saved session. */
+/** «Новый диалог»: archive the current dialog (restorable), then clear. */
 export async function clearShellSessionAction(): Promise<void> {
   const user = await requireAdmin()
   try {
+    await archiveConsoleSession(user.sub)
     await clearConsoleSession(user.sub)
   } catch {
     // Same fail-open contract as save.
+  }
+}
+
+/** Archived shell dialogs, newest first (for the «История» panel). */
+export async function listShellHistoryAction(): Promise<
+  ConsoleSessionArchiveItem[]
+> {
+  const user = await requireAdmin()
+  return listConsoleSessionArchive(user.sub)
+}
+
+/**
+ * Restore an archived dialog as the live session (the current one is archived
+ * first — nothing is lost). Returns the turns for the client to render.
+ */
+export async function restoreShellSessionAction(
+  archiveId: string,
+): Promise<AssistantTurn[] | null> {
+  const user = await requireAdmin()
+  try {
+    return await restoreConsoleSession(user.sub, archiveId)
+  } catch {
+    return null
   }
 }
 

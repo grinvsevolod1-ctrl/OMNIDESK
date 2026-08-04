@@ -106,6 +106,30 @@ export function managerTools(state: RunState) {
       },
     }),
 
+    block_managers: tool({
+      description:
+        'Заблокировать НЕСКОЛЬКИХ менеджеров разом («заблокируй всех кроме X» — сначала возьми ids из list_managers и исключи нужных). ОПАСНО: не применяется сразу — вернёт needsConfirmation.',
+      inputSchema: z.object({
+        ids: z.array(z.string().min(1)).min(1).max(100),
+      }),
+      execute: async ({ ids }) => {
+        const names: string[] = []
+        for (const id of ids) {
+          const m = await getManagerById(id)
+          if (m && m.status === 'active') names.push(m.name)
+        }
+        if (names.length === 0)
+          return { ok: false, message: 'Активных менеджеров среди указанных нет' }
+        state.pending = {
+          kind: 'block_managers',
+          label: `Заблокировать менеджеров: ${names.length}`,
+          detail: `Доступ к панели потеряют: ${truncate(names.join(', '), 300)}. Их диалоги останутся.`,
+          payload: { ids },
+        }
+        return { ok: true, needsConfirmation: true, count: names.length }
+      },
+    }),
+
     delete_manager: tool({
       description:
         'Удалить менеджера НАВСЕГДА вместе с его каналами. ОПАСНО: не применяется сразу — вернёт needsConfirmation, попроси админа подтвердить кнопкой.',

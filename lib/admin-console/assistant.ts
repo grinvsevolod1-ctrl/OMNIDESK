@@ -29,6 +29,7 @@ export interface ExecutedAction {
     | 'report'
     | 'schedule'
     | 'dialog'
+    | 'ai'
   /** Short human summary, e.g. «Заблокировал менеджера Ivan». */
   label: string
 }
@@ -41,11 +42,15 @@ export interface PendingConfirmation {
   kind:
     | 'delete_manager'
     | 'block_manager'
+    | 'block_managers'
     | 'delete_channel'
     | 'reassign_channel'
     | 'reassign_dialogs'
     | 'delete_proxy'
     | 'delete_finance_entry'
+    | 'send_message'
+    | 'delete_directive'
+    | 'delete_knowledge'
   /** Button text, e.g. «Удалить менеджера Ivan». */
   label: string
   /** One-sentence consequence so the admin knows what they're approving. */
@@ -80,6 +85,8 @@ export interface DataView {
     | 'dialogs'
     | 'messages'
     | 'manager_activity'
+    | 'directives'
+    | 'knowledge'
   title: string
   payload: unknown
 }

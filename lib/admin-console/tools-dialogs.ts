@@ -41,7 +41,7 @@ export function dialogTools(state: RunState) {
   return {
     list_dialogs: tool({
       description:
-        'Список диалогов (переписок с клиентами) по всей системе. Фильтры: managerId (диалоги конкретного менеджера), channelType (telegram/whatsapp/max/vk/livechat), search (имя/handle контакта или текст), period (today/week/month/all — по последней активности). Отвечает на «покажи диалоги менеджера X», «кто писал сегодня».',
+        'Список диалогов (переписок с клиентами) по всей системе. Фильтры: managerId (диалоги конкретного менеджера), channelType (telegram/whatsapp/max/vk/livechat), search (имя/handle контакта или текст), period (today/week/month/all — по последней активности), unansweredOnly (только где клиент ждёт ответа), quietHours (без активности дольше N часов). Отвечает на «покажи диалоги менеджера X», «кто писал сегодня», «диалоги без ответа старше суток».',
       inputSchema: z.object({
         managerId: z.string().optional(),
         channelType: z
@@ -49,14 +49,37 @@ export function dialogTools(state: RunState) {
           .optional(),
         search: z.string().max(120).optional(),
         period: z.enum(PERIODS).default('all'),
-        limit: z.number().int().min(1).max(100).default(30),
+        unansweredOnly: z
+          .boolean()
+          .optional()
+          .describe('Только диалоги с непрочитанными входящими (клиент ждёт)'),
+        quietHours: z
+          .number()
+          .int()
+          .min(1)
+          .max(24 * 90)
+          .optional()
+          .describe('Только диалоги БЕЗ активности дольше N часов'),
+        limit: z.number().int().min(1).max(200).default(30),
       }),
-      execute: async ({ managerId, channelType, search, period, limit }) => {
+      execute: async ({
+        managerId,
+        channelType,
+        search,
+        period,
+        unansweredOnly,
+        quietHours,
+        limit,
+      }) => {
         const rows = await listConversationsAdmin({
           search,
           channelType: channelType as ChannelType | undefined,
           managerId,
           activeSince: periodStart(period),
+          unansweredOnly,
+          quietSince: quietHours
+            ? new Date(Date.now() - quietHours * 3600 * 1000).toISOString()
+            : undefined,
           limit,
         })
         const payload = rows.map((c) => ({
@@ -142,6 +165,33 @@ export function dialogTools(state: RunState) {
               : 'Активность менеджеров за месяц'
         state.views.push({ kind: 'manager_activity', title, payload: rows })
         return rows
+      },
+    }),
+
+    send_message: tool({
+      description:
+        'Отправить сообщение клиенту в диалог от имени менеджера-владельца. Текст пиши сам по просьбе админа (или бери его формулировку). ОПАСНО: не отправляется сразу — вернёт needsConfirmation, попроси админа подтвердить. conversationId бери из list_dialogs / show_dialog.',
+      inputSchema: z.object({
+        conversationId: z.string().min(1),
+        body: z.string().min(1).max(2000).describe('Текст сообщения клиенту'),
+      }),
+      execute: async ({ conversationId, body }) => {
+        const convo = await getConversationAdmin(conversationId)
+        if (!convo) return { ok: false, message: 'Диалог не найден' }
+        if (!convo.managerId)
+          return {
+            ok: false,
+            message:
+              'У диалога нет менеджера-владельца — сначала передай его менеджеру (reassign_dialogs)',
+          }
+        const contact = convo.contactName || convo.contactHandle
+        state.pending = {
+          kind: 'send_message',
+          label: `Отправить сообщение → ${contact}`,
+          detail: `От имени ${convo.managerName ?? 'менеджера'} в ${convo.channelType}: «${truncate(body, 200)}». Клиент получит его как обычный ответ менеджера.`,
+          payload: { conversationId, body },
+        }
+        return { ok: true, needsConfirmation: true, contact }
       },
     }),
 

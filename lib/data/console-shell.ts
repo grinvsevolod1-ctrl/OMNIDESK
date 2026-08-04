@@ -64,6 +64,113 @@ export async function clearConsoleSession(userId: string): Promise<void> {
   await query(`DELETE FROM console_sessions WHERE user_id = $1`, [userId])
 }
 
+/* --------------------------- dialog history -------------------------- */
+
+/** How many archived dialogs are kept per admin (oldest pruned). */
+const ARCHIVE_KEEP = 30
+
+export interface ConsoleSessionArchiveItem {
+  id: string
+  title: string
+  turnCount: number
+  createdAt: string
+}
+
+/**
+ * Archive the CURRENT dialog (if non-trivial) so «Новый диалог» is reversible.
+ * Title = first user utterance. Prunes beyond ARCHIVE_KEEP. Fail-open: history
+ * is a nicety, an archive failure must never block starting a new dialog.
+ */
+export async function archiveConsoleSession(userId: string): Promise<void> {
+  try {
+    const turns = await loadConsoleSession(userId)
+    const firstUser = turns.find((t) => t.role === 'user')?.content?.trim()
+    // Nothing worth keeping: no user utterance ever happened.
+    if (!firstUser) return
+    const title = firstUser.length > 80 ? `${firstUser.slice(0, 79)}…` : firstUser
+    await query(
+      `INSERT INTO console_session_archive (user_id, title, turns)
+       VALUES ($1, $2, $3::jsonb)`,
+      [userId, title, JSON.stringify(turns)],
+    )
+    await query(
+      `DELETE FROM console_session_archive
+        WHERE user_id = $1
+          AND id NOT IN (
+            SELECT id FROM console_session_archive
+             WHERE user_id = $1
+             ORDER BY created_at DESC
+             LIMIT ${ARCHIVE_KEEP}
+          )`,
+      [userId],
+    )
+  } catch {
+    // Pre-migration or DB hiccup — degrade to the old destructive behavior.
+  }
+}
+
+/** Archived dialogs, newest first (fail-open: [] before the migration). */
+export async function listConsoleSessionArchive(
+  userId: string,
+): Promise<ConsoleSessionArchiveItem[]> {
+  try {
+    const rows = await query<{
+      id: string
+      title: string
+      turn_count: number | string
+      created_at: string
+    }>(
+      `SELECT id, title, jsonb_array_length(turns) AS turn_count, created_at
+         FROM console_session_archive
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT ${ARCHIVE_KEEP}`,
+      [userId],
+    )
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      turnCount: Number(r.turn_count),
+      createdAt: r.created_at,
+    }))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Restore an archived dialog as the live session. The archive row is consumed
+ * (it becomes the live dialog again); the current dialog is archived first so
+ * nothing is ever lost. Returns the restored turns, or null if not found.
+ */
+export async function restoreConsoleSession(
+  userId: string,
+  archiveId: string,
+): Promise<AssistantTurn[] | null> {
+  const rows = await query<{ turns: unknown }>(
+    `SELECT turns FROM console_session_archive
+      WHERE id = $2 AND user_id = $1`,
+    [userId, archiveId],
+  )
+  const raw = rows[0]?.turns
+  if (!Array.isArray(raw)) return null
+  const turns = raw.filter(
+    (t): t is AssistantTurn =>
+      !!t &&
+      typeof t === 'object' &&
+      ((t as AssistantTurn).role === 'user' ||
+        (t as AssistantTurn).role === 'assistant') &&
+      typeof (t as AssistantTurn).content === 'string',
+  )
+  await archiveConsoleSession(userId)
+  await saveConsoleSession(userId, turns)
+  await query(
+    `DELETE FROM console_session_archive WHERE id = $2 AND user_id = $1`,
+    [userId, archiveId],
+  )
+  return turns.slice(-SESSION_TURNS_LIMIT)
+}
+
 /* ------------------------- scheduled commands ------------------------ */
 
 export type ConsoleScheduleKind =
