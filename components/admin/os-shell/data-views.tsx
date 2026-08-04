@@ -43,9 +43,190 @@ function renderBody(view: DataView) {
       return <DictionariesPanel payload={view.payload} />
     case 'schedules':
       return <SchedulesPanel payload={view.payload} />
+    case 'dialogs':
+      return <DialogsPanel payload={view.payload} />
+    case 'messages':
+      return <MessagesPanel payload={view.payload} />
+    case 'manager_activity':
+      return <ManagerActivityPanel payload={view.payload} />
     default:
       return null
   }
+}
+
+/* ----------------------------- dialogs ------------------------------ */
+
+interface DialogRow {
+  id: string
+  contactName: string
+  channelType: string
+  managerName: string | null
+  lastMessage: string
+  lastMessageAt: string
+  unread: number
+}
+
+function DialogsPanel({ payload }: { payload: unknown }) {
+  const rows = asArray<DialogRow>(payload).filter((r) => r?.id)
+  if (rows.length === 0) return <EmptyNote />
+  return (
+    <SimpleTable
+      head={['Контакт', 'Канал', 'Менеджер', 'Последнее сообщение', 'Когда']}
+      rows={rows.map((d) => [
+        <span key="c" className="font-medium">
+          {d.contactName}
+          {d.unread > 0 ? (
+            <span className="ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+              {d.unread}
+            </span>
+          ) : null}
+        </span>,
+        CHANNEL_LABEL[d.channelType] ?? d.channelType,
+        d.managerName ?? '—',
+        <span key="m" className="text-muted-foreground">
+          {d.lastMessage || '—'}
+        </span>,
+        <span key="t" className="whitespace-nowrap text-xs text-muted-foreground">
+          {formatWhen(d.lastMessageAt)}
+        </span>,
+      ])}
+    />
+  )
+}
+
+/* ----------------------------- messages ----------------------------- */
+
+interface TranscriptMessage {
+  direction: 'in' | 'out'
+  author: string
+  body: string
+  createdAt: string
+}
+
+function MessagesPanel({ payload }: { payload: unknown }) {
+  const obj = (payload ?? {}) as {
+    contactName?: string
+    managerName?: string | null
+    messages?: unknown
+  }
+  const messages = asArray<TranscriptMessage>(obj.messages).filter(
+    (m) => m?.body || m?.author,
+  )
+  if (messages.length === 0) return <EmptyNote />
+  return (
+    <div className="flex max-h-96 flex-col gap-2 overflow-y-auto pr-1">
+      {messages.map((m, i) => (
+        <div
+          key={i}
+          className={
+            m.direction === 'in'
+              ? 'flex flex-col items-start'
+              : 'flex flex-col items-end'
+          }
+        >
+          <div
+            className={
+              m.direction === 'in'
+                ? 'max-w-[85%] rounded-lg rounded-tl-sm border border-border bg-background/50 px-3 py-1.5'
+                : 'max-w-[85%] rounded-lg rounded-tr-sm bg-primary/15 px-3 py-1.5'
+            }
+          >
+            <p className="text-[11px] font-medium text-muted-foreground">
+              {m.author}
+            </p>
+            <p className="whitespace-pre-wrap text-sm">{m.body}</p>
+          </div>
+          <span className="mt-0.5 text-[10px] text-muted-foreground">
+            {formatWhen(m.createdAt)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/* ------------------------- manager activity ------------------------- */
+
+interface ManagerActivityViewRow {
+  id: string
+  name: string
+  status: string
+  dialogsTotal: number
+  newDialogs: number
+  contactsWrote: number
+  inboundMessages: number
+  unanswered: number
+}
+
+function ManagerActivityPanel({ payload }: { payload: unknown }) {
+  const rows = asArray<ManagerActivityViewRow>(payload).filter((r) => r?.id)
+  if (rows.length === 0) return <EmptyNote />
+  return (
+    <SimpleTable
+      head={[
+        'Менеджер',
+        'Написало людей',
+        'Входящих',
+        'Новых диалогов',
+        'Без ответа',
+        'Всего диалогов',
+      ]}
+      rows={rows.map((m) => [
+        <span key="n" className="font-medium">
+          {m.name}
+          {m.status !== 'active' ? (
+            <span className="ml-1.5 text-xs text-muted-foreground">
+              (заблокирован)
+            </span>
+          ) : null}
+        </span>,
+        <Num key="a" v={m.contactsWrote} highlight />,
+        <Num key="b" v={m.inboundMessages} />,
+        <Num key="c" v={m.newDialogs} />,
+        <Num key="d" v={m.unanswered} warn={m.unanswered > 0} />,
+        <Num key="e" v={m.dialogsTotal} />,
+      ])}
+    />
+  )
+}
+
+function Num({
+  v,
+  highlight,
+  warn,
+}: {
+  v: number
+  highlight?: boolean
+  warn?: boolean
+}) {
+  return (
+    <span
+      className={
+        warn
+          ? 'font-semibold tabular-nums text-destructive'
+          : highlight
+            ? 'font-semibold tabular-nums text-foreground'
+            : 'tabular-nums text-muted-foreground'
+      }
+    >
+      {v}
+    </span>
+  )
+}
+
+/** Compact relative/absolute timestamp for feed tables. */
+function formatWhen(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  const time = d.toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  if (sameDay) return time
+  return `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`
 }
 
 /* ---------------------------- schedules ----------------------------- */
@@ -116,7 +297,7 @@ function StatsPanel({ payload }: { payload: unknown }) {
           className="rounded-lg border border-border bg-background/40 px-3 py-2.5"
         >
           <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            {METRIC_LABEL[k] ?? k}
+            {metricLabel(k)}
           </dt>
           <dd className="mt-1 text-xl font-semibold tabular-nums text-foreground">
             {v}
@@ -136,6 +317,37 @@ const METRIC_LABEL: Record<string, string> = {
   totalLeads: 'Лидов всего',
   newThisWeek: 'Новых за неделю',
   unanswered: 'Без ответа',
+  totalConversations: 'Диалогов',
+  totalContacts: 'Контактов',
+  totalProxies: 'Прокси',
+  workingProxies: 'Рабочих прокси',
+}
+
+/** Human channel names — raw enum keys must never reach the admin's eyes. */
+const CHANNEL_LABEL: Record<string, string> = {
+  telegram: 'Telegram',
+  whatsapp: 'WhatsApp',
+  livechat: 'Live Chat',
+  max: 'MAX',
+  vk: 'VK',
+}
+
+/**
+ * Every metric key becomes a human label: known keys map directly; nested
+ * `channelsByType.telegram`-style keys render as the channel's display name;
+ * anything else falls back to a de-camel-cased last segment — never the raw
+ * dotted key (the «CHANNELSBYTYPE.TELEGRAM» bug).
+ */
+function metricLabel(key: string): string {
+  if (METRIC_LABEL[key]) return METRIC_LABEL[key]
+  const parts = key.split('.')
+  const last = parts[parts.length - 1]
+  if (parts.length > 1 && parts[0] === 'channelsByType')
+    return CHANNEL_LABEL[last] ?? last.toUpperCase()
+  if (METRIC_LABEL[last]) return METRIC_LABEL[last]
+  if (CHANNEL_LABEL[last]) return CHANNEL_LABEL[last]
+  // deCamel: "newThisWeek" -> "new this week"
+  return last.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
 }
 
 function flattenMetrics(payload: unknown): [string, number][] {
@@ -289,7 +501,7 @@ function ContactsPanel({ payload }: { payload: unknown }) {
           className="rounded-lg border border-border bg-background/40 px-3 py-2.5"
         >
           <dt className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            {g.channelType}
+            {CHANNEL_LABEL[g.channelType] ?? g.channelType}
           </dt>
           <dd className="mt-1 text-xl font-semibold tabular-nums">{g.count}</dd>
         </div>

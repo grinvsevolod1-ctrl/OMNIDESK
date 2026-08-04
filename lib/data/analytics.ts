@@ -581,6 +581,10 @@ export async function listMessagesAdmin(
 export async function listConversationsAdmin(opts?: {
   search?: string
   channelType?: ChannelType
+  /** Only conversations owned by this manager. */
+  managerId?: string
+  /** Only conversations with activity at/after this ISO timestamp. */
+  activeSince?: string
   limit?: number
 }): Promise<
   Array<Conversation & { managerName: string | null; godUnread: number }>
@@ -599,6 +603,14 @@ export async function listConversationsAdmin(opts?: {
   if (opts?.channelType) {
     params.push(opts.channelType)
     where.push(`c.channel_type = $${params.length}`)
+  }
+  if (opts?.managerId) {
+    params.push(opts.managerId)
+    where.push(`c.manager_id = $${params.length}`)
+  }
+  if (opts?.activeSince) {
+    params.push(opts.activeSince)
+    where.push(`c.last_message_at >= $${params.length}`)
   }
 
   const limit = Math.min(Math.max(opts?.limit ?? 300, 1), 1000)
@@ -631,6 +643,76 @@ export async function listConversationsAdmin(opts?: {
     channelName: r.channel_name ?? undefined,
     managerName: r.manager_name ?? null,
     godUnread: Number(r.god_unread),
+  }))
+}
+
+/** Per-manager activity rollup for a time window (admin copilot). */
+export interface ManagerActivityRow {
+  id: string
+  name: string
+  status: string
+  /** Conversations this manager owns in total. */
+  dialogsTotal: number
+  /** Conversations created within the window. */
+  newDialogs: number
+  /** Distinct contacts who WROTE (inbound) within the window. */
+  contactsWrote: number
+  /** Inbound messages within the window. */
+  inboundMessages: number
+  /** Conversations with unread inbound messages right now. */
+  unanswered: number
+}
+
+/**
+ * Admin-only: who wrote to whom — per-manager dialog/message activity since a
+ * timestamp. Answers questions like «сколько людей написало сегодня менеджеру
+ * X». Subquery-per-metric keeps each aggregate independently index-friendly.
+ */
+export async function listManagerActivity(
+  sinceIso: string,
+): Promise<ManagerActivityRow[]> {
+  const rows = await query<{
+    id: string
+    name: string
+    status: string
+    dialogs_total: string | number
+    new_dialogs: string | number
+    contacts_wrote: string | number
+    inbound_messages: string | number
+    unanswered: string | number
+  }>(
+    `SELECT m.id, m.name, m.status,
+            (SELECT count(*) FROM conversations c
+              WHERE c.manager_id = m.id) AS dialogs_total,
+            (SELECT count(*) FROM conversations c
+              WHERE c.manager_id = m.id AND c.created_at >= $1) AS new_dialogs,
+            (SELECT count(DISTINCT mm.conversation_id)
+               FROM messages mm
+               JOIN conversations c ON c.id = mm.conversation_id
+              WHERE c.manager_id = m.id
+                AND mm.direction = 'in'
+                AND mm.created_at >= $1) AS contacts_wrote,
+            (SELECT count(*)
+               FROM messages mm
+               JOIN conversations c ON c.id = mm.conversation_id
+              WHERE c.manager_id = m.id
+                AND mm.direction = 'in'
+                AND mm.created_at >= $1) AS inbound_messages,
+            (SELECT count(*) FROM conversations c
+              WHERE c.manager_id = m.id AND c.unread > 0) AS unanswered
+       FROM managers m
+      ORDER BY m.name ASC`,
+    [sinceIso],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    status: r.status,
+    dialogsTotal: Number(r.dialogs_total),
+    newDialogs: Number(r.new_dialogs),
+    contactsWrote: Number(r.contacts_wrote),
+    inboundMessages: Number(r.inbound_messages),
+    unanswered: Number(r.unanswered),
   }))
 }
 

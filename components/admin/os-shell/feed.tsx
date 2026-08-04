@@ -9,6 +9,14 @@ import { Check, Command, FileDown, ShieldAlert, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import type {
   AssistantReport,
   ExecutedAction,
@@ -105,11 +113,13 @@ function Receipts({ actions }: { actions: ExecutedAction[] }) {
   )
 }
 
-/* -------------------------- confirmation card ------------------------ */
+/* -------------------------- confirmation modal ----------------------- */
 
 /**
  * Two-phase safety gate: the copilot proposes, the admin disposes. Nothing
- * dangerous executes until this explicit click.
+ * dangerous executes until this explicit click. Rendered as a MODAL dialog —
+ * the decision demands full attention and must not scroll away with the feed.
+ * Dismissing the dialog (Esc / overlay click) counts as cancel.
  */
 function ConfirmCard({
   pending,
@@ -123,31 +133,35 @@ function ConfirmCard({
   onCancel: () => void
 }) {
   return (
-    <div className="w-full max-w-[92%] rounded-xl border border-destructive/40 bg-destructive/10 p-3.5 sm:max-w-[70%]">
-      <div className="flex items-start gap-2.5">
-        <ShieldAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-        <div className="flex-1">
-          <p className="text-sm font-semibold text-foreground">{pending.label}</p>
-          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) onCancel()
+      }}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <div className="mx-auto flex size-12 items-center justify-center rounded-full border border-destructive/40 bg-destructive/10">
+            <ShieldAlert className="size-6 text-destructive" />
+          </div>
+          <DialogTitle className="text-center text-balance">
+            {pending.label}
+          </DialogTitle>
+          <DialogDescription className="text-center text-pretty leading-relaxed">
             {pending.detail}
-          </p>
-        </div>
-      </div>
-      <div className="mt-3 flex gap-2">
-        <Button
-          size="sm"
-          variant="destructive"
-          disabled={busy}
-          onClick={onConfirm}
-        >
-          {busy ? 'Выполняю…' : 'Подтвердить'}
-        </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
-          <X className="size-4" />
-          Отмена
-        </Button>
-      </div>
-    </div>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="gap-2 sm:justify-center">
+          <Button variant="outline" disabled={busy} onClick={onCancel}>
+            <X className="size-4" />
+            Отмена
+          </Button>
+          <Button variant="destructive" disabled={busy} onClick={onConfirm}>
+            {busy ? 'Выполняю…' : 'Подтвердить'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

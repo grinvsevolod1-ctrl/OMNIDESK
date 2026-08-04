@@ -4,11 +4,13 @@ import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { requireAdmin } from '@/lib/auth'
 import {
+  adminReassignConversations,
   deleteChannelById,
   deleteManager,
   deleteProxy,
   getChannelById,
   getManagerById,
+  listConversationIdsForManager,
   reassignChannelManager,
   updateManagerStatus,
 } from '@/lib/data'
@@ -49,7 +51,10 @@ export async function confirmShellPendingAction(
 ): Promise<{ ok: boolean; message: string }> {
   await requireAdmin()
   const id = typeof pending?.payload?.id === 'string' ? pending.payload.id : ''
-  if (!id) return { ok: false, message: 'Некорректное подтверждение' }
+  // reassign_dialogs identifies its targets via manager/conversation ids, not
+  // a single `id`; every other kind still requires one.
+  if (!id && pending?.kind !== 'reassign_dialogs')
+    return { ok: false, message: 'Некорректное подтверждение' }
 
   try {
     switch (pending.kind) {
@@ -99,6 +104,52 @@ export async function confirmShellPendingAction(
           message: managerName
             ? `Канал ${ch.name} передан менеджеру ${managerName}`
             : `Канал ${ch.name} снят с менеджера`,
+        }
+      }
+      case 'reassign_dialogs': {
+        // Re-validate everything: the payload crossed the client round-trip.
+        const toManagerId =
+          typeof pending.payload?.toManagerId === 'string'
+            ? pending.payload.toManagerId
+            : ''
+        if (!toManagerId)
+          return { ok: false, message: 'Некорректное подтверждение' }
+        const to = await getManagerById(toManagerId)
+        if (!to) return { ok: false, message: 'Целевой менеджер не найден' }
+        if (to.status !== 'active')
+          return { ok: false, message: `Менеджер ${to.name} заблокирован` }
+
+        const fromManagerId =
+          typeof pending.payload?.fromManagerId === 'string'
+            ? pending.payload.fromManagerId
+            : null
+        let conversationIds: string[]
+        if (fromManagerId) {
+          // Resolve the CURRENT dialog list at execution time, not proposal
+          // time — dialogs created in between are included, deleted ones not.
+          conversationIds = await listConversationIdsForManager(fromManagerId)
+        } else {
+          conversationIds = Array.isArray(pending.payload?.conversationIds)
+            ? (pending.payload.conversationIds as unknown[]).filter(
+                (v): v is string => typeof v === 'string',
+              )
+            : []
+        }
+        if (conversationIds.length === 0)
+          return { ok: false, message: 'Нет диалогов для передачи' }
+
+        const moved = await adminReassignConversations({
+          conversationIds,
+          toManagerId,
+          note: 'OMNIDESK OS: массовая передача диалогов',
+        })
+        revalidatePath('/admin')
+        return {
+          ok: moved > 0,
+          message:
+            moved > 0
+              ? `Передано диалогов: ${moved} → ${to.name}`
+              : 'Диалоги уже принадлежат этому менеджеру',
         }
       }
       case 'delete_proxy': {

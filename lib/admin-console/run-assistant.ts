@@ -10,6 +10,7 @@ import {
 import { SYSTEM_INSTRUCTIONS } from './prompt'
 import { createRunState } from './run-state'
 import { overviewTools } from './tools-overview'
+import { dialogTools } from './tools-dialogs'
 import { managerTools } from './tools-managers'
 import { channelTools } from './tools-channels'
 import { contactTools } from './tools-contacts'
@@ -24,10 +25,16 @@ import { scheduleTools } from './tools-schedules'
  * lib/ai-console/run-assistant.ts so the two copilots stay symmetrical.
  */
 
+/**
+ * Cheap + fast by default: gpt-4.1-mini is ~5–10x cheaper than gpt-4.1
+ * ($0.40/$1.60 vs $2/$8 per 1M tokens via the AI Gateway) and noticeably
+ * lower-latency, while keeping reliable tool calling. A turn with several
+ * tool calls costs fractions of a cent instead of ~20¢.
+ */
 const ASSISTANT_MODEL =
   process.env.ADMIN_CONSOLE_ASSISTANT_MODEL ||
   process.env.AI_CONSOLE_ASSISTANT_MODEL ||
-  'openai/gpt-4.1'
+  'openai/gpt-4.1-mini'
 
 /** Normalize raw client history into clean model turns. */
 export function normalizeTurns(
@@ -75,6 +82,7 @@ export function prepareAssistantRun(
 
   const tools = {
     ...overviewTools(state),
+    ...dialogTools(state),
     ...managerTools(state),
     ...channelTools(state),
     ...contactTools(state),

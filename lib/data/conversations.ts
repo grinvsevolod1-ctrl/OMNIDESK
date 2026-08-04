@@ -881,5 +881,19 @@ export async function adminReassignConversations(input: {
   })
 }
 
+/**
+ * Admin-only: every conversation id owned by a manager. Powers «передай ВСЕ
+ * диалоги менеджера X менеджеру Y» — the confirm handler resolves the id list
+ * server-side at execution time so the client payload stays tiny and fresh.
+ */
+export async function listConversationIdsForManager(
+  managerId: string,
+): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM conversations WHERE manager_id = $1`,
+    [managerId],
+  )
+  return rows.map((r) => r.id)
+}
 
 /* Live chat widget — extracted to ./data/livechat */
