@@ -708,7 +708,7 @@ function MessengersTab({ config, patch }: TabProps) {
             <Input
               value={m.label}
               onChange={(e) => update(i, { label: e.target.value })}
-              placeholder="П��дпись кнопки"
+              placeholder="Подпись кнопки"
               className="flex-1"
             />
             <Button

@@ -660,7 +660,7 @@ function systemPrompt(): string {
     '',
     'ПЛАН (адаптируй под проект):',
     '1. Определи ОС и дистрибутив (cat /etc/os-release, uname -a), какой пакетный менеджер (apt/dnf/yum/apk).',
-    '2. Определи тип проекта по репозиторию (package.json → Node, Dockerfile �� Docker, requirements.txt → Python, index.html → статика, composer.json → PHP и т.п.). Сначала set_status("cloning"), затем clone_repo, потом изучи файлы (ls, cat package.json).',
+    '2. Определи тип проекта по репозиторию (package.json → Node, Dockerfile → Docker, requirements.txt → Python, index.html → статика, composer.json → PHP и т.п.). Сначала set_status("cloning"), затем clone_repo, потом изучи файлы (ls, cat package.json).',
     '3. set_status("building"): установи недостающее (node+npm, docker, nginx/caddy, git, сборочные зависимости), затем установи зависимости проекта и собери его.',
     '4. set_status("running"): запусти приложение устойчиво (pm2 для Node/PHP, docker run --restart для Docker, либо systemd-юнит). Для статики — отдай через веб-сервер.',
     '5. Если задан домен — сначала ПРОВЕРЬ DNS: домен должен указывать на IP этого сервера (dig +short <домен> или getent hosts <домен>, сравни с внешним IP: curl -s ifconfig.me). Если A-запись не совпадает — НЕ запускай certbot/выпуск сертификата (он упадёт из-за проверки Let\'s Encrypt): подними reverse-proxy по HTTP (порт 80) и в finish предупреди, что для HTTPS нужно направить домен на этот IP. Если DNS в порядке — настрой reverse-proxy и HTTPS (Caddy проще всего: сам берёт сертификат Let\'s Encrypt).',
@@ -685,7 +685,7 @@ function userContext(
   appDir: string,
 ): string {
   const lines = [
-    `Сервер: ${server.name} (${server.ip_address}), пол��зователь ${server.ssh_username}.`,
+    `Сервер: ${server.name} (${server.ip_address}), пользователь ${server.ssh_username}.`,
     server.agent_notes ? `Заметки о сервере: ${server.agent_notes}` : 'Заметок о сервере пока нет.',
     app.agent_notes
       ? `Заметки об этом приложении с прошлой установки (проверь актуальность, но не изучай проект с нуля): ${app.agent_notes}`

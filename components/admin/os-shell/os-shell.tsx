@@ -333,7 +333,6 @@ export function OsShell({
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setInsightsVisible(localStorage.getItem(INSIGHTS_MUTED_KEY) !== today)
     } catch {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInsightsVisible(true)
     }
   }, [insights.length])
@@ -524,7 +523,7 @@ function sectionPrompt(id: ShellSection, title: string): string {
     case 'proxies':
       return 'Покажи прокси'
     case 'contacts':
-      return 'Покажи к��нтакты по каналам'
+      return 'Покажи контакты по каналам'
     case 'hosting':
       return 'Открой раздел серверов'
     case 'ai':

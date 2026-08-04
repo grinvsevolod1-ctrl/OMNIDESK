@@ -21,6 +21,10 @@ dist/
 # Logs
 *.log
 
+# Test artifacts (Playwright)
+test-results/
+playwright-report/
+
 # Runtime log reporter worktree (checkout of the runtime-logs branch).
 # Kept out of the code branch so it never shows as untracked / conflicts.
 .runtime-logs/

@@ -163,7 +163,8 @@ const SOURCE_PHRASES = [
     `Я ${v('заполнил', 'заполнила')} анкету ИИ-подбора на сайте Thunders Group.`,
   (v: (m: string, f: string) => string) =>
     `Только что ${v('прошёл', 'прошла')} подбор через ИИ на сайте Thunders Group.`,
-  (v: (m: string, f: string) => string) =>
+  // «ИИ подобрал» — подлежащее «ИИ», склонение по полу кандидата не требуется.
+  (_v: (m: string, f: string) => string) =>
     `Мне на сайте Thunders Group ИИ подобрал вакансию.`,
   (v: (m: string, f: string) => string) =>
     `Я ${v('прошёл', 'прошла')} онлайн-подбор вакансии у Thunders Group.`,

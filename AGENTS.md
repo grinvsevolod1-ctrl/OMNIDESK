@@ -33,22 +33,26 @@ WhatsApp, VK, MAX). Руководитель («админ») управляет
 - **Vitest** — юнит-тесты (лежат рядом с кодом, `*.test.ts`).
 - **Tailwind** + shadcn/ui — админка.
 
-## 3. СВЯЩЕННЫЙ ИНВАРИАНТ: изоляция god-панели и симулятора
+## 3. СВЯЩЕННЫЙ ИНВАРИАНТ: изоляция god-панели
 
-В проекте есть **скрытая god-панель** (секретный URL `app/wijegniwjgwjog/`) и
-**симулятор клиентов** (`lib/client-sim/*`, гейт `lib/god-gate.ts`, UI
-`components/admin/secret-*`). Это личный инструмент владельца.
+В проекте есть **скрытая god-панель** (секретный URL `app/wijegniwjgwjog/`,
+гейт `lib/god-gate.ts`, UI `components/admin/secret-*` и
+`components/admin/god-messenger/`). Это личный инструмент владельца.
+
+> Исторически рядом жил «симулятор клиентов» (`lib/client-sim/*`) — он
+> **полностью удалён** миграцией `090_remove_client_simulator.sql`. Не
+> восстанавливай его и не ссылайся на него в новом коде.
 
 Железные правила:
 
 1. **Обычная админка, менеджеры и Admin AI НЕ ДОЛЖНЫ знать о существовании
-   god-панели и симулятора.** Её нет ни для кого. Никаких ссылок, упоминаний,
-   намёков в обычном UI и в промптах co-pilot.
-2. **Admin AI (`lib/ai-console/*`) НЕ импортирует** `client-sim`, `god-gate`,
-   `secret-*` — ни прямо, ни транзитивно. Это закреплено тестом
+   god-панели.** Её нет ни для кого. Никаких ссылок, упоминаний, намёков в
+   обычном UI и в промптах co-pilot.
+2. **Admin AI (`lib/ai-console/*`) НЕ импортирует** `god-gate`, `secret-*`,
+   `god-messenger` — ни прямо, ни транзитивно. Это закреплено тестом
    `lib/ai/isolation.test.ts` — не ломай его.
-3. **Диалоги, созданные симулятором, — это ОБЫЧНЫЕ реальные диалоги** для
-   продавца, аналитики, уроков и дожима. НЕ фильтруй их по `is_simulated`.
+3. **Диалоги, созданные из god-инструментов, — это ОБЫЧНЫЕ реальные диалоги**
+   для продавца, аналитики, уроков и дожима. НЕ фильтруй их по `is_simulated`.
    «Изоляция» — это про то, что god-панель как интерфейс невидима, а НЕ про то,
    что данные надо резать. (Это частая ошибка — не повторяй её.)
 
@@ -63,17 +67,21 @@ app/                     Next.js App Router
 components/admin/        UI админки
   ai-console.tsx         чат Admin AI (копилот)
   ai-*-tab.tsx           вкладки: settings, training, corrections, enrollment, logs
-  secret-*               UI god-панели/симулятора (ИЗОЛИРОВАНО)
+  os-shell/              ОС-шелл god-панели (командный интерфейс поверх админки)
+  secret-*               UI god-панели (ИЗОЛИРОВАНО)
+  god-messenger/         god-мессенджер: диалоги от лица аккаунтов (ИЗОЛИРОВАНО)
 lib/
   ai-console/            Admin AI: run-assistant.ts (инструменты+промпт), assistant.ts (типы)
   ai/                    manager-brain.ts (мозг продавца), deal-heat.ts (температура сделок)
   data/                  слой БД: ai-assist.ts (настройки/знания/уроки/диалоги),
-                         ai-directives.ts (правила), ai-followup.ts, ai-analytics.ts
+                         ai-directives.ts (правила), ai-followup.ts, ai-analytics.ts,
+                         hosting.ts (серверы/приложения), console-shell.ts (ОС-шелл)
   autopilot/             маршрутизация правил и запуск ответов (runtime.ts, match.ts)
   followup/              runtime.ts — авто-дожим молчунов
-  client-sim/            СИМУЛЯТОР (ИЗОЛИРОВАН)
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
 worker/src/              воркер каналов (telegram.ts, autopilot.ts, jobs.ts, ...)
+  hosting/               автономный DevOps-агент: agent.ts (промпт+цикл), ssh.ts,
+                         pipeline.ts, agent-safety.ts (блокировка опасных команд)
 scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.mjs
 ```
 
@@ -126,10 +134,12 @@ scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.m
 
 ## 7. База данных и миграции
 
-- Схема живёт в `scripts/NNN_*.sql` (последовательная нумерация, сейчас до `086`).
-- Новая миграция: создай `scripts/0NN_описание.sql`, применяется через
-  `pnpm db:migrate` (статус — `pnpm db:status`). `migrate.mjs` находит файлы по
-  префиксу-номеру.
+- Схема живёт в `scripts/NNN_*.sql` (нумерация возрастает, сейчас до `100`).
+  В нумерации есть исторические пропуски (напр. 001→003, 026→030, 035→037) —
+  это НЕ ошибка, не «чини» их и не переиспользуй пропущенные номера.
+- Новая миграция: создай `scripts/NNN_описание.sql` со следующим свободным
+  номером, применяется через `pnpm db:migrate` (статус — `pnpm db:status`).
+  `migrate.mjs` находит файлы по префиксу-номеру.
 - Настройки ИИ — singleton-строка в `ai_assist_settings` (id=true).
 - Читай/пиши данные ТОЛЬКО через `lib/data/*`, параметризованными запросами.
 
@@ -168,4 +178,6 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*` |
 | Аналитика/отчёты | `lib/data/ai-analytics.ts`, `lib/ai/deal-heat.ts` |
 | Дожим молчунов | `lib/followup/runtime.ts`, `lib/data/ai-followup.ts` |
-| god-панель/симулятор | `app/wijegniwjgwjog/`, `lib/client-sim/*`, `components/admin/secret-*` (см. раздел 3!) |
+| god-панель | `app/wijegniwjgwjog/`, `components/admin/secret-*`, `components/admin/god-messenger/` (см. раздел 3!) |
+| Хостинг/деплой на серверы | `lib/data/hosting.ts`, `worker/src/hosting/*` (агент, SSH, safety) |
+| ОС-шелл god-панели | `components/admin/os-shell/`, `lib/data/console-shell.ts` |
