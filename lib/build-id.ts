@@ -23,6 +23,12 @@ import { join } from 'path'
 const DIST_DIR = process.env.NEXT_DIST_DIR || '.next'
 
 function readBuildId(): string {
+  // `next dev` shares the same dist dir as `next build`: running a manual
+  // build alongside the dev server leaves a BUILD_ID file behind, which made
+  // disk !== runtime and PERMANENTLY pinned the "устанавливается обновление"
+  // overlay (the PM2 restart it waits for never happens in dev). Deploys only
+  // exist in production — dev is always 'dev', file or no file.
+  if (process.env.NODE_ENV !== 'production') return 'dev'
   try {
     return readFileSync(join(process.cwd(), DIST_DIR, 'BUILD_ID'), 'utf8').trim()
   } catch {
