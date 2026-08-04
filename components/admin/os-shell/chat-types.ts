@@ -23,8 +23,11 @@ export interface ShellMessage {
   report?: AssistantReport | null
 }
 
-/** Meta portion of an SSE turn (AssistantResult minus the reply text). */
-export type ShellMeta = Omit<AssistantResult, 'reply'>
+/**
+ * Meta frame of an SSE turn. `reply` is included as a safety net: if no delta
+ * frames arrived (buffered proxy, offline fallback) the client renders it.
+ */
+export type ShellMeta = Omit<AssistantResult, 'reply'> & { reply?: string }
 
 let counter = 0
 /** Unique-enough id for optimistic message rendering. */

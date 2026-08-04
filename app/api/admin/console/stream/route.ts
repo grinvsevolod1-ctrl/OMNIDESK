@@ -2,6 +2,7 @@ import { requireAdmin } from '@/lib/auth'
 import { isBrainConfigured } from '@/lib/ai/manager-brain'
 import type { AssistantTurn } from '@/lib/admin-console/assistant'
 import {
+  fallbackResult,
   lastUserText,
   normalizeTurns,
   prepareAssistantRun,
@@ -43,8 +44,7 @@ export async function POST(req: Request): Promise<Response> {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         if (result.reply) controller.enqueue(sse({ t: 'delta', v: result.reply }))
-        const { reply: _reply, ...meta } = result
-        controller.enqueue(sse({ t: 'meta', v: meta }))
+        controller.enqueue(sse({ t: 'meta', v: result }))
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
         controller.close()
       },
@@ -63,9 +63,25 @@ export async function POST(req: Request): Promise<Response> {
           full += delta
           controller.enqueue(sse({ t: 'delta', v: delta }))
         }
-        const finalized = run.finalize(full)
-        const { reply: _reply, ...meta } = finalized
-        controller.enqueue(sse({ t: 'meta', v: meta }))
+        let finalized = run.finalize(full)
+        // The AI SDK can swallow generation errors inside textStream and end
+        // "cleanly" with zero output. An empty run (no text, no tool activity)
+        // means the model never actually answered — serve the deterministic
+        // fallback instead of a blank bubble.
+        if (
+          !full.trim() &&
+          finalized.actions.length === 0 &&
+          finalized.views.length === 0 &&
+          !finalized.pending &&
+          !finalized.report
+        ) {
+          finalized = fallbackResult(text)
+          if (finalized.reply)
+            controller.enqueue(sse({ t: 'delta', v: finalized.reply }))
+        }
+        // Keep reply inside meta too: the client uses it whenever it received
+        // no delta frames (proxies that buffer SSE, fallback result, etc).
+        controller.enqueue(sse({ t: 'meta', v: finalized }))
       } catch {
         controller.enqueue(sse({ t: 'error' }))
       } finally {

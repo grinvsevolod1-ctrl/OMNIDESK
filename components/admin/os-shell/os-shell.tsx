@@ -142,15 +142,17 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
               )
             } else if (evt.t === 'meta' && evt.v) {
               gotMeta = true
-              applyMeta(asstId, evt.v as ShellMeta, reply || undefined)
+              const meta = evt.v as ShellMeta
+              // If delta frames never arrived, meta carries the reply text.
+              if (!reply && typeof meta.reply === 'string') reply = meta.reply
+              applyMeta(asstId, meta, reply || undefined)
             } else if (evt.t === 'error') {
               throw new Error('generation failed')
             }
           }
         }
         if (!gotMeta) throw new Error('no meta')
-      } catch (err) {
-        console.log('[v0] SSE path failed, falling back:', err)
+      } catch {
         // Fallback: one-shot server action (works without SSE / AI gateway).
         try {
           const result: AssistantResult = await runShellAssistantAction(
@@ -165,8 +167,7 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
           )
           applyMeta(asstId, meta, reply)
           gotMeta = true
-        } catch (err2) {
-          console.log('[v0] fallback action failed too:', err2)
+        } catch {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === asstId
@@ -244,7 +245,7 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
     },
     onError: (code) => {
       if (code === 'not-allowed')
-        toast.error('Доступ к микрофону запрещён браузером')
+        toast.error('Д��ступ к микрофону запрещён браузером')
       else if (code !== 'aborted' && code !== 'no-speech')
         toast.error('Голосовой ввод недоступен')
     },
