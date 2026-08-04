@@ -381,18 +381,19 @@ export function OsShell({
         </div>
       </header>
 
-      {/* Section dock */}
+      {/* Section dock — pills wrap onto extra rows instead of clipping into a
+          horizontal scroller (no scrollbar, always tidy). */}
       <nav
         aria-label="Разделы"
-        className="mx-auto w-full max-w-4xl overflow-x-auto px-4 pt-4 scrollbar-thin"
+        className="mx-auto w-full max-w-4xl px-4 pt-4"
       >
-        <ul className="flex gap-1.5">
+        <ul className="flex flex-wrap justify-center gap-2">
           {SHELL_SECTIONS.filter((s) => s.id !== 'help').map((s) => (
             <li key={s.id}>
               <button
                 type="button"
                 onClick={() => void send(sectionPrompt(s.id, s.title))}
-                className="whitespace-nowrap rounded-full border border-border bg-card/50 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                className="press-scale whitespace-nowrap rounded-full border border-border bg-card/50 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-foreground/25 hover:bg-card hover:text-foreground"
               >
                 {s.title}
               </button>
