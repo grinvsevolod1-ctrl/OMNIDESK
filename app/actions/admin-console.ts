@@ -7,7 +7,9 @@ import {
   deleteChannelById,
   deleteManager,
   deleteProxy,
+  getChannelById,
   getManagerById,
+  reassignChannelManager,
   updateManagerStatus,
 } from '@/lib/data'
 import { deleteFinanceEntry } from '@/lib/finance'
@@ -71,6 +73,33 @@ export async function confirmShellPendingAction(
         revalidatePath('/admin/accounts')
         revalidatePath('/admin')
         return { ok: true, message: 'Канал удалён' }
+      }
+      case 'reassign_channel': {
+        // managerId: string = reassign, null = unassign. Re-validated here —
+        // the pending payload from the client is never trusted blindly.
+        const rawManagerId = pending.payload?.managerId
+        const managerId =
+          typeof rawManagerId === 'string' && rawManagerId ? rawManagerId : null
+        const ch = await getChannelById(id)
+        if (!ch) return { ok: false, message: 'Канал не найден' }
+        let managerName: string | null = null
+        if (managerId) {
+          const m = await getManagerById(managerId)
+          if (!m) return { ok: false, message: 'Менеджер не найден' }
+          if (m.status === 'blocked')
+            return { ok: false, message: `Менеджер ${m.name} заблокирован` }
+          managerName = m.name
+        }
+        await reassignChannelManager(id, managerId)
+        revalidatePath('/admin/accounts')
+        revalidatePath('/admin/channels')
+        revalidatePath('/admin')
+        return {
+          ok: true,
+          message: managerName
+            ? `Канал ${ch.name} передан менеджеру ${managerName}`
+            : `Канал ${ch.name} снят с менеджера`,
+        }
       }
       case 'delete_proxy': {
         await deleteProxy(id)

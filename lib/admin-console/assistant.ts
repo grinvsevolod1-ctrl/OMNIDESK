@@ -41,6 +41,7 @@ export interface PendingConfirmation {
     | 'delete_manager'
     | 'block_manager'
     | 'delete_channel'
+    | 'reassign_channel'
     | 'delete_proxy'
     | 'delete_finance_entry'
   /** Button text, e.g. «Удалить менеджера Ivan». */

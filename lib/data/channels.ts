@@ -115,6 +115,17 @@ export async function deleteChannelById(id: string): Promise<void> {
   await query('DELETE FROM channels WHERE id = $1', [id])
 }
 
+/** Admin: reassign a channel to another manager (or unassign with null). */
+export async function reassignChannelManager(
+  id: string,
+  managerId: string | null,
+): Promise<void> {
+  await query('UPDATE channels SET manager_id = $2 WHERE id = $1', [
+    id,
+    managerId,
+  ])
+}
+
 export interface LivechatWidgetAppearance {
   /** Header title shown in the widget panel. */
   title: string
