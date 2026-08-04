@@ -159,6 +159,12 @@ pnpm install --frozen-lockfile
 echo "🗄  Applying database migrations ..."
 node --env-file=.env scripts/migrate.mjs up
 
+# 4b. Seed the managed dictionaries (lead status labels, channel captions,
+#     OS-shell commands...) exactly once: ON CONFLICT DO NOTHING inside the
+#     script makes this a no-op on every subsequent deploy and NEVER
+#     overwrites admin edits made through the copilot.
+node --env-file=.env scripts/seed-dictionaries.mjs
+
 # 5. Rebuild the panel into a THROWAWAY directory, then swap it in atomically.
 #    Deleting the live .next before building (the old approach) left the directory
 #    missing for the whole ~10s build, so the still-running panel under PM2

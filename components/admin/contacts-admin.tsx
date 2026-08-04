@@ -14,8 +14,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { downloadText } from '@/lib/vault-utils'
-import { LEAD_STATUS_META } from '@/lib/types'
+import { useLeadStatusMeta } from '@/components/dictionaries-provider'
 import type { ContactChannelGroup, ContactRecord } from '@/lib/types'
+import type { Dictionaries } from '@/lib/dictionaries'
 import { cn } from '@/lib/utils'
 
 /** Per-channel accent, mirroring the Accounts tab palette. */
@@ -45,7 +46,10 @@ function csvCell(value: string): string {
 }
 
 /** Build a CSV export for one channel's contacts. */
-function contactsToCSV(contacts: ContactRecord[]): string {
+function contactsToCSV(
+  contacts: ContactRecord[],
+  leadStatuses: Dictionaries['leadStatuses'],
+): string {
   const header = [
     'name',
     'identifier',
@@ -63,7 +67,7 @@ function contactsToCSV(contacts: ContactRecord[]): string {
       c.contactUsername ?? '',
       c.channelName ?? c.channelType,
       c.managerName ?? '',
-      LEAD_STATUS_META[c.status]?.label ?? c.status,
+      leadStatuses[c.status]?.label ?? c.status,
       c.createdAt,
       c.lastMessageAt,
     ]
@@ -74,12 +78,13 @@ function contactsToCSV(contacts: ContactRecord[]): string {
 }
 
 export function ContactsAdmin({ groups }: { groups: ContactChannelGroup[] }) {
+  const leadStatuses = useLeadStatusMeta()
   const [openType, setOpenType] = useState<string | null>(null)
   const active = groups.find((g) => g.channelType === openType) ?? null
   const total = groups.reduce((sum, g) => sum + g.count, 0)
 
   function exportGroup(group: ContactChannelGroup) {
-    const csv = contactsToCSV(group.contacts)
+    const csv = contactsToCSV(group.contacts, leadStatuses)
     downloadText(`contacts-${group.channelType}.csv`, csv, 'text/csv')
   }
 
@@ -220,7 +225,7 @@ export function ContactsAdmin({ groups }: { groups: ContactChannelGroup[] }) {
                         </td>
                         <td className="px-3 py-2">
                           <Badge variant="outline" className="text-xs">
-                            {LEAD_STATUS_META[c.status]?.label ?? c.status}
+                            {leadStatuses[c.status]?.label ?? c.status}
                           </Badge>
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">

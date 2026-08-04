@@ -25,7 +25,11 @@ import {
   adminListManagerConversationsAction,
   type AdminTranscript,
 } from '@/app/actions/admin-inbox'
-import { LEAD_STATUS_META, type LeadStatus } from '@/lib/types'
+import type { LeadStatus } from '@/lib/types'
+import {
+  useChannelTypeLabels,
+  useLeadStatusMeta,
+} from '@/components/dictionaries-provider'
 
 const STATUS_DOT: Record<LeadStatus, string> = {
   unsubscribed: 'bg-sky-500',
@@ -33,13 +37,6 @@ const STATUS_DOT: Record<LeadStatus, string> = {
   liquid: 'bg-teal-500',
   not_liquid: 'bg-muted-foreground',
   transferred: 'bg-emerald-500',
-}
-
-const CHANNEL_LABEL: Record<string, string> = {
-  telegram: 'Telegram',
-  whatsapp: 'WhatsApp',
-  livechat: 'Онлайн-чат',
-  max: 'MAX',
 }
 
 function formatTime(iso: string): string {
@@ -64,6 +61,8 @@ export function ConversationReaderDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const leadStatuses = useLeadStatusMeta()
+  const channelLabels = useChannelTypeLabels()
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<AdminTranscript | null>(null)
@@ -189,7 +188,7 @@ export function ConversationReaderDialog({
                               'size-2 shrink-0 rounded-full',
                               STATUS_DOT[c.status],
                             )}
-                            title={LEAD_STATUS_META[c.status].label}
+                            title={leadStatuses[c.status].label}
                             aria-hidden
                           />
                         </div>
@@ -197,7 +196,7 @@ export function ConversationReaderDialog({
                           {c.lastMessage || 'Нет сообщений'}
                         </span>
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                          {CHANNEL_LABEL[c.channelType] ?? c.channelType}
+                          {channelLabels[c.channelType] ?? c.channelType}
                           {' · '}
                           {formatTime(c.lastMessageAt)}
                         </span>
@@ -241,7 +240,7 @@ export function ConversationReaderDialog({
                     </p>
                     {transcript?.conversation ? (
                       <p className="truncate text-xs text-muted-foreground">
-                        {CHANNEL_LABEL[transcript.conversation.channelType] ??
+                        {channelLabels[transcript.conversation.channelType] ??
                           transcript.conversation.channelType}
                         {transcript.conversation.contactHandle
                           ? ` · ${transcript.conversation.contactHandle}`

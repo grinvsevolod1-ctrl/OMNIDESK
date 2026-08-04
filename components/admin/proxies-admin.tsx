@@ -59,12 +59,6 @@ const STATUS_COLOR: Record<Proxy['status'], string> = {
   unknown: 'bg-muted-foreground',
 }
 
-const STATUS_LABEL: Record<Proxy['status'], string> = {
-  ok: 'Работает',
-  error: 'Не работает',
-  unknown: 'Не проверен',
-}
-
 type ViewMode = 'all' | 'byManager'
 type StatusFilter = 'all' | Proxy['status']
 type OwnerFilter = 'all' | 'admin' | 'manager'

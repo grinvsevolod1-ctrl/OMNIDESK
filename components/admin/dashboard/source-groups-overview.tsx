@@ -45,6 +45,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { ChannelType } from '@/lib/types'
+import { useChannelTypeLabels } from '@/components/dictionaries-provider'
 import { cn } from '@/lib/utils'
 import type { GroupAnalytics, SourceGroup } from '@/lib/data'
 
@@ -56,14 +57,6 @@ type ChannelOption = {
 }
 
 type Preset = 'today' | '7d' | '30d' | 'custom'
-
-const TYPE_LABEL: Record<ChannelType, string> = {
-  telegram: 'Telegram',
-  whatsapp: 'WhatsApp',
-  livechat: 'Онлайн-чат',
-  max: 'MAX',
-  vk: 'VK',
-}
 
 const TYPE_DOT: Record<ChannelType, string> = {
   telegram: 'bg-sky-500',
@@ -326,6 +319,7 @@ export function SourceGroupsOverview({
 }
 
 function Report({ analytics }: { analytics: GroupAnalytics }) {
+  const TYPE_LABEL = useChannelTypeLabels()
   // Блоки по типам мессенджеров больше не захардкожены под Telegram/WhatsApp/
   // Онлайн-чат: строим их из фактических данных и сортируем по убыванию лидов.
   // «Всего написали» закреплён первым, дальше — три самых активных канала.
@@ -372,6 +366,7 @@ function Report({ analytics }: { analytics: GroupAnalytics }) {
 }
 
 function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
+  const TYPE_LABEL = useChannelTypeLabels()
   // byChannel уже отсортирован сервером по убыванию людей. Доля считается от
   // самого активного канала, чтобы нарисовать сравнительную полоску.
   const peak = Math.max(1, ...analytics.byChannel.map((c) => c.people))
@@ -447,6 +442,7 @@ function ManageGroupsDialog({
   channels: ChannelOption[]
   triggerLabel?: string
 }) {
+  const TYPE_LABEL = useChannelTypeLabels()
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
