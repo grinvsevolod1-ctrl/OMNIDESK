@@ -19,6 +19,7 @@ import { dictionaryTools } from './tools-dictionaries'
 import { navigationTools } from './tools-navigation'
 import { scheduleTools } from './tools-schedules'
 import { aiTools } from './tools-ai'
+import { tryLocalCommand } from './local-commands'
 
 /**
  * Shared orchestration for the OMNIDESK OS shell copilot, used by BOTH the
@@ -197,6 +198,15 @@ export function prepareAssistantRun(
   return { agent, messages: turns, finalize }
 }
 
+/**
+ * Best available answer WITHOUT the AI gateway: first the deterministic
+ * local-command layer (real data views), then keyword navigation.
+ */
+export async function offlineResult(text: string): Promise<AssistantResult> {
+  const local = await tryLocalCommand(text)
+  return local ?? fallbackResult(text)
+}
+
 /** One-shot (non-streaming) turn with the deterministic offline fallback. */
 export async function runAssistantOnce(
   history: AssistantTurn[],
@@ -204,6 +214,11 @@ export async function runAssistantOnce(
 ): Promise<AssistantResult> {
   const turns = normalizeTurns(history)
   const text = lastUserText(turns)
+
+  // Local command layer FIRST: common reads and drill-downs are answered
+  // straight from the DB — zero gateway tokens, zero LLM latency.
+  const local = text ? await tryLocalCommand(text) : null
+  if (local) return local
 
   if (!isBrainConfigured() || !text) return fallbackResult(text)
 

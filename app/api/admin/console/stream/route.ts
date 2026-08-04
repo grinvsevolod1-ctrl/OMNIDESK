@@ -2,12 +2,13 @@ import { requireAdmin } from '@/lib/auth'
 import { isBrainConfigured } from '@/lib/ai/manager-brain'
 import type { AssistantTurn } from '@/lib/admin-console/assistant'
 import {
-  fallbackResult,
   lastUserText,
   normalizeTurns,
+  offlineResult,
   prepareAssistantRun,
   runAssistantOnce,
 } from '@/lib/admin-console/run-assistant'
+import { tryLocalCommand } from '@/lib/admin-console/local-commands'
 
 /**
  * Streaming endpoint for the OMNIDESK OS shell copilot. Same SSE line protocol
@@ -38,10 +39,13 @@ export async function POST(req: Request): Promise<Response> {
   const turns = normalizeTurns(history)
   const text = lastUserText(turns)
 
-  // Offline / no-gateway: return the deterministic one-shot result as a
-  // single delta+meta so the client renders it through the same path.
-  if (!isBrainConfigured() || !text) {
-    const result = await runAssistantOnce(history, user.sub)
+  // Local command layer FIRST: common reads, navigation, and the clickable
+  // table drill-downs are exact phrases — answering them straight from the DB
+  // skips the AI gateway entirely (zero tokens, one round-trip). Also the
+  // offline / no-gateway path: runAssistantOnce embeds the same layer.
+  const local = text ? await tryLocalCommand(text) : null
+  if (local || !isBrainConfigured() || !text) {
+    const result = local ?? (await runAssistantOnce(history, user.sub))
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         if (result.reply) controller.enqueue(sse({ t: 'delta', v: result.reply }))
@@ -88,7 +92,9 @@ export async function POST(req: Request): Promise<Response> {
           !finalized.pending &&
           !finalized.report
         ) {
-          finalized = fallbackResult(text)
+          // offlineResult tries the local data layer first, then keyword
+          // navigation — a dead gateway still gets real answers.
+          finalized = await offlineResult(text)
           if (finalized.reply)
             controller.enqueue(sse({ t: 'delta', v: finalized.reply }))
         }
@@ -96,7 +102,20 @@ export async function POST(req: Request): Promise<Response> {
         // no delta frames (proxies that buffer SSE, fallback result, etc).
         controller.enqueue(sse({ t: 'meta', v: finalized }))
       } catch {
-        controller.enqueue(sse({ t: 'error' }))
+        // Generation blew up mid-stream. If nothing was emitted yet, degrade
+        // to the offline layer (real data or navigation) instead of an error.
+        if (!full.trim()) {
+          try {
+            const offline = await offlineResult(text)
+            if (offline.reply)
+              controller.enqueue(sse({ t: 'delta', v: offline.reply }))
+            controller.enqueue(sse({ t: 'meta', v: offline }))
+          } catch {
+            controller.enqueue(sse({ t: 'error' }))
+          }
+        } else {
+          controller.enqueue(sse({ t: 'error' }))
+        }
       } finally {
         statusSink = null
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
