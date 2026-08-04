@@ -10,6 +10,10 @@ export default defineConfig({
     alias: {
       'server-only': new URL('./tests/stubs/server-only.ts', import.meta.url)
         .pathname,
+      // Mirror the tsconfig `@/*` path alias for un-mocked runtime imports
+      // (tests usually vi.mock('@/…') paths, but shared modules like
+      // lib/console-core are imported for real).
+      '@': new URL('.', import.meta.url).pathname.replace(/\/$/, ''),
     },
   },
 })

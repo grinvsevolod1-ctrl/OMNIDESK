@@ -11,6 +11,10 @@ import {
 import { SYSTEM_INSTRUCTIONS } from './prompt'
 import { createRunState } from './run-state'
 import { serversTools } from './tools'
+import {
+  lastUserText,
+  normalizeTurns as coreNormalizeTurns,
+} from '@/lib/console-core'
 
 /**
  * Shared orchestration for the conversational servers assistant, used by BOTH
@@ -25,26 +29,18 @@ const ASSISTANT_MODEL =
 
 export const SERVERS_PATH = '/admin/servers'
 
-/** Normalize raw client history into clean model turns. */
+/**
+ * Normalize raw client history (shared console-core rules). This console now
+ * inherits the same long-dialog context compression as the admin copilot —
+ * older turns are truncated so the token bill stays flat.
+ */
 export function normalizeTurns(
   history: AssistantTurn[] | undefined,
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
-  return (history ?? [])
-    .filter((t) => t && typeof t.content === 'string' && t.content.trim())
-    .slice(-ASSISTANT_HISTORY_LIMIT)
-    .map((t) => ({
-      role:
-        t.role === 'assistant' ? ('assistant' as const) : ('user' as const),
-      content: t.content.trim().slice(0, 2000),
-    }))
+  return coreNormalizeTurns(history, ASSISTANT_HISTORY_LIMIT)
 }
 
-/** The latest user utterance from a normalized turn list. */
-export function lastUserText(
-  turns: Array<{ role: 'user' | 'assistant'; content: string }>,
-): string {
-  return [...turns].reverse().find((t) => t.role === 'user')?.content ?? ''
-}
+export { lastUserText }
 
 /** Natural acknowledgement per intent for the deterministic fallback path. */
 export function fallbackReply(intent: ServersIntent): string {

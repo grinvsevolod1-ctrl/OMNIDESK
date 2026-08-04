@@ -781,7 +781,6 @@ export function InboxView({
     if (!activeId || activeId in localMessages) return
     if (hydratingRef.current === activeId) return
     hydratingRef.current = activeId
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setThreadLoading(true)
     void loadThreadMessagesAction(activeId)
       .then((res) => {
