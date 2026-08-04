@@ -56,8 +56,9 @@ export function contactTools(state: RunState) {
         )
         state.report = {
           filename: `contacts-${channelType}.csv`,
-          mimeType: 'text/csv',
-          content: [header.join(','), ...lines].join('\n'),
+          mimeType: 'text/csv;charset=utf-8',
+          // CRLF row separator per RFC 4180 — what Excel expects.
+          content: [header.join(','), ...lines].join('\r\n'),
           label: `Контакты ${dict.channelTypes[channelType] ?? channelType} (${group.count})`,
         }
         state.actions.push({

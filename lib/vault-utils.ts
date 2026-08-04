@@ -167,7 +167,11 @@ export function downloadText(
   content: string,
   mime = 'text/plain',
 ): void {
-  const blob = new Blob([content], { type: `${mime};charset=utf-8` })
+  // UTF-8 BOM for CSV: without it Excel assumes a legacy codepage
+  // (Windows-1251) and renders Cyrillic as mojibake.
+  const isCsv = mime.includes('csv') || filename.endsWith('.csv')
+  const parts: BlobPart[] = isCsv ? ['\uFEFF', content] : [content]
+  const blob = new Blob(parts, { type: `${mime};charset=utf-8` })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

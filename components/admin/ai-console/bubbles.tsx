@@ -319,7 +319,16 @@ export function ActionReceipts({
 export function ReportDownload({ report }: { report: AssistantReport }) {
   const download = () => {
     try {
-      const blob = new Blob([report.content], { type: report.mimeType })
+      // UTF-8 BOM for CSV: without it Excel assumes a legacy codepage
+      // (Windows-1251) and renders Cyrillic as mojibake.
+      const isCsv =
+        report.mimeType.includes('csv') || report.filename.endsWith('.csv')
+      const parts: BlobPart[] = isCsv
+        ? ['\uFEFF', report.content]
+        : [report.content]
+      const blob = new Blob(parts, {
+        type: isCsv ? 'text/csv;charset=utf-8' : report.mimeType,
+      })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
