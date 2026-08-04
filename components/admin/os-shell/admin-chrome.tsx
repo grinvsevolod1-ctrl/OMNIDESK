@@ -3,7 +3,7 @@
 /**
  * Mode switch for the admin area. When the OS shell is enabled (default) the
  * /admin root becomes the OMNIDESK OS command shell; deeper routes
- * (/admin/managers, /admin/hosting, ...) keep the classic chrome so the
+ * (/admin/managers, /admin/servers, ...) keep the classic chrome so the
  * copilot can "open" them as apps and direct URLs keep working. When the
  * shell is disabled via the toggle cookie, everything renders classic and the
  * header shows a button to switch back.

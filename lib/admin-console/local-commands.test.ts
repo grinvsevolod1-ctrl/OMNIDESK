@@ -45,6 +45,19 @@ vi.mock('@/lib/data/ai-directives', () => ({
 vi.mock('@/lib/data/ai-assist', () => ({
   listKnowledge: vi.fn(async () => []),
 }))
+vi.mock('@/lib/data/hosting', () => ({
+  listServers: vi.fn(async () => [
+    {
+      id: 's1',
+      name: 'prod-1',
+      ipAddress: '10.0.0.1',
+      status: 'online',
+      metrics: { cpu: 12, mem: 40, disk: 55, uptime: 'up 3 days' },
+      lastError: null,
+      appCount: 2,
+    },
+  ]),
+}))
 
 import { tryLocalCommand } from './local-commands'
 
@@ -62,6 +75,8 @@ describe('tryLocalCommand — recognized commands (no gateway needed)', () => {
     ['прокси', 'proxies'],
     ['покажи директивы', 'directives'],
     ['база знаний', 'knowledge'],
+    ['покажи серверы', 'servers'],
+    ['что с серверами', 'servers'],
   ])('«%s» → %s view', async (text, kind) => {
     const res = await tryLocalCommand(text)
     expect(res).not.toBeNull()
@@ -116,6 +131,7 @@ describe('tryLocalCommand — must defer to the LLM (returns null)', () => {
     'почему упала конверсия?',
     'добавь правило: на вопрос о цене отвечай уклончиво',
     'сколько мы потратили на рекламу в марте',
+    'задеплой приложение site',
   ])('«%s» → null', async (text) => {
     expect(await tryLocalCommand(text)).toBeNull()
   })

@@ -30,6 +30,7 @@ export interface ExecutedAction {
     | 'schedule'
     | 'dialog'
     | 'ai'
+    | 'server'
   /** Short human summary, e.g. «Заблокировал менеджера Ivan». */
   label: string
 }
@@ -51,6 +52,7 @@ export interface PendingConfirmation {
     | 'send_message'
     | 'delete_directive'
     | 'delete_knowledge'
+    | 'deploy_app'
   /** Button text, e.g. «Удалить менеджера Ivan». */
   label: string
   /** One-sentence consequence so the admin knows what they're approving. */
@@ -87,6 +89,8 @@ export interface DataView {
     | 'manager_activity'
     | 'directives'
     | 'knowledge'
+    | 'servers'
+    | 'apps'
   title: string
   payload: unknown
 }

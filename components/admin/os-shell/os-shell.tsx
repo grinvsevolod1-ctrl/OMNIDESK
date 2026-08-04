@@ -777,11 +777,21 @@ function sectionPrompt(id: ShellSection, title: string): string {
     case 'contacts':
       return 'Покажи контакты по каналам'
     case 'hosting':
-      return 'Открой раздел серверов'
+      return 'Покажи серверы'
     case 'ai':
       return 'Открой ИИ-менеджера'
     case 'dictionaries':
       return 'Покажи справочники'
+    case 'whatsapp':
+      return 'Открой раздел WhatsApp'
+    case 'livechat':
+      return 'Открой онлайн-чат'
+    case 'telemost':
+      return 'Открой Телемост'
+    case 'settings':
+      return 'Открой настройки'
+    case 'docs':
+      return 'Открой документацию'
     default:
       return `Открой раздел «${title}»`
   }

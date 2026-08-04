@@ -17,6 +17,11 @@ export type ShellSection =
   | 'hosting'
   | 'ai'
   | 'dictionaries'
+  | 'whatsapp'
+  | 'livechat'
+  | 'telemost'
+  | 'settings'
+  | 'docs'
   | 'help'
 
 export interface ShellSectionInfo {
@@ -44,7 +49,8 @@ export const SHELL_SECTIONS: ShellSectionInfo[] = [
     id: 'accounts',
     title: 'Аккаунты',
     href: '/admin/accounts',
-    keywords: ['аккаунт', 'telegram', 'телеграм', 'whatsapp', 'ватсап', 'сесси'],
+    // WhatsApp lives on its own page (/admin/whatsapp) — keep its keywords there.
+    keywords: ['аккаунт', 'telegram', 'телеграм', 'сесси', 'vk', 'вконтакте', 'max', 'макс'],
   },
   {
     id: 'finance',
@@ -73,7 +79,8 @@ export const SHELL_SECTIONS: ShellSectionInfo[] = [
   {
     id: 'hosting',
     title: 'Серверы',
-    href: '/admin/hosting',
+    // The servers console lives at /admin/servers (there is no /admin/hosting).
+    href: '/admin/servers',
     keywords: ['сервер', 'хостинг', 'деплой', 'deploy', 'ssh'],
   },
   {
@@ -87,6 +94,36 @@ export const SHELL_SECTIONS: ShellSectionInfo[] = [
     title: 'Справочники',
     href: '/admin',
     keywords: ['справочник', 'статус', 'переимен', 'назван', 'лейбл', 'ликвид'],
+  },
+  {
+    id: 'whatsapp',
+    title: 'WhatsApp',
+    href: '/admin/whatsapp',
+    keywords: ['whatsapp', 'ватсап', 'вацап', 'wa-аккаунт'],
+  },
+  {
+    id: 'livechat',
+    title: 'Онлайн-чат',
+    href: '/admin/livechat',
+    keywords: ['онлайн-чат', 'лайвчат', 'чат на сайте', 'виджет чата'],
+  },
+  {
+    id: 'telemost',
+    title: 'Телемост',
+    href: '/admin/telemost',
+    keywords: ['телемост', 'видеовстреч', 'видеозвон', 'созвон'],
+  },
+  {
+    id: 'settings',
+    title: 'Настройки',
+    href: '/admin/settings',
+    keywords: ['настройк', 'конфигурац', 'параметр систем'],
+  },
+  {
+    id: 'docs',
+    title: 'Документация',
+    href: '/admin/docs',
+    keywords: ['документац', 'инструкц', 'справк', 'руководств', 'мануал'],
   },
 ]
 

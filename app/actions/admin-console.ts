@@ -19,6 +19,7 @@ import {
 } from '@/lib/data'
 import { removeDirective } from '@/lib/data/ai-directives'
 import { deleteKnowledge } from '@/lib/data/ai-assist'
+import { executeDeployApp } from '@/lib/admin-console/tools-servers'
 import { deleteFinanceEntry } from '@/lib/finance'
 import {
   SHELL_MODE_COOKIE,
@@ -242,6 +243,11 @@ export async function confirmShellPendingAction(
         await deleteKnowledge(id)
         revalidatePath('/admin/ai')
         return { ok: true, message: 'Статья удалена из базы знаний' }
+      }
+      case 'deploy_app': {
+        const result = await executeDeployApp(id)
+        if (result.ok) revalidatePath('/admin/servers')
+        return result
       }
       case 'delete_proxy': {
         await deleteProxy(id)

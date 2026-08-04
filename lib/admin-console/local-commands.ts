@@ -14,6 +14,7 @@ import {
 import { getDictionaries } from '@/lib/data/dictionaries'
 import { listDirectives } from '@/lib/data/ai-directives'
 import { listKnowledge } from '@/lib/data/ai-assist'
+import { listServers } from '@/lib/data/hosting'
 import { classifyByKeywords, SHELL_SECTIONS } from './intents'
 import type { AssistantResult } from './assistant'
 import { cached } from './tool-cache'
@@ -239,6 +240,38 @@ async function directivesView(): Promise<AssistantResult> {
   ])
 }
 
+const SERVER_STATUS_RU: Record<string, string> = {
+  online: 'в сети',
+  offline: 'не в сети',
+  unknown: 'не проверялся',
+}
+
+async function serversView(): Promise<AssistantResult> {
+  const servers = await listServers()
+  const payload = servers.map((s) => ({
+    id: s.id,
+    name: s.name,
+    ip: s.ipAddress,
+    status: s.status,
+    statusLabel: SERVER_STATUS_RU[s.status] ?? s.status,
+    cpu: s.metrics?.cpu ?? null,
+    memory: s.metrics?.mem ?? null,
+    disk: s.metrics?.disk ?? null,
+    uptime: s.metrics?.uptime ?? null,
+    apps: s.appCount ?? 0,
+    lastError: s.lastError,
+  }))
+  const problems = payload.filter(
+    (s) => s.status === 'offline' || s.lastError,
+  )
+  return ok(
+    problems.length
+      ? `Серверов: ${payload.length}, с проблемами: ${problems.length} (${problems.map((p) => p.name).join(', ')}).`
+      : `Серверов: ${payload.length}, все в порядке.`,
+    [{ kind: 'servers', title: 'Серверы', payload }],
+  )
+}
+
 async function knowledgeView(): Promise<AssistantResult> {
   const list = await listKnowledge()
   const payload = list.map((k) => ({
@@ -255,7 +288,7 @@ async function knowledgeView(): Promise<AssistantResult> {
 function helpReply(): AssistantResult {
   return {
     reply:
-      'Я управляю всей панелью: сводка и аналитика, менеджеры (создать/заблокировать/диалоги), каналы и прокси, переписки клиентов (показать, ответить, передать другому менеджеру), директивы и база знаний ИИ, финансы и расписания. Опасные действия всегда прошу подтвердить. Скажите, что нужно — например «покажи диалоги без ответа» или «создай менеджера Ивана».',
+      'Я управляю всей панелью: сводка и аналитика, менеджеры (создать/заблокировать/диалоги), каналы и прокси, переписки клиентов (показать, ответить, передать другому менеджеру), директивы и база знаний ИИ, финансы, расписания, серверы и деплой приложений. Опасные действия всегда прошу подтвердить. Скажите, что нужно — например «покажи диалоги без ответа», «что с серверами» или «создай менеджера Ивана».',
     actions: [],
     openSection: null,
     views: [],
@@ -282,7 +315,7 @@ export async function tryLocalCommand(
   // the rest of the phrase looks like a read («передай все диалоги без
   // ответа…» is a reassignment, not a listing).
   if (
-    /перед[аy]|переназнач|перенеси|создай|добавь|удали|заблокируй|разблокируй|ответь|напиши|отправь|измени|обнови|включи|выключи|поставь|сравни/.test(
+    /перед[аy]|переназнач|перенеси|создай|добавь|удали|заблокируй|разблокируй|ответь|напиши|отправь|измени|обнови|включи|выключи|поставь|сравни|деплой|deploy|перезапусти|останови/.test(
       q,
     )
   )
@@ -339,6 +372,12 @@ export async function tryLocalCommand(
       return await directivesView()
     if (/^(?:покажи |открой )?(?:база знаний|базу знаний|знания ии)$/.test(q))
       return await knowledgeView()
+    if (
+      /^(?:покажи |открой )?(?:серверы|список серверов|статус серверов|что с серверами)$/.test(
+        q,
+      )
+    )
+      return await serversView()
 
     // Navigation: «открой раздел X» (explicit — mirrors the system prompt).
     const nav = /^открой (?:раздел )?(.+)$/.exec(q)

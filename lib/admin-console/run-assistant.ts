@@ -19,6 +19,7 @@ import { dictionaryTools } from './tools-dictionaries'
 import { navigationTools } from './tools-navigation'
 import { scheduleTools } from './tools-schedules'
 import { aiTools } from './tools-ai'
+import { serverTools } from './tools-servers'
 import { tryLocalCommand } from './local-commands'
 
 /**
@@ -117,6 +118,9 @@ const TOOL_STATUS: Record<string, string> = {
   list_knowledge: 'Читаю базу знаний…',
   upsert_knowledge: 'Сохраняю знание…',
   remove_knowledge: 'Готовлю удаление знания…',
+  list_servers: 'Проверяю серверы…',
+  show_server_apps: 'Смотрю приложения…',
+  deploy_app: 'Готовлю деплой…',
 }
 
 /**
@@ -164,6 +168,7 @@ export function prepareAssistantRun(
       ...navigationTools(state),
       ...scheduleTools(state, userId),
       ...aiTools(state),
+      ...serverTools(state),
     },
     onStatus,
   )
