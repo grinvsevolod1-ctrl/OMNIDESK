@@ -12,8 +12,15 @@ import { toast } from 'sonner'
 import type { DataView } from '@/lib/admin-console/assistant'
 import type { Dictionaries } from '@/lib/dictionaries'
 
-export function DataViewPanel({ view }: { view: DataView }) {
-  const body = renderBody(view)
+export function DataViewPanel({
+  view,
+  onCommand,
+}: {
+  view: DataView
+  /** Row clicks drill down by issuing a follow-up command to the copilot. */
+  onCommand?: (prompt: string) => void
+}) {
+  const body = renderBody(view, onCommand)
   if (!body) return null
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card/60 backdrop-blur-sm duration-300 animate-in fade-in slide-in-from-bottom-2">
@@ -25,12 +32,12 @@ export function DataViewPanel({ view }: { view: DataView }) {
   )
 }
 
-function renderBody(view: DataView) {
+function renderBody(view: DataView, onCommand?: (prompt: string) => void) {
   switch (view.kind) {
     case 'stats':
       return <StatsPanel payload={view.payload} />
     case 'managers':
-      return <ManagersPanel payload={view.payload} />
+      return <ManagersPanel payload={view.payload} onCommand={onCommand} />
     case 'channels':
       return <ChannelsPanel payload={view.payload} />
     case 'proxies':
@@ -44,11 +51,17 @@ function renderBody(view: DataView) {
     case 'schedules':
       return <SchedulesPanel payload={view.payload} />
     case 'dialogs':
-      return <DialogsPanel payload={view.payload} />
+      return <DialogsPanel payload={view.payload} onCommand={onCommand} />
     case 'messages':
       return <MessagesPanel payload={view.payload} />
     case 'manager_activity':
-      return <ManagerActivityPanel payload={view.payload} />
+      return (
+        <ManagerActivityPanel payload={view.payload} onCommand={onCommand} />
+      )
+    case 'directives':
+      return <DirectivesPanel payload={view.payload} />
+    case 'knowledge':
+      return <KnowledgePanel payload={view.payload} />
     default:
       return null
   }
@@ -66,12 +79,26 @@ interface DialogRow {
   unread: number
 }
 
-function DialogsPanel({ payload }: { payload: unknown }) {
+function DialogsPanel({
+  payload,
+  onCommand,
+}: {
+  payload: unknown
+  onCommand?: (prompt: string) => void
+}) {
   const rows = asArray<DialogRow>(payload).filter((r) => r?.id)
   if (rows.length === 0) return <EmptyNote />
   return (
     <SimpleTable
       head={['Контакт', 'Канал', 'Менеджер', 'Последнее сообщение', 'Когда']}
+      onRowClick={
+        onCommand
+          ? (i) =>
+              onCommand(
+                `Покажи переписку с «${rows[i].contactName}» (диалог ${rows[i].id})`,
+              )
+          : undefined
+      }
       rows={rows.map((d) => [
         <span key="c" className="font-medium">
           {d.contactName}
@@ -91,6 +118,76 @@ function DialogsPanel({ payload }: { payload: unknown }) {
         </span>,
       ])}
     />
+  )
+}
+
+/* --------------------------- AI settings ---------------------------- */
+
+interface DirectiveRow {
+  id: string
+  body: string
+  enabled: boolean
+}
+
+function DirectivesPanel({ payload }: { payload: unknown }) {
+  const rows = asArray<DirectiveRow>(payload).filter((r) => r?.id)
+  if (rows.length === 0) return <EmptyNote />
+  return (
+    <ol className="flex flex-col gap-1.5">
+      {rows.map((d, i) => (
+        <li key={d.id} className="flex items-start gap-2.5 text-sm">
+          <span className="mt-px shrink-0 font-mono text-xs text-muted-foreground">
+            {i + 1}.
+          </span>
+          <span
+            className={
+              d.enabled ? 'text-foreground' : 'text-muted-foreground line-through'
+            }
+          >
+            {d.body}
+          </span>
+          {!d.enabled ? (
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+              выкл
+            </span>
+          ) : null}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+interface KnowledgeRow {
+  id: string
+  title: string
+  enabled: boolean
+  preview?: string
+}
+
+function KnowledgePanel({ payload }: { payload: unknown }) {
+  const rows = asArray<KnowledgeRow>(payload).filter((r) => r?.id)
+  if (rows.length === 0) return <EmptyNote />
+  return (
+    <ul className="flex flex-col gap-2">
+      {rows.map((k) => (
+        <li key={k.id} className="text-sm">
+          <span
+            className={
+              k.enabled
+                ? 'font-medium'
+                : 'font-medium text-muted-foreground line-through'
+            }
+          >
+            {k.title}
+          </span>
+          {k.preview ? (
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              {k.preview}
+            </span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -158,11 +255,22 @@ interface ManagerActivityViewRow {
   unanswered: number
 }
 
-function ManagerActivityPanel({ payload }: { payload: unknown }) {
+function ManagerActivityPanel({
+  payload,
+  onCommand,
+}: {
+  payload: unknown
+  onCommand?: (prompt: string) => void
+}) {
   const rows = asArray<ManagerActivityViewRow>(payload).filter((r) => r?.id)
   if (rows.length === 0) return <EmptyNote />
   return (
     <SimpleTable
+      onRowClick={
+        onCommand
+          ? (i) => onCommand(`Покажи диалоги менеджера ${rows[i].name}`)
+          : undefined
+      }
       head={[
         'Менеджер',
         'Написало людей',
@@ -374,11 +482,22 @@ interface ManagerRow {
   tempPassword?: string
 }
 
-function ManagersPanel({ payload }: { payload: unknown }) {
+function ManagersPanel({
+  payload,
+  onCommand,
+}: {
+  payload: unknown
+  onCommand?: (prompt: string) => void
+}) {
   const rows = asArray<ManagerRow>(payload).filter((r) => r?.id && r?.name)
   if (rows.length === 0) return <EmptyNote />
   return (
     <SimpleTable
+      onRowClick={
+        onCommand
+          ? (i) => onCommand(`Покажи диалоги менеджера ${rows[i].name}`)
+          : undefined
+      }
       head={['Имя', 'Email', 'Статус', '']}
       rows={rows.map((m) => [
         m.name,
@@ -630,10 +749,23 @@ function DictGroup({
 function SimpleTable({
   head,
   rows,
+  onRowClick,
 }: {
   head: string[]
   rows: React.ReactNode[][]
+  /** Makes rows drill-downable (click / Enter / Space issues a command). */
+  onRowClick?: (rowIndex: number) => void
 }) {
+  const activate = (
+    e: React.MouseEvent | React.KeyboardEvent,
+    rowIndex: number,
+  ) => {
+    if (!onRowClick) return
+    // Buttons/links inside cells (copy password, etc.) keep their own click —
+    // the row drill-down must not hijack them.
+    if ((e.target as HTMLElement).closest('button, a')) return
+    onRowClick(rowIndex)
+  }
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[420px] text-sm">
@@ -652,7 +784,23 @@ function SimpleTable({
         </thead>
         <tbody>
           {rows.map((cells, r) => (
-            <tr key={r} className="border-b border-border/50 last:border-0">
+            <tr
+              key={r}
+              className={
+                onRowClick
+                  ? 'cursor-pointer border-b border-border/50 transition-colors last:border-0 hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none'
+                  : 'border-b border-border/50 last:border-0'
+              }
+              tabIndex={onRowClick ? 0 : undefined}
+              role={onRowClick ? 'button' : undefined}
+              onClick={(e) => activate(e, r)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  activate(e, r)
+                }
+              }}
+            >
               {cells.map((c, i) => (
                 <td key={i} className="px-2 py-2 align-middle">
                   {c}

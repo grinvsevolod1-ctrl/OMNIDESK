@@ -7,6 +7,7 @@ import {
   getManagerPerformance,
 } from '@/lib/data'
 import { getDictionaries } from '@/lib/data/dictionaries'
+import { cached } from './tool-cache'
 import type { RunState } from './run-state'
 
 /** Overview/analytics tools: dashboard stats, lead funnel, manager performance. */
@@ -17,7 +18,7 @@ export function overviewTools(state: RunState) {
         'Показать сводные метрики системы: менеджеры (всего/активные/заблокированные), каналы по типам и подключённость.',
       inputSchema: z.object({}),
       execute: async () => {
-        const stats = await getAdminStats()
+        const stats = await cached('admin-stats', getAdminStats)
         state.views.push({ kind: 'stats', title: 'Сводка системы', payload: stats })
         return stats
       },
@@ -51,7 +52,7 @@ export function overviewTools(state: RunState) {
         'Производительность менеджеров: диалоги, ответы, конверсия. Используй для вопросов «кто лучше работает», «у кого просадка».',
       inputSchema: z.object({}),
       execute: async () => {
-        const perf = await getManagerPerformance()
+        const perf = await cached('manager-performance', getManagerPerformance)
         state.views.push({
           kind: 'stats',
           title: 'Производительность менеджеров',

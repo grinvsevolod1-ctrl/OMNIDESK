@@ -31,11 +31,14 @@ export function ShellMessageRow({
   onConfirm,
   onCancelPending,
   confirmBusy,
+  onCommand,
 }: {
   message: ShellMessage
   onConfirm: (pending: PendingConfirmation) => void
   onCancelPending: (messageId: string) => void
   confirmBusy: boolean
+  /** Row clicks in data panels issue follow-up commands through this. */
+  onCommand?: (prompt: string) => void
 }) {
   const isUser = message.role === 'user'
   return (
@@ -61,11 +64,27 @@ export function ShellMessageRow({
             ) : null}
           </p>
         ) : message.streaming ? (
-          <span className="flex gap-1 py-1" aria-label="Печатает">
-            <Dot delay="0ms" />
-            <Dot delay="150ms" />
-            <Dot delay="300ms" />
-          </span>
+          message.status ? (
+            // Tool progress («Ищу диалоги…») — live region so screen readers
+            // hear what the copilot is busy with.
+            <span
+              className="flex items-center gap-2 py-1 text-muted-foreground"
+              role="status"
+            >
+              <span className="flex gap-1" aria-hidden="true">
+                <Dot delay="0ms" />
+                <Dot delay="150ms" />
+                <Dot delay="300ms" />
+              </span>
+              {message.status}
+            </span>
+          ) : (
+            <span className="flex gap-1 py-1" aria-label="Печатает">
+              <Dot delay="0ms" />
+              <Dot delay="150ms" />
+              <Dot delay="300ms" />
+            </span>
+          )
         ) : null}
       </div>
 
@@ -76,7 +95,7 @@ export function ShellMessageRow({
       {!isUser && message.views && message.views.length > 0 ? (
         <div className="flex w-full max-w-[92%] flex-col gap-2 sm:max-w-[85%]">
           {message.views.map((v, i) => (
-            <DataViewPanel key={i} view={v} />
+            <DataViewPanel key={i} view={v} onCommand={onCommand} />
           ))}
         </div>
       ) : null}

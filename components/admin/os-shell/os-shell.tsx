@@ -15,12 +15,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ArrowUp,
+  History,
   LayoutPanelLeft,
   LogOut,
   MessageSquarePlus,
+  Mic,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import type { Dictionaries } from '@/lib/dictionaries'
 import {
   ASSISTANT_HISTORY_LIMIT,
@@ -30,9 +39,12 @@ import {
 } from '@/lib/admin-console/assistant'
 import { SHELL_SECTIONS, type ShellSection } from '@/lib/admin-console/intents'
 import type { ShellInsight } from '@/lib/admin-console/insights'
+import type { ConsoleSessionArchiveItem } from '@/lib/data/console-shell'
 import {
   clearShellSessionAction,
   confirmShellPendingAction,
+  listShellHistoryAction,
+  restoreShellSessionAction,
   runShellAssistantAction,
   saveShellSessionAction,
   setShellModeAction,
@@ -43,6 +55,37 @@ import { ShellHero, ShellMessageRow } from './feed'
 
 /** localStorage key: date when the admin muted proactive insights. */
 const INSIGHTS_MUTED_KEY = 'od-os:insights-muted'
+
+/* ------------------------- Web Speech API shim ------------------------- */
+/**
+ * Minimal structural type for webkitSpeechRecognition — the DOM lib doesn't
+ * ship it and we only need these members. Feature-detected at runtime; the
+ * mic button simply doesn't render where the API is missing (Firefox).
+ */
+interface SpeechRecognitionLike {
+  lang: string
+  interimResults: boolean
+  continuous: boolean
+  onresult:
+    | ((event: {
+        results: ArrayLike<ArrayLike<{ transcript: string }>>
+      }) => void)
+    | null
+  onend: (() => void) | null
+  onerror: (() => void) | null
+  start(): void
+  stop(): void
+}
+
+function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === 'undefined') return null
+  const w = window as unknown as Record<string, unknown>
+  return (
+    (w.SpeechRecognition as new () => SpeechRecognitionLike) ??
+    (w.webkitSpeechRecognition as new () => SpeechRecognitionLike) ??
+    null
+  )
+}
 
 export function OsShell({
   dictionaries,
@@ -84,6 +127,7 @@ export function OsShell({
                 ...m,
                 content: reply ?? m.content,
                 streaming: false,
+                status: undefined,
                 actions: meta.actions,
                 views: meta.views,
                 pending: meta.pending ?? null,
@@ -161,7 +205,19 @@ export function OsShell({
               reply += evt.v
               setMessages((prev) =>
                 prev.map((m) =>
-                  m.id === asstId ? { ...m, content: reply } : m,
+                  m.id === asstId
+                    ? { ...m, content: reply, status: undefined }
+                    : m,
+                ),
+              )
+            } else if (evt.t === 'status' && typeof evt.v === 'string') {
+              // Tool progress line — visible only until the first delta.
+              const label = evt.v
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === asstId && !m.content
+                    ? { ...m, status: label }
+                    : m,
                 ),
               )
             } else if (evt.t === 'meta' && evt.v) {
@@ -319,9 +375,98 @@ export function OsShell({
   const newDialog = useCallback(() => {
     setMessages([])
     historyRef.current = []
+    // Server archives the current dialog before clearing — restorable later.
     void clearShellSessionAction()
     inputRef.current?.focus()
   }, [])
+
+  /* ------------------------------ history ------------------------------ */
+
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyItems, setHistoryItems] = useState<
+    ConsoleSessionArchiveItem[] | null
+  >(null)
+
+  const openHistory = useCallback(async () => {
+    setHistoryOpen(true)
+    setHistoryItems(null)
+    try {
+      setHistoryItems(await listShellHistoryAction())
+    } catch {
+      setHistoryItems([])
+    }
+  }, [])
+
+  const restoreDialog = useCallback(async (archiveId: string) => {
+    setHistoryOpen(false)
+    try {
+      const turns = await restoreShellSessionAction(archiveId)
+      if (!turns) {
+        toast.error('Не удалось восстановить диалог')
+        return
+      }
+      historyRef.current = turns.slice(-ASSISTANT_HISTORY_LIMIT)
+      setMessages(
+        turns.map((t) => ({
+          id: nextMessageId(),
+          role: t.role,
+          content: t.content,
+        })),
+      )
+    } catch {
+      toast.error('Не удалось восстановить диалог')
+    }
+  }, [])
+
+  /* ---------------------------- voice input ---------------------------- */
+
+  const [listening, setListening] = useState(false)
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const [voiceSupported, setVoiceSupported] = useState(false)
+  useEffect(() => {
+    // Feature detection must run client-side only (hydration-safe), same
+    // pattern as the insights visibility check above.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVoiceSupported(!!getSpeechRecognition())
+  }, [])
+
+  const toggleVoice = useCallback(() => {
+    if (listening) {
+      recognitionRef.current?.stop()
+      return
+    }
+    const Ctor = getSpeechRecognition()
+    if (!Ctor) return
+    const rec = new Ctor()
+    rec.lang = 'ru-RU'
+    rec.interimResults = true
+    rec.continuous = false
+    // The command the admin had typed before pressing the mic is preserved;
+    // dictation appends to it.
+    const base = inputRef.current?.value ?? ''
+    rec.onresult = (event) => {
+      let transcript = ''
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0]?.transcript ?? ''
+      }
+      setInput(base ? `${base} ${transcript}` : transcript)
+    }
+    rec.onend = () => {
+      setListening(false)
+      recognitionRef.current = null
+      inputRef.current?.focus()
+    }
+    rec.onerror = () => {
+      setListening(false)
+      recognitionRef.current = null
+    }
+    recognitionRef.current = rec
+    setListening(true)
+    rec.start()
+  }, [listening])
+
+  // Never leave the mic hot after unmount.
+  useEffect(() => () => recognitionRef.current?.stop(), [])
 
   /* ----------------------------- insights ----------------------------- */
 
@@ -383,6 +528,16 @@ export function OsShell({
                 <span className="hidden sm:inline">Новый диалог</span>
               </Button>
             ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void openHistory()}
+              aria-label="История диалогов"
+              className="gap-1.5 text-muted-foreground"
+            >
+              <History className="size-4" />
+              <span className="hidden sm:inline">История</span>
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -467,6 +622,7 @@ export function OsShell({
               onConfirm={confirm}
               onCancelPending={cancelPending}
               confirmBusy={confirmBusy}
+              onCommand={(prompt) => void send(prompt)}
             />
           ))
         )}
@@ -521,6 +677,22 @@ export function OsShell({
               </span>
             ) : null}
           </div>
+          {voiceSupported ? (
+            <Button
+              type="button"
+              size="icon"
+              variant={listening ? 'destructive' : 'outline'}
+              onClick={toggleVoice}
+              aria-label={listening ? 'Остановить запись' : 'Голосовой ввод'}
+              aria-pressed={listening}
+              className={cn(
+                'press-scale size-[56px] shrink-0 rounded-2xl',
+                listening && 'animate-pulse',
+              )}
+            >
+              <Mic className="size-5" />
+            </Button>
+          ) : null}
           <Button
             type="submit"
             size="icon"
@@ -532,8 +704,59 @@ export function OsShell({
           </Button>
         </form>
       </div>
+
+      {/* Dialog history: past sessions archived by «Новый диалог». */}
+      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>История диалогов</DialogTitle>
+          </DialogHeader>
+          {historyItems === null ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              Загружаю…
+            </p>
+          ) : historyItems.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              Пока пусто — прошлые диалоги появятся здесь после «Новый диалог».
+            </p>
+          ) : (
+            <ul className="flex max-h-80 flex-col gap-1 overflow-y-auto">
+              {historyItems.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => void restoreDialog(item.id)}
+                    className="w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-accent"
+                  >
+                    <span className="block truncate text-sm font-medium">
+                      {item.title}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {formatArchiveDate(item.createdAt)} · сообщений:{' '}
+                      {item.turnCount}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
+}
+
+/** «сегодня, 14:05» / «3 мар., 09:12» for the history list. */
+function formatArchiveDate(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const time = d.toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return d.toDateString() === new Date().toDateString()
+    ? `сегодня, ${time}`
+    : `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`
 }
 
 /** Natural-language prompt for a dock section click. */
