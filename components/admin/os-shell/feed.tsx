@@ -5,7 +5,7 @@
  * confirmation card for guarded actions, and the report download button.
  */
 
-import { Check, FileDown, ShieldAlert, Sparkles, X } from 'lucide-react'
+import { Check, Command, FileDown, ShieldAlert, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -228,7 +228,7 @@ export function ShellHero({
         {hasProblems ? (
           <ShieldAlert className="size-8 sm:size-10" />
         ) : (
-          <Sparkles className="size-8 sm:size-10" />
+          <Command className="size-8 sm:size-10" />
         )}
       </span>
       <h2 className="max-w-2xl text-4xl font-semibold tracking-tight text-balance sm:text-6xl">

@@ -68,7 +68,7 @@ export function OsShell({
   const [busy, setBusy] = useState(false)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const historyRef = useRef<AssistantTurn[]>(
     (savedSession ?? []).slice(-ASSISTANT_HISTORY_LIMIT),
   )
@@ -107,6 +107,8 @@ export function OsShell({
       const text = raw.trim()
       if (!text || busy) return
       setInput('')
+      // Collapse the auto-grown textarea back to one row.
+      if (inputRef.current) inputRef.current.style.height = ''
       setBusy(true)
 
       const userMsg: ShellMessage = {
@@ -293,11 +295,12 @@ export function OsShell({
   }, [])
 
   // Follow the conversation: any feed change (new message OR streaming delta)
-  // pins the view to the bottom. 'smooth' fought with rapid delta updates —
-  // each new call cancelled the previous animation, so the page never actually
-  // reached the bottom. Instant 'auto' scrolling wins every time.
+  // pins the view to the bottom. The feed is its OWN scroll container (not the
+  // page), so we set scrollTop directly — scrollIntoView on the window fought
+  // with the sticky command bar and left the last answer hidden behind it.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }, [messages])
 
   const toClassic = useCallback(async () => {
@@ -351,7 +354,7 @@ export function OsShell({
   /* ------------------------------ render ------------------------------ */
 
   return (
-    <div className="od-os flex min-h-dvh flex-col bg-background text-foreground">
+    <div className="od-os flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       {/* Ambient glow — pure decoration, kept subtle. */}
       <div
         aria-hidden="true"
@@ -359,7 +362,7 @@ export function OsShell({
       />
 
       {/* Titlebar */}
-      <header className="sticky top-0 z-20 border-b border-border bg-background/80 backdrop-blur-md">
+      <header className="z-20 shrink-0 border-b border-border bg-background/80 backdrop-blur-md">
         <div className="mx-auto flex h-12 w-full max-w-4xl items-center gap-3 px-4">
           <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">
             Omnidesk OS
@@ -373,6 +376,7 @@ export function OsShell({
                 variant="ghost"
                 size="sm"
                 onClick={newDialog}
+                aria-label="Новый диалог"
                 className="gap-1.5 text-muted-foreground"
               >
                 <MessageSquarePlus className="size-4" />
@@ -383,6 +387,7 @@ export function OsShell({
               variant="ghost"
               size="sm"
               onClick={toClassic}
+              aria-label="Классический режим"
               className="gap-1.5 text-muted-foreground"
             >
               <LayoutPanelLeft className="size-4" />
@@ -403,11 +408,18 @@ export function OsShell({
         </div>
       </header>
 
+      {/* Scrollable feed area: the ONLY scroll container on the page. Header
+          and command bar live outside it, so nothing ever slides under them
+          and scrollTop-based autoscroll is exact. */}
+      <div
+        ref={scrollRef}
+        className="flex flex-1 flex-col overflow-y-auto overscroll-contain"
+      >
       {/* Section dock — pills wrap onto extra rows instead of clipping into a
           horizontal scroller (no scrollbar, always tidy). */}
       <nav
         aria-label="Разделы"
-        className="mx-auto w-full max-w-4xl px-4 pt-4"
+        className="mx-auto w-full max-w-4xl shrink-0 px-4 pt-4"
       >
         <ul className="flex flex-wrap justify-center gap-2">
           {SHELL_SECTIONS.filter((s) => s.id !== 'help').map((s) => (
@@ -458,11 +470,11 @@ export function OsShell({
             />
           ))
         )}
-        <div ref={bottomRef} />
       </main>
+      </div>
 
       {/* Command field */}
-      <div className="sticky bottom-0 z-20 border-t border-border bg-background/85 backdrop-blur-md">
+      <div className="z-20 shrink-0 border-t border-border bg-background/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-md">
         <form
           className="mx-auto flex w-full max-w-4xl items-end gap-2 px-4 py-3"
           onSubmit={(e) => {
@@ -474,7 +486,12 @@ export function OsShell({
             <textarea
               ref={inputRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value)
+                // Auto-grow up to max-h; collapse back when text shrinks.
+                e.target.style.height = 'auto'
+                e.target.style.height = `${Math.min(e.target.scrollHeight, 176)}px`
+              }}
               onKeyDown={(e) => {
                 if (
                   e.key === 'Enter' &&

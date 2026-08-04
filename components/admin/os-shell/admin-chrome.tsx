@@ -14,7 +14,7 @@
 
 import type { ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
-import { Sparkles } from 'lucide-react'
+import { Terminal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
 import type { Dictionaries } from '@/lib/dictionaries'
@@ -78,7 +78,7 @@ export function AdminChrome({
           onClick={enableShell}
           className="gap-1.5"
         >
-          <Sparkles className="size-4" />
+          <Terminal className="size-4" />
           <span className="hidden sm:inline">
             {shellEnabled ? 'OMNIDESK OS' : 'Включить OMNIDESK OS'}
           </span>
