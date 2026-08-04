@@ -1,0 +1,51 @@
+import { timingSafeEqual } from 'node:crypto'
+import { NextResponse } from 'next/server'
+import { runDueSchedules } from '@/lib/admin-console/schedule-runner'
+import { logServerError } from '@/lib/server-log'
+import { runWithRequestContext } from '@/lib/request-context'
+
+export const dynamic = 'force-dynamic'
+export const maxDuration = 60
+
+/**
+ * OS shell scheduled-commands sweep. Runs due console_schedules through the
+ * shell copilot core. Same CRON_SECRET bearer contract as the other cron
+ * endpoints; safe to call every few minutes — claiming is atomic
+ * (FOR UPDATE SKIP LOCKED), so overlapping ticks never double-run.
+ */
+export async function GET(request: Request): Promise<Response> {
+  return runWithRequestContext(request, () => handle(request))
+}
+
+async function handle(request: Request): Promise<Response> {
+  const secret = process.env.CRON_SECRET
+  if (!secret) {
+    return NextResponse.json(
+      { ok: false, error: 'service_not_configured' },
+      { status: 503 },
+    )
+  }
+
+  const auth = request.headers.get('authorization') ?? ''
+  const expected = `Bearer ${secret}`
+  const authorized =
+    auth.length === expected.length &&
+    timingSafeEqual(Buffer.from(auth), Buffer.from(expected))
+  if (!authorized) {
+    return NextResponse.json(
+      { ok: false, error: 'unauthorized' },
+      { status: 401 },
+    )
+  }
+
+  try {
+    const result = await runDueSchedules(5)
+    return NextResponse.json({ ok: true, result })
+  } catch (error) {
+    const errorId = logServerError('cron.console-schedules', error)
+    return NextResponse.json(
+      { ok: false, error: 'server_error', errorId },
+      { status: 500 },
+    )
+  }
+}

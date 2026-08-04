@@ -13,15 +13,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import {
-  ArrowUp,
-  LayoutPanelLeft,
-  LogOut,
-  Mic,
-  Square,
-} from 'lucide-react'
+import { ArrowUp, LayoutPanelLeft, LogOut } from 'lucide-react'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import type { Dictionaries } from '@/lib/dictionaries'
 import {
@@ -37,7 +30,6 @@ import {
   setShellModeAction,
 } from '@/app/actions/admin-console'
 import { logoutAction } from '@/app/actions/auth'
-import { useSpeechInput } from '@/components/admin/ai-console/use-speech-input'
 import { nextMessageId, type ShellMessage, type ShellMeta } from './chat-types'
 import { ShellHero, ShellMessageRow } from './feed'
 
@@ -235,22 +227,6 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
     )
   }, [])
 
-  /* ------------------------------ voice ------------------------------- */
-
-  const speech = useSpeechInput({
-    onInterim: setInput,
-    onFinal: (text) => {
-      setInput('')
-      void send(text)
-    },
-    onError: (code) => {
-      if (code === 'not-allowed')
-        toast.error('Д��ступ к микрофону запрещён браузером')
-      else if (code !== 'aborted' && code !== 'no-speech')
-        toast.error('Голосовой ввод недоступен')
-    },
-  })
-
   /* ---------------------------- shortcuts ----------------------------- */
 
   useEffect(() => {
@@ -399,29 +375,8 @@ export function OsShell({ dictionaries }: { dictionaries: Dictionaries }) {
               rows={1}
               placeholder="Скомандуйте: «покажи сводку», «создай менеджера», «переименуй статус Ликвид»…  (⌘K)"
               aria-label="Командное поле"
-              className="max-h-40 min-h-[46px] w-full resize-none rounded-xl border border-input bg-card/70 px-4 py-3 pr-11 text-sm leading-snug text-foreground placeholder:text-muted-foreground/70 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              className="max-h-40 min-h-[46px] w-full resize-none rounded-xl border border-input bg-card/70 px-4 py-3 text-sm leading-snug text-foreground placeholder:text-muted-foreground/70 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
-            {speech.supported ? (
-              <button
-                type="button"
-                onClick={speech.toggle}
-                aria-label={
-                  speech.listening ? 'Остановить запись' : 'Голосовой ввод'
-                }
-                className={cn(
-                  'absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1.5 transition-colors',
-                  speech.listening
-                    ? 'bg-destructive/15 text-destructive'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {speech.listening ? (
-                  <Square className="size-4" />
-                ) : (
-                  <Mic className="size-4" />
-                )}
-              </button>
-            ) : null}
           </div>
           <Button
             type="submit"

@@ -27,6 +27,7 @@ export interface ExecutedAction {
     | 'dictionary'
     | 'navigation'
     | 'report'
+    | 'schedule'
   /** Short human summary, e.g. «Заблокировал менеджера Ivan». */
   label: string
 }
@@ -72,6 +73,7 @@ export interface DataView {
     | 'contacts'
     | 'finance'
     | 'dictionaries'
+    | 'schedules'
   title: string
   payload: unknown
 }

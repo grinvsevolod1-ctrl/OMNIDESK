@@ -18,6 +18,10 @@ import {
   type PendingConfirmation,
 } from '@/lib/admin-console/assistant'
 import { runAssistantOnce } from '@/lib/admin-console/run-assistant'
+import {
+  clearConsoleSession,
+  saveConsoleSession,
+} from '@/lib/data/console-shell'
 
 /**
  * Server actions for the OMNIDESK OS shell: the non-streaming assistant path,
@@ -29,8 +33,8 @@ import { runAssistantOnce } from '@/lib/admin-console/run-assistant'
 export async function runShellAssistantAction(
   history: AssistantTurn[],
 ): Promise<AssistantResult> {
-  await requireAdmin()
-  return runAssistantOnce(history)
+  const user = await requireAdmin()
+  return runAssistantOnce(history, user.sub)
 }
 
 /**
@@ -83,6 +87,31 @@ export async function confirmShellPendingAction(
     }
   } catch {
     return { ok: false, message: 'Не удалось выполнить действие' }
+  }
+}
+
+/**
+ * Persist the running dialog so a reload or another browser keeps context.
+ * Fire-and-forget from the client; failures are silent (memory is a nicety).
+ */
+export async function saveShellSessionAction(
+  turns: AssistantTurn[],
+): Promise<void> {
+  const user = await requireAdmin()
+  try {
+    await saveConsoleSession(user.sub, turns)
+  } catch {
+    // Never let persistence break the dialog itself.
+  }
+}
+
+/** «Новый диалог»: forget the saved session. */
+export async function clearShellSessionAction(): Promise<void> {
+  const user = await requireAdmin()
+  try {
+    await clearConsoleSession(user.sub)
+  } catch {
+    // Same fail-open contract as save.
   }
 }
 

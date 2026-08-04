@@ -16,6 +16,7 @@ import { contactTools } from './tools-contacts'
 import { financeTools } from './tools-finance'
 import { dictionaryTools } from './tools-dictionaries'
 import { navigationTools } from './tools-navigation'
+import { scheduleTools } from './tools-schedules'
 
 /**
  * Shared orchestration for the OMNIDESK OS shell copilot, used by BOTH the
@@ -68,6 +69,7 @@ export function fallbackResult(text: string): AssistantResult {
 /** Build the tool-calling agent plus per-turn accumulators. */
 export function prepareAssistantRun(
   turns: Array<{ role: 'user' | 'assistant'; content: string }>,
+  userId: string,
 ) {
   const state = createRunState()
 
@@ -79,6 +81,7 @@ export function prepareAssistantRun(
     ...financeTools(state),
     ...dictionaryTools(state),
     ...navigationTools(state),
+    ...scheduleTools(state, userId),
   }
 
   const agent = new ToolLoopAgent({
@@ -114,13 +117,14 @@ export function prepareAssistantRun(
 /** One-shot (non-streaming) turn with the deterministic offline fallback. */
 export async function runAssistantOnce(
   history: AssistantTurn[],
+  userId: string,
 ): Promise<AssistantResult> {
   const turns = normalizeTurns(history)
   const text = lastUserText(turns)
 
   if (!isBrainConfigured() || !text) return fallbackResult(text)
 
-  const run = prepareAssistantRun(turns)
+  const run = prepareAssistantRun(turns, userId)
   try {
     const result = await run.agent.generate({ messages: run.messages })
     return run.finalize(result.text ?? '')

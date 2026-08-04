@@ -24,7 +24,7 @@ const encoder = new TextEncoder()
 const sse = (obj: unknown) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)
 
 export async function POST(req: Request): Promise<Response> {
-  await requireAdmin()
+  const user = await requireAdmin()
 
   let history: AssistantTurn[] = []
   try {
@@ -40,7 +40,7 @@ export async function POST(req: Request): Promise<Response> {
   // Offline / no-gateway: return the deterministic one-shot result as a
   // single delta+meta so the client renders it through the same path.
   if (!isBrainConfigured() || !text) {
-    const result = await runAssistantOnce(history)
+    const result = await runAssistantOnce(history, user.sub)
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         if (result.reply) controller.enqueue(sse({ t: 'delta', v: result.reply }))
@@ -52,7 +52,7 @@ export async function POST(req: Request): Promise<Response> {
     return new Response(stream, { headers: sseHeaders() })
   }
 
-  const run = prepareAssistantRun(turns)
+  const run = prepareAssistantRun(turns, user.sub)
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {

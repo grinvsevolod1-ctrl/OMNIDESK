@@ -163,6 +163,21 @@ module.exports = {
         NODE_ENV: 'production',
       },
     },
+    {
+      // OS shell scheduled commands («каждый понедельник — отчёт по лидам»):
+      // sweeps due console_schedules through the shell copilot (see
+      // /api/cron/console-schedules). Claiming is atomic (SKIP LOCKED), so a
+      // 5-minute tick is safe. Requires CRON_SECRET in the shared .env.
+      name: 'omnidesk-cron-console-schedules',
+      script: 'scripts/cron-console-schedules.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '*/5 * * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
     // NOTE: the former `omnidesk-log-reporter` process (scripts/log-reporter.mjs,
     // which pushed runtime reports to a dedicated `runtime-logs` git branch) was
     // REMOVED deliberately. Its constant commits/pushes and its participation in
