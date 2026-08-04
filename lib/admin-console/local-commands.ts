@@ -15,6 +15,7 @@ import { getDictionaries } from '@/lib/data/dictionaries'
 import { listDirectives } from '@/lib/data/ai-directives'
 import { listKnowledge } from '@/lib/data/ai-assist'
 import { listServers } from '@/lib/data/hosting'
+import { SERVER_STATUS_RU } from './tools-servers'
 import { classifyByKeywords, SHELL_SECTIONS } from './intents'
 import type { AssistantResult } from './assistant'
 import { cached } from './tool-cache'
@@ -236,14 +237,8 @@ async function directivesView(): Promise<AssistantResult> {
     sortOrder: d.sortOrder,
   }))
   return ok(`Директив ИИ: ${payload.length}.`, [
-    { kind: 'directives', title: 'Директивы ИИ-менеджера', payload },
+    { kind: 'directives', title: 'Дире��тивы ИИ-менеджера', payload },
   ])
-}
-
-const SERVER_STATUS_RU: Record<string, string> = {
-  online: 'в сети',
-  offline: 'не в сети',
-  unknown: 'не проверялся',
 }
 
 async function serversView(): Promise<AssistantResult> {

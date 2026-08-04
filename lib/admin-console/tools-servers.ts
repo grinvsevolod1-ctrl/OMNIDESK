@@ -12,7 +12,8 @@ import {
 } from '@/lib/data/hosting'
 import type { RunState } from './run-state'
 
-const SERVER_STATUS_RU: Record<string, string> = {
+/** Shared with the local-command layer so labels can never drift apart. */
+export const SERVER_STATUS_RU: Record<string, string> = {
   online: 'в сети',
   offline: 'не в сети',
   unknown: 'не проверялся',
@@ -73,23 +74,25 @@ export function serverTools(state: RunState) {
         const server = await getServerById(serverId)
         if (!server) return { ok: false, message: 'Сервер не найден' }
         const apps = await listAppsForServer(serverId)
-        const rows = []
-        for (const app of apps) {
-          const deploys = await listDeploymentsForApp(app.id, 1)
-          const last = deploys[0]
-          rows.push({
-            id: app.id,
-            name: app.name,
-            status: app.status,
-            statusLabel: APP_STATUS_RU[app.status] ?? app.status,
-            domain: app.domain,
-            branch: app.branch,
-            autoDeploy: app.autoDeploy,
-            lastDeployStatus: last?.status ?? null,
-            lastDeployAt: last?.finishedAt ?? last?.startedAt ?? null,
-            lastError: app.lastError,
-          })
-        }
+        // Parallel: one sequential round-trip per app would be a classic N+1.
+        const rows = await Promise.all(
+          apps.map(async (app) => {
+            const deploys = await listDeploymentsForApp(app.id, 1)
+            const last = deploys[0]
+            return {
+              id: app.id,
+              name: app.name,
+              status: app.status,
+              statusLabel: APP_STATUS_RU[app.status] ?? app.status,
+              domain: app.domain,
+              branch: app.branch,
+              autoDeploy: app.autoDeploy,
+              lastDeployStatus: last?.status ?? null,
+              lastDeployAt: last?.finishedAt ?? last?.startedAt ?? null,
+              lastError: app.lastError,
+            }
+          }),
+        )
         state.views.push({
           kind: 'apps',
           title: `Приложения — ${server.name}`,
