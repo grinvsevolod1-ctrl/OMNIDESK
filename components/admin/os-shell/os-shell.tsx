@@ -175,32 +175,51 @@ export function OsShell({
         }
         if (!gotMeta) throw new Error('no meta')
       } catch {
-        // Fallback: one-shot server action (works without SSE / AI gateway).
-        try {
-          const result: AssistantResult = await runShellAssistantAction(
-            historyRef.current,
-          )
-          reply = result.reply
-          const { reply: _r, ...meta } = result
+        // The stream died. If it already produced text, NEVER discard it —
+        // a partial answer beats an error bubble every time.
+        if (reply) {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === asstId ? { ...m, content: reply, streaming: false } : m,
             ),
           )
-          applyMeta(asstId, meta, reply)
-          gotMeta = true
-        } catch {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === asstId
-                ? {
-                    ...m,
-                    content: 'Не получилось обработать команду. Попробуйте ещё раз.',
-                    streaming: false,
-                  }
-                : m,
-            ),
-          )
+        } else {
+          // Fallback: one-shot server action (works without SSE / AI gateway),
+          // with one automatic retry — transient hiccups shouldn't reach the
+          // admin as an error.
+          let result: AssistantResult | null = null
+          for (let attempt = 0; attempt < 2 && !result; attempt++) {
+            try {
+              result = await runShellAssistantAction(historyRef.current)
+            } catch {
+              if (attempt === 0)
+                await new Promise((r) => setTimeout(r, 600))
+            }
+          }
+          if (result) {
+            reply = result.reply
+            const { reply: _r, ...meta } = result
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === asstId
+                  ? { ...m, content: reply, streaming: false }
+                  : m,
+              ),
+            )
+            applyMeta(asstId, meta, reply)
+            gotMeta = true
+          } else {
+            // Total failure (network down / server restarting). Give the
+            // command back to the input so one tap retries it.
+            setInput(text)
+            setMessages((prev) =>
+              prev.filter((m) => m.id !== asstId && m.id !== userMsg.id),
+            )
+            toast.error('Связь прервалась — команда возвращена в поле ввода')
+            historyRef.current = historyRef.current.filter(
+              (t) => !(t.role === 'user' && t.content === text),
+            )
+          }
         }
       } finally {
         if (reply) {
@@ -273,8 +292,12 @@ export function OsShell({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Follow the conversation: any feed change (new message OR streaming delta)
+  // pins the view to the bottom. 'smooth' fought with rapid delta updates —
+  // each new call cancelled the previous animation, so the page never actually
+  // reached the bottom. Instant 'auto' scrolling wins every time.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
   }, [messages])
 
   const toClassic = useCallback(async () => {
