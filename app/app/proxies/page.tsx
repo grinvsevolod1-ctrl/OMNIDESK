@@ -5,15 +5,15 @@ import {
   listManagerAssignedProxies,
   listManagerOwnedProxies,
 } from '@/lib/data'
-import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
+import { isWorkerConfigured, workerHealthCached } from '@/lib/worker-client'
 
 export default async function ManagerProxiesPage() {
   const session = await requireManager()
-  const [owned, assigned] = await Promise.all([
+  const [owned, assigned, workerOnline] = await Promise.all([
     listManagerOwnedProxies(session.sub),
     listManagerAssignedProxies(session.sub),
+    isWorkerConfigured ? workerHealthCached() : Promise.resolve(false),
   ])
-  const workerOnline = isWorkerConfigured ? await workerHealth() : false
 
   return (
     <div className="flex flex-col gap-6">

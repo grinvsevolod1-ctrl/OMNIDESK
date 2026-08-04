@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState, PageHeader } from '@/components/page-parts'
 import { requireManager } from '@/lib/auth'
 import { listChannels, listProxies } from '@/lib/data'
-import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
+import { isWorkerConfigured, workerHealthCached } from '@/lib/worker-client'
 import { type Channel, type ChannelType } from '@/lib/types'
 
 const GROUPS: { type: ChannelType; label: string; icon: BrandIconComponent }[] =
@@ -23,11 +23,11 @@ const GROUPS: { type: ChannelType; label: string; icon: BrandIconComponent }[] =
 
 export default async function ConnectionsPage() {
   const session = await requireManager()
-  const [channels, proxies] = await Promise.all([
+  const [channels, proxies, workerOnline] = await Promise.all([
     listChannels(session.sub),
     listProxies(session.sub),
+    isWorkerConfigured ? workerHealthCached() : Promise.resolve(false),
   ])
-  const workerOnline = isWorkerConfigured ? await workerHealth() : false
 
   const byType = (t: ChannelType): Channel[] =>
     channels.filter((c) => c.type === t)

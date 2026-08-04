@@ -15,6 +15,13 @@ import { getAiAssistSettings } from '@/lib/data/ai-assist'
 import { isTelemostConfigured } from '@/lib/telemost'
 import type { Message } from '@/lib/types'
 
+/**
+ * How many top-of-list threads get their transcript in the SSR payload.
+ * Covers a full screen of the list plus healthy overscroll; everything
+ * below lazy-loads on first open.
+ */
+const INBOX_PRELOAD_THREADS = 40
+
 export default async function InboxPage() {
   const session = await requireManager()
   const [conversations, channels, quickReplies, transferTargets] =
@@ -62,16 +69,19 @@ export default async function InboxPage() {
       lastError: c.lastError,
     }))
 
-  // Recent transcript for every visible thread in ONE query (window-function
-  // batch) instead of a per-conversation N+1. Threads with no messages are
-  // absent from the map, so default them to an empty list for the client.
-  const batched = await listMessagesForConversations(
-    conversations.map((c) => c.id),
-    session.sub,
-  )
+  // Recent transcripts in ONE window-function query — but only for the top
+  // slice of the list (sorted by last activity). A busy panel holds up to 500
+  // threads; preloading all of them serialized thousands of rows into the RSC
+  // payload while the manager physically sees ~15. Threads outside the slice
+  // lazy-load on первый клик via loadThreadMessagesAction; missing keys mark
+  // them as "not yet loaded" for the client.
+  const preloadIds = conversations
+    .slice(0, INBOX_PRELOAD_THREADS)
+    .map((c) => c.id)
+  const batched = await listMessagesForConversations(preloadIds, session.sub)
   const messagesByConversation: Record<string, Message[]> = {}
-  for (const c of conversations) {
-    messagesByConversation[c.id] = batched[c.id] ?? []
+  for (const id of preloadIds) {
+    messagesByConversation[id] = batched[id] ?? []
   }
 
   // Autopilot status for the inbox toolbar toggle. Wrapped in try/catch with

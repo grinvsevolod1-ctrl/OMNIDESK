@@ -8,6 +8,7 @@ import {
   enqueueJob,
   getConversation,
   getMessageDispatch,
+  listMessages,
   listMessagesBefore,
   markMessageDeleted,
   setConversationAiAutopilot,
@@ -319,6 +320,20 @@ export async function acknowledgeAiHandoffAction(
  * a foreign conversation id just returns an empty page. `hasMore` reflects
  * whether a full page came back (i.e. there is probably still older history).
  */
+/**
+ * First-open hydration for threads OUTSIDE the SSR preload slice: the inbox
+ * page only ships transcripts for the top of the list, so clicking a colder
+ * thread fetches its recent history here (ownership enforced by the query).
+ */
+export async function loadThreadMessagesAction(
+  conversationId: string,
+): Promise<{ ok: boolean; messages: Message[] }> {
+  const session = await requireManager()
+  if (!conversationId) return { ok: false, messages: [] }
+  const messages = await listMessages(conversationId, session.sub)
+  return { ok: true, messages }
+}
+
 export async function loadOlderMessagesAction(
   conversationId: string,
   before: string,

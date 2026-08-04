@@ -10,9 +10,12 @@ export default async function AdminServerPage({
 }) {
   await requireAdmin()
   const { serverId } = await params
-  const server = await getServerById(serverId)
+  // Independent by id — fetch in parallel, 404 after both settle.
+  const [server, apps] = await Promise.all([
+    getServerById(serverId),
+    listAppsForServer(serverId),
+  ])
   if (!server) notFound()
-  const apps = await listAppsForServer(serverId)
 
   return <ServerDetail server={server} apps={apps} />
 }

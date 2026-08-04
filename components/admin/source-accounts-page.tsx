@@ -5,7 +5,7 @@ import { AccountsAdmin } from '@/components/admin/accounts-admin'
 import { Card } from '@/components/ui/card'
 import { requireAdmin } from '@/lib/auth'
 import { listAdminChannels, listAllProxies, listManagers } from '@/lib/data'
-import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
+import { isWorkerConfigured, workerHealthCached } from '@/lib/worker-client'
 import { cn } from '@/lib/utils'
 
 type Source = 'telegram' | 'vk' | 'max'
@@ -65,12 +65,12 @@ const META: Record<Source, SourceMeta> = {
 
 export async function SourceAccountsPage({ source }: { source: Source }) {
   await requireAdmin()
-  const [channels, proxies, managers] = await Promise.all([
+  const [channels, proxies, managers, workerOnline] = await Promise.all([
     listAdminChannels(),
     listAllProxies(),
     listManagers(),
+    isWorkerConfigured ? workerHealthCached() : Promise.resolve(false),
   ])
-  const workerOnline = isWorkerConfigured ? await workerHealth() : false
 
   // Proxy usage map (same shape the create form expects): proxyId -> types[].
   const proxyUsage: Record<string, string[]> = {}

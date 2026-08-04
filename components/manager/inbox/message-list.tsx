@@ -27,6 +27,7 @@ export function MessageList({
   active,
   activeId,
   thread,
+  threadLoading = false,
   noOlder,
   loadingOlder,
   onLoadOlder,
@@ -45,6 +46,8 @@ export function MessageList({
   active: Conversation
   activeId: string | null
   thread: Message[]
+  /** True while a cold thread (outside the SSR preload slice) hydrates. */
+  threadLoading?: boolean
   noOlder: Record<string, boolean>
   loadingOlder: boolean
   onLoadOlder: () => void
@@ -72,9 +75,20 @@ export function MessageList({
       }}
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-1">
-        {/* Older-history loader: shown only when the thread was truncated
-            to the most-recent slice and there may be more to fetch. */}
-        {activeId && thread.length >= 300 && !noOlder[activeId] ? (
+        {/* Cold-thread hydration: transcript is being fetched on first open. */}
+        {threadLoading && thread.length === 0 ? (
+          <div
+            className="flex justify-center py-8 text-muted-foreground"
+            role="status"
+            aria-label="Загружаю переписку"
+          >
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : null}
+        {/* Older-history loader: shown only when the thread was truncated to
+            the most-recent slice (SSR batch preloads 30 per thread) and there
+            may be more to fetch. */}
+        {activeId && thread.length >= 30 && !noOlder[activeId] ? (
           <div className="mb-2 flex justify-center">
             <Button
               variant="ghost"

@@ -7,17 +7,18 @@ import {
   listManagers,
   listManagersWithProxies,
 } from '@/lib/data'
-import { isWorkerConfigured, workerHealth } from '@/lib/worker-client'
+import { isWorkerConfigured, workerHealthCached } from '@/lib/worker-client'
 
 export default async function AdminProxiesPage() {
   await requireAdmin()
-  const [proxies, managers, analytics, managerSummaries] = await Promise.all([
-    listAllProxies(),
-    listManagers(),
-    getProxyAnalytics(),
-    listManagersWithProxies(),
-  ])
-  const workerOnline = isWorkerConfigured ? await workerHealth() : false
+  const [proxies, managers, analytics, managerSummaries, workerOnline] =
+    await Promise.all([
+      listAllProxies(),
+      listManagers(),
+      getProxyAnalytics(),
+      listManagersWithProxies(),
+      isWorkerConfigured ? workerHealthCached() : Promise.resolve(false),
+    ])
 
   return (
     <div className="flex flex-col gap-6">

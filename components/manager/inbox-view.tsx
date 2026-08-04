@@ -17,6 +17,7 @@ import {
   toggleConversationAiAction,
   acknowledgeAiHandoffAction,
   loadOlderMessagesAction,
+  loadThreadMessagesAction,
 } from '@/app/actions/messages'
 import {
   dismissReplyReminderAction,
@@ -771,6 +772,43 @@ export function InboxView({
   )
   const thread = activeId ? (localMessages[activeId] ?? []) : []
 
+  // Lazy hydration for threads outside the SSR preload slice: a missing key in
+  // the map means "transcript not shipped yet" (an empty array means a genuinely
+  // empty thread). First open fetches the recent history once.
+  const [threadLoading, setThreadLoading] = useState(false)
+  const hydratingRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activeId || activeId in localMessages) return
+    if (hydratingRef.current === activeId) return
+    hydratingRef.current = activeId
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setThreadLoading(true)
+    void loadThreadMessagesAction(activeId)
+      .then((res) => {
+        if (hydratingRef.current !== activeId) return
+        setLocalMessages((prev) => {
+          // An optimistic send may have created the key mid-flight — merge
+          // the fetched history UNDER those messages instead of dropping it.
+          const existing = prev[activeId]
+          if (!existing || existing.length === 0)
+            return { ...prev, [activeId]: res.ok ? res.messages : [] }
+          if (!res.ok) return prev
+          const known = new Set(existing.map((m) => m.id))
+          const older = res.messages.filter((m) => !known.has(m.id))
+          return older.length === 0
+            ? prev
+            : { ...prev, [activeId]: [...older, ...existing] }
+        })
+      })
+      .catch(() => toast.error('Не удалось загрузить переписку'))
+      .finally(() => {
+        if (hydratingRef.current === activeId) {
+          hydratingRef.current = null
+          setThreadLoading(false)
+        }
+      })
+  }, [activeId, localMessages])
+
   // Is the AI currently leading the open thread? Under global-lead mode the AI
   // leads whenever the master switch is on AND the thread isn't paused. An
   // optimistic override (from the inbox toggle) wins so the UI reacts instantly.
@@ -1019,6 +1057,7 @@ export function InboxView({
               active={active}
               activeId={activeId}
               thread={thread}
+              threadLoading={threadLoading}
               noOlder={noOlder}
               loadingOlder={loadingOlder}
               onLoadOlder={handleLoadOlder}

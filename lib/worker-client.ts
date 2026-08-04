@@ -52,6 +52,20 @@ export async function workerHealth(): Promise<boolean> {
   return Boolean(data?.ok)
 }
 
+/* 15s TTL cache for the health probe: server pages render it on every
+ * request, and an extra HTTP round-trip per page view buys nothing —
+ * a worker flapping within 15 seconds is not actionable from the UI. */
+let healthCache: { value: boolean; expires: number } | null = null
+
+/** Cached variant of {@link workerHealth} for hot server-rendered pages. */
+export async function workerHealthCached(): Promise<boolean> {
+  const now = Date.now()
+  if (healthCache && healthCache.expires > now) return healthCache.value
+  const value = await workerHealth()
+  healthCache = { value, expires: now + 15_000 }
+  return value
+}
+
 export interface ProxyCheckResult {
   ok: boolean
   latencyMs?: number
