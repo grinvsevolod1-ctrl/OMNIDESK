@@ -119,16 +119,18 @@ export async function clearShellSessionAction(): Promise<void> {
 export async function setShellModeAction(enabled: boolean): Promise<void> {
   await requireAdmin()
   const jar = await cookies()
-  if (enabled) {
-    // Default is ON — deleting the cookie returns to the default.
-    jar.delete(SHELL_MODE_COOKIE)
-  } else {
-    jar.set(SHELL_MODE_COOKIE, '0', {
-      httpOnly: true,
-      sameSite: 'lax',
-      path: '/admin',
-      maxAge: 60 * 60 * 24 * 365,
-    })
+  // ALWAYS write an explicit value on BOTH paths. The previous version set
+  // '0' with path=/admin but deleted with the default path=/ — a mismatch
+  // the browser ignores, so «Включить OMNIDESK OS» could never clear the
+  // opt-out cookie and the classic UI kept coming back after reload.
+  const value = enabled ? '1' : '0'
+  const base = {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    maxAge: 60 * 60 * 24 * 365,
   }
+  jar.set(SHELL_MODE_COOKIE, value, { ...base, path: '/' })
+  // Overwrite the legacy /admin-scoped cookie so it cannot shadow the new one.
+  jar.set(SHELL_MODE_COOKIE, value, { ...base, path: '/admin' })
   revalidatePath('/admin')
 }
