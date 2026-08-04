@@ -67,6 +67,16 @@ export function OsShell({
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmBusy, setConfirmBusy] = useState(false)
+  // Placeholder can't be styled per-breakpoint via CSS, so track narrow
+  // viewports and swap to a short prompt that doesn't wrap/clip on mobile.
+  const [isNarrow, setIsNarrow] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 639px)')
+    const sync = () => setIsNarrow(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const historyRef = useRef<AssistantTurn[]>(
@@ -504,7 +514,11 @@ export function OsShell({
                 }
               }}
               rows={1}
-              placeholder="Скомандуйте: «покажи сводку», «создай менеджера»…  (⌘K)"
+              placeholder={
+                isNarrow
+                  ? 'Скомандуйте…'
+                  : 'Скомандуйте: «покажи сводку», «создай менеджера»…  (⌘K)'
+              }
               aria-label="Командное поле"
               className="max-h-44 min-h-[56px] w-full resize-none rounded-2xl border border-input bg-card/70 px-5 py-4 text-base leading-snug text-foreground placeholder:text-muted-foreground/60 backdrop-blur-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-ring"
             />
