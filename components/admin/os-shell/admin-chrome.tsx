@@ -13,7 +13,7 @@
  */
 
 import type { ReactNode } from 'react'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
@@ -41,7 +41,6 @@ export function AdminChrome({
   children: ReactNode
 }) {
   const pathname = usePathname()
-  const router = useRouter()
 
   // The shell replaces the DASHBOARD (root) only; deep routes stay classic so
   // the copilot can navigate into them.
@@ -56,9 +55,15 @@ export function AdminChrome({
   }
 
   const enableShell = async () => {
-    await setShellModeAction(true)
-    router.push('/admin')
-    router.refresh()
+    try {
+      await setShellModeAction(true)
+    } catch {
+      // Cookie deletion may still have applied; hard reload re-reads it.
+    }
+    // FULL page navigation instead of router.push + refresh: the client
+    // Router Cache kept serving the classic RSC payload, so the button
+    // «Включить OMNIDESK OS» appeared to do nothing.
+    window.location.assign('/admin')
   }
 
   return (

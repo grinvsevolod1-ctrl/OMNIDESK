@@ -129,31 +129,32 @@
 }
 
 /* ------------------------- OMNIDESK OS shell ------------------------- */
-/* Scoped dark "glass OS" theme for the admin command shell. Reuses the same
-   semantic token names, so every shadcn component inside .od-os inherits the
-   dark glass look without any per-component overrides — and the rest of the
-   app (manager panel, classic admin) is untouched. */
+/* The OS shell uses the SAME dark palette as the rest of the project (see
+   `.dark` above) — same near-black background, white primary, identical
+   borders — so switching between the shell and the classic admin feels like
+   one product, not two. Scoping via .od-os only forces dark inside the shell
+   regardless of the user's system scheme. */
 .od-os {
-  --background: oklch(0.13 0.012 260);
-  --foreground: oklch(0.95 0.005 260);
-  --card: oklch(0.18 0.014 260 / 72%);
-  --card-foreground: oklch(0.95 0.005 260);
-  --popover: oklch(0.17 0.014 260);
-  --popover-foreground: oklch(0.95 0.005 260);
-  --primary: oklch(0.78 0.12 195);
-  --primary-foreground: oklch(0.15 0.02 260);
-  --secondary: oklch(0.24 0.014 260);
-  --secondary-foreground: oklch(0.95 0.005 260);
-  --muted: oklch(0.22 0.012 260);
-  --muted-foreground: oklch(0.68 0.01 260);
-  --accent: oklch(0.26 0.016 260);
-  --accent-foreground: oklch(0.95 0.005 260);
-  --destructive: oklch(0.66 0.19 25);
-  --success: oklch(0.74 0.15 165);
-  --warning: oklch(0.8 0.14 85);
-  --border: oklch(0.95 0.005 260 / 12%);
-  --input: oklch(0.95 0.005 260 / 14%);
-  --ring: oklch(0.78 0.12 195 / 60%);
+  --background: oklch(0.08 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.12 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.13 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.13 0 0);
+  --secondary: oklch(0.2 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.17 0 0);
+  --muted-foreground: oklch(0.65 0 0);
+  --accent: oklch(0.2 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.72 0.17 152);
+  --warning: oklch(0.78 0.16 78);
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.7 0 0);
   color-scheme: dark;
 }
 

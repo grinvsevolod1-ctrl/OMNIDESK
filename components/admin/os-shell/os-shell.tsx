@@ -41,6 +41,9 @@ import { logoutAction } from '@/app/actions/auth'
 import { nextMessageId, type ShellMessage, type ShellMeta } from './chat-types'
 import { ShellHero, ShellMessageRow } from './feed'
 
+/** localStorage key: date when the admin muted proactive insights. */
+const INSIGHTS_MUTED_KEY = 'od-os:insights-muted'
+
 export function OsShell({
   dictionaries,
   insights = [],
@@ -275,15 +278,50 @@ export function OsShell({
   }, [messages])
 
   const toClassic = useCallback(async () => {
-    await setShellModeAction(false)
-    router.refresh()
-  }, [router])
+    try {
+      await setShellModeAction(false)
+    } catch {
+      // Cookie may still have been set; the hard reload below re-reads it.
+    }
+    // FULL page navigation, not router.refresh(): the client Router Cache can
+    // serve a stale RSC payload for /admin, which made the toggle look broken
+    // («старая версия» after switching). A hard load always re-reads the
+    // cookie server-side.
+    window.location.assign('/admin')
+  }, [])
 
   const newDialog = useCallback(() => {
     setMessages([])
     historyRef.current = []
     void clearShellSessionAction()
     inputRef.current?.focus()
+  }, [])
+
+  /* ----------------------------- insights ----------------------------- */
+
+  // Proactive findings are useful once, not on every visit: «Скрыть» mutes
+  // them until tomorrow (per browser). Start hidden to avoid a flash, reveal
+  // in an effect once localStorage confirms they weren't dismissed today.
+  const [insightsVisible, setInsightsVisible] = useState(false)
+  useEffect(() => {
+    if (insights.length === 0) return
+    try {
+      const today = new Date().toDateString()
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setInsightsVisible(localStorage.getItem(INSIGHTS_MUTED_KEY) !== today)
+    } catch {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setInsightsVisible(true)
+    }
+  }, [insights.length])
+
+  const dismissInsights = useCallback(() => {
+    setInsightsVisible(false)
+    try {
+      localStorage.setItem(INSIGHTS_MUTED_KEY, new Date().toDateString())
+    } catch {
+      /* private mode — session-only dismissal */
+    }
   }, [])
 
   const hasChat = messages.length > 0
@@ -369,16 +407,17 @@ export function OsShell({
           <>
             <ShellHero
               greeting={dictionaries.shellGreeting}
-              insights={insights}
+              insights={insightsVisible ? insights : []}
               onInsight={(prompt) => void send(prompt)}
+              onDismissInsights={dismissInsights}
             />
-            <div className="flex flex-wrap justify-center gap-1.5">
+            <div className="flex flex-wrap justify-center gap-2">
               {dictionaries.shellQuickCommands.map((c) => (
                 <button
                   key={c.label}
                   type="button"
                   onClick={() => void send(c.prompt)}
-                  className="rounded-full border border-border bg-card/50 px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-card hover:text-foreground"
+                  className="press-scale rounded-full border border-border bg-card/60 px-4 py-2 text-sm text-muted-foreground transition-colors hover:border-foreground/25 hover:bg-card hover:text-foreground"
                 >
                   {c.label}
                 </button>
@@ -425,9 +464,9 @@ export function OsShell({
                 }
               }}
               rows={1}
-              placeholder="Скомандуйте: «покажи сводку», «создай менеджера», «переименуй статус Ликвид»…  (⌘K)"
+              placeholder="Скомандуйте: «покажи сводку», «создай менеджера»…  (⌘K)"
               aria-label="Командное поле"
-              className="max-h-40 min-h-[46px] w-full resize-none rounded-xl border border-input bg-card/70 px-4 py-3 text-sm leading-snug text-foreground placeholder:text-muted-foreground/70 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              className="max-h-44 min-h-[56px] w-full resize-none rounded-2xl border border-input bg-card/70 px-5 py-4 text-base leading-snug text-foreground placeholder:text-muted-foreground/60 backdrop-blur-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
           <Button
@@ -435,7 +474,7 @@ export function OsShell({
             size="icon"
             disabled={busy || !input.trim()}
             aria-label="Отправить"
-            className="size-[46px] shrink-0 rounded-xl"
+            className="press-scale size-[56px] shrink-0 rounded-2xl"
           >
             <ArrowUp className="size-5" />
           </Button>
@@ -461,7 +500,7 @@ function sectionPrompt(id: ShellSection, title: string): string {
     case 'proxies':
       return 'Покажи прокси'
     case 'contacts':
-      return 'Покажи контакты по каналам'
+      return 'Покажи к��нтакты по каналам'
     case 'hosting':
       return 'Открой раздел серверов'
     case 'ai':
