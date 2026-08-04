@@ -1,11 +1,14 @@
 import type { ReactNode } from 'react'
-import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
+import { cookies } from 'next/headers'
+import type { NavItem } from '@/components/dashboard-shell'
 import { SWRProvider } from '@/components/swr-provider'
 import { Fake502 } from '@/components/fake-502'
 import { DictionariesProvider } from '@/components/dictionaries-provider'
+import { AdminChrome } from '@/components/admin/os-shell/admin-chrome'
 import { requireAdmin } from '@/lib/auth'
 import { getFake502 } from '@/lib/data'
 import { getDictionaries } from '@/lib/data/dictionaries'
+import { SHELL_MODE_COOKIE } from '@/lib/admin-console/assistant'
 
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
@@ -47,16 +50,22 @@ export default async function AdminLayout({
   // server-side once per request — no client fetch, no default-label flash.
   const dictionaries = await getDictionaries()
 
+  // OS shell is the DEFAULT admin experience; the cookie ('0') opts back into
+  // the classic tab UI. Read server-side so there is no mode flash (FOUC).
+  const jar = await cookies()
+  const shellEnabled = jar.get(SHELL_MODE_COOKIE)?.value !== '0'
+
   return (
     <SWRProvider>
       <DictionariesProvider value={dictionaries}>
-        <DashboardShell
+        <AdminChrome
+          shellEnabled={shellEnabled}
           nav={nav}
-          roleLabel="Администратор"
           user={{ name: user.name, email: user.email }}
+          dictionaries={dictionaries}
         >
           {children}
-        </DashboardShell>
+        </AdminChrome>
       </DictionariesProvider>
     </SWRProvider>
   )
