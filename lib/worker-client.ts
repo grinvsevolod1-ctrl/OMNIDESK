@@ -1,7 +1,6 @@
 /**
- * Thin server-side client for the worker's internal HTTP API. Used only for
- * things that can't live in the DB — primarily the live WhatsApp QR which is
- * held in the worker's memory while a scan is pending.
+ * Thin server-side client for the worker's internal HTTP API: health probes,
+ * proxy checks, sticker palettes, and raw media streaming.
  *
  * Everything else (commands, status) flows through the Postgres job queue and
  * the channels table, so the panel and worker stay loosely coupled.
@@ -26,24 +25,6 @@ async function call<T>(path: string): Promise<T | null> {
   } catch {
     return null
   }
-}
-
-/** Fetch the current WhatsApp QR (data-URL) for a channel, if any. */
-export async function fetchQr(channelId: string): Promise<string | null> {
-  const data = await call<{ qr: string | null }>(
-    `/qr?channelId=${encodeURIComponent(channelId)}`,
-  )
-  return data?.qr ?? null
-}
-
-/** Fetch the current WhatsApp pairing code for a channel, if any. */
-export async function fetchPairingCode(
-  channelId: string,
-): Promise<string | null> {
-  const data = await call<{ code: string | null }>(
-    `/pairing-code?channelId=${encodeURIComponent(channelId)}`,
-  )
-  return data?.code ?? null
 }
 
 /** Worker health probe (used by the connections page / settings). */

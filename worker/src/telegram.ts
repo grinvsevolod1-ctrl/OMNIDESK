@@ -48,6 +48,14 @@ export { telegramSendFailureReason } from './telegram-errors.js'
 const EXCLUSIVE_SWEEP_MS = 2 * 60_000
 
 /**
+ * How long a pending login (code_pending / password_pending) may sit without
+ * any code/password submission before the connection is torn down. Telegram
+ * login codes expire in ~5 minutes anyway; 10 minutes is generous for a human
+ * while guaranteeing an abandoned wizard can't leak a DC connection forever.
+ */
+const LOGIN_ABANDON_TIMEOUT_MS = 10 * 60_000
+
+/**
  * One live Telegram (MTProto) user session bound to a channel. The same client
  * instance is reused across login steps so the phoneCodeHash and connection
  * survive between "send code" and "enter password".
@@ -81,6 +89,14 @@ export class TelegramSession {
    */
   private exclusiveTimer: ReturnType<typeof setInterval> | null = null
   /**
+   * Abandoned-login guard. Every wizard that requests a code but never enters
+   * it used to leave the MTProto client connected to the DC forever — a leaked
+   * connection per abandoned attempt. Armed when we enter code_pending /
+   * password_pending, cleared by any code/password submission, resend
+   * (re-start), successful login, stop, or logout.
+   */
+  private loginTimer: ReturnType<typeof setTimeout> | null = null
+  /**
    * The narrow view of this session the split-out feature modules operate on.
    * Accessors re-read live state so a disconnect or pause mid-sweep is seen at
    * the next checkpoint, exactly like direct `this.client` checks used to.
@@ -112,6 +128,41 @@ export class TelegramSession {
    */
   setIngestPaused(paused: boolean): void {
     this.ingestPaused = paused
+  }
+
+  /** Arm (or re-arm) the abandoned-login timeout. */
+  private armLoginTimer(): void {
+    this.clearLoginTimer()
+    this.loginTimer = setTimeout(() => {
+      this.loginTimer = null
+      void (async () => {
+        this.authLogger().warn(
+          { stage: 'login-timeout', timeoutMs: LOGIN_ABANDON_TIMEOUT_MS },
+          'TG login: no code/password entered in time — disconnecting pending login',
+        )
+        try {
+          await this.client?.disconnect()
+        } catch {
+          /* ignore */
+        }
+        this.client = null
+        await repo
+          .setSession(this.channelId, 'error', {
+            lastError:
+              'Время входа истекло: код не был введён. Запросите код повторно.',
+          })
+          .catch(() => {})
+      })()
+    }, LOGIN_ABANDON_TIMEOUT_MS)
+    // Never keep the worker process alive just for an abandoned wizard.
+    this.loginTimer.unref?.()
+  }
+
+  private clearLoginTimer(): void {
+    if (this.loginTimer) {
+      clearTimeout(this.loginTimer)
+      this.loginTimer = null
+    }
   }
 
   /** Child logger bound to this channel + current login attempt. */
@@ -158,6 +209,9 @@ export class TelegramSession {
     // New correlation id per attempt (panel can supply one for end-to-end
     // correlation; otherwise we mint our own, e.g. on restart/restore).
     this.attemptId = attemptId || randomUUID()
+    // A fresh start (including a code re-request) supersedes any previous
+    // pending-login abandonment timer.
+    this.clearLoginTimer()
     const log = this.authLogger()
     // Verbose-but-non-critical lines: visible when auth diagnostics are on
     // (AUTH_DEBUG=1 / LOG_LEVEL=debug / non-prod), otherwise demoted to debug.
@@ -189,6 +243,13 @@ export class TelegramSession {
       { stage: 'proxy', usingProxy: Boolean(proxyRow), proxyKind: proxyRow?.kind ?? null },
       'TG login: proxy resolved',
     )
+
+    // A re-start (e.g. "запросить код повторно") must not leak the previous
+    // half-logged-in client's DC connection — tear it down first.
+    if (this.client) {
+      await this.client.disconnect().catch(() => {})
+      this.client = null
+    }
 
     this.client = await this.buildClient()
     try {
@@ -290,6 +351,7 @@ export class TelegramSession {
       // mid-login can resume on the right data-center.
       await this.persist()
       await repo.setSession(this.channelId, 'code_pending')
+      this.armLoginTimer()
       log.info(
         { stage: 'code_pending', totalDurationMs: Date.now() - t0 },
         'TG login: waiting for code entry',
@@ -309,6 +371,8 @@ export class TelegramSession {
     code: string,
   ): Promise<{ sessionStatus: repo.SessionStatus }> {
     const log = this.authLogger()
+    // The admin is actively typing — the login is not abandoned.
+    this.clearLoginTimer()
     if (!this.client) {
       log.warn({ stage: 'submitCode' }, 'TG login: code submitted but session not started')
       return this.notStarted()
@@ -355,6 +419,8 @@ export class TelegramSession {
           'TG login: code OK, 2FA cloud password required',
         )
         await repo.setSession(this.channelId, 'password_pending')
+        // Re-arm: waiting on the cloud password now, same abandonment risk.
+        this.armLoginTimer()
         return { sessionStatus: 'password_pending' }
       }
       log.error({ stage: 'submitCode:error', err: msg }, 'TG login: code rejected')
@@ -367,6 +433,8 @@ export class TelegramSession {
     password: string,
   ): Promise<{ sessionStatus: repo.SessionStatus }> {
     const log = this.authLogger()
+    // The admin is actively typing — the login is not abandoned.
+    this.clearLoginTimer()
     if (!this.client) {
       log.warn({ stage: 'submitPassword' }, 'TG login: password submitted but session not started')
       return this.notStarted()
@@ -437,6 +505,7 @@ export class TelegramSession {
   /** After a successful login: persist session, set detail, attach listeners. */
   private async afterLogin(): Promise<void> {
     if (!this.client) return
+    this.clearLoginTimer()
     await this.persist()
     try {
       const me = (await this.client.getMe()) as Api.User
@@ -740,6 +809,7 @@ export class TelegramSession {
 
   async stop(): Promise<void> {
     this.stopExclusiveTimer()
+    this.clearLoginTimer()
     try {
       await this.client?.disconnect()
     } finally {
@@ -750,6 +820,7 @@ export class TelegramSession {
 
   async logout(): Promise<void> {
     this.stopExclusiveTimer()
+    this.clearLoginTimer()
     try {
       await this.client?.invoke(new Api.auth.LogOut())
     } catch {

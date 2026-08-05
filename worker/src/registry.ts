@@ -59,8 +59,7 @@ class Registry {
     session.setIngestPaused(Boolean(channel.ingest_paused))
 
     switch (job.action) {
-      case 'start':
-      case 'request_qr': {
+      case 'start': {
         return session.start(
           (payload.phone as string) || channel.phone || undefined,
           typeof payload.attemptId === 'string' ? payload.attemptId : undefined,

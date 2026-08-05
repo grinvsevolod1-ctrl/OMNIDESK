@@ -136,7 +136,6 @@ export type JobAction =
   | 'logout'
   | 'send_code'
   | 'send_password'
-  | 'request_qr'
   | 'send_message'
   // Send a sticker (Telegram only) by its document descriptor.
   | 'send_sticker'
