@@ -17,8 +17,13 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return output
 }
 
-/** Byte-compare an existing subscription's server key with the current one. */
-function keyMatches(sub: PushSubscription, publicKey: string): boolean {
+/**
+ * Byte-compare an existing subscription's server key with the current one.
+ * Exported for the settings diagnostics panel: a mismatch here means every
+ * push to this device is signed with a different key than the subscription
+ * was created for, and the push service silently rejects them all.
+ */
+export function keyMatches(sub: PushSubscription, publicKey: string): boolean {
   const existing = sub.options?.applicationServerKey
   if (!existing) return false
   const a = new Uint8Array(existing)

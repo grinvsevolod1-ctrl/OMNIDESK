@@ -1,15 +1,22 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BellRing, Loader2, Send } from 'lucide-react'
+import { BellRing, Loader2, Send, Stethoscope } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   getPushConfigAction,
+  getPushDiagnosticsAction,
   sendTestPushAction,
   unsubscribePushAction,
 } from '@/app/actions/push'
-import { ensurePushSubscription } from '@/lib/push-client'
+import { ensurePushSubscription, keyMatches } from '@/lib/push-client'
+
+interface DiagLine {
+  label: string
+  ok: boolean
+  detail?: string
+}
 
 type State =
   | 'checking'
@@ -22,6 +29,7 @@ type State =
 export function NotificationSettings() {
   const [state, setState] = useState<State>('checking')
   const [busy, setBusy] = useState(false)
+  const [diag, setDiag] = useState<DiagLine[] | null>(null)
   const publicKeyRef = useRef<string>('')
 
   const refresh = useCallback(async () => {
@@ -147,6 +155,75 @@ export function NotificationSettings() {
     }
   }, [refresh])
 
+  const diagnose = useCallback(async () => {
+    setBusy(true)
+    try {
+      const lines: DiagLine[] = []
+      const server = await getPushDiagnosticsAction()
+      lines.push({
+        label: 'VAPID-ключи на сервере',
+        ok: server.configured,
+        detail: server.configured ? undefined : 'Пуши не могут отправляться вообще',
+      })
+
+      const perm = Notification.permission
+      lines.push({
+        label: 'Разрешение браузера',
+        ok: perm === 'granted',
+        detail: perm !== 'granted' ? `Статус: ${perm}` : undefined,
+      })
+
+      const reg = await navigator.serviceWorker.ready.catch(() => null)
+      const sub = reg ? await reg.pushManager.getSubscription() : null
+      lines.push({
+        label: 'Подписка в этом браузере',
+        ok: Boolean(sub),
+        detail: sub ? undefined : 'Нажмите «Включить уведомления»',
+      })
+
+      if (sub) {
+        const match = keyMatches(sub, server.publicKey)
+        lines.push({
+          label: 'Ключ подписки совпадает с сервером',
+          ok: match,
+          detail: match
+            ? undefined
+            : 'Подписка создана со старым ключом — нажмите «Отправить тест», он её пересоздаст',
+        })
+
+        const registered = server.devices.some((d) => d.endpoint === sub.endpoint)
+        lines.push({
+          label: 'Это устройство зарегистрировано на сервере',
+          ok: registered,
+          detail: registered
+            ? undefined
+            : 'Сервер не знает об этом браузере — «Отправить тест» восстановит регистрацию',
+        })
+      }
+
+      lines.push({
+        label: `Устройств у вас на сервере: ${server.devices.length}`,
+        ok: server.devices.length > 0,
+        detail:
+          server.devices.length === 0
+            ? 'Ни одно устройство не получит пуш — включите уведомления заново'
+            : undefined,
+      })
+
+      setDiag(lines)
+      const broken = lines.filter((l) => !l.ok)
+      if (broken.length === 0) {
+        toast.success(
+          'Всё в порядке. Если тест «отправлен», но не показывается — проверьте уведомления Chrome в настройках Windows/macOS (Фокусировка/Do Not Disturb).',
+        )
+      }
+    } catch {
+      toast.error('Не удалось выполнить диагностику.')
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
   if (state === 'checking') {
     return (
       <p className="text-sm text-muted-foreground">Проверяем статус уведомлений…</p>
@@ -203,6 +280,15 @@ export function NotificationSettings() {
               )}
               Отправить тест
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={diagnose}
+              disabled={busy}
+            >
+              <Stethoscope className="size-4" />
+              Диагностика
+            </Button>
             <Button variant="ghost" size="sm" onClick={disable} disabled={busy}>
               Отключить на этом устройстве
             </Button>
@@ -218,6 +304,34 @@ export function NotificationSettings() {
           </Button>
         )}
       </div>
+      {diag && (
+        <ul className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/30 p-3 text-sm">
+          {diag.map((line) => (
+            <li key={line.label} className="flex items-start gap-2">
+              <span
+                className={
+                  line.ok
+                    ? 'mt-1.5 inline-flex size-2 shrink-0 rounded-full bg-primary'
+                    : 'mt-1.5 inline-flex size-2 shrink-0 rounded-full bg-destructive'
+                }
+                aria-hidden="true"
+              />
+              <span>
+                <span
+                  className={line.ok ? 'text-foreground' : 'text-destructive'}
+                >
+                  {line.label}
+                </span>
+                {line.detail && (
+                  <span className="block text-xs text-muted-foreground">
+                    {line.detail}
+                  </span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

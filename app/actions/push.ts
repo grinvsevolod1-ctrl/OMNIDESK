@@ -5,10 +5,12 @@ import { requireManager } from '@/lib/auth'
 import {
   getVapidPublicKey,
   isPushConfigured,
+  listManagerSubscriptions,
   removeSubscription,
   saveSubscription,
   sendPushToEndpoint,
   sendPushToManager,
+  type SubscriptionInfo,
 } from '@/lib/push'
 
 export interface PushConfig {
@@ -132,4 +134,27 @@ export async function sendTestPushAction(
   return sent > 0
     ? { ok: true, message: 'Тест отправлен.' }
     : { ok: false, message: 'Нет активных устройств.' }
+}
+
+export interface PushDiagnostics {
+  configured: boolean
+  /** Server VAPID public key (base64url) — client compares with its own. */
+  publicKey: string
+  devices: SubscriptionInfo[]
+}
+
+/**
+ * Settings-page diagnostics: whether the server can push at all and which
+ * devices it believes belong to this manager. Lets the client render an
+ * honest per-device picture (this browser registered? key matching? when was
+ * the device last confirmed?) instead of guessing from local state.
+ */
+export async function getPushDiagnosticsAction(): Promise<PushDiagnostics> {
+  const session = await requireManager()
+  const configured = isPushConfigured()
+  let devices: SubscriptionInfo[] = []
+  if (configured) {
+    devices = await listManagerSubscriptions(session.sub).catch(() => [])
+  }
+  return { configured, publicKey: getVapidPublicKey(), devices }
 }

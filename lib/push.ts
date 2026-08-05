@@ -64,6 +64,39 @@ export async function saveSubscription(
   )
 }
 
+export interface SubscriptionInfo {
+  endpoint: string
+  userAgent: string | null
+  lastUsedAt: string | null
+}
+
+/**
+ * List a manager's registered devices (settings-page diagnostics). Endpoints
+ * are opaque push-service URLs, not secrets, and the list is scoped to the
+ * signed-in manager — the client marks "this device" by comparing with its
+ * own subscription endpoint.
+ */
+export async function listManagerSubscriptions(
+  managerId: string,
+): Promise<SubscriptionInfo[]> {
+  const rows = await query<{
+    endpoint: string
+    user_agent: string | null
+    last_used_at: string | null
+  }>(
+    `SELECT endpoint, user_agent, last_used_at
+       FROM push_subscriptions
+      WHERE manager_id = $1
+      ORDER BY last_used_at DESC NULLS LAST`,
+    [managerId],
+  )
+  return rows.map((r) => ({
+    endpoint: r.endpoint,
+    userAgent: r.user_agent,
+    lastUsedAt: r.last_used_at ? String(r.last_used_at) : null,
+  }))
+}
+
 /** Remove a subscription by endpoint (manager-scoped for safety). */
 export async function removeSubscription(
   managerId: string,
