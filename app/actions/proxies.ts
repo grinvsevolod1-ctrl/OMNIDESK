@@ -92,12 +92,11 @@ export async function checkProxyAction(id: string): Promise<ProxyResult> {
       message: 'Worker unreachable — start the worker to run proxy checks.',
     }
   }
-  // Build a per-destination summary (Telegram/WhatsApp) when available so the
-  // operator can see e.g. a proxy that works for Telegram but is blocked by
-  // WhatsApp — the exact situation that otherwise looks like a healthy proxy.
+  // Per-destination summary: `telegram` is a real MTProto-DC tunnel check
+  // (what GramJS actually needs), `https` is generic web traffic.
   const reachSummary = res.reach
-    ? ` TG: ${res.reach.telegram ? 'OK' : 'нет'}, WA: ${
-        res.reach.whatsapp ? 'OK' : 'нет'
+    ? ` Telegram DC: ${res.reach.telegram ? 'OK' : 'нет'}, HTTPS: ${
+        res.reach.https ? 'OK' : 'нет'
       }.`
     : ''
 

@@ -54,6 +54,34 @@ const CHANNEL_COOLDOWN_MS = 8000
 const lastSendByChannel = new Map<string, number>()
 
 /**
+ * Hold a "typing…" presence for the whole humanized delay. Telegram expires
+ * the indicator after ~6 seconds, so a single fire-and-forget call (the old
+ * behavior) showed typing for a fraction of a 10–45s delay; re-send it every
+ * 5s and explicitly cancel right before the message goes out. Best-effort:
+ * presence must never delay or break the actual send.
+ */
+async function typeWhileWaiting(
+  session: SenderSession,
+  target: string,
+  delayMs: number,
+): Promise<void> {
+  if (!session.sendTyping) {
+    await new Promise((r) => setTimeout(r, delayMs))
+    return
+  }
+  const startedAt = Date.now()
+  await session.sendTyping(target, true).catch(() => {})
+  while (Date.now() - startedAt < delayMs) {
+    const remaining = delayMs - (Date.now() - startedAt)
+    await new Promise((r) => setTimeout(r, Math.min(5000, remaining)))
+    if (Date.now() - startedAt < delayMs) {
+      await session.sendTyping(target, true).catch(() => {})
+    }
+  }
+  await session.sendTyping(target, false).catch(() => {})
+}
+
+/**
  * Conversations with an AI-lead generation currently in flight. A messenger
  * inbound can arrive while the model is still composing the previous reply;
  * without this guard both calls pass the pre-checks and the contact receives
@@ -159,15 +187,9 @@ async function fireRule(params: {
       return false
     }
 
-    // Human-like pacing: show typing, wait, then send.
+    // Human-like pacing: hold "typing…" for the whole delay, then send.
     const delayMs = computeSendDelayMs(rule.config, replyText)
-    if (session.sendTyping) {
-      await session.sendTyping(contactHandle, true).catch(() => {})
-    }
-    await new Promise((r) => setTimeout(r, delayMs))
-    if (session.sendTyping) {
-      await session.sendTyping(contactHandle, false).catch(() => {})
-    }
+    await typeWhileWaiting(session, contactHandle, delayMs)
 
     const { providerMessageId } = await session.sendMessage(contactHandle, replyText)
     lastSendByChannel.set(channelId, Date.now())
@@ -385,18 +407,12 @@ async function fireAiLead(params: {
       return false
     }
 
-    // Human-like pacing: typing presence, a length-scaled delay, then send.
+    // Human-like pacing: hold typing presence for a length-scaled delay.
     const delayMs = Math.min(
       45_000,
       3000 + reply.length * 60 + Math.floor(Math.random() * 4000),
     )
-    if (session.sendTyping) {
-      await session.sendTyping(contactHandle, true).catch(() => {})
-    }
-    await new Promise((r) => setTimeout(r, delayMs))
-    if (session.sendTyping) {
-      await session.sendTyping(contactHandle, false).catch(() => {})
-    }
+    await typeWhileWaiting(session, contactHandle, delayMs)
 
     // Re-check the AI-lead flag right before sending: a human may have taken
     // over (manual reply clears the flag) while we were composing. If so, bail

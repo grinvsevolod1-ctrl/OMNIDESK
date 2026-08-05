@@ -71,6 +71,11 @@ async function validateProxyForType(
   if (proxy.kind === 'mtproto' && type !== 'telegram') {
     return 'MTProto-прокси подходит только для Telegram. Для VK/MAX/WhatsApp выберите socks5 или http прокси.'
   }
+  // GramJS has no HTTP-CONNECT transport: an HTTP proxy passed to a Telegram
+  // session used to be silently treated as SOCKS5 and hang the connection.
+  if (proxy.kind === 'http' && type === 'telegram') {
+    return 'HTTP-прокси не поддерживается Telegram (MTProto). Выберите SOCKS5 или MTProto-прокси.'
+  }
   if (await proxyTypeInUse(proxyId, type, excludeChannelId)) {
     return `Этот прокси уже используется другим аккаунтом «${type}». Одно прокси = один аккаунт каждого типа — выберите другой.`
   }
@@ -89,14 +94,19 @@ export async function adminConnectTelegramAction(
 ): Promise<AdminAccountResult> {
   await requireAdmin()
   const name = String(formData.get('name') ?? '').trim() || 'Telegram account'
-  const phone = String(formData.get('phone') ?? '').trim()
+  const rawPhone = String(formData.get('phone') ?? '').trim()
   const managerId = String(formData.get('managerId') ?? '').trim()
   const proxyId = String(formData.get('proxyId') ?? '').trim() || null
 
   if (!managerId) return { ok: false, message: 'Выберите менеджера-владельца.' }
-  if (!/^\+?[0-9\s\-()]{7,}$/.test(phone)) {
+  // Normalize to strict E.164 BEFORE anything is persisted or queued: MTProto's
+  // sendCode wants +<digits>; spaces/dashes/parens used to pass through as-is
+  // and are a known cause of "код не приходит".
+  const digits = rawPhone.replace(/[\s\-()]/g, '')
+  if (!/^\+?[0-9]{7,15}$/.test(digits)) {
     return { ok: false, message: 'Введите корректный номер, например +14155550132.' }
   }
+  const phone = digits.startsWith('+') ? digits : `+${digits}`
   const proxyError = await validateProxyForType(proxyId, 'telegram')
   if (proxyError) return { ok: false, message: proxyError }
 
@@ -124,6 +134,45 @@ export async function adminConnectTelegramAction(
     ok: true,
     message: 'Запрашиваем код входа…',
     channelId: channel.id,
+    sessionStatus: 'starting',
+  }
+}
+
+/**
+ * Re-request the login code on an EXISTING channel. Recovers from an expired
+ * code, a worker restart mid-login (phoneCodeHash lives only in worker memory),
+ * or a wrong code — previously the only way out was deleting the channel and
+ * starting over. Re-enqueues the same `start` job the initial connect uses.
+ */
+export async function adminResendTelegramCodeAction(
+  channelId: string,
+): Promise<AdminAccountResult> {
+  await requireAdmin()
+  const channel = await getChannelById(channelId)
+  if (!channel || !channel.managerId || channel.type !== 'telegram') {
+    return { ok: false, message: 'Аккаунт не найден.' }
+  }
+  if (!channel.phone) {
+    return { ok: false, message: 'У аккаунта не указан номер телефона.' }
+  }
+  if (channel.sessionStatus === 'online') {
+    return { ok: false, message: 'Аккаунт уже подключён.' }
+  }
+  const attemptId = globalThis.crypto.randomUUID()
+  await updateChannelSessionById(channelId, {
+    sessionStatus: 'starting',
+    lastError: null,
+  })
+  await enqueueJob({
+    channelId,
+    managerId: channel.managerId,
+    action: 'start',
+    payload: { phone: channel.phone, attemptId },
+  })
+  return {
+    ok: true,
+    message: 'Запрашиваем новый код входа…',
+    channelId,
     sessionStatus: 'starting',
   }
 }

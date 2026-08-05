@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useMemo, useRef, useState, useTransition } from 'react'
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import {
   Loader2,
   Plus,
@@ -21,6 +21,7 @@ import {
   adminGetChannelStatusAction,
   adminHealthCheckAction,
   adminReassignProxyAction,
+  adminResendTelegramCodeAction,
   adminSubmitTelegramCodeAction,
   adminSubmitTelegramPasswordAction,
 } from '@/app/actions/admin-accounts'
@@ -154,12 +155,24 @@ function CreateAccountCard({
   const [tgStep, setTgStep] = useState<'code' | 'password' | null>(null)
   const [tgCode, setTgCode] = useState('')
   const [tgPassword, setTgPassword] = useState('')
+  // Login error shown INSIDE the modal (toasts vanish; the admin needs the
+  // reason + a retry button in front of them, not a dead-end spinner).
+  const [tgError, setTgError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Wall-clock deadline for the login to leave the 'starting' state. If the
   // worker is offline or the job is never claimed, the session status stays
   // 'starting' forever and the code window never appears — so we stop polling
   // and surface a clear error instead of spinning indefinitely.
   const pollDeadlineRef = useRef<number>(0)
+
+  // The poll interval must not outlive the component: navigating away while a
+  // login is in flight used to leak the interval and fire setState on an
+  // unmounted component.
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [])
 
   const eligibleProxies = useMemo(
     () => proxies.filter((p) => proxyEligible(p, type, proxyUsage)),
@@ -176,6 +189,7 @@ function CreateAccountCard({
     setTgStep(null)
     setTgCode('')
     setTgPassword('')
+    setTgError(null)
     if (pollRef.current) clearInterval(pollRef.current)
   }
 
@@ -187,6 +201,7 @@ function CreateAccountCard({
 
   function pollTelegram(channelId: string) {
     if (pollRef.current) clearInterval(pollRef.current)
+    setTgError(null)
     // Allow up to 90s to reach a code/password/online/error state. Requesting
     // the code from Telegram (through the account's proxy) can take a while, but
     // if nothing happens by then the worker is almost certainly not processing
@@ -197,8 +212,10 @@ function CreateAccountCard({
       if (!snap) return
       if (snap.sessionStatus === 'code_pending') {
         setTgStep('code')
+        setTgError(null)
       } else if (snap.sessionStatus === 'password_pending') {
         setTgStep('password')
+        setTgError(null)
       } else if (snap.sessionStatus === 'online') {
         if (pollRef.current) clearInterval(pollRef.current)
         toast.success('Telegram-аккаунт подключён.')
@@ -207,8 +224,10 @@ function CreateAccountCard({
         snap.sessionStatus === 'error' ||
         snap.sessionStatus === 'logged_out'
       ) {
+        // Keep the modal alive with the error + retry actions. Polling stops,
+        // but submitCode/resend restart it — previously the flow was dead here.
         if (pollRef.current) clearInterval(pollRef.current)
-        toast.error(snap.lastError || 'Не удалось подключить Telegram.')
+        setTgError(snap.lastError || 'Не удалось подключить Telegram.')
       } else if (
         // Still 'starting'/'idle' past the deadline → the worker never picked
         // up the job. Stop and explain, so the flow doesn't hang forever.
@@ -216,11 +235,27 @@ function CreateAccountCard({
         (snap.sessionStatus === 'starting' || snap.sessionStatus === 'idle')
       ) {
         if (pollRef.current) clearInterval(pollRef.current)
-        toast.error(
-          'Telegram не ответил. Убедитесь, что процесс воркера запущен на VPS и подключён к базе, затем попробуйте снова.',
+        setTgError(
+          'Telegram не ответил. Убедитесь, что процесс воркера запущен на VPS и подключён к базе, затем запросите код повторно.',
         )
       }
     }, 2000)
+  }
+
+  /** Re-request the login code on the existing channel and resume polling. */
+  function resendCode() {
+    if (!tgChannelId) return
+    startTransition(async () => {
+      const res = await adminResendTelegramCodeAction(tgChannelId)
+      if (!res.ok) {
+        setTgError(res.message)
+        return
+      }
+      toast.message(res.message)
+      setTgStep(null)
+      setTgCode('')
+      pollTelegram(tgChannelId)
+    })
   }
 
   function submitCreate() {
@@ -298,6 +333,9 @@ function CreateAccountCard({
       else {
         toast.message(res.message)
         setTgCode('')
+        // The previous poll may have stopped on an earlier error (wrong code):
+        // always restart it so the outcome of THIS attempt reaches the UI.
+        pollTelegram(tgChannelId)
       }
     })
   }
@@ -313,6 +351,8 @@ function CreateAccountCard({
       else {
         toast.message(res.message)
         setTgPassword('')
+        // Same as submitCode: make sure a live poll is watching this attempt.
+        pollTelegram(tgChannelId)
       }
     })
   }
@@ -530,6 +570,28 @@ function CreateAccountCard({
             </DialogDescription>
           </DialogHeader>
 
+          {tgError ? (
+            <div className="flex flex-col gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+              <div className="flex items-start gap-2 text-sm text-destructive">
+                <ShieldAlert className="mt-0.5 size-4 shrink-0" />
+                <span className="text-pretty">{tgError}</span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={resendCode}
+                disabled={pending}
+              >
+                {pending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                Запросить код повторно
+              </Button>
+            </div>
+          ) : null}
+
           {tgStep === 'code' ? (
             <form
               className="flex flex-col gap-3"
@@ -563,6 +625,14 @@ function CreateAccountCard({
                 {pending ? <Loader2 className="size-4 animate-spin" /> : null}
                 Отправить код
               </Button>
+              <button
+                type="button"
+                onClick={resendCode}
+                disabled={pending}
+                className="self-start text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+              >
+                Код не пришёл или истёк — отправить повторно
+              </button>
             </form>
           ) : tgStep === 'password' ? (
             <form
@@ -598,12 +668,12 @@ function CreateAccountCard({
                 Отправить пароль
               </Button>
             </form>
-          ) : (
+          ) : !tgError ? (
             <div className="flex items-center gap-3 py-4 text-sm text-muted-foreground">
               <Loader2 className="size-5 animate-spin" />
               Запрашиваем код у Telegram… Это может занять несколько секунд.
             </div>
-          )}
+          ) : null}
 
           <DialogFooter>
             <Button variant="outline" onClick={resetForm} disabled={pending}>

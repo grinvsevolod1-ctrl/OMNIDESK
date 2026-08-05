@@ -70,8 +70,8 @@ export interface ProxyCheckResult {
   ok: boolean
   latencyMs?: number
   error?: string
-  /** Per-destination reachability (socks5/http proxies). */
-  reach?: { telegram: boolean; whatsapp: boolean }
+  /** Per-destination reachability: MTProto DC tunnel + generic HTTPS. */
+  reach?: { telegram: boolean; https: boolean }
 }
 
 /**

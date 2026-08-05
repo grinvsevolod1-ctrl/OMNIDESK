@@ -100,11 +100,11 @@ export async function checkManagerProxyAction(
       message: 'Worker недоступен — проверка прокси временно невозможна.',
     }
   }
-  // Per-destination breakdown (Telegram/WhatsApp) so a proxy that's blocked by
-  // WhatsApp but fine for Telegram is reported honestly instead of "healthy".
+  // Per-destination breakdown: `telegram` is a real MTProto-DC tunnel check
+  // (what GramJS actually needs), `https` is generic web traffic.
   const reachSummary = res.reach
-    ? ` TG: ${res.reach.telegram ? 'OK' : 'нет'}, WA: ${
-        res.reach.whatsapp ? 'OK' : 'нет'
+    ? ` Telegram DC: ${res.reach.telegram ? 'OK' : 'нет'}, HTTPS: ${
+        res.reach.https ? 'OK' : 'нет'
       }.`
     : ''
 

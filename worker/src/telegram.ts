@@ -535,6 +535,26 @@ export class TelegramSession {
   }
 
   /**
+   * SenderSession adapter for the autopilot's optional typing presence.
+   * The autopilot duck-types `sendTyping?(target, on)` — this was silently
+   * never called before because only `setTyping` existed, so auto-replies
+   * arrived with no "печатает…" indicator. `on=false` sends an explicit
+   * cancel action instead of waiting for Telegram's ~6s auto-expiry.
+   */
+  async sendTyping(target: string, on: boolean): Promise<void> {
+    if (!this.client) throw new Error('Session not started')
+    const entity = await this.resolveTarget(target)
+    await this.client.invoke(
+      new Api.messages.SetTyping({
+        peer: entity,
+        action: on
+          ? new Api.SendMessageTypingAction()
+          : new Api.SendMessageCancelAction(),
+      }),
+    )
+  }
+
+  /**
    * Toggle an emoji reaction on a message. Passing an empty emoji clears the
    * reaction. Telegram-only.
    */
