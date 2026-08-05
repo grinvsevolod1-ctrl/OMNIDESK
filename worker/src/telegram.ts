@@ -12,6 +12,9 @@ import {
   classifyError,
   errMessage,
   extractErrorCode,
+  isConnectionSendFailure,
+  OFFLINE_SEND_REASON,
+  telegramSendFailureReason,
 } from './telegram-errors.js'
 import {
   TG_SEND_JITTER_MS,

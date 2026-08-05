@@ -22,6 +22,40 @@ import type { Message } from '@/lib/types'
  */
 const INBOX_PRELOAD_THREADS = 40
 
+/**
+ * Minimum time an account must stay degraded before the manager sees the
+ * "needs attention" banner. Routine reconnects recover in seconds and were
+ * pure noise; only a persistent outage is actionable for a manager.
+ */
+const DEGRADED_GRACE_MS = 5 * 60_000
+
+/**
+ * True when the channel has been in a degraded session state for longer than
+ * the grace period. Missing timestamp (migration not applied yet) counts as
+ * NOT degraded-long-enough — stay quiet rather than nag about a blip.
+ * Server-only helper: reads the clock, so it lives outside component render.
+ */
+function isDegradedPastGrace(c: {
+  type: string
+  sessionStatus: string | null
+  sessionStatusChangedAt: string | null
+}): boolean {
+  if (c.type !== 'telegram' && c.type !== 'whatsapp') return false
+  if (
+    c.sessionStatus !== 'rate_limited' &&
+    c.sessionStatus !== 'error' &&
+    c.sessionStatus !== 'logged_out' &&
+    c.sessionStatus !== 'offline'
+  ) {
+    return false
+  }
+  if (!c.sessionStatusChangedAt) return false
+  return (
+    Date.now() - new Date(c.sessionStatusChangedAt).getTime() >=
+    DEGRADED_GRACE_MS
+  )
+}
+
 export default async function InboxPage() {
   const session = await requireManager()
   const [conversations, channels, quickReplies, transferTargets] =
@@ -49,25 +83,10 @@ export default async function InboxPage() {
     console.error('inbox: AI settings unavailable:', err)
   }
 
-  // Personal accounts whose session is degraded — surfaced as a banner in the
-  // inbox. GRACE PERIOD: routine reconnects recover in seconds and were pure
-  // noise for managers, so an account only makes the banner after it has been
-  // degraded for 5+ minutes (per the session_status_changed_at trigger). When
-  // the timestamp is missing (migration not applied yet) we stay quiet rather
-  // than nag about what is almost certainly a transient blip.
-  const DEGRADED_GRACE_MS = 5 * 60_000
-  const now = Date.now()
+  // Personal accounts whose session has been degraded past the grace period —
+  // surfaced as a banner in the inbox (see isDegradedPastGrace for the rules).
   const degradedAccounts = channels
-    .filter(
-      (c) =>
-        (c.type === 'telegram' || c.type === 'whatsapp') &&
-        (c.sessionStatus === 'rate_limited' ||
-          c.sessionStatus === 'error' ||
-          c.sessionStatus === 'logged_out' ||
-          c.sessionStatus === 'offline') &&
-        c.sessionStatusChangedAt !== null &&
-        now - new Date(c.sessionStatusChangedAt).getTime() >= DEGRADED_GRACE_MS,
-    )
+    .filter(isDegradedPastGrace)
     .map((c) => ({
       id: c.id,
       name: c.name,
