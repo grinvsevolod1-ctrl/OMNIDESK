@@ -327,7 +327,27 @@ export async function sendPushToManager(
             : undefined
         if (statusCode === 404 || statusCode === 410) {
           dead.push(row.endpoint)
+          return
         }
+        if (statusCode === 400 || statusCode === 401 || statusCode === 403) {
+          // Signature/key rejection — the classic symptom of a VAPID key
+          // rotation: the browser's subscription was created with the OLD
+          // key, so every delivery is refused. Prune it; the client
+          // re-subscribes with the current key on its next panel load
+          // (ensurePushSubscription drops key-mismatched subscriptions).
+          dead.push(row.endpoint)
+          console.warn(
+            `[push] Delivery rejected (HTTP ${statusCode}) for manager ${managerId} — ` +
+              'likely a subscription from an old VAPID key. Pruned; it will be ' +
+              'recreated when the manager next opens the panel.',
+          )
+          return
+        }
+        // Anything else (5xx from the push service, network): transient —
+        // keep the subscription, but leave a trace instead of failing mute.
+        console.warn(
+          `[push] Delivery failed (HTTP ${statusCode ?? '?'}) for manager ${managerId}; keeping subscription.`,
+        )
       }
     }),
   )

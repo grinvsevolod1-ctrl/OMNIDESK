@@ -17,21 +17,45 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return output
 }
 
+/** Byte-compare an existing subscription's server key with the current one. */
+function keyMatches(sub: PushSubscription, publicKey: string): boolean {
+  const existing = sub.options?.applicationServerKey
+  if (!existing) return false
+  const a = new Uint8Array(existing)
+  const b = urlBase64ToUint8Array(publicKey)
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false
+  return true
+}
+
 /**
  * Ensure this browser has a push subscription for the given VAPID public key,
- * then persist it on the server. Reuses an existing subscription when present,
- * otherwise creates one. Assumes the service worker is already registered and
- * notification permission has been granted by the caller.
+ * then persist it on the server. Reuses an existing subscription ONLY when it
+ * was created with the SAME key: after a VAPID key rotation (typical after a
+ * server move) the old subscription still exists in the browser but every
+ * delivery to it fails with 403 VapidPkHashMismatch — silently, since the
+ * push service rejects it server-side. That stale subscription must be
+ * dropped and recreated, otherwise pushes "just stop" with no error anywhere.
+ * Assumes the service worker is registered and permission has been granted.
  */
 export async function ensurePushSubscription(
   publicKey: string,
 ): Promise<{ ok: boolean; message: string }> {
+  if (!publicKey) {
+    return { ok: false, message: 'Push-уведомления не настроены на сервере.' }
+  }
   const reg = await navigator.serviceWorker.ready
   let sub = await reg.pushManager.getSubscription()
-  if (!sub) {
-    if (!publicKey) {
-      return { ok: false, message: 'Push-уведомления не настроены на сервере.' }
+  if (sub && !keyMatches(sub, publicKey)) {
+    // Key rotated — the old subscription can never be delivered to again.
+    try {
+      await sub.unsubscribe()
+    } catch {
+      /* best-effort: subscribe() below will fail loudly if this mattered */
     }
+    sub = null
+  }
+  if (!sub) {
     sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(publicKey),
