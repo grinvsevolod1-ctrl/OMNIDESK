@@ -208,6 +208,21 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       max_memory_restart: '256M',
+      // CRITICAL: signal ONLY the watcher process on stop/restart. PM2's
+      // default treekill walks the child tree by ppid and SIGINTs every
+      // descendant — including an in-flight deploy.sh (the `detached` spawn
+      // flag does NOT protect against it, only against process-GROUP
+      // signals). With treekill the deploy died with exit 130, the success
+      // marker was never written, and the watcher retried the same commit
+      // forever. With treekill:false a `pm2 restart omnidesk-auto-deploy`
+      // mid-deploy kills just the watcher; the orphaned deploy.sh finishes on
+      // its own, writes the marker, and the relaunched watcher sees the box
+      // as up to date.
+      treekill: false,
+      // Default 1.6s is fine for the watcher itself (its cleanup is one log
+      // line), but be explicit so nobody "fixes" it to something huge: the
+      // deploy child no longer needs the watcher alive.
+      kill_timeout: 5000,
       // A deploy can take a while (install + build + migrate); don't let PM2's
       // watchdog consider a legitimately busy watcher "unstable". Back off on
       // repeated early exits instead of hammering.

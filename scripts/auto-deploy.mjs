@@ -37,7 +37,7 @@
  *     if this file itself changed, we exit(0) so PM2 relaunches the new version
  *     (self-updating watcher).
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -320,28 +320,36 @@ function ensurePanelAlive() {
           env: process.env,
           timeout: 120_000,
         })
-      let start = pm2Start()
-      if (start.status !== 0) {
-        // A pm2 daemon with corrupted in-memory state (the classic
-        // "Cannot read properties of undefined (reading 'pm2_env')" /
-        // "Process N not found" bug, triggered by deletes racing the
-        // every-minute cron one-shots) fails EVERY subsequent command until
-        // the daemon itself is refreshed. `pm2 update` restarts the daemon
-        // in-place, re-adopting live processes — then retry the start once.
-        log('pm2 start failed — refreshing the pm2 daemon (pm2 update) and retrying ...')
-        spawnSync('pm2', ['update'], {
-          cwd: REPO_ROOT,
-          stdio: 'inherit',
-          env: process.env,
-          timeout: 180_000,
-        })
-        start = pm2Start()
-      }
+      const start = pm2Start()
       if (start.status === 0) {
         spawnSync('pm2', ['save'], { cwd: REPO_ROOT, env: process.env, timeout: 60_000 })
         log('panel recovered — old version keeps serving until the retry succeeds.')
       } else {
-        log('pm2 recovery failed; will try again after the next failed deploy.')
+        // A pm2 daemon with corrupted in-memory state (the classic
+        // "Cannot read properties of undefined (reading 'pm2_env')" /
+        // "Process N not found" bug) fails EVERY command until the daemon is
+        // refreshed. But `pm2 update` KILLS the daemon, and the daemon kills
+        // every managed process — including THIS watcher. Running it via
+        // spawnSync meant the watcher died mid-update and the follow-up
+        // start/save never executed. Run the whole recovery as a DETACHED
+        // shell instead: it survives the watcher's own death, finishes the
+        // update, brings every app back and saves the list; pm2 then also
+        // resurrects the watcher itself from the saved process list.
+        log(
+          'pm2 start failed — daemon likely corrupted. Launching a detached ' +
+            'daemon refresh (pm2 update && pm2 start && pm2 save); it will ' +
+            'finish even though it restarts this watcher too.',
+        )
+        try {
+          const child = spawn(
+            'bash',
+            ['-c', 'pm2 update; pm2 start ecosystem.config.js; pm2 save'],
+            { cwd: REPO_ROOT, detached: true, stdio: 'ignore', env: process.env },
+          )
+          child.unref()
+        } catch (err) {
+          log('failed to launch detached pm2 recovery:', err?.message || err)
+        }
       }
     }
   } catch (err) {

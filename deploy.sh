@@ -213,13 +213,29 @@ git worktree remove --force .runtime-logs 2>/dev/null || true
 rm -rf .runtime-logs
 git branch -D runtime-logs 2>/dev/null || true
 
+# From here to the success marker is the critical section: the new build is
+# already promoted, so an interrupt now can only do harm (apps restarted but
+# marker unwritten → endless watcher retry). Shield it from stray SIGINT/
+# SIGTERM — anything short of SIGKILL. The section takes seconds.
+trap '' INT TERM
+
 PM2_APPS="omnidesk-panel,omnidesk-worker,omnidesk-cron-sync-ads,omnidesk-cron-retry-dead-letters,omnidesk-cron-followup"
 if ! pm2 startOrRestart ecosystem.config.js --only "$PM2_APPS" --update-env; then
-  # A corrupted pm2 daemon fails every command until refreshed. `pm2 update`
-  # restarts the daemon in-place (processes keep running), then retry once.
-  echo "⚠️  pm2 startOrRestart failed — refreshing the pm2 daemon and retrying ..."
-  pm2 update || true
-  pm2 startOrRestart ecosystem.config.js --only "$PM2_APPS" --update-env
+  # NEVER run `pm2 update` from inside a deploy. It kills the pm2 daemon, the
+  # daemon kills every process it manages — including omnidesk-auto-deploy,
+  # the watcher whose CHILD is this very script — and PM2's tree-kill then
+  # SIGINTs this deploy mid-flight (exit 130). The success marker was never
+  # written, so the watcher retried the same commit forever: deploy → self-
+  # kill → 130 → retry, in a loop. That was the cyclic SIGINT failure.
+  #
+  # Instead, retry each app individually: one flaky app (or a pm2 process-list
+  # race with the every-minute cron one-shots) must not fail the whole batch.
+  echo "⚠️  pm2 startOrRestart failed for the batch — retrying each app individually ..."
+  IFS=',' read -ra APPS <<< "$PM2_APPS"
+  for APP in "${APPS[@]}"; do
+    pm2 startOrRestart ecosystem.config.js --only "$APP" --update-env || \
+      echo "⚠️  Could not restart $APP — it keeps serving on the previous code."
+  done
 fi
 # Create any app missing from the process list (e.g. a brand-new box or a new
 # app added to the config, including the auto-deploy watcher itself): plain
