@@ -69,6 +69,13 @@ class Registry {
           typeof payload.attemptId === 'string' ? payload.attemptId : undefined,
         )
       }
+      case 'start_qr': {
+        // One-button QR login: no phone/SMS, the owner scans from Telegram →
+        // Settings → Devices. The panel polls the QR via the internal HTTP API.
+        return session.startQr(
+          typeof payload.attemptId === 'string' ? payload.attemptId : undefined,
+        )
+      }
       case 'pause': {
         // Keep the session connected; only stop writing inbound to the inbox.
         session.setIngestPaused(true)

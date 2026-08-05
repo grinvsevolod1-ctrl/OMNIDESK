@@ -69,6 +69,19 @@ export async function checkProxy(
 }
 
 /**
+ * Fetch the live Telegram QR-login deep link for a channel (present only while
+ * a QR login is pending on the worker). Null when the worker isn't configured,
+ * the session is missing, or no QR is pending.
+ */
+export async function fetchTelegramQr(
+  channelId: string,
+): Promise<{ qr: string | null; expiresAt: number | null } | null> {
+  return call<{ qr: string | null; expiresAt: number | null }>(
+    `/qr?channelId=${encodeURIComponent(channelId)}`,
+  )
+}
+
+/**
  * Fetch the sticker palette (favourited + recent) for a Telegram channel.
  * Returns null when the worker isn't configured or the session is offline.
  */

@@ -32,6 +32,7 @@ import {
   setCallbackSettings as setVkCallbackSettings,
 } from '@/lib/vk'
 import { resolveAppBaseUrl } from '@/lib/app-url'
+import { fetchTelegramQr } from '@/lib/worker-client'
 import type { ChannelStatus, ChannelType, SessionStatus } from '@/lib/types'
 
 export interface AdminAccountResult {
@@ -136,6 +137,102 @@ export async function adminConnectTelegramAction(
     channelId: channel.id,
     sessionStatus: 'starting',
   }
+}
+
+/**
+ * Admin: create a Telegram account and begin ONE-BUTTON QR login. No phone, no
+ * SMS: the worker exports a login token (auth.exportLoginToken) and the account
+ * owner scans the QR from Telegram → Settings → Devices → Link Desktop Device.
+ * Only a 2FA cloud password (if set) remains — that reuses the existing
+ * password_pending flow.
+ */
+export async function adminConnectTelegramQrAction(
+  formData: FormData,
+): Promise<AdminAccountResult> {
+  await requireAdmin()
+  const name = String(formData.get('name') ?? '').trim() || 'Telegram account'
+  const managerId = String(formData.get('managerId') ?? '').trim()
+  const proxyId = String(formData.get('proxyId') ?? '').trim() || null
+
+  if (!managerId) return { ok: false, message: 'Выберите менеджера-владельца.' }
+  const proxyError = await validateProxyForType(proxyId, 'telegram')
+  if (proxyError) return { ok: false, message: proxyError }
+
+  const attemptId = globalThis.crypto.randomUUID()
+  const channel = await createChannel({
+    managerId,
+    type: 'telegram',
+    name,
+    detail: 'QR-подключение',
+    status: 'pending',
+    sessionStatus: 'starting',
+    phone: null,
+    proxyId,
+    config: {},
+  })
+
+  await enqueueJob({
+    channelId: channel.id,
+    managerId,
+    action: 'start_qr',
+    payload: { attemptId },
+  })
+
+  return {
+    ok: true,
+    message: 'Генерируем QR-код…',
+    channelId: channel.id,
+    sessionStatus: 'starting',
+  }
+}
+
+/**
+ * Restart QR login on an EXISTING channel (e.g. the QR expired unwatched, the
+ * account logged out, or the phone-code flow stalled and the admin prefers QR).
+ */
+export async function adminRestartTelegramQrAction(
+  channelId: string,
+): Promise<AdminAccountResult> {
+  await requireAdmin()
+  const channel = await getChannelById(channelId)
+  if (!channel || !channel.managerId || channel.type !== 'telegram') {
+    return { ok: false, message: 'Аккаунт не найден.' }
+  }
+  if (channel.sessionStatus === 'online') {
+    return { ok: false, message: 'Аккаунт уже подключён.' }
+  }
+  const attemptId = globalThis.crypto.randomUUID()
+  await updateChannelSessionById(channelId, {
+    sessionStatus: 'starting',
+    lastError: null,
+  })
+  await enqueueJob({
+    channelId,
+    managerId: channel.managerId,
+    action: 'start_qr',
+    payload: { attemptId },
+  })
+  return {
+    ok: true,
+    message: 'Генерируем QR-код…',
+    channelId,
+    sessionStatus: 'starting',
+  }
+}
+
+/**
+ * Poll the live QR deep link for a channel whose QR login is pending. The link
+ * lives only in worker memory (never persisted); Telegram rotates it ~every
+ * 30s, so the wizard polls this and re-renders the QR image.
+ */
+export async function adminGetTelegramQrAction(
+  channelId: string,
+): Promise<{ qr: string | null; expiresAt: number | null }> {
+  await requireAdmin()
+  const channel = await getChannelById(channelId)
+  if (!channel || channel.type !== 'telegram') return { qr: null, expiresAt: null }
+  const data = await fetchTelegramQr(channelId)
+  return data ?? { qr: null, expiresAt: null }
 }
 
 /**

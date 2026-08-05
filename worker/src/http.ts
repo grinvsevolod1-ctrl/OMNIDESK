@@ -27,6 +27,24 @@ export function startHttpServer(): void {
       return json(res, 401, { error: 'unauthorized' })
     }
 
+    // Live Telegram QR-login deep link for a channel (held in worker memory
+    // while a QR login is pending — never persisted). The panel polls this
+    // and renders the QR for the account owner to scan.
+    if (url.pathname === '/qr' && req.method === 'GET') {
+      const channelId = url.searchParams.get('channelId') ?? ''
+      if (!channelId) return json(res, 400, { error: 'channelId required' })
+      const session = registry.get(channelId)
+      if (!session) return json(res, 200, { qr: null, expiresAt: null })
+      if (!(session instanceof TelegramSession)) {
+        return json(res, 415, { error: 'unsupported_channel' })
+      }
+      const qr = session.getQr()
+      return json(res, 200, {
+        qr: qr?.url ?? null,
+        expiresAt: qr?.expiresAt ?? null,
+      })
+    }
+
     // Stream a message's media. The panel proxies the browser request here
     // after verifying ownership. We serve the bytes PERSISTED in Postgres first
     // (so media survives the contact deleting/editing the original); only when

@@ -137,6 +137,9 @@ export interface ManagerProxySummary {
 
 export type JobAction =
   | 'start'
+  // One-button QR login (Telegram): auth.exportLoginToken, no phone/SMS. The
+  // owner scans the QR from Telegram → Settings → Devices.
+  | 'start_qr'
   | 'stop'
   | 'restart'
   | 'logout'
