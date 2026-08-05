@@ -712,6 +712,64 @@ export async function setMessageProviderId(
   )
 }
 
+/**
+ * Outbound messages that never reached Telegram because the session was down
+ * when the manager hit "send" — the post-reconnect delivery-recovery sweep
+ * resends exactly these. A message qualifies when:
+ *
+ *  - it has NO provider_message_id (a confirmed send always backfills one), AND
+ *  - it either failed with the stable OFFLINE marker, or still sits in the
+ *    optimistic 'sent' state 2+ minutes later (its job was lost before it ran);
+ *  - it is plain text (media resends could duplicate large uploads), recent
+ *    (24h window — a stale resend would confuse the contact), and has NO
+ *    still-queued/running send job (the queue drain will deliver those itself,
+ *    so touching them here would double-send).
+ */
+export async function listRecoverableOutbound(
+  channelId: string,
+  offlineReason: string,
+): Promise<Array<{ id: string; body: string; contactHandle: string }>> {
+  const rows = await query<{
+    id: string
+    body: string
+    contact_handle: string
+  }>(
+    `SELECT m.id, m.body, c.contact_handle
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.channel_id = $1
+        AND m.direction = 'out'
+        AND m.provider_message_id IS NULL
+        AND m.deleted_at IS NULL
+        AND m.media_type IS NULL
+        AND m.body <> ''
+        AND m.created_at > now() - interval '24 hours'
+        AND m.created_at < now() - interval '2 minutes'
+        AND (
+          (m.status = 'failed' AND m.error_reason = $2)
+          OR m.status = 'sent'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM channel_jobs j
+           WHERE j.channel_id = c.channel_id
+             AND j.action = 'send_message'
+             -- queued/running: the drain will deliver it; done: it WAS
+             -- delivered (even if the provider-id backfill failed), so a
+             -- resend here would duplicate the message for the contact.
+             AND j.status IN ('queued', 'running', 'done')
+             AND j.payload->>'messageId' = m.id::text
+        )
+      ORDER BY m.created_at ASC
+      LIMIT 30`,
+    [channelId, offlineReason],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    body: r.body,
+    contactHandle: r.contact_handle,
+  }))
+}
+
 /* ----------------------- Telegram peer cache ------------------------- */
 
 export type TelegramPeerKind = 'user' | 'channel' | 'chat'

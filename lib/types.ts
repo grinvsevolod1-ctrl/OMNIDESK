@@ -65,6 +65,12 @@ export interface Channel {
   createdAt: string
   connectedAt: string | null
   lastCheckedAt: string | null
+  /**
+   * When sessionStatus last CHANGED value (maintained by a DB trigger, not by
+   * every status re-assert). Lets the UI apply grace periods, e.g. only alert
+   * managers about accounts degraded for 5+ minutes.
+   */
+  sessionStatusChangedAt: string | null
 }
 
 export type ProxyKind = 'socks5' | 'http' | 'mtproto'

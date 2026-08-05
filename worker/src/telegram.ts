@@ -533,6 +533,59 @@ export class TelegramSession {
     // path also backfills recent per-chat message history so opened threads show
     // real conversation, not just messages that arrive after connecting.
     void this.syncDialogs({ backfill: true })
+    // Delivery recovery: resend outbound messages that were written while this
+    // account was disconnected and never reached Telegram. Background, so going
+    // online isn't blocked by resends.
+    void this.recoverUndeliveredOutbound()
+  }
+
+  /**
+   * Post-reconnect delivery recovery. Managers keep typing while an account is
+   * down; those sends fail at the transport level and used to silently never
+   * arrive. This sweep finds outbound rows with no provider id that failed with
+   * the OFFLINE marker (or whose send job was lost), resends them in original
+   * order through the normal pacing throttle, and backfills provider ids /
+   * statuses — so the thread shows the truth: delivered after reconnect, or
+   * a failed tick with the real reason.
+   */
+  private async recoverUndeliveredOutbound(): Promise<void> {
+    try {
+      const pending = await repo.listRecoverableOutbound(
+        this.channelId,
+        OFFLINE_SEND_REASON,
+      )
+      if (pending.length === 0) return
+      logger.info(
+        { channelId: this.channelId, count: pending.length },
+        'TG delivery recovery: resending messages written while offline',
+      )
+      for (const msg of pending) {
+        if (!this.client) return // disconnected mid-sweep — next login retries
+        try {
+          const result = await this.sendMessage(msg.contactHandle, msg.body)
+          if (result.providerMessageId) {
+            await repo.setMessageProviderId(msg.id, result.providerMessageId)
+          }
+          await repo.setMessageStatus(msg.id, 'sent', null).catch(() => {})
+        } catch (err) {
+          // A real provider rejection now gets its true reason; a transport
+          // error keeps the OFFLINE marker so the NEXT reconnect retries it.
+          const reason = isConnectionSendFailure(err)
+            ? OFFLINE_SEND_REASON
+            : telegramSendFailureReason(err)
+          await repo.setMessageStatus(msg.id, 'failed', reason).catch(() => {})
+          logger.warn(
+            { channelId: this.channelId, messageId: msg.id, err },
+            'TG delivery recovery: resend failed',
+          )
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        { channelId: this.channelId, err },
+        'TG delivery recovery sweep failed (non-fatal)',
+      )
+    }
   }
 
   /** Import dialogs + optional history backfill (see telegram-history.ts). */

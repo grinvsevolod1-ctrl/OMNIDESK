@@ -1,5 +1,9 @@
 import { logger } from './logger.js'
 import { TelegramSession, telegramSendFailureReason } from './telegram.js'
+import {
+  isConnectionSendFailure,
+  OFFLINE_SEND_REASON,
+} from './telegram-errors.js'
 import * as repo from './repo.js'
 
 /**
@@ -112,10 +116,15 @@ class Registry {
         } catch (err) {
           // Surface the failure on the message row so the panel shows a failed
           // tick WITH a human-readable reason (flood wait, blocked, privacy…)
-          // instead of a silent "sent" that never arrived.
+          // instead of a silent "sent" that never arrived. Transport failures
+          // (session was down) get the stable OFFLINE_SEND_REASON marker so the
+          // post-reconnect recovery sweep knows this message is safe to resend.
           if (dbMessageId) {
+            const reason = isConnectionSendFailure(err)
+              ? OFFLINE_SEND_REASON
+              : telegramSendFailureReason(err)
             await repo
-              .setMessageStatus(dbMessageId, 'failed', telegramSendFailureReason(err))
+              .setMessageStatus(dbMessageId, 'failed', reason)
               .catch(() => {})
           }
           throw err

@@ -49,9 +49,14 @@ export default async function InboxPage() {
     console.error('inbox: AI settings unavailable:', err)
   }
 
-  // Personal accounts whose session is degraded/paused — surfaced as a banner in
-  // the inbox so the operator knows live sync may be affected for those sources,
-  // without having to open the Connections page.
+  // Personal accounts whose session is degraded — surfaced as a banner in the
+  // inbox. GRACE PERIOD: routine reconnects recover in seconds and were pure
+  // noise for managers, so an account only makes the banner after it has been
+  // degraded for 5+ minutes (per the session_status_changed_at trigger). When
+  // the timestamp is missing (migration not applied yet) we stay quiet rather
+  // than nag about what is almost certainly a transient blip.
+  const DEGRADED_GRACE_MS = 5 * 60_000
+  const now = Date.now()
   const degradedAccounts = channels
     .filter(
       (c) =>
@@ -59,7 +64,9 @@ export default async function InboxPage() {
         (c.sessionStatus === 'rate_limited' ||
           c.sessionStatus === 'error' ||
           c.sessionStatus === 'logged_out' ||
-          c.sessionStatus === 'offline'),
+          c.sessionStatus === 'offline') &&
+        c.sessionStatusChangedAt !== null &&
+        now - new Date(c.sessionStatusChangedAt).getTime() >= DEGRADED_GRACE_MS,
     )
     .map((c) => ({
       id: c.id,

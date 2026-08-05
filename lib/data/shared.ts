@@ -55,6 +55,7 @@ export interface ChannelRow {
   created_at: string | Date
   connected_at: string | Date | null
   last_checked_at: string | Date | null
+  session_status_changed_at: string | Date | null
 }
 
 export interface ConversationRow {
@@ -219,7 +220,7 @@ const MANAGER_COLUMN_NAMES = [
 const CHANNEL_COLUMN_NAMES = [
   'id', 'manager_id', 'type', 'name', 'detail', 'status', 'session_status',
   'ingest_paused', 'phone', 'proxy_id', 'last_error', 'config', 'created_at',
-  'connected_at', 'last_checked_at',
+  'connected_at', 'last_checked_at', 'session_status_changed_at',
 ] as const
 
 const CONVERSATION_COLUMN_NAMES = [
@@ -295,6 +296,9 @@ export function toChannel(r: ChannelRow): Channel {
       : null,
     lastCheckedAt: r.last_checked_at
       ? new Date(r.last_checked_at).toISOString()
+      : null,
+    sessionStatusChangedAt: r.session_status_changed_at
+      ? new Date(r.session_status_changed_at).toISOString()
       : null,
   }
 }

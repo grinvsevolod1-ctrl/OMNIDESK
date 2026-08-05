@@ -17,6 +17,36 @@ export function errMessage(e: unknown): string {
 }
 
 /**
+ * Stable error_reason recorded when a send failed ONLY because the account's
+ * session was down at that moment (not a real Telegram rejection). The exact
+ * string doubles as the marker the post-reconnect delivery-recovery sweep
+ * matches on to know which failed messages are safe to auto-resend.
+ */
+export const OFFLINE_SEND_REASON =
+  'Не доставлено: аккаунт был отключён. Сообщение будет отправлено автоматически после переподключения.'
+
+/**
+ * True when a send error means "the session/transport was down", i.e. the
+ * message never reached Telegram and re-sending it after reconnect cannot
+ * produce a duplicate. Real provider rejections (flood, blocked, privacy…)
+ * must NOT match — auto-retrying those would just repeat the same failure.
+ */
+export function isConnectionSendFailure(e: unknown): boolean {
+  const m = errMessage(e).toUpperCase()
+  return (
+    m.includes('SESSION NOT STARTED') ||
+    m.includes('DISCONNECT') || // "Cannot send requests while disconnected"
+    m.includes('NOT CONNECTED') ||
+    m.includes('CONNECTION CLOSED') ||
+    m.includes('TIMEDOUT') ||
+    m.includes('TIMEOUT') ||
+    m.includes('ECONNRESET') ||
+    m.includes('ECONNREFUSED') ||
+    m.includes('SOCKET')
+  )
+}
+
+/**
  * Map a raw Telegram/MTProto send error into a short, human-readable Russian
  * explanation for the panel (stored on messages.error_reason). Kept exhaustive
  * for the send failures a manager actually hits so the inbox "!" marker always
