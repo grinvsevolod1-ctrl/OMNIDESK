@@ -16,6 +16,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import type { useRouter } from 'next/navigation'
 import type { Message } from '@/lib/types'
 import type { PresenceState } from '@/components/manager/inbox/visual'
+import { notifyNewInboundMessage } from '@/lib/local-notify'
 
 /**
  * Shape of a parsed `/api/stream` SSE payload we care about on the client.
@@ -24,9 +25,13 @@ import type { PresenceState } from '@/components/manager/inbox/visual'
  */
 interface RealtimeStreamEvent {
   type?: 'message' | 'conversation' | 'channel' | 'typing'
-  event?: 'insert' | 'update'
+  event?: 'insert' | 'update' | 'resync'
   conversationId?: string
   id?: string
+  /** Message direction: 'in' = from the contact (triggers local notify). */
+  direction?: 'in' | 'out'
+  /** True on frames replayed via Last-Event-ID — never notify for those. */
+  replay?: boolean
   reactions?: Array<{ emoji: string; fromMe: boolean }> | null
   deletedAt?: string | null
   deletedOrigin?: 'self' | 'remote' | null
@@ -127,8 +132,22 @@ export function useInboxRealtime({
     }
     document.addEventListener('visibilitychange', handleVisibility)
     const es = new EventSource('/api/stream')
-    es.addEventListener('ready', () => setSyncState('live'))
-    es.onopen = () => setSyncState('live')
+    // Reconnect watchdog: EventSource auto-reconnects after a drop, and the
+    // server replays missed MESSAGE frames via Last-Event-ID — but
+    // conversation/channel events (new dialogs, unread counters, session
+    // status) are never replayed. So after any reconnect that followed an
+    // error, pull fresh server data once instead of trusting the gap was
+    // empty. This is what makes new dialogs appear without a manual F5.
+    let wasOffline = false
+    const backToLive = () => {
+      setSyncState('live')
+      if (wasOffline) {
+        wasOffline = false
+        scheduleRefresh()
+      }
+    }
+    es.addEventListener('ready', backToLive)
+    es.onopen = backToLive
     es.addEventListener('update', (e) => {
       setSyncState('live')
       let data: RealtimeStreamEvent | null = null
@@ -190,6 +209,18 @@ export function useInboxRealtime({
         })
         return
       }
+      // Local notification for a live NEW inbound message: short chime +
+      // flashing tab title (both no-ops when disabled / tab is focused).
+      // Replayed frames (gap recovery after reconnect) never notify — the
+      // manager would get a burst of stale chimes.
+      if (
+        data &&
+        data.type === 'message' &&
+        data.direction === 'in' &&
+        !data.replay
+      ) {
+        notifyNewInboundMessage()
+      }
       // Everything else (new inbound message, conversation/channel changes):
       // pull fresh server data (debounced to avoid a refresh storm).
       scheduleRefresh()
@@ -241,7 +272,10 @@ export function useInboxRealtime({
         [convId]: { state, at: Date.now() },
       }))
     })
-    es.onerror = () => setSyncState('offline')
+    es.onerror = () => {
+      wasOffline = true
+      setSyncState('offline')
+    }
     // Sweep stale typing indicators (in case a "stopped" ping is ever lost).
     const sweep = setInterval(() => {
       setTypingByConv((prev) => {

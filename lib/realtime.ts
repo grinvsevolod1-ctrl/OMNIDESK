@@ -18,7 +18,13 @@ import { query, resolveSslConfig } from './db'
  */
 
 export interface RealtimeEvent {
-  type: 'message' | 'conversation' | 'channel' | 'typing' | 'presence'
+  /**
+   * 'resync' is a synthetic event emitted by the hub itself (never by the DB)
+   * right after the LISTEN connection is re-established: any NOTIFY fired
+   * while the connection was down is lost forever, so subscribers must
+   * re-fetch their data instead of trusting the gap was empty.
+   */
+  type: 'message' | 'conversation' | 'channel' | 'typing' | 'presence' | 'resync'
   /**
    * For message events: 'insert' (new message) or 'update' (a message changed
    * in place — reaction toggled or soft-deleted). Absent for legacy/other
@@ -81,7 +87,25 @@ interface Hub {
   connecting: boolean
   reconnectTimer: ReturnType<typeof setTimeout> | null
   backoff: number
+  /** Active liveness probe for the LISTEN connection (see KEEPALIVE_MS). */
+  keepaliveTimer: ReturnType<typeof setInterval> | null
+  /**
+   * True once the hub has connected at least once: distinguishes the very
+   * first connect (nothing was missed — no resync needed) from a REconnect
+   * (the gap may have swallowed NOTIFYs — subscribers must re-fetch).
+   */
+  hasConnectedBefore: boolean
 }
+
+/**
+ * How often the LISTEN connection is pinged with `SELECT 1`. A silently dead
+ * TCP connection (NAT timeout, Postgres restart, network blip) does NOT
+ * reliably emit 'error' on the pg Client — without an active probe the hub
+ * keeps "listening" on a corpse: the SSE route still sends its own heartbeats,
+ * so the inbox looks live while receiving nothing until the process restarts.
+ * This is the exact failure mode already fixed in the worker's listener.
+ */
+const KEEPALIVE_MS = 30_000
 
 // Survive Next.js hot reloads / module duplication by stashing on globalThis.
 const globalForRealtime = globalThis as unknown as { __realtimeHub?: Hub }
@@ -94,6 +118,8 @@ function hub(): Hub {
       connecting: false,
       reconnectTimer: null,
       backoff: 1000,
+      keepaliveTimer: null,
+      hasConnectedBefore: false,
     }
   }
   return globalForRealtime.__realtimeHub
@@ -146,8 +172,12 @@ async function connect(h: Hub): Promise<void> {
   })
 
   client.on('error', () => {
-    teardown(h)
-    scheduleReconnect(h)
+    // A late 'error' from an already-replaced client must not kill the new
+    // connection: only tear down when this client is still the active one.
+    if (h.client === client) {
+      teardown(h)
+      scheduleReconnect(h)
+    }
   })
 
   try {
@@ -155,6 +185,35 @@ async function connect(h: Hub): Promise<void> {
     await client.query('LISTEN realtime')
     h.client = client
     h.backoff = 1000 // reset after a clean connect
+
+    // Active liveness probe: see KEEPALIVE_MS. A failed ping means the
+    // connection is dead even though no 'error' event ever fired — tear it
+    // down and reconnect instead of listening on a corpse.
+    h.keepaliveTimer = setInterval(() => {
+      client.query('SELECT 1').catch(() => {
+        if (h.client === client) {
+          teardown(h)
+          scheduleReconnect(h)
+        }
+      })
+    }, KEEPALIVE_MS)
+    h.keepaliveTimer.unref?.()
+
+    if (h.hasConnectedBefore) {
+      // REconnect: every NOTIFY fired during the outage is gone. Tell all
+      // subscribers to re-fetch — the SSE route forwards this to browsers,
+      // which refresh their conversation lists instead of silently missing
+      // the dialogs/messages that arrived during the gap.
+      const resync: RealtimeEvent = { type: 'resync' }
+      for (const sub of h.subscribers) {
+        try {
+          sub(resync)
+        } catch {
+          /* never let one bad subscriber break the fan-out */
+        }
+      }
+    }
+    h.hasConnectedBefore = true
   } catch {
     try {
       await client.end()
@@ -170,6 +229,10 @@ async function connect(h: Hub): Promise<void> {
 function teardown(h: Hub): void {
   const client = h.client
   h.client = null
+  if (h.keepaliveTimer) {
+    clearInterval(h.keepaliveTimer)
+    h.keepaliveTimer = null
+  }
   if (client) {
     client.removeAllListeners()
     client.end().catch(() => {})

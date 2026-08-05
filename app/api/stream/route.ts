@@ -111,6 +111,15 @@ export async function GET(request: Request): Promise<Response> {
       heartbeat = setInterval(() => safeEnqueue(`: ping\n\n`), 25_000)
 
       unsubscribe = subscribeRealtime((event: RealtimeEvent) => {
+        // Hub-level resync: the LISTEN connection dropped and reconnected, so
+        // NOTIFYs may have been lost for EVERY manager. It carries no
+        // managerId (it is not a DB event), so handle it before the scoping
+        // filter — reusing the same frame shape as the truncated-replay path,
+        // which the client already understands as "re-fetch everything".
+        if (event.type === 'resync') {
+          send('update', { type: 'conversation', managerId, event: 'resync' })
+          return
+        }
         // Only deliver events scoped to this manager.
         if (!event.managerId || event.managerId !== managerId) return
         // Ephemeral typing pings from the visitor: relayed on their own SSE

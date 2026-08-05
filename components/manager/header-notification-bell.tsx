@@ -1,23 +1,35 @@
 'use client'
 
+import { useState } from 'react'
 import { Bell, BellRing, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useNotifications } from '@/components/manager/notification-provider'
+import {
+  isSoundEnabled,
+  playNotificationSound,
+  setSoundEnabled,
+} from '@/lib/local-notify'
 
 /**
- * Compact notification status control that lives in the dashboard header
- * (next to the manager identity). Replaces the old floating bell that overlapped
- * the inbox composer's send button.
+ * Compact notification control in the dashboard header. A dropdown with the
+ * push-subscription action plus the in-tab sound toggle, so a manager can
+ * manage both kinds of notifications from one place.
  */
 export function HeaderNotificationBell() {
   const { ready, busy, loading, support, permission, enable } =
     useNotifications()
+  // Lazily read from localStorage on first render (client component).
+  const [sound, setSound] = useState<boolean>(() => isSoundEnabled())
 
   if (loading) {
     return (
@@ -29,24 +41,22 @@ export function HeaderNotificationBell() {
 
   const canEnable = support === 'ok' && permission !== 'denied'
 
-  const label = ready
-    ? 'Уведомления включены'
+  const pushLabel = ready
+    ? 'Push-уведомления включены'
     : canEnable
-      ? 'Включить уведомления'
-      : 'Уведомления недоступны'
+      ? 'Включить push-уведомления'
+      : permission === 'denied'
+        ? 'Push заблокирован в браузере'
+        : 'Push недоступен на этом устройстве'
 
   return (
-    <Tooltip>
-      <TooltipTrigger
+    <DropdownMenu>
+      <DropdownMenuTrigger
         render={
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={label}
-            disabled={busy || (!ready && !canEnable)}
-            onClick={() => {
-              if (!ready && canEnable) void enable()
-            }}
+            aria-label="Настройки уведомлений"
             className="relative"
           >
             {busy ? (
@@ -66,7 +76,37 @@ export function HeaderNotificationBell() {
           </Button>
         }
       />
-      <TooltipContent side="bottom">{label}</TooltipContent>
-    </Tooltip>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel>Уведомления</DropdownMenuLabel>
+        <DropdownMenuItem
+          disabled={busy || ready || !canEnable}
+          onClick={() => {
+            if (!ready && canEnable) void enable()
+          }}
+        >
+          <span
+            className={cn(
+              'size-2 shrink-0 rounded-full',
+              ready ? 'bg-emerald-500' : 'bg-amber-500',
+            )}
+            aria-hidden="true"
+          />
+          {pushLabel}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem
+          checked={sound}
+          onCheckedChange={(checked) => {
+            const next = Boolean(checked)
+            setSound(next)
+            setSoundEnabled(next)
+            // Instant feedback so the manager hears what they just enabled.
+            if (next) playNotificationSound()
+          }}
+        >
+          Звук при новом сообщении
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
