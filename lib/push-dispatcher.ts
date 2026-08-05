@@ -156,9 +156,16 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
 export function startPushDispatcher(): void {
   if (globalForDispatcher.__pushDispatcherStarted) return
   if (!isPushConfigured()) {
-    // No VAPID keys yet — nothing to dispatch. We don't subscribe so we don't
-    // hold the realtime hub open for no reason; once keys are added and the
-    // server restarts, this will run.
+    // No VAPID keys — nothing to dispatch. This is THE most common reason
+    // pushes "silently stop" after a server move/redeploy, so say it loudly
+    // in the boot log instead of failing invisibly: without the warning the
+    // only symptom is managers not getting pushes, with no error anywhere.
+    console.warn(
+      '[push] Dispatcher NOT started: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY are missing. ' +
+        'Web Push to managers is disabled. Generate keys with ' +
+        `node -e "console.log(require('web-push').generateVAPIDKeys())" ` +
+        'and set them in the environment, then restart the panel.',
+    )
     return
   }
   globalForDispatcher.__pushDispatcherStarted = true
@@ -167,4 +174,7 @@ export function startPushDispatcher(): void {
       /* never let a notification error crash the realtime hub */
     })
   })
+  console.log(
+    '[push] Dispatcher started: VAPID configured, listening for inbound messages.',
+  )
 }

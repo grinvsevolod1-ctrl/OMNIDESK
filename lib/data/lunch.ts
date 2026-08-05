@@ -3,13 +3,19 @@
  * lunch substitution routing.
  * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
  */
-import { query } from '../db'
+import { query, withTransaction } from '../db'
 import { nextRoundRobinIndex } from './shared'
 
 /* --------------------------- Lunch / availability -------------------------- */
 
 /** Named round-robin counter used to spread substituted conversations. */
 const LUNCH_RR_COUNTER = 'lunch_substitute'
+
+/**
+ * Advisory-lock key serializing all "go on lunch" attempts. Arbitrary but
+ * stable app-wide constant (never reused for another lock).
+ */
+const LUNCH_LOCK_KEY = 48_291_034
 
 /** Set/clear the calling manager's "on lunch" availability flag. */
 export async function setManagerOnLunch(
@@ -20,6 +26,41 @@ export async function setManagerOnLunch(
     managerId,
     onLunch,
   ])
+}
+
+/**
+ * Atomically try to put a manager on lunch, guaranteeing at least one active
+ * manager always stays available.
+ *
+ * The old flow was check-then-set in two separate queries with no locking — a
+ * textbook TOCTOU race. Lunch is exactly the worst case for it: everyone
+ * presses the button at the same minute, every request sees the OTHERS as
+ * still available, all pass the check, and the whole team walks out at once.
+ *
+ * Fix: one transaction holding a Postgres advisory lock, so concurrent
+ * attempts run strictly one-by-one — the last available manager is always
+ * caught, no matter how simultaneous the clicks are. Fails CLOSED: if the
+ * availability check errors we refuse the lunch (never strand the line
+ * unmanned); going OFF lunch stays unguarded via setManagerOnLunch.
+ *
+ * Returns true when the manager is now on lunch, false when they are the last
+ * one available and must stay.
+ */
+export async function tryGoOnLunch(managerId: string): Promise<boolean> {
+  return withTransaction(async (db) => {
+    // Serialize all go-on-lunch attempts (auto-released at COMMIT/ROLLBACK).
+    await db.query('SELECT pg_advisory_xact_lock($1)', [LUNCH_LOCK_KEY])
+    const rows = await db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM managers
+        WHERE status = 'active' AND on_lunch = false AND id <> $1::uuid`,
+      [managerId],
+    )
+    if (Number(rows[0]?.n ?? 0) < 1) return false
+    await db.query('UPDATE managers SET on_lunch = true WHERE id = $1', [
+      managerId,
+    ])
+    return true
+  })
 }
 
 /**

@@ -9,7 +9,6 @@ import {
 } from '@/lib/auth'
 import {
   addMessage,
-  countAvailableManagers,
   enqueueJob,
   getConversation,
   getManagerAuthState,
@@ -21,6 +20,7 @@ import {
   markMessageFailed,
   setManagerOnLunch,
   setMessageProviderId,
+  tryGoOnLunch,
   updateManagerPassword,
 } from '@/lib/data'
 import { deliverMaxMessage } from '@/lib/max-dispatch'
@@ -56,11 +56,26 @@ export async function setLunchAction(
 ): Promise<{ ok: boolean; onLunch: boolean; message: string }> {
   const session = await requireManager()
 
-  // Guard: at least one manager must always stay online. If this manager is the
-  // last available one (active and not already on lunch), block going on lunch.
   if (onLunch) {
-    const available = await countAvailableManagers()
-    if (available <= 1) {
+    // Atomic guard: check-and-set runs in ONE transaction under an advisory
+    // lock (tryGoOnLunch), so simultaneous clicks are serialized and the last
+    // available manager is always blocked. The previous two-query version
+    // raced: everyone pressing "lunch" at the same minute passed the check
+    // together and the whole team could walk out at once.
+    let allowed: boolean
+    try {
+      allowed = await tryGoOnLunch(session.sub)
+    } catch (err) {
+      // Fail CLOSED for going on lunch: if we can't verify availability,
+      // don't risk leaving the line unmanned.
+      console.error('[panel] setLunchAction (go on lunch) failed:', err)
+      return {
+        ok: false,
+        onLunch: false,
+        message: 'Не удалось обновить статус.',
+      }
+    }
+    if (!allowed) {
       return {
         ok: false,
         onLunch: false,
@@ -68,16 +83,17 @@ export async function setLunchAction(
           'Вы сейчас единственный менеджер на линии. Дождитесь, пока вернётся кто-то ещё, прежде чем уходить на обед.',
       }
     }
-  }
-
-  try {
-    await setManagerOnLunch(session.sub, onLunch)
-  } catch (err) {
-    console.error('[panel] setLunchAction failed:', err)
-    return {
-      ok: false,
-      onLunch: !onLunch,
-      message: 'Не удалось обновить статус.',
+  } else {
+    // Coming BACK from lunch is always allowed — never trap a manager away.
+    try {
+      await setManagerOnLunch(session.sub, false)
+    } catch (err) {
+      console.error('[panel] setLunchAction (return) failed:', err)
+      return {
+        ok: false,
+        onLunch: true,
+        message: 'Не удалось обновить статус.',
+      }
     }
   }
   // The inbox lists conversations for this manager; refresh after a change.
@@ -648,7 +664,7 @@ export async function sendStickerAction(
 ): Promise<SimpleResult> {
   const session = await requireManager()
   if (!sticker || !sticker.id || !sticker.accessHash || !sticker.fileReference) {
-    return { ok: false, message: 'Некорректный стикер.' }
+    return { ok: false, message: 'Некорректный стике��.' }
   }
 
   const conv = await getConversation(conversationId, session.sub)
