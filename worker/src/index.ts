@@ -41,10 +41,18 @@ const FALLBACK_DRAIN_MS = 45_000
  */
 const STUCK_JOB_SWEEP_MINUTES = 15
 
+/**
+ * How often finished channel jobs are purged. Voice-note jobs carry the full
+ * audio as base64 in their payload (~0.4 MB each), so without retention the
+ * table grows into gigabytes. Runs daily; keeps the last 7 days.
+ */
+const JOBS_RETENTION_SWEEP_MS = 24 * 60 * 60 * 1000
+
 let noResponseTimer: NodeJS.Timeout | null = null
 let hostingHealthTimer: NodeJS.Timeout | null = null
 let revivalTimer: NodeJS.Timeout | null = null
 let fallbackDrainTimer: NodeJS.Timeout | null = null
+let jobsRetentionTimer: NodeJS.Timeout | null = null
 
 async function main(): Promise<void> {
   logger.info('Omnidesk worker starting')
@@ -91,6 +99,21 @@ async function main(): Promise<void> {
       .catch((err) => logger.error({ err }, 'stale job sweep failed'))
   }, FALLBACK_DRAIN_MS)
   fallbackDrainTimer.unref?.()
+
+  // 3a'. Retention: purge finished jobs (done/error > 7 days). Run once at
+  //      startup too so long-lived deployments that predate this sweep shrink
+  //      immediately instead of waiting a day.
+  const purgeJobs = (): void => {
+    repo
+      .purgeFinishedChannelJobs()
+      .then((n) => {
+        if (n > 0) logger.info({ purged: n }, 'purged finished channel jobs')
+      })
+      .catch((err) => logger.error({ err }, 'channel jobs retention failed'))
+  }
+  purgeJobs()
+  jobsRetentionTimer = setInterval(purgeJobs, JOBS_RETENTION_SWEEP_MS)
+  jobsRetentionTimer.unref?.()
 
   // 3b. App Hosting ("Серверы"): consume deploy_jobs the same way — react to new
   //     jobs via NOTIFY, then drain anything queued while we were down.
@@ -152,6 +175,7 @@ async function shutdown(signal: string): Promise<void> {
     if (hostingHealthTimer) clearInterval(hostingHealthTimer)
     if (revivalTimer) clearInterval(revivalTimer)
     if (fallbackDrainTimer) clearInterval(fallbackDrainTimer)
+    if (jobsRetentionTimer) clearInterval(jobsRetentionTimer)
     await registry.shutdownAll()
     await pool.end()
   } finally {
