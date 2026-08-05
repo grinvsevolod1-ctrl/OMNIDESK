@@ -32,6 +32,7 @@ import {
   listStickers,
   downloadStickerById,
   sendStickerTo,
+  sendVoiceTo,
   type StickerDescriptor,
 } from './telegram-media-io.js'
 
@@ -795,13 +796,15 @@ export class TelegramSession {
   /**
    * Send an outgoing message to a stored handle (@username or numeric peer id).
    * When `replyToMsgId` is given the message is sent as a Telegram reply to that
-   * message. Returns the new Telegram message id so the caller can persist it
-   * (needed to later delete / forward / react to our own message).
+   * message. When `scheduleAt` (unix seconds) is given, Telegram schedules the
+   * send SERVER-SIDE (messages.sendMessage schedule_date) — it delivers at that
+   * time even if the worker is down. Returns the new Telegram message id so the
+   * caller can persist it (needed to later delete / forward / react to it).
    */
   async sendMessage(
     target: string,
     body: string,
-    opts?: { replyToMsgId?: number },
+    opts?: { replyToMsgId?: number; scheduleAt?: number },
   ): Promise<{ providerMessageId: string | null }> {
     if (!this.client) throw new Error('Session not started')
     await this.throttleSend()
@@ -809,6 +812,7 @@ export class TelegramSession {
     const sent = await this.client.sendMessage(entity, {
       message: body,
       ...(opts?.replyToMsgId ? { replyTo: opts.replyToMsgId } : {}),
+      ...(opts?.scheduleAt ? { schedule: opts.scheduleAt } : {}),
     })
     return { providerMessageId: sent?.id != null ? String(sent.id) : null }
   }
@@ -1041,6 +1045,17 @@ export class TelegramSession {
     sticker: { id: string; accessHash: string; fileReference: string },
   ): Promise<void> {
     return sendStickerTo(this.ctx, target, sticker)
+  }
+
+  /**
+   * Send a voice note recorded in the panel composer. Telegram renders it as a
+   * native voice bubble (waveform + duration), not a file attachment.
+   */
+  async sendVoice(
+    target: string,
+    audio: { buffer: Buffer; durationSec: number },
+  ): Promise<{ providerMessageId: string | null }> {
+    return sendVoiceTo(this.ctx, target, audio)
   }
 
   async stop(): Promise<void> {

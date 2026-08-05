@@ -114,6 +114,11 @@ class Registry {
         const replyToMsgId = payload.replyToProviderId
           ? Number(payload.replyToProviderId)
           : undefined
+        // Optional server-side scheduling (unix seconds): Telegram delivers at
+        // that time on its own — no worker timer involved.
+        const scheduleAt = payload.scheduleAt
+          ? Number(payload.scheduleAt)
+          : undefined
         const dbMessageId = payload.messageId
           ? String(payload.messageId)
           : null
@@ -121,7 +126,9 @@ class Registry {
           const result = await session.sendMessage(
             target,
             body,
-            replyToMsgId ? { replyToMsgId } : undefined,
+            replyToMsgId || scheduleAt
+              ? { replyToMsgId, scheduleAt }
+              : undefined,
           )
           // Backfill the provider/Telegram message id onto the panel's optimistic
           // outbound row so it can later be deleted / forwarded / reacted to AND
@@ -139,6 +146,46 @@ class Registry {
           // instead of a silent "sent" that never arrived. Transport failures
           // (session was down) get the stable OFFLINE_SEND_REASON marker so the
           // post-reconnect recovery sweep knows this message is safe to resend.
+          if (dbMessageId) {
+            const reason = isConnectionSendFailure(err)
+              ? OFFLINE_SEND_REASON
+              : telegramSendFailureReason(err)
+            await repo
+              .setMessageStatus(dbMessageId, 'failed', reason)
+              .catch(() => {})
+          }
+          throw err
+        }
+      }
+      case 'send_voice': {
+        // Voice note recorded in the panel composer. The audio arrives as
+        // base64 in the payload (small: capped panel-side at ~1 MB /
+        // ~60s of opus) and is delivered as a native Telegram voice bubble.
+        const target = String(payload.target ?? '')
+        const audioB64 = String(payload.audio ?? '')
+        const durationSec = Number(payload.durationSec ?? 0)
+        const dbMessageId = payload.messageId
+          ? String(payload.messageId)
+          : null
+        if (!target || !audioB64) {
+          throw new Error('send_voice requires target and audio')
+        }
+        try {
+          const result = await session.sendVoice(target, {
+            buffer: Buffer.from(audioB64, 'base64'),
+            durationSec,
+          })
+          if (dbMessageId && result?.providerMessageId) {
+            await repo.setMessageProviderId(
+              dbMessageId,
+              result.providerMessageId,
+            )
+          }
+          return { sent: true }
+        } catch (err) {
+          // Same failure surfacing as text sends — the panel shows a failed
+          // tick with a human-readable reason. Voice notes are intentionally
+          // NOT auto-resent by the delivery-recovery sweep (media excluded).
           if (dbMessageId) {
             const reason = isConnectionSendFailure(err)
               ? OFFLINE_SEND_REASON

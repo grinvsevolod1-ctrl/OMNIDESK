@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EmojiPicker, StickerPicker } from '@/components/manager/inbox/pickers'
+import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
 import { TelemostIcon } from '@/components/channel-icons'
 import { cn } from '@/lib/utils'
 import type { ChannelType, QuickReply, StickerItem } from '@/lib/types'
@@ -42,6 +43,14 @@ export interface MessageComposerProps {
   onSend: (text: string) => void
   onSendSticker: (sticker: StickerItem) => void
   onSendMediaFile: (file: File, caption: string) => void
+  /** Send a recorded voice note (Telegram only). */
+  onSendVoice: (audio: {
+    base64: string
+    mime: string
+    durationSec: number
+  }) => void
+  /** Surface a recorder error (mic denied, unsupported browser) to the user. */
+  onVoiceError: (message: string) => void
   aiLed: boolean
   /** Fired when the manager tries to type/send while the AI leads the thread. */
   onBlockedInteract: () => void
@@ -81,6 +90,8 @@ export const MessageComposer = memo(function MessageComposer({
   onSend,
   onSendSticker,
   onSendMediaFile,
+  onSendVoice,
+  onVoiceError,
   aiLed,
   onBlockedInteract,
   onToggleAi,
@@ -282,7 +293,14 @@ export const MessageComposer = memo(function MessageComposer({
           }}
         />
         {channelType === 'telegram' ? (
-          <StickerPicker channelId={channelId} onSend={onSendSticker} />
+          <>
+            <StickerPicker channelId={channelId} onSend={onSendSticker} />
+            <VoiceRecorder
+              disabled={pending || aiLed}
+              onSend={onSendVoice}
+              onError={onVoiceError}
+            />
+          </>
         ) : null}
         {channelType === 'whatsapp' || channelType === 'vk' ? (
           <>

@@ -6,6 +6,7 @@ import {
   sendMessageAction,
   sendStickerAction,
   sendVkMediaAction,
+  sendVoiceAction,
   sendWhatsappMediaAction,
 } from '@/app/actions/account'
 import {
@@ -220,6 +221,40 @@ export function useMessageActions({
     })
   }
 
+  /** Send a voice note recorded in the composer (Telegram only). Optimistic:
+   *  a 'voice' bubble appears immediately; a rejected send flags it failed. */
+  function sendVoice(audio: {
+    base64: string
+    mime: string
+    durationSec: number
+  }) {
+    if (!activeId) return
+    if (activeAiLed) {
+      pulseAiButton()
+      toast.error('ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.')
+      return
+    }
+    const optimistic: Message = {
+      id: `tmp_${Date.now()}`,
+      conversationId: activeId,
+      direction: 'out',
+      body: '[Голосовое сообщение]',
+      author: currentUser,
+      createdAt: new Date().toISOString(),
+      status: 'sent',
+      mediaType: 'voice',
+      mediaMime: audio.mime,
+    }
+    setLocalMessages((prev) => ({
+      ...prev,
+      [activeId]: [...(prev[activeId] ?? []), optimistic],
+    }))
+    startTransition(async () => {
+      const res = await sendVoiceAction(activeId, audio)
+      if (!res.ok) toast.error(res.message)
+    })
+  }
+
   // Attach + send a file on a WhatsApp or VK conversation. The bytes are
   // uploaded provider-side (through the account's proxy); on success the realtime
   // insert (or refresh) shows the new message with its media bubble.
@@ -274,6 +309,7 @@ export function useMessageActions({
     forwardMessage,
     copyMessageText,
     sendSticker,
+    sendVoice,
     handleSendMediaFile,
   }
 }

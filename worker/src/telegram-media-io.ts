@@ -1,4 +1,5 @@
 import { TelegramClient, Api } from 'telegram'
+import { CustomFile } from 'telegram/client/uploads.js'
 import { returnBigInt } from 'telegram/Helpers.js'
 import { logger } from './logger.js'
 import * as repo from './repo.js'
@@ -160,6 +161,36 @@ export async function downloadStickerById(
     | undefined
   if (!buf || buf.length === 0) return null
   return { buffer: Buffer.from(buf), mime: 'image/webp' }
+}
+
+/**
+ * Send a voice note recorded in the panel composer. The buffer is OGG/Opus
+ * (MediaRecorder output transcoded panel-side or raw when the browser already
+ * records opus). `voiceNote: true` makes Telegram render it as a proper voice
+ * bubble with waveform, not a file attachment. Shares the per-account send
+ * throttle. Returns the provider message id for read-receipt tracking.
+ */
+export async function sendVoiceTo(
+  ctx: TgSessionCtx,
+  target: string,
+  audio: { buffer: Buffer; durationSec: number },
+): Promise<{ providerMessageId: string | null }> {
+  const client = ctx.getClient()
+  if (!client) throw new Error('Session not started')
+  await ctx.throttleSend()
+  const entity = await ctx.resolveTarget(target)
+  const file = new CustomFile('voice.ogg', audio.buffer.byteLength, '', audio.buffer)
+  const sent = await client.sendFile(entity, {
+    file,
+    voiceNote: true,
+    attributes: [
+      new Api.DocumentAttributeAudio({
+        voice: true,
+        duration: Math.max(1, Math.round(audio.durationSec)),
+      }),
+    ],
+  })
+  return { providerMessageId: sent?.id != null ? String(sent.id) : null }
 }
 
 /**

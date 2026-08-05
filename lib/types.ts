@@ -148,6 +148,8 @@ export type JobAction =
   | 'send_message'
   // Send a sticker (Telegram only) by its document descriptor.
   | 'send_sticker'
+  // Send a voice note recorded in the panel composer (payload: base64 audio).
+  | 'send_voice'
   // Telegram-only message actions: react with an emoji, delete (revoke),
   // edit the text of an already-sent message, and forward to another chat.
   | 'react_message'
@@ -234,7 +236,7 @@ export const LEAD_STATUS_META: Record<
   },
   handoff: {
     label: 'Передан человеку',
-    description: 'ИИ передал диалог менеджеру или менеджер вступил сам',
+    description: 'ИИ передал диалог менедж��ру или менеджер вступил сам',
   },
   liquid: {
     label: 'Ликвид',
