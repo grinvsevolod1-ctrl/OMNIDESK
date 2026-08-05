@@ -12,6 +12,7 @@ import {
   classifyError,
   errMessage,
   extractErrorCode,
+  extractFloodWaitSeconds,
   isConnectionSendFailure,
   OFFLINE_SEND_REASON,
   telegramSendFailureReason,
@@ -82,6 +83,13 @@ export class TelegramSession {
   /** Timestamp of the last outgoing send, for per-account rate limiting. */
   private lastSentAt = 0
   /**
+   * Deadline (epoch ms) until which ALL sends are refused after a significant
+   * FLOOD_WAIT. Every send attempted during an active flood window extends the
+   * ban server-side — so once Telegram says "wait N seconds", the whole
+   * channel cools down instead of letting the next queued message re-trip it.
+   */
+  private floodCooldownUntil = 0
+  /**
    * Soft pause. When true the client stays connected (account alive) but inbound
    * messages and dialog history are NOT written to the inbox. Set via
    * pause/resume jobs and restored from the channel record on (re)start.
@@ -110,6 +118,8 @@ export class TelegramSession {
   private qrTimer: ReturnType<typeof setTimeout> | null = null
   /** Guards against concurrent finalize attempts (update + poll racing). */
   private qrFinalizing = false
+  /** The UpdateLoginToken listener, kept so clearQr can detach it. */
+  private qrUpdateHandler: ((update: Api.TypeUpdate) => void) | null = null
   /**
    * The narrow view of this session the split-out feature modules operate on.
    * Accessors re-read live state so a disconnect or pause mid-sweep is seen at
@@ -198,6 +208,13 @@ export class TelegramSession {
       env.telegramApiHash,
       {
         connectionRetries: 5,
+        // Pace reconnect attempts: GramJS's default retry delay hammers the
+        // DC (and the proxy) back-to-back, which both slows recovery and
+        // looks bot-like. 3s between attempts is what official clients use.
+        retryDelay: 3_000,
+        // Retry transient RPC failures once instead of surfacing every blip
+        // as a failed job; anything persistent still fails fast.
+        requestRetries: 2,
         deviceModel: env.deviceModel,
         systemVersion: env.systemVersion,
         appVersion: env.appVersion,
@@ -425,12 +442,15 @@ export class TelegramSession {
     }
 
     // A scan shows up as UpdateLoginToken — finalize immediately instead of
-    // waiting for the next refresh tick.
-    this.client.addEventHandler((update: Api.TypeUpdate) => {
+    // waiting for the next refresh tick. Kept as a named callback so clearQr
+    // can detach it after login: otherwise every QR attempt leaves a dead
+    // handler running on the client for the session's whole lifetime.
+    this.qrUpdateHandler = (update: Api.TypeUpdate) => {
       if (update instanceof Api.UpdateLoginToken) {
         void this.finalizeQr()
       }
-    })
+    }
+    this.client.addEventHandler(this.qrUpdateHandler)
 
     const status = await this.exportQrToken()
     if (status !== 'qr_pending') return { sessionStatus: status }
@@ -515,7 +535,15 @@ export class TelegramSession {
     try {
       if (res instanceof Api.auth.LoginTokenMigrateTo) {
         // The account lives on another DC: reconnect there and import the token.
+        // _switchDC is a private GramJS API (no public equivalent exists for
+        // this flow) — verify it's still there so a library upgrade degrades
+        // into a clear error instead of a TypeError mid-login.
         log.info({ stage: 'qr:migrate', dcId: res.dcId }, 'TG QR login: migrating to home DC')
+        if (typeof this.client._switchDC !== 'function') {
+          throw new Error(
+            'GramJS _switchDC is unavailable (library upgrade?) — QR login cannot migrate DC',
+          )
+        }
         await this.client._switchDC(res.dcId)
         const imported = await this.client.invoke(
           new Api.auth.ImportLoginToken({ token: res.token }),
@@ -542,12 +570,22 @@ export class TelegramSession {
     }
   }
 
-  /** Drop the in-memory QR and its refresh timer. */
+  /** Drop the in-memory QR, its refresh timer and the login-token listener. */
   private clearQr(): void {
     this.qrLogin = null
     if (this.qrTimer) {
       clearTimeout(this.qrTimer)
       this.qrTimer = null
+    }
+    if (this.qrUpdateHandler) {
+      // Detach the scan listener — after login it would sit on the client for
+      // the whole session lifetime, running on every incoming update.
+      try {
+        this.client?.removeEventHandler(this.qrUpdateHandler, undefined as never)
+      } catch {
+        /* best-effort */
+      }
+      this.qrUpdateHandler = null
     }
   }
 
@@ -712,10 +750,17 @@ export class TelegramSession {
     // going "online" isn't blocked by the account.getAuthorizations round-trip.
     void this.enforceExclusiveSessions()
     this.startExclusiveTimer()
+    // Gap recovery note: GramJS's client.catchUp() is an unimplemented stub
+    // (function body is literally `// TODO`), so updates.getDifference cannot
+    // be leaned on here. The offline gap is instead recovered by the dialog
+    // sync below: per-chat watermarks (scripts/105) make it fetch ONLY the
+    // messages missed while offline, not the whole history.
     // Import existing chats so the inbox isn't empty after connecting. Runs in
     // the background so going "online" isn't blocked by the history fetch. This
     // path also backfills recent per-chat message history so opened threads show
-    // real conversation, not just messages that arrive after connecting.
+    // real conversation, not just messages that arrive after connecting. With
+    // per-chat watermarks (scripts/105) a reconnect only fetches the offline
+    // delta, not the whole history again.
     void this.syncDialogs({ backfill: true })
     // Delivery recovery: resend outbound messages that were written while this
     // account was disconnected and never reached Telegram. Background, so going
@@ -743,9 +788,44 @@ export class TelegramSession {
         { channelId: this.channelId, count: pending.length },
         'TG delivery recovery: resending messages written while offline',
       )
+      // Duplicate guard: a send that failed with "TIMEOUT" may still have
+      // reached Telegram (the server can accept the RPC after the socket
+      // died), so blindly resending would deliver the message TWICE. Before
+      // resending, check the chat's recent outbound messages: if a message
+      // with identical text already exists there, backfill its id and mark it
+      // sent instead of sending again. One fetch per contact, cached.
+      const recentOutByHandle = new Map<string, Map<string, string>>()
+      const recentOutbound = async (
+        handle: string,
+      ): Promise<Map<string, string>> => {
+        const cached = recentOutByHandle.get(handle)
+        if (cached) return cached
+        const byBody = new Map<string, string>()
+        try {
+          const entity = await this.resolveTarget(handle)
+          const recent = await this.client?.getMessages(entity, { limit: 20 })
+          for (const m of recent ?? []) {
+            if (m?.out && m.message) byBody.set(m.message, String(m.id))
+          }
+        } catch {
+          /* best-effort: on failure we fall back to a normal resend */
+        }
+        recentOutByHandle.set(handle, byBody)
+        return byBody
+      }
+
       for (const msg of pending) {
         if (!this.client) return // disconnected mid-sweep — next login retries
         try {
+          const already = (await recentOutbound(msg.contactHandle)).get(
+            msg.body,
+          )
+          if (already) {
+            // It DID arrive before the disconnect — record the truth, no dupe.
+            await repo.setMessageProviderId(msg.id, already).catch(() => {})
+            await repo.setMessageStatus(msg.id, 'sent', null).catch(() => {})
+            continue
+          }
           const result = await this.sendMessage(msg.contactHandle, msg.body)
           if (result.providerMessageId) {
             await repo.setMessageProviderId(msg.id, result.providerMessageId)
@@ -781,16 +861,62 @@ export class TelegramSession {
    * Per-account send pacing: keep a minimum, slightly random spacing between
    * sends so the account never bursts at machine speed. Shared by text sends
    * and stickers.
+   *
+   * Atomic via a promise chain: queued sends and direct callers (autopilot
+   * replies bypass the job queue) can hit this concurrently, and the previous
+   * read-sleep-write version let both read the same lastSentAt and pass
+   * together — a two-message burst, exactly what the throttle exists to
+   * prevent. Chaining serializes the gap computation itself.
    */
-  private async throttleSend(): Promise<void> {
-    const now = Date.now()
-    const since = now - this.lastSentAt
-    const minGap =
-      TG_SEND_MIN_INTERVAL_MS + Math.floor(Math.random() * TG_SEND_JITTER_MS)
-    if (since < minGap) {
-      await new Promise((r) => setTimeout(r, minGap - since))
-    }
-    this.lastSentAt = Date.now()
+  private throttleTail: Promise<void> = Promise.resolve()
+
+  private throttleSend(): Promise<void> {
+    const next = this.throttleTail.then(async () => {
+      // Flood gate first: while a FLOOD_WAIT window is active every further
+      // attempt would extend the ban, so refuse outright. The error text keeps
+      // the FLOOD_WAIT_<secs> shape so telegramSendFailureReason renders the
+      // proper human explanation on the failed message row.
+      const coolMs = this.floodCooldownUntil - Date.now()
+      if (coolMs > 0) {
+        throw new Error(`FLOOD_WAIT_${Math.ceil(coolMs / 1000)} (local cooldown)`)
+      }
+      const since = Date.now() - this.lastSentAt
+      const minGap =
+        TG_SEND_MIN_INTERVAL_MS + Math.floor(Math.random() * TG_SEND_JITTER_MS)
+      if (since < minGap) {
+        await new Promise((r) => setTimeout(r, minGap - since))
+      }
+      this.lastSentAt = Date.now()
+    })
+    // Keep the chain alive even if a caller's continuation throws later.
+    this.throttleTail = next.catch(() => {})
+    return next
+  }
+
+  /**
+   * Inspect a send failure and, when Telegram answered FLOOD_WAIT with a
+   * meaningful duration, put the whole channel into cooldown: sends are gated
+   * locally (see throttleSend) and the panel shows `rate_limited` until the
+   * window passes, when the status flips back to online automatically.
+   * Short waits (< 30s) are left to the normal per-send pacing.
+   */
+  private tripFloodCooldown(err: unknown): void {
+    const secs = extractFloodWaitSeconds(err)
+    if (!secs || secs < 30) return
+    this.floodCooldownUntil = Date.now() + secs * 1000
+    logger.warn(
+      { channelId: this.channelId, floodWaitSecs: secs },
+      'channel entering flood cooldown',
+    )
+    void repo.setSession(this.channelId, 'rate_limited').catch(() => {})
+    const timer = setTimeout(() => {
+      // Only restore if nothing else changed the state meanwhile and the
+      // client is still alive (a stop/logout must not be overwritten).
+      if (this.client && Date.now() >= this.floodCooldownUntil) {
+        void repo.setSession(this.channelId, 'online').catch(() => {})
+      }
+    }, secs * 1000)
+    timer.unref?.()
   }
 
   /**
@@ -808,13 +934,18 @@ export class TelegramSession {
   ): Promise<{ providerMessageId: string | null }> {
     if (!this.client) throw new Error('Session not started')
     await this.throttleSend()
-    const entity = await this.resolveTarget(target)
-    const sent = await this.client.sendMessage(entity, {
-      message: body,
-      ...(opts?.replyToMsgId ? { replyTo: opts.replyToMsgId } : {}),
-      ...(opts?.scheduleAt ? { schedule: opts.scheduleAt } : {}),
-    })
-    return { providerMessageId: sent?.id != null ? String(sent.id) : null }
+    try {
+      const entity = await this.resolveTarget(target)
+      const sent = await this.client.sendMessage(entity, {
+        message: body,
+        ...(opts?.replyToMsgId ? { replyTo: opts.replyToMsgId } : {}),
+        ...(opts?.scheduleAt ? { schedule: opts.scheduleAt } : {}),
+      })
+      return { providerMessageId: sent?.id != null ? String(sent.id) : null }
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
   }
 
   /**
@@ -1044,7 +1175,12 @@ export class TelegramSession {
     target: string,
     sticker: { id: string; accessHash: string; fileReference: string },
   ): Promise<void> {
-    return sendStickerTo(this.ctx, target, sticker)
+    try {
+      return await sendStickerTo(this.ctx, target, sticker)
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
   }
 
   /**
@@ -1055,7 +1191,12 @@ export class TelegramSession {
     target: string,
     audio: { buffer: Buffer; durationSec: number },
   ): Promise<{ providerMessageId: string | null }> {
-    return sendVoiceTo(this.ctx, target, audio)
+    try {
+      return await sendVoiceTo(this.ctx, target, audio)
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
   }
 
   async stop(): Promise<void> {

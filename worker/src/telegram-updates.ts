@@ -170,13 +170,19 @@ export function attachTelegramHandlers(ctx: TgSessionCtx): void {
         deletedIds = update.messages
       }
       if (deletedIds && deletedIds.length) {
-        for (const mid of deletedIds) {
-          await repo
-            .markInboundDeletedByProviderId(ctx.channelId, String(mid))
-            .catch((err) =>
-              logger.warn({ err, mid }, 'telegram mark-deleted failed'),
-            )
-        }
+        // Single batched UPDATE: a "clear chat" revokes hundreds of ids at
+        // once — a query per id would hammer the pool for no reason.
+        await repo
+          .markInboundDeletedByProviderIds(
+            ctx.channelId,
+            deletedIds.map((mid) => String(mid)),
+          )
+          .catch((err) =>
+            logger.warn(
+              { err, count: deletedIds.length },
+              'telegram mark-deleted failed',
+            ),
+          )
       }
 
       // Edits: the contact (or we, from a linked device) edited a message.

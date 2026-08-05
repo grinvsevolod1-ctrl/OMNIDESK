@@ -149,6 +149,23 @@ export async function recoverStuckChannelJobs(
   return rows.length
 }
 
+/**
+ * Retention: purge finished jobs older than the window. Without this the
+ * table grows forever — and voice-note jobs carry the FULL audio as base64 in
+ * their payload (~0.4 MB each), so "forever" gets expensive fast. 7 days keeps
+ * plenty of debugging history.
+ */
+export async function purgeFinishedChannelJobs(days = 7): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `DELETE FROM channel_jobs
+      WHERE status IN ('done', 'error')
+        AND updated_at < now() - make_interval(days => $1)
+      RETURNING id`,
+    [days],
+  )
+  return rows.length
+}
+
 export async function finishJob(
   jobId: string,
   ok: boolean,
@@ -1072,16 +1089,29 @@ export async function markInboundDeletedByProviderId(
   channelId: string,
   providerMessageId: string,
 ): Promise<string[]> {
+  return markInboundDeletedByProviderIds(channelId, [providerMessageId])
+}
+
+/**
+ * Batch variant: Telegram delete updates carry an ARRAY of message ids (a
+ * "clear chat" can revoke hundreds at once). One UPDATE with ANY($2) instead
+ * of a query per id.
+ */
+export async function markInboundDeletedByProviderIds(
+  channelId: string,
+  providerMessageIds: string[],
+): Promise<string[]> {
+  if (providerMessageIds.length === 0) return []
   const rows = await query<{ id: string }>(
     `UPDATE messages m
         SET deleted_at = now(), deleted_origin = 'remote'
        FROM conversations c
       WHERE m.conversation_id = c.id
         AND c.channel_id = $1
-        AND m.provider_message_id = $2
+        AND m.provider_message_id = ANY($2)
         AND m.deleted_at IS NULL
       RETURNING m.id`,
-    [channelId, providerMessageId],
+    [channelId, providerMessageIds],
   )
   return rows.map((r) => r.id)
 }

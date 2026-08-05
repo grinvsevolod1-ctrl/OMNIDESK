@@ -40,7 +40,9 @@ function resolveSslConfig(
 
 export const pool = new Pool({
   connectionString: env.databaseUrl,
-  max: 10,
+  // Tunable: 10 is fine for a handful of accounts, but 20+ concurrently
+  // backfilling channels serialize on the pool and slow every ingest write.
+  max: Number(process.env.WORKER_PG_POOL_MAX || 10),
   ssl: resolveSslConfig(env.databaseUrl),
 })
 

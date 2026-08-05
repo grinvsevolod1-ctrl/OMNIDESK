@@ -108,6 +108,24 @@ export function telegramSendFailureReason(e: unknown): string {
   return raw ? `Ошибка отправки: ${raw}` : 'Не удалось отправить сообщение.'
 }
 
+/**
+ * Extract the FLOOD_WAIT duration in seconds from a raw Telegram error, or
+ * null when the error is not a flood wait. Used by the send path to put the
+ * whole channel into a rate_limited cooldown instead of letting subsequent
+ * sends keep hammering (each attempt during an active flood window extends
+ * the ban server-side).
+ */
+export function extractFloodWaitSeconds(e: unknown): number | null {
+  const raw = errMessage(e)
+  if (!raw.toUpperCase().includes('FLOOD_WAIT')) return null
+  const fromField =
+    e && typeof e === 'object' && typeof (e as { seconds?: number }).seconds === 'number'
+      ? (e as { seconds: number }).seconds
+      : null
+  const secs = fromField ?? Number(raw.match(/FLOOD_WAIT_(\d+)/)?.[1] ?? 0)
+  return secs > 0 ? secs : null
+}
+
 /** Numeric MTProto error code, if the SDK exposed one (e.g. 420, 400, 406). */
 export function extractErrorCode(e: unknown): number | null {
   if (e && typeof e === 'object') {
