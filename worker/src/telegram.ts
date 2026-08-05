@@ -1149,14 +1149,24 @@ export class TelegramSession {
     toTarget: string,
   ): Promise<{ providerMessageId: string | null }> {
     if (!this.client) throw new Error('Session not started')
-    const fromEntity = await this.resolveTarget(fromTarget)
-    const toEntity = await this.resolveTarget(toTarget)
-    const result = await this.client.forwardMessages(toEntity, {
-      messages: [msgId],
-      fromPeer: fromEntity,
-    })
-    const first = Array.isArray(result) ? result[0] : undefined
-    return { providerMessageId: first?.id != null ? String(first.id) : null }
+    // Forwards are outgoing sends like any other: they must respect the same
+    // per-account pacing and flood gate. This method used to bypass both —
+    // the one send path that could still burst at machine speed and keep
+    // hammering through an active FLOOD_WAIT window.
+    await this.throttleSend()
+    try {
+      const fromEntity = await this.resolveTarget(fromTarget)
+      const toEntity = await this.resolveTarget(toTarget)
+      const result = await this.client.forwardMessages(toEntity, {
+        messages: [msgId],
+        fromPeer: fromEntity,
+      })
+      const first = Array.isArray(result) ? result[0] : undefined
+      return { providerMessageId: first?.id != null ? String(first.id) : null }
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
   }
 
   /** Tracks whether we've already refreshed the entity cache this session, so a
