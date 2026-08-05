@@ -5,18 +5,24 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import {
   Loader2,
   Plus,
+  QrCode,
   RefreshCw,
   Server,
   ShieldAlert,
+  Smartphone,
   Trash2,
 } from 'lucide-react'
+import QRCode from 'qrcode'
 import { channelIcon } from '@/components/channel-icons'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   adminConnectMaxAction,
   adminConnectTelegramAction,
+  adminConnectTelegramQrAction,
   adminConnectVkAction,
+  adminGetTelegramQrAction,
+  adminRestartTelegramQrAction,
   adminDeleteChannelAction,
   adminGetChannelStatusAction,
   adminHealthCheckAction,
@@ -150,11 +156,19 @@ function CreateAccountCard({
   const [token, setToken] = useState('')
   const [pending, startTransition] = useTransition()
 
+  // How to log the Telegram account in. QR is the default: no phone number, no
+  // SMS wait — the owner scans from Telegram → Settings → Devices. The phone
+  // flow stays for accounts that can't scan (e.g. only device IS this login).
+  const [tgMethod, setTgMethod] = useState<'qr' | 'phone'>('qr')
   // Telegram multi-step login state.
   const [tgChannelId, setTgChannelId] = useState<string | null>(null)
-  const [tgStep, setTgStep] = useState<'code' | 'password' | null>(null)
+  const [tgStep, setTgStep] = useState<'qr' | 'code' | 'password' | null>(null)
   const [tgCode, setTgCode] = useState('')
   const [tgPassword, setTgPassword] = useState('')
+  // Rendered QR image (data URL) + the deep link it encodes. The link rotates
+  // ~every 30s on the worker, so the poll re-renders only when it changes.
+  const [tgQrImage, setTgQrImage] = useState<string | null>(null)
+  const tgQrUrlRef = useRef<string | null>(null)
   // Login error shown INSIDE the modal (toasts vanish; the admin needs the
   // reason + a retry button in front of them, not a dead-end spinner).
   const [tgError, setTgError] = useState<string | null>(null)
@@ -190,6 +204,8 @@ function CreateAccountCard({
     setTgCode('')
     setTgPassword('')
     setTgError(null)
+    setTgQrImage(null)
+    tgQrUrlRef.current = null
     if (pollRef.current) clearInterval(pollRef.current)
   }
 
@@ -210,7 +226,25 @@ function CreateAccountCard({
     pollRef.current = setInterval(async () => {
       const snap = await adminGetChannelStatusAction(channelId)
       if (!snap) return
-      if (snap.sessionStatus === 'code_pending') {
+      if (snap.sessionStatus === 'qr_pending') {
+        setTgStep('qr')
+        setTgError(null)
+        // The deep link rotates on the worker (~30s TTL): fetch it and re-render
+        // the QR image only when the link actually changed.
+        const data = await adminGetTelegramQrAction(channelId)
+        if (data.qr && data.qr !== tgQrUrlRef.current) {
+          tgQrUrlRef.current = data.qr
+          const img = await QRCode.toDataURL(data.qr, {
+            margin: 1,
+            width: 320,
+            errorCorrectionLevel: 'M',
+          })
+          setTgQrImage(img)
+        }
+        // The scan can happen at any moment — extend the deadline while the
+        // QR is displayed so the wizard never times out mid-wait.
+        pollDeadlineRef.current = Date.now() + 90_000
+      } else if (snap.sessionStatus === 'code_pending') {
         setTgStep('code')
         setTgError(null)
       } else if (snap.sessionStatus === 'password_pending') {
@@ -242,11 +276,17 @@ function CreateAccountCard({
     }, 2000)
   }
 
-  /** Re-request the login code on the existing channel and resume polling. */
-  function resendCode() {
+  /**
+   * Retry the login on the existing channel and resume polling. QR attempts
+   * restart the QR flow (fresh token), phone attempts re-request the SMS code.
+   */
+  function retryLogin() {
     if (!tgChannelId) return
     startTransition(async () => {
-      const res = await adminResendTelegramCodeAction(tgChannelId)
+      const res =
+        tgMethod === 'qr'
+          ? await adminRestartTelegramQrAction(tgChannelId)
+          : await adminResendTelegramCodeAction(tgChannelId)
       if (!res.ok) {
         setTgError(res.message)
         return
@@ -254,6 +294,8 @@ function CreateAccountCard({
       toast.message(res.message)
       setTgStep(null)
       setTgCode('')
+      setTgQrImage(null)
+      tgQrUrlRef.current = null
       pollTelegram(tgChannelId)
     })
   }
@@ -271,21 +313,24 @@ function CreateAccountCard({
 
     startTransition(async () => {
       if (type === 'telegram') {
-        if (!phone.trim()) {
-          toast.error('Введите номер телефона.')
-          return
-        }
         // Telegram login is driven entirely by the worker (MTProto). If it's
-        // offline the job will queue but never run, so the code window would
-        // never appear. Block up-front with a clear reason instead.
+        // offline the job will queue but never run, so the QR/code window
+        // would never appear. Block up-front with a clear reason instead.
         if (!workerOnline) {
           toast.error(
             'Воркер не в сети. Telegram-вход требует запущенного процесса воркера на VPS — запустите его и повторите.',
           )
           return
         }
-        fd.set('phone', phone)
-        const res = await adminConnectTelegramAction(fd)
+        if (tgMethod === 'phone' && !phone.trim()) {
+          toast.error('Введите номер телефона.')
+          return
+        }
+        if (tgMethod === 'phone') fd.set('phone', phone)
+        const res =
+          tgMethod === 'qr'
+            ? await adminConnectTelegramQrAction(fd)
+            : await adminConnectTelegramAction(fd)
         if (!res.ok) {
           toast.error(res.message)
           return
@@ -496,23 +541,59 @@ function CreateAccountCard({
         </div>
 
         {type === 'telegram' ? (
-          <div className="flex flex-col gap-1.5">
-            <Label>Номер телефона</Label>
-            <Input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="+14155550132"
-              disabled={Boolean(tgChannelId)}
-            />
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>Способ входа</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTgMethod('qr')}
+                  disabled={pending || Boolean(tgChannelId)}
+                  className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                    tgMethod === 'qr'
+                      ? 'border-foreground bg-secondary text-secondary-foreground'
+                      : 'border-border text-muted-foreground hover:bg-muted/50'
+                  }`}
+                >
+                  <QrCode className="size-4" />
+                  По QR-коду
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTgMethod('phone')}
+                  disabled={pending || Boolean(tgChannelId)}
+                  className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                    tgMethod === 'phone'
+                      ? 'border-foreground bg-secondary text-secondary-foreground'
+                      : 'border-border text-muted-foreground hover:bg-muted/50'
+                  }`}
+                >
+                  <Smartphone className="size-4" />
+                  По номеру
+                </button>
+              </div>
+            </div>
+            {tgMethod === 'phone' ? (
+              <div className="flex flex-col gap-1.5">
+                <Label>Номер телефона</Label>
+                <Input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="+14155550132"
+                  disabled={Boolean(tgChannelId)}
+                />
+              </div>
+            ) : null}
             {!workerOnline ? (
               <p className="text-xs text-warning">
                 Воркер не в сети — вход в Telegram сейчас недоступен. Запустите
-                процесс воркера на VPS, чтобы получить код подтверждения.
+                процесс воркера на VPS, чтобы продолжить.
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                После нажатия «Подключить» откроется окно для ввода кода из
-                Telegram.
+                {tgMethod === 'qr'
+                  ? 'Появится QR-код: отсканируйте его с телефона владельца аккаунта — Telegram → Настройки → Устройства → Подключить устройство.'
+                  : 'После нажатия «Подключить» откроется окно для ввода кода из Telegram.'}
               </p>
             )}
           </div>
@@ -566,7 +647,11 @@ function CreateAccountCard({
           <DialogHeader>
             <DialogTitle>Подключение Telegram</DialogTitle>
             <DialogDescription>
-              {phone ? `Номер ${phone}` : 'Вход в аккаунт Telegram'}
+              {tgMethod === 'qr'
+                ? 'Вход по QR-коду — без номера и SMS'
+                : phone
+                  ? `Номер ${phone}`
+                  : 'Вход в аккаунт Telegram'}
             </DialogDescription>
           </DialogHeader>
 
@@ -579,7 +664,7 @@ function CreateAccountCard({
               <Button
                 type="button"
                 variant="outline"
-                onClick={resendCode}
+                onClick={retryLogin}
                 disabled={pending}
               >
                 {pending ? (
@@ -587,12 +672,38 @@ function CreateAccountCard({
                 ) : (
                   <RefreshCw className="size-4" />
                 )}
-                Запросить код повторно
+                {tgMethod === 'qr' ? 'Показать новый QR' : 'Запросить код повторно'}
               </Button>
             </div>
           ) : null}
 
-          {tgStep === 'code' ? (
+          {tgStep === 'qr' ? (
+            <div className="flex flex-col items-center gap-3">
+              {tgQrImage ? (
+                // The QR encodes a tg://login deep link that rotates ~every 30s;
+                // the poll swaps the image automatically, no user action needed.
+                <img
+                  src={tgQrImage || "/placeholder.svg"}
+                  alt="QR-код для входа в Telegram"
+                  className="size-56 rounded-lg border border-border bg-white p-2"
+                />
+              ) : (
+                <div className="flex size-56 items-center justify-center rounded-lg border border-border">
+                  <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+              <ol className="w-full list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+                <li>Откройте Telegram на телефоне владельца аккаунта</li>
+                <li>Настройки → Устройства → Подключить устройство</li>
+                <li>Наведите камеру на QR-код</li>
+              </ol>
+              <p className="text-xs text-muted-foreground">
+                Код обновляется автоматически. Если на аккаунте включена
+                двухэтапная аутентификация, после сканирования попросим облачный
+                пароль.
+              </p>
+            </div>
+          ) : tgStep === 'code' ? (
             <form
               className="flex flex-col gap-3"
               onSubmit={(e) => {
@@ -627,7 +738,7 @@ function CreateAccountCard({
               </Button>
               <button
                 type="button"
-                onClick={resendCode}
+                onClick={retryLogin}
                 disabled={pending}
                 className="self-start text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
               >
@@ -671,7 +782,9 @@ function CreateAccountCard({
           ) : !tgError ? (
             <div className="flex items-center gap-3 py-4 text-sm text-muted-foreground">
               <Loader2 className="size-5 animate-spin" />
-              Запрашиваем код у Telegram… Это может занять несколько секунд.
+              {tgMethod === 'qr'
+                ? 'Генерируем QR-код… Это может занять несколько секунд.'
+                : 'Запрашиваем код у Telegram… Это может занять несколько секунд.'}
             </div>
           ) : null}
 

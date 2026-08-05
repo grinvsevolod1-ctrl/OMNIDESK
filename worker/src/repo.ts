@@ -151,6 +151,34 @@ export async function listLiveChannels(): Promise<ChannelRecord[]> {
   )
 }
 
+/**
+ * Telegram channels eligible for AUTOMATIC revival: degraded (offline/error)
+ * but with a SAVED session string — meaning a plain reconnect is enough, no
+ * login interaction. Channels without a stored session are excluded on
+ * purpose: "reviving" those would begin a fresh phone-code login and spam the
+ * account owner with SMS. `logged_out` (authorization revoked — a human must
+ * re-login) and `rate_limited` (must wait out the flood window) are also
+ * intentionally NOT revivable. Channels with a queued/running start job are
+ * skipped so the sweep never races an admin-initiated reconnect.
+ */
+export async function listRevivableChannels(): Promise<ChannelRecord[]> {
+  return query<ChannelRecord>(
+    `SELECT ${CHANNEL_COLUMNS} FROM channels
+     WHERE type = 'telegram'
+       AND session_status IN ('offline', 'error')
+       AND EXISTS (
+         SELECT 1 FROM channel_secrets s
+          WHERE s.channel_id = channels.id AND s.tg_session_enc IS NOT NULL
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM channel_jobs j
+          WHERE j.channel_id = channels.id
+            AND j.action IN ('start', 'start_qr', 'restart')
+            AND j.status IN ('queued', 'running')
+       )`,
+  )
+}
+
 export async function setSession(
   channelId: string,
   sessionStatus: SessionStatus,

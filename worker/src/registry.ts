@@ -36,6 +36,19 @@ class Registry {
   }
 
   /**
+   * Reconnect adapter for the revival sweep: (re)create the session object and
+   * start it with the saved session string. Mirrors what restore() does for a
+   * single channel, preserving the soft-pause flag.
+   */
+  async revive(
+    channel: repo.ChannelRecord,
+  ): Promise<{ sessionStatus: repo.SessionStatus }> {
+    const session = this.ensure(channel)
+    session.setIngestPaused(Boolean(channel.ingest_paused))
+    return session.start(channel.phone || undefined)
+  }
+
+  /**
    * True for channels this worker is responsible for. Only Telegram runs here;
    * everything else (WhatsApp Cloud, VK, MAX, livechat) is owned by Next.js.
    */

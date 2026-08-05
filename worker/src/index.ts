@@ -4,6 +4,7 @@ import { startHttpServer } from './http.js'
 import { processJob, drainQueue } from './jobs.js'
 import { registry } from './registry.js'
 import { runNoResponseSweep } from './autopilot.js'
+import { runRevivalSweep } from './revival.js'
 import { captureException, initErrorReporter } from './error-reporter.js'
 import { processDeployJob, drainDeployQueue } from './hosting/jobs.js'
 import { sweepServerHealth } from './hosting/ops.js'
@@ -15,8 +16,16 @@ const NO_RESPONSE_SWEEP_MS = 60_000
 /** How often to health-check every managed hosting server. */
 const HOSTING_HEALTH_SWEEP_MS = 120_000
 
+/**
+ * How often the revival sweep looks for degraded Telegram sessions to
+ * auto-reconnect. Each channel additionally has its own exponential backoff
+ * inside the sweep, so a short scan period does not mean frequent retries.
+ */
+const REVIVAL_SWEEP_MS = 60_000
+
 let noResponseTimer: NodeJS.Timeout | null = null
 let hostingHealthTimer: NodeJS.Timeout | null = null
+let revivalTimer: NodeJS.Timeout | null = null
 
 async function main(): Promise<void> {
   logger.info('Omnidesk worker starting')
@@ -77,6 +86,16 @@ async function main(): Promise<void> {
   // Don't let the timer keep the event loop alive on shutdown.
   noResponseTimer.unref?.()
 
+  // 6. Auto-revival: reconnect degraded Telegram sessions (offline/error with a
+  //    saved session) automatically with per-channel exponential backoff — most
+  //    outages heal here before the 5-minute manager banner would ever fire.
+  revivalTimer = setInterval(() => {
+    runRevivalSweep((channel) => registry.revive(channel)).catch((err) =>
+      logger.error({ err }, 'revival sweep failed'),
+    )
+  }, REVIVAL_SWEEP_MS)
+  revivalTimer.unref?.()
+
   logger.info('Omnidesk worker ready')
 }
 
@@ -85,6 +104,7 @@ async function shutdown(signal: string): Promise<void> {
   try {
     if (noResponseTimer) clearInterval(noResponseTimer)
     if (hostingHealthTimer) clearInterval(hostingHealthTimer)
+    if (revivalTimer) clearInterval(revivalTimer)
     await registry.shutdownAll()
     await pool.end()
   } finally {
