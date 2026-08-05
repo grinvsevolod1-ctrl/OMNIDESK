@@ -19,6 +19,7 @@
 
 import { query } from '../db'
 import type { MediaType, MessageEdit } from '../types'
+import { saveMediaFile, readMediaFile, deleteMediaFile } from '../media-store'
 
 /** Largest media we copy into Postgres. Bigger files stay fetch-on-demand. */
 export const MEDIA_MAX_STORE_BYTES = (() => {
@@ -52,13 +53,33 @@ export async function storeMessageMediaBytes(
   if (existing.length === 0) return null
   if (existing[0].media_blob_id) return existing[0].media_blob_id
 
-  const blob = await query<{ id: string }>(
-    `INSERT INTO media_blobs (bytes, mime, name, byte_size)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id`,
-    [bytes, mime, name, bytes.byteLength],
-  )
-  if (blob.length === 0) return null
+  // Bytes go to the local VPS filesystem (scripts/107); only the absolute
+  // path lands in Postgres. On disk failure fall back to bytea so the
+  // archive guarantee still holds.
+  let filePath: string | null = null
+  try {
+    filePath = await saveMediaFile(bytes)
+  } catch {
+    filePath = null
+  }
+
+  let blob: Array<{ id: string }>
+  try {
+    blob = await query<{ id: string }>(
+      `INSERT INTO media_blobs (bytes, mime, name, byte_size, file_path)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [filePath ? null : bytes, mime, name, bytes.byteLength, filePath],
+    )
+  } catch (err) {
+    // Don't leak an orphaned file when the row never got created.
+    if (filePath) await deleteMediaFile(filePath)
+    throw err
+  }
+  if (blob.length === 0) {
+    if (filePath) await deleteMediaFile(filePath)
+    return null
+  }
   await query(`UPDATE messages SET media_blob_id = $2 WHERE id = $1`, [
     messageId,
     blob[0].id,
@@ -77,23 +98,44 @@ export async function messageNeedsMediaBytes(
   return rows.length > 0 && !!rows[0].media_type && !rows[0].media_blob_id
 }
 
+/**
+ * Materialize a blob row into bytes: disk-backed rows (scripts/107) read from
+ * the local filesystem, legacy rows still carry bytea inline.
+ */
+async function resolveBlobBytes(row: {
+  bytes: Buffer | null
+  file_path: string | null
+  mime: string | null
+  name: string | null
+}): Promise<{ bytes: Buffer; mime: string | null; name: string | null } | null> {
+  if (row.file_path) {
+    const fromDisk = await readMediaFile(row.file_path)
+    if (fromDisk) return { bytes: fromDisk, mime: row.mime, name: row.name }
+  }
+  if (row.bytes) {
+    return { bytes: Buffer.from(row.bytes), mime: row.mime, name: row.name }
+  }
+  return null
+}
+
 /** Stored media bytes for a message's CURRENT version, or null. */
 export async function getStoredMediaBytes(
   messageId: string,
 ): Promise<{ bytes: Buffer; mime: string | null; name: string | null } | null> {
   const rows = await query<{
-    bytes: Buffer
+    bytes: Buffer | null
+    file_path: string | null
     mime: string | null
     name: string | null
   }>(
-    `SELECT b.bytes, b.mime, b.name
+    `SELECT b.bytes, b.file_path, b.mime, b.name
        FROM messages m
        JOIN media_blobs b ON b.id = m.media_blob_id
       WHERE m.id = $1`,
     [messageId],
   )
   if (rows.length === 0) return null
-  return { bytes: Buffer.from(rows[0].bytes), mime: rows[0].mime, name: rows[0].name }
+  return resolveBlobBytes(rows[0])
 }
 
 /** Stored media bytes for a specific edit-history version, or null. */
@@ -101,18 +143,19 @@ export async function getStoredEditMediaBytes(
   editId: string,
 ): Promise<{ bytes: Buffer; mime: string | null; name: string | null } | null> {
   const rows = await query<{
-    bytes: Buffer
+    bytes: Buffer | null
+    file_path: string | null
     mime: string | null
     name: string | null
   }>(
-    `SELECT b.bytes, b.mime, b.name
+    `SELECT b.bytes, b.file_path, b.mime, b.name
        FROM message_edits e
        JOIN media_blobs b ON b.id = e.media_blob_id
       WHERE e.id = $1`,
     [editId],
   )
   if (rows.length === 0) return null
-  return { bytes: Buffer.from(rows[0].bytes), mime: rows[0].mime, name: rows[0].name }
+  return resolveBlobBytes(rows[0])
 }
 
 /**

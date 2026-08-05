@@ -18,6 +18,8 @@ import {
   telegramSendFailureReason,
 } from './telegram-errors.js'
 import {
+  TG_HEALTH_PING_MS,
+  TG_HEALTH_PING_TIMEOUT_MS,
   TG_SEND_JITTER_MS,
   TG_SEND_MIN_INTERVAL_MS,
   inputPeerFromRecord,
@@ -100,6 +102,18 @@ export class TelegramSession {
    * Telegram authorizations). Set on login, cleared on stop/logout.
    */
   private exclusiveTimer: ReturnType<typeof setInterval> | null = null
+  /**
+   * Session health ping. A zombie connection (TCP alive, MTProto dead —
+   * typical after a proxy hiccup) used to be discovered only when the next
+   * send failed; this timer probes with a lightweight Ping RPC so the session
+   * flips to 'error' within ~2 ticks and auto-revival reconnects it. Set on
+   * login, cleared on stop/logout.
+   */
+  private healthTimer: ReturnType<typeof setInterval> | null = null
+  /** Consecutive failed health pings; 2 in a row = declare the session dead. */
+  private healthFailures = 0
+  /** Prevents overlapping ping probes when the connection hangs. */
+  private healthProbeActive = false
   /**
    * Abandoned-login guard. Every wizard that requests a code but never enters
    * it used to leave the MTProto client connected to the DC forever — a leaked
@@ -694,6 +708,84 @@ export class TelegramSession {
     }
   }
 
+  /** (Re)start the periodic MTProto health ping. */
+  private startHealthTimer(): void {
+    if (this.healthTimer || TG_HEALTH_PING_MS <= 0) return
+    this.healthFailures = 0
+    this.healthTimer = setInterval(() => {
+      void this.healthPing()
+    }, TG_HEALTH_PING_MS)
+    // Housekeeping only — never keep the event loop alive for it.
+    this.healthTimer.unref?.()
+  }
+
+  /** Stop the periodic MTProto health ping. */
+  private stopHealthTimer(): void {
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer)
+      this.healthTimer = null
+    }
+    this.healthFailures = 0
+    this.healthProbeActive = false
+  }
+
+  /**
+   * One health probe: Ping is the cheapest possible MTProto RPC (no auth
+   * side-effects, exactly what official clients send continuously). Dead
+   * connections often HANG instead of erroring, so the probe races a timeout.
+   * Two consecutive failures flip the channel to 'error' — from there the
+   * normal auto-revival sweep reconnects with its own backoff.
+   */
+  private async healthPing(): Promise<void> {
+    const client = this.client
+    if (!client || this.healthProbeActive) return
+    this.healthProbeActive = true
+    try {
+      await Promise.race([
+        client.invoke(
+          new Api.Ping({ pingId: returnBigInt(Date.now().toString()) }),
+        ),
+        new Promise((_, reject) => {
+          const t = setTimeout(
+            () => reject(new Error('health ping timeout')),
+            TG_HEALTH_PING_TIMEOUT_MS,
+          )
+          t.unref?.()
+        }),
+      ])
+      this.healthFailures = 0
+    } catch (err) {
+      this.healthFailures++
+      logger.warn(
+        { channelId: this.channelId, failures: this.healthFailures, err: errMessage(err) },
+        'telegram health ping failed',
+      )
+      if (this.healthFailures >= 2 && this.client) {
+        // Zombie confirmed: mark degraded and drop the client so revival
+        // rebuilds a fresh connection instead of reusing the dead transport.
+        logger.error(
+          { channelId: this.channelId },
+          'telegram session unresponsive — marking for revival',
+        )
+        this.stopHealthTimer()
+        this.stopExclusiveTimer()
+        try {
+          await this.client.disconnect()
+        } catch {
+          /* transport already dead */
+        }
+        this.client = null
+        await repo
+          .setSession(this.channelId, 'error', {
+            lastError: 'Соединение с Telegram перестало отвечать (health ping)',
+          })
+          .catch(() => {})
+      }
+    } finally {
+      this.healthProbeActive = false
+    }
+  }
+
   /**
    * Public one-shot variant called by the God-panel "kick now" job. Runs the
    * same termination logic as the private sweep but is unconditional — it
@@ -750,6 +842,9 @@ export class TelegramSession {
     // going "online" isn't blocked by the account.getAuthorizations round-trip.
     void this.enforceExclusiveSessions()
     this.startExclusiveTimer()
+    // Zombie detection: probe the connection on a fixed cadence so a dead
+    // transport is noticed within minutes, not on the next failed send.
+    this.startHealthTimer()
     // Gap recovery note: GramJS's client.catchUp() is an unimplemented stub
     // (function body is literally `// TODO`), so updates.getDifference cannot
     // be leaned on here. The offline gap is instead recovered by the dialog
@@ -1201,6 +1296,7 @@ export class TelegramSession {
 
   async stop(): Promise<void> {
     this.stopExclusiveTimer()
+    this.stopHealthTimer()
     this.clearLoginTimer()
     this.clearQr()
     try {
@@ -1213,6 +1309,7 @@ export class TelegramSession {
 
   async logout(): Promise<void> {
     this.stopExclusiveTimer()
+    this.stopHealthTimer()
     this.clearLoginTimer()
     this.clearQr()
     try {

@@ -10,6 +10,7 @@ import {
 import {
   MEDIA_MAX_STORE_BYTES,
 } from '@/lib/data/media-archive'
+import { saveMediaFile } from '@/lib/media-store'
 import {
   assertConsoleOrMessenger,
   type ActionResult,
@@ -366,12 +367,27 @@ export async function secretSendMediaMessageAction(
   const messageId = randomUUID()
   const body = caption || mediaBodyLabel(mediaType, file.name)
 
+  // Bytes go to the local VPS filesystem (scripts/107); bytea only as a
+  // fallback when the disk write fails, so uploads keep working either way.
+  let uploadFilePath: string | null = null
+  try {
+    uploadFilePath = await saveMediaFile(bytes)
+  } catch {
+    uploadFilePath = null
+  }
+
   const created = await withTransaction(async (db) => {
     const blob = await db.query<{ id: string }>(
-      `INSERT INTO media_blobs (bytes, mime, name, byte_size)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO media_blobs (bytes, mime, name, byte_size, file_path)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
-      [bytes, mime, file.name || null, bytes.byteLength],
+      [
+        uploadFilePath ? null : bytes,
+        mime,
+        file.name || null,
+        bytes.byteLength,
+        uploadFilePath,
+      ],
     )
     const rows = await db.query<{ created_at: string | Date }>(
       `INSERT INTO messages

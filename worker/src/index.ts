@@ -48,11 +48,20 @@ const STUCK_JOB_SWEEP_MINUTES = 15
  */
 const JOBS_RETENTION_SWEEP_MS = 24 * 60 * 60 * 1000
 
+/**
+ * Legacy media offload cadence: moves pre-scripts/107 bytea blobs out of
+ * Postgres onto the local filesystem, one small batch per tick so the DB is
+ * never hammered. 25 blobs / 30s ≈ 70k blobs a day — plenty, and once nothing
+ * legacy remains each tick is a single cheap indexed SELECT.
+ */
+const MEDIA_OFFLOAD_SWEEP_MS = 30_000
+
 let noResponseTimer: NodeJS.Timeout | null = null
 let hostingHealthTimer: NodeJS.Timeout | null = null
 let revivalTimer: NodeJS.Timeout | null = null
 let fallbackDrainTimer: NodeJS.Timeout | null = null
 let jobsRetentionTimer: NodeJS.Timeout | null = null
+let mediaOffloadTimer: NodeJS.Timeout | null = null
 
 async function main(): Promise<void> {
   logger.info('Omnidesk worker starting')
@@ -115,6 +124,19 @@ async function main(): Promise<void> {
   jobsRetentionTimer = setInterval(purgeJobs, JOBS_RETENTION_SWEEP_MS)
   jobsRetentionTimer.unref?.()
 
+  // 3a''. Legacy media offload: gradually move pre-107 bytea blobs to the
+  //       local filesystem (see MEDIA_OFFLOAD_SWEEP_MS). Tolerates the
+  //       migration not being applied yet (query fails -> logged, retried).
+  mediaOffloadTimer = setInterval(() => {
+    repo
+      .offloadLegacyMediaBlobs()
+      .then((n) => {
+        if (n > 0) logger.info({ moved: n }, 'offloaded legacy media blobs to disk')
+      })
+      .catch((err) => logger.warn({ err }, 'media offload sweep failed'))
+  }, MEDIA_OFFLOAD_SWEEP_MS)
+  mediaOffloadTimer.unref?.()
+
   // 3b. App Hosting ("Серверы"): consume deploy_jobs the same way — react to new
   //     jobs via NOTIFY, then drain anything queued while we were down.
   //     First recover deployments orphaned by a crash/redeploy so none stay
@@ -176,6 +198,7 @@ async function shutdown(signal: string): Promise<void> {
     if (revivalTimer) clearInterval(revivalTimer)
     if (fallbackDrainTimer) clearInterval(fallbackDrainTimer)
     if (jobsRetentionTimer) clearInterval(jobsRetentionTimer)
+    if (mediaOffloadTimer) clearInterval(mediaOffloadTimer)
     await registry.shutdownAll()
     await pool.end()
   } finally {

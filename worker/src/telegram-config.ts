@@ -77,6 +77,15 @@ export const TG_BACKFILL_MEDIA_THROTTLE_MS = envInt(
   250,
 )
 
+// Session health ping: a lightweight RPC on a fixed cadence so a zombie
+// connection (TCP alive, MTProto dead — typical after a proxy hiccup) is
+// detected within ~2 ticks instead of on the next failed send. Ping traffic
+// is what every official client does continuously; this adds no flood risk.
+export const TG_HEALTH_PING_MS = envInt('TG_HEALTH_PING_MS', 90_000)
+// How long one ping may take before it counts as failed (dead connections
+// often HANG rather than error).
+export const TG_HEALTH_PING_TIMEOUT_MS = envInt('TG_HEALTH_PING_TIMEOUT_MS', 15_000)
+
 /**
  * Extract a persistable peer record (kind + id + access_hash) from a GramJS
  * entity. Returns null for entities we can't address (e.g. deleted accounts).
