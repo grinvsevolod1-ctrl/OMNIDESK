@@ -104,12 +104,48 @@ export function NotificationSettings() {
   const test = useCallback(async () => {
     setBusy(true)
     try {
-      const res = await sendTestPushAction()
-      toast[res.ok ? 'success' : 'error'](res.message)
+      // Target THIS device: a broadcast test reports success as soon as ANY
+      // device gets it, which hides exactly the bug being tested for (this
+      // computer silently unsubscribed server-side while another one works).
+      const reg = await navigator.serviceWorker.ready
+      const sub = await reg.pushManager.getSubscription()
+      if (!sub) {
+        toast.error('На этом устройстве нет подписки. Включите уведомления.')
+        await refresh()
+        return
+      }
+      const res = await sendTestPushAction(sub.endpoint)
+      if (res.ok) {
+        toast.success(res.message)
+        return
+      }
+      if (!res.needsResubscribe) {
+        toast.error(res.message)
+        return
+      }
+      // Server lost/rejected this device's subscription: re-subscribe with
+      // the current key and retry the test once, so one click both heals the
+      // device and proves delivery works again.
+      const healed = await ensurePushSubscription(publicKeyRef.current)
+      if (!healed.ok) {
+        toast.error(healed.message)
+        await refresh()
+        return
+      }
+      const sub2 = await reg.pushManager.getSubscription()
+      const retry = sub2 ? await sendTestPushAction(sub2.endpoint) : null
+      if (retry?.ok) {
+        toast.success('Подписка восстановлена — тест отправлен.')
+      } else {
+        toast.error(retry?.message ?? 'Не удалось восстановить подписку.')
+      }
+      await refresh()
+    } catch {
+      toast.error('Не удалось отправить тест.')
     } finally {
       setBusy(false)
     }
-  }, [])
+  }, [refresh])
 
   if (state === 'checking') {
     return (

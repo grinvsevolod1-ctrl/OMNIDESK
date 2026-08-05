@@ -286,6 +286,83 @@ export interface PushPayload {
   tag?: string
 }
 
+export type EndpointPushResult =
+  /** Delivered to the push service for this exact device. */
+  | 'sent'
+  /** No row for this endpoint on the server — the device is not registered. */
+  | 'missing'
+  /** The push service rejected the subscription (dead/stale) — row pruned. */
+  | 'rejected'
+  /** Transient failure (5xx/network); subscription kept. */
+  | 'error'
+
+/**
+ * Send a push to ONE specific device (endpoint) of a manager and report what
+ * actually happened to THAT device. The broadcast path (sendPushToManager)
+ * can only say "delivered somewhere", which made the settings-page test
+ * useless for diagnosing a single broken computer: it reported success when
+ * another device received the push. Endpoint is manager-scoped so one manager
+ * can't probe another's subscriptions.
+ */
+export async function sendPushToEndpoint(
+  managerId: string,
+  endpoint: string,
+  payload: PushPayload,
+): Promise<EndpointPushResult> {
+  if (!ensureConfigured()) return 'error'
+
+  let rows: SubscriptionRow[]
+  try {
+    rows = await query<SubscriptionRow>(
+      `SELECT endpoint, p256dh, auth FROM push_subscriptions
+        WHERE manager_id = $1 AND endpoint = $2`,
+      [managerId, endpoint],
+    )
+  } catch {
+    return 'error'
+  }
+  const row = rows[0]
+  if (!row) return 'missing'
+
+  const subscription: PushSubscription = {
+    endpoint: row.endpoint,
+    keys: { p256dh: row.p256dh, auth: row.auth },
+  }
+  try {
+    await webpush.sendNotification(subscription, JSON.stringify(payload), {
+      TTL: 60,
+    })
+    return 'sent'
+  } catch (err: unknown) {
+    const statusCode =
+      typeof err === 'object' && err && 'statusCode' in err
+        ? (err as { statusCode?: number }).statusCode
+        : undefined
+    if (
+      statusCode === 400 ||
+      statusCode === 401 ||
+      statusCode === 403 ||
+      statusCode === 404 ||
+      statusCode === 410
+    ) {
+      // Dead or key-mismatched subscription: prune so the client's next
+      // ensurePushSubscription recreates it cleanly.
+      await query(
+        'DELETE FROM push_subscriptions WHERE manager_id = $1 AND endpoint = $2',
+        [managerId, endpoint],
+      ).catch(() => {})
+      console.warn(
+        `[push] Test delivery rejected (HTTP ${statusCode}) for manager ${managerId}; subscription pruned.`,
+      )
+      return 'rejected'
+    }
+    console.warn(
+      `[push] Test delivery failed (HTTP ${statusCode ?? '?'}) for manager ${managerId}; keeping subscription.`,
+    )
+    return 'error'
+  }
+}
+
 /**
  * Send a push to every device a manager has registered. Subscriptions that the
  * push service reports as gone (404/410) are pruned automatically so we don't
