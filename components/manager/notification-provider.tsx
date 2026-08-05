@@ -112,9 +112,16 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       if (cancelled) return
       setSubscribed(Boolean(existing))
 
-      // Already granted but the device isn't registered (e.g. server pruned a
-      // stale row, or first grant on this browser): silently (re)subscribe.
-      if (perm === 'granted' && config.configured && !existing) {
+      // Permission granted: ALWAYS re-sync with the server, even when a local
+      // subscription exists. A browser-side subscription is only half the
+      // story — the server may have pruned its row (VAPID 403 cleanup, DB
+      // maintenance), leaving this device convinced it is subscribed while
+      // the server has nowhere to send. That silent split-brain is exactly
+      // "phone gets pushes, desktop doesn't": the phone re-subscribed later,
+      // the desktop never did. ensurePushSubscription is idempotent — it
+      // reuses a key-matching subscription, replaces a stale-key one, and
+      // re-upserts the server row either way (a no-op when already in sync).
+      if (perm === 'granted' && config.configured) {
         void doSubscribe().catch(() => {})
       }
     }

@@ -15,6 +15,42 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim())
 })
 
+/**
+ * The browser can rotate or expire a push subscription on its own (desktop
+ * Chrome does this after updates / endpoint expiry). When that happens the
+ * server keeps pushing to a dead endpoint and this device silently stops
+ * receiving notifications until the panel is reopened. Re-subscribe with the
+ * same VAPID key and hand both endpoints to the server so it can swap the row.
+ */
+self.addEventListener('pushsubscriptionchange', (event) => {
+  const oldSub = event.oldSubscription
+  const appServerKey =
+    (event.oldSubscription &&
+      event.oldSubscription.options &&
+      event.oldSubscription.options.applicationServerKey) ||
+    null
+  if (!appServerKey) return // nothing to re-subscribe with
+
+  event.waitUntil(
+    self.registration.pushManager
+      .subscribe({ userVisibleOnly: true, applicationServerKey: appServerKey })
+      .then((newSub) =>
+        fetch('/api/push/resubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            oldEndpoint: oldSub ? oldSub.endpoint : null,
+            subscription: newSub.toJSON(),
+          }),
+        }),
+      )
+      .catch(() => {
+        /* panel-load resync (NotificationProvider) is the fallback */
+      }),
+  )
+})
+
 self.addEventListener('push', (event) => {
   let data = {}
   try {
