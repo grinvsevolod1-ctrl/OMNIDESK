@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import { Download, ExternalLink, FileText, Info, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { TgsSticker } from '@/components/manager/inbox/tgs-sticker'
 import type { Message } from '@/lib/types'
 
 /** Placeholder labels we synthesise at ingest for media without a caption. */
@@ -198,6 +199,34 @@ export function MessageMedia({ message }: { message: Message }) {
   }
 
   if (type === 'sticker') {
+    // Telegram stickers come in three containers, and only WEBP renders in an
+    // <img> — TGS (gzipped Lottie) and WEBM (video) used to hit onError and
+    // degrade to the "[Стикер]" text. Dispatch on the stored mime, with a
+    // magic-bytes-honest fallback already applied worker-side.
+    const mime = message.mediaMime || ''
+    if (mime.includes('tgs') || mime === 'application/gzip') {
+      return (
+        <TgsSticker
+          url={url}
+          alt={message.body || '🎯'}
+          onError={() => setFailed(true)}
+        />
+      )
+    }
+    if (mime.startsWith('video/')) {
+      return (
+        <video
+          src={url}
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="size-32 object-contain"
+          aria-label={message.body || 'Стикер'}
+          onError={() => setFailed(true)}
+        />
+      )
+    }
     return (
       // Chat media comes from arbitrary external CDNs (Telegram/VK/etc.) with
       // unknown dimensions; next/image can't optimize these, so a plain img is

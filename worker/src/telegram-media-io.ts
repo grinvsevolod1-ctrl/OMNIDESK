@@ -144,23 +144,60 @@ export async function listStickers(
   return out
 }
 
-/** Download a sticker's bytes by its document descriptor (for thumbnails). */
+/** Sniff a sticker payload's real container from its magic bytes. */
+function sniffStickerMime(buf: Buffer): string {
+  // Gzip magic — TGS (gzipped Lottie JSON animation).
+  if (buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b)
+    return 'application/x-tgsticker'
+  // EBML magic — WEBM video sticker.
+  if (
+    buf.length > 4 &&
+    buf[0] === 0x1a &&
+    buf[1] === 0x45 &&
+    buf[2] === 0xdf &&
+    buf[3] === 0xa3
+  )
+    return 'video/webm'
+  return 'image/webp'
+}
+
+/**
+ * Download a sticker's bytes by its document descriptor (for picker
+ * thumbnails). Static stickers are WEBP and render in an <img> as-is — but
+ * animated (TGS) and video (WEBM) stickers do NOT: serving their full payload
+ * labeled image/webp is exactly why picker thumbnails showed broken images.
+ * For those, fall back to the document's static preview (thumbSize 'm').
+ */
 export async function downloadStickerById(
   client: TelegramClient | null,
   sticker: { id: string; accessHash: string; fileReference: string },
 ): Promise<{ buffer: Buffer; mime: string } | null> {
   if (!client) throw new Error('Session not started')
-  const location = new Api.InputDocumentFileLocation({
-    id: returnBigInt(sticker.id),
-    accessHash: returnBigInt(sticker.accessHash),
-    fileReference: Buffer.from(sticker.fileReference, 'base64'),
-    thumbSize: '',
-  })
-  const buf = (await client.downloadFile(location, {})) as
-    | Buffer
-    | undefined
+  const loc = (thumbSize: string) =>
+    new Api.InputDocumentFileLocation({
+      id: returnBigInt(sticker.id),
+      accessHash: returnBigInt(sticker.accessHash),
+      fileReference: Buffer.from(sticker.fileReference, 'base64'),
+      thumbSize,
+    })
+  const buf = (await client.downloadFile(loc(''), {})) as Buffer | undefined
   if (!buf || buf.length === 0) return null
-  return { buffer: Buffer.from(buf), mime: 'image/webp' }
+  const mime = sniffStickerMime(buf)
+  if (mime === 'image/webp') return { buffer: Buffer.from(buf), mime }
+  // Animated/video sticker: an <img> can't show the full payload. Grab the
+  // static preview instead; if the document has none, serve the real bytes
+  // with an honest mime so the client can still decide what to do.
+  try {
+    const thumb = (await client.downloadFile(loc('m'), {})) as
+      | Buffer
+      | undefined
+    if (thumb && thumb.length > 0) {
+      return { buffer: Buffer.from(thumb), mime: 'image/jpeg' }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'telegram sticker static thumb download failed')
+  }
+  return { buffer: Buffer.from(buf), mime }
 }
 
 /**
