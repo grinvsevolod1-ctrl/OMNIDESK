@@ -33,6 +33,13 @@ export interface ChannelRecord {
    * messages are NOT written to the inbox. Independent of session_status.
    */
   ingest_paused: boolean
+  /**
+   * True after an explicit stop job. Excludes the channel from auto-revival
+   * and startup restore until an explicit start/restart clears it — otherwise
+   * the revival sweep would resurrect a deliberately stopped account within a
+   * minute (offline + saved session is exactly what it looks for).
+   */
+  manually_stopped: boolean
   /** Channel config JSON. For WhatsApp, provider:'cloud' marks Cloud API. */
   config: Record<string, unknown> | null
 }
@@ -112,6 +119,36 @@ export async function claimNextQueued(): Promise<JobRecord | null> {
   )
 }
 
+/**
+ * Recover channel jobs orphaned in 'running' by a worker crash/redeploy.
+ *
+ * The per-channel serializer lives in worker memory, so after a restart NO
+ * 'running' job is actually executing — but without this sweep they would sit
+ * in 'running' forever: the panel keeps polling a result that never comes, and
+ * (worse) listRevivableChannels / delivery recovery skip the channel because a
+ * start/send job "is running", permanently blocking auto-revival for it.
+ *
+ * `olderThanMinutes` guards live claims: at startup 0 is safe (nothing has
+ * been claimed by this process yet), while the periodic safety sweep uses a
+ * threshold far above any legitimate job duration (jobs never run for tens of
+ * minutes — history sync is backgrounded, not awaited inside the job).
+ */
+export async function recoverStuckChannelJobs(
+  olderThanMinutes: number,
+): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `UPDATE channel_jobs
+       SET status = 'error',
+           last_error = 'Worker restarted while the job was running',
+           updated_at = now()
+     WHERE status = 'running'
+       AND updated_at < now() - make_interval(mins => $1)
+     RETURNING id`,
+    [olderThanMinutes],
+  )
+  return rows.length
+}
+
 export async function finishJob(
   jobId: string,
   ok: boolean,
@@ -132,7 +169,7 @@ export async function finishJob(
 // keeps the query in lockstep with the type and stops a future column addition
 // from silently widening every channel read the worker performs.
 const CHANNEL_COLUMNS =
-  'id, manager_id, type, name, detail, status, session_status, phone, proxy_id, ingest_paused, config'
+  'id, manager_id, type, name, detail, status, session_status, phone, proxy_id, ingest_paused, manually_stopped, config'
 
 export async function getChannel(id: string): Promise<ChannelRecord | null> {
   return one<ChannelRecord>(
@@ -144,10 +181,12 @@ export async function getChannel(id: string): Promise<ChannelRecord | null> {
 export async function listLiveChannels(): Promise<ChannelRecord[]> {
   // Only Telegram runs in this worker. WhatsApp (Cloud API), VK and MAX are all
   // served by the Next.js app, so we never open a session for them here.
+  // Manually stopped channels stay stopped across worker restarts.
   return query<ChannelRecord>(
     `SELECT ${CHANNEL_COLUMNS} FROM channels
      WHERE type = 'telegram'
-       AND session_status IN ('online', 'offline', 'starting')`,
+       AND session_status IN ('online', 'offline', 'starting')
+       AND NOT manually_stopped`,
   )
 }
 
@@ -166,6 +205,7 @@ export async function listRevivableChannels(): Promise<ChannelRecord[]> {
     `SELECT ${CHANNEL_COLUMNS} FROM channels
      WHERE type = 'telegram'
        AND session_status IN ('offline', 'error')
+       AND NOT manually_stopped
        AND EXISTS (
          SELECT 1 FROM channel_secrets s
           WHERE s.channel_id = channels.id AND s.tg_session_enc IS NOT NULL
@@ -208,6 +248,20 @@ export async function setSession(
       opts.markConnected ?? sessionStatus === 'online',
     ],
   )
+}
+
+/**
+ * Toggle the manual-stop flag. Set by 'stop' jobs, cleared by explicit
+ * start/restart jobs. See ChannelRecord.manually_stopped.
+ */
+export async function setManuallyStopped(
+  channelId: string,
+  stopped: boolean,
+): Promise<void> {
+  await query(`UPDATE channels SET manually_stopped = $2 WHERE id = $1`, [
+    channelId,
+    stopped,
+  ])
 }
 
 /**
@@ -846,6 +900,77 @@ export async function getTelegramPeer(
   )
   if (!row) return null
   return { kind: row.kind, peerId: row.peer_id, accessHash: row.access_hash }
+}
+
+/* ---------------------- Backfill watermarks ---------------------- */
+
+/**
+ * Per-chat history sync progress (see scripts/105). Lets a reconnect fetch
+ * only the offline gap instead of re-paging the chat's entire history, and
+ * lets an interrupted deep backfill resume where it stopped.
+ */
+export interface BackfillWatermark {
+  newestSyncedId: number
+  oldestSyncedId: number
+  complete: boolean
+}
+
+export async function getBackfillWatermark(
+  channelId: string,
+  handle: string,
+): Promise<BackfillWatermark | null> {
+  const row = await one<{
+    newest_synced_id: string
+    oldest_synced_id: string
+    complete: boolean
+  }>(
+    `SELECT newest_synced_id, oldest_synced_id, complete
+       FROM telegram_backfill_watermarks
+      WHERE channel_id = $1 AND contact_handle = $2`,
+    [channelId, handle],
+  )
+  if (!row) return null
+  return {
+    newestSyncedId: Number(row.newest_synced_id),
+    oldestSyncedId: Number(row.oldest_synced_id),
+    complete: row.complete,
+  }
+}
+
+/**
+ * Monotonic upsert: newest only ever grows, oldest only ever shrinks (toward
+ * the first message), complete never reverts to false. Safe to call from
+ * overlapping sweeps.
+ */
+export async function upsertBackfillWatermark(
+  channelId: string,
+  handle: string,
+  patch: Partial<BackfillWatermark>,
+): Promise<void> {
+  await query(
+    `INSERT INTO telegram_backfill_watermarks
+       (channel_id, contact_handle, newest_synced_id, oldest_synced_id, complete, updated_at)
+     VALUES ($1, $2, COALESCE($3, 0), COALESCE($4, 0), COALESCE($5, false), now())
+     ON CONFLICT (channel_id, contact_handle) DO UPDATE
+       SET newest_synced_id = GREATEST(
+             telegram_backfill_watermarks.newest_synced_id,
+             COALESCE($3, telegram_backfill_watermarks.newest_synced_id)
+           ),
+           oldest_synced_id = CASE
+             WHEN $4 IS NULL THEN telegram_backfill_watermarks.oldest_synced_id
+             WHEN telegram_backfill_watermarks.oldest_synced_id = 0 THEN $4
+             ELSE LEAST(telegram_backfill_watermarks.oldest_synced_id, $4)
+           END,
+           complete = telegram_backfill_watermarks.complete OR COALESCE($5, false),
+           updated_at = now()`,
+    [
+      channelId,
+      handle,
+      patch.newestSyncedId ?? null,
+      patch.oldestSyncedId ?? null,
+      patch.complete ?? null,
+    ],
+  )
 }
 
 /** Outbound delivery lifecycle, ordered. Status only ever moves forward. */

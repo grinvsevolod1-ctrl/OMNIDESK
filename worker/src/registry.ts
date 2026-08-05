@@ -5,6 +5,7 @@ import {
   OFFLINE_SEND_REASON,
 } from './telegram-errors.js'
 import * as repo from './repo.js'
+import { runSerialized } from './serialize.js'
 
 /**
  * The worker only drives Telegram (MTProto) sessions. WhatsApp is served
@@ -39,13 +40,20 @@ class Registry {
    * Reconnect adapter for the revival sweep: (re)create the session object and
    * start it with the saved session string. Mirrors what restore() does for a
    * single channel, preserving the soft-pause flag.
+   *
+   * Serialized through the same per-channel chain as queued jobs: without this
+   * a revival start() could run concurrently with a send/login job that is
+   * mid-flight on the SAME MTProto session (listRevivableChannels only
+   * excludes start-type jobs, not sends), disconnecting the client under it.
    */
   async revive(
     channel: repo.ChannelRecord,
   ): Promise<{ sessionStatus: repo.SessionStatus }> {
-    const session = this.ensure(channel)
-    session.setIngestPaused(Boolean(channel.ingest_paused))
-    return session.start(channel.phone || undefined)
+    return runSerialized(channel.id, () => {
+      const session = this.ensure(channel)
+      session.setIngestPaused(Boolean(channel.ingest_paused))
+      return session.start(channel.phone || undefined)
+    })
   }
 
   /**
@@ -77,6 +85,8 @@ class Registry {
 
     switch (job.action) {
       case 'start': {
+        // An explicit start supersedes any earlier manual stop.
+        await repo.setManuallyStopped(channel.id, false)
         return session.start(
           (payload.phone as string) || channel.phone || undefined,
           typeof payload.attemptId === 'string' ? payload.attemptId : undefined,
@@ -85,6 +95,7 @@ class Registry {
       case 'start_qr': {
         // One-button QR login: no phone/SMS, the owner scans from Telegram →
         // Settings → Devices. The panel polls the QR via the internal HTTP API.
+        await repo.setManuallyStopped(channel.id, false)
         return session.startQr(
           typeof payload.attemptId === 'string' ? payload.attemptId : undefined,
         )
@@ -296,10 +307,15 @@ class Registry {
         return { sent: true }
       }
       case 'restart': {
+        await repo.setManuallyStopped(channel.id, false)
         await session.stop()
         return session.start(channel.phone || undefined)
       }
       case 'stop': {
+        // Record the intent BEFORE stopping: without this flag the revival
+        // sweep sees "offline + saved session" and resurrects the account
+        // ~60 seconds after the admin deliberately stopped it.
+        await repo.setManuallyStopped(channel.id, true)
         await session.stop()
         return { stopped: true }
       }
@@ -344,17 +360,19 @@ class Registry {
         // Re-check at fire time: a job processed during the stagger window may
         // have created the session in the meantime.
         if (this.sessions.has(channel.id)) return
-        try {
+        // Serialized with queued jobs for the same channel (see revive()).
+        void runSerialized(channel.id, () => {
+          if (this.sessions.has(channel.id)) return Promise.resolve()
           const session = this.ensure(channel)
           // Preserve the soft-pause state across worker restarts.
           session.setIngestPaused(Boolean(channel.ingest_paused))
-          void session.start(channel.phone || undefined)
-        } catch (err) {
+          return session.start(channel.phone || undefined).then(() => undefined)
+        }).catch((err) => {
           logger.error(
             { err, channelId: channel.id },
             'Failed to restore session',
           )
-        }
+        })
       }, delay)
     })
   }

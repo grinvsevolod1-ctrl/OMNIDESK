@@ -65,6 +65,15 @@ export async function one<T = Record<string, unknown>>(
 }
 
 /**
+ * How often the LISTEN client is pinged with `SELECT 1`. A silently dead TCP
+ * connection (NAT timeout, firewall drop) does NOT reliably emit 'error' on
+ * the pg Client — without an active probe the worker would keep "listening"
+ * on a corpse and never see another NOTIFY until restart. The ping forces the
+ * failure to surface so the reconnect logic kicks in within a minute.
+ */
+const LISTEN_KEEPALIVE_MS = 60_000
+
+/**
  * Dedicated LISTEN client (separate from the pool) that auto-reconnects.
  * Calls onNotify for every NOTIFY received on the given channel.
  */
@@ -96,16 +105,34 @@ export async function startListener(
       // providers (sslmode=require) instead of silently failing to connect.
       ssl: resolveSslConfig(env.databaseUrl),
     })
+    let keepalive: NodeJS.Timeout | null = null
+    const teardown = (): void => {
+      if (keepalive) {
+        clearInterval(keepalive)
+        keepalive = null
+      }
+      client.end().catch(() => {})
+      scheduleReconnect()
+    }
     client.on('notification', (msg) => {
       if (msg.channel === channel && msg.payload) onNotify(msg.payload)
     })
     client.on('error', (err) => {
       logger.error({ err }, `LISTEN ${channel} client error, reconnecting`)
-      client.end().catch(() => {})
-      scheduleReconnect()
+      teardown()
     })
     await client.connect()
     await client.query(`LISTEN ${channel}`)
+    // Active liveness probe: see LISTEN_KEEPALIVE_MS. If the ping fails, the
+    // connection is dead even if no 'error' event ever fired — tear it down
+    // and reconnect instead of listening on a corpse forever.
+    keepalive = setInterval(() => {
+      client.query('SELECT 1').catch((err) => {
+        logger.error({ err }, `LISTEN ${channel} keepalive failed, reconnecting`)
+        teardown()
+      })
+    }, LISTEN_KEEPALIVE_MS)
+    keepalive.unref?.()
     logger.info(`Listening on Postgres channel "${channel}"`)
   }
   await connect()

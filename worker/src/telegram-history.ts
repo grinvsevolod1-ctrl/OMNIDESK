@@ -58,11 +58,15 @@ export async function syncDialogs(
   for (const folder of TG_DIALOG_FOLDERS) {
     if (!ctx.getClient() || ctx.isIngestPaused()) break
     try {
-      const dialogs = await client.getDialogs({
+      // iterDialogs streams one page at a time instead of materializing the
+      // whole dialog list (previously getDialogs with a de-facto unbounded
+      // limit built an array of EVERY chat + entity in memory at once —
+      // significant for accounts with thousands of dialogs).
+      for await (const dialog of client.iterDialogs({
         limit: enumLimit,
         folder,
-      })
-      for (const dialog of dialogs) {
+      })) {
+        if (!ctx.getClient() || ctx.isIngestPaused()) break
         try {
           const handled = await importDialog(ctx, dialog, {
             backfill: Boolean(opts?.backfill),
@@ -99,7 +103,7 @@ export async function syncDialogs(
  */
 async function importDialog(
   ctx: TgSessionCtx,
-  dialog: Awaited<ReturnType<TelegramClient['getDialogs']>>[number],
+  dialog: Dialog,
   ictx: { backfill: boolean; canBackfill: boolean; seenPeers: Set<string> },
 ): Promise<'skipped' | 'imported' | 'backfilled'> {
   // Skip Telegram's own service/notifications "channel" feed but keep
@@ -168,11 +172,19 @@ async function importDialog(
 }
 
 /**
- * Pull the COMPLETE message history of a single chat into the inbox — every
- * message and every file, paged all the way back to the very first message
- * (unless TG_BACKFILL_PER_CHAT sets a cap). Idempotent: ingestInbound
- * de-duplicates on providerMessageId, so re-connecting never creates dupes,
- * and countUnread:false means backfilling old chats doesn't light up unread
+ * Pull the message history of a single chat into the inbox, tracked by a
+ * per-chat WATERMARK (scripts/105) so work is never repeated:
+ *
+ *   Phase A (gap top-up): if the chat has been synced before, fetch only
+ *   messages NEWER than newest_synced_id — the offline gap. On a typical
+ *   reconnect this is a single small page instead of the entire history.
+ *
+ *   Phase B (deep backfill): pages backwards toward the first message, but
+ *   only until `complete` — and RESUMES from oldest_synced_id if a previous
+ *   sweep was interrupted, instead of restarting from the top.
+ *
+ * Idempotent: ingestInbound de-duplicates on providerMessageId, and
+ * countUnread:false means backfilling old chats doesn't light up unread
  * badges. Uses only cached sender data (no per-message network calls) and
  * sleeps between pages to keep the full sweep flood-safe.
  */
@@ -185,94 +197,163 @@ async function backfillDialogHistory(
 ): Promise<void> {
   const client = ctx.getClient()
   if (!client) return
-  // Page backwards through history: getMessages returns newest-first, and
-  // `offsetId` asks for messages OLDER than that id, so we walk from the most
-  // recent message to the first one, one bounded page at a time.
-  let offsetId = 0
+
+  // Watermark read is best-effort: if the table is missing (migration not yet
+  // applied) fall back to the old full-backfill behaviour instead of failing.
+  const wm = await repo
+    .getBackfillWatermark(ctx.channelId, handle)
+    .catch(() => null)
+
   let fetched = 0
+
+  /**
+   * Ingest one getMessages page (oldest-first within the page so the stored
+   * thread keeps natural chronological order). Returns the page's id range.
+   */
+  async function ingestPage(
+    messages: Awaited<ReturnType<TelegramClient['getMessages']>>,
+  ): Promise<{ maxId: number; minId: number }> {
+    let maxId = 0
+    let minId = Number.MAX_SAFE_INTEGER
+    for (const msg of [...messages].reverse()) {
+      if (!msg) continue
+      if (msg.id > maxId) maxId = msg.id
+      if (msg.id < minId) minId = msg.id
+      const media = classifyTgMedia(msg)
+      const text = msg.message || (media ? media.placeholder : '')
+      if (!text && !media) continue // skip service/empty messages
+      const out = Boolean(msg.out)
+
+      // For groups, prefix the sender name using cached data only
+      // (msg.sender is populated by getMessages) — never await getSender().
+      let body = text
+      if (!isUser && !out) {
+        const s = msg.sender as Api.User | null
+        const senderName =
+          s && 'firstName' in s
+            ? [s.firstName, s.lastName].filter(Boolean).join(' ') ||
+              (s.username ? `@${s.username}` : 'Участник')
+            : 'Участник'
+        body = `${senderName}: ${text}`
+      }
+
+      const histIngest = await repo.ingestInbound({
+        channelId: ctx.channelId,
+        managerId: ctx.managerId,
+        channelType: 'telegram',
+        contactName,
+        contactHandle: handle,
+        body,
+        direction: out ? 'out' : 'in',
+        author: out ? 'Вы' : undefined,
+        providerMessageId: String(msg.id),
+        createdAt: msg.date ? new Date(msg.date * 1000) : undefined,
+        countUnread: false,
+        ...(media
+          ? {
+              mediaType: media.mediaType,
+              mediaMime: media.mediaMime,
+              mediaName: media.mediaName,
+              mediaRef: { peer: handle, msgId: String(msg.id) },
+            }
+          : {}),
+      })
+
+      // Persist historical media bytes too (throttled to stay flood-safe).
+      if (media && TG_STORE_MEDIA_BACKFILL && histIngest.messageId) {
+        await ctx.persistMediaBytes(histIngest.messageId, msg)
+        if (TG_BACKFILL_MEDIA_THROTTLE_MS > 0) {
+          await new Promise((r) =>
+            setTimeout(r, TG_BACKFILL_MEDIA_THROTTLE_MS),
+          )
+        }
+      }
+    }
+    return { maxId, minId: minId === Number.MAX_SAFE_INTEGER ? 0 : minId }
+  }
+
   try {
+    // ---- Phase A: gap top-up (only messages newer than the watermark). ----
+    if (wm && wm.newestSyncedId > 0) {
+      let offsetId = 0
+      for (;;) {
+        if (!ctx.getClient() || ctx.isIngestPaused()) return
+        const messages = await client.getMessages(entity, {
+          limit: TG_BACKFILL_BATCH,
+          minId: wm.newestSyncedId,
+          ...(offsetId ? { offsetId } : {}),
+        })
+        if (!messages || messages.length === 0) break
+        const { maxId, minId } = await ingestPage(messages)
+        fetched += messages.length
+        if (maxId > 0) {
+          await repo
+            .upsertBackfillWatermark(ctx.channelId, handle, {
+              newestSyncedId: maxId,
+            })
+            .catch(() => {})
+        }
+        if (messages.length < TG_BACKFILL_BATCH || minId <= 0) break
+        offsetId = minId
+        await new Promise((r) => setTimeout(r, TG_BACKFILL_PAGE_THROTTLE_MS))
+      }
+    }
+
+    // ---- Phase B: deep backfill toward the first message (once). ----
+    if (wm?.complete) return
+    // Resume where the previous (interrupted) sweep stopped; 0 = from the top.
+    let offsetId = wm?.oldestSyncedId ?? 0
     for (;;) {
       if (!ctx.getClient() || ctx.isIngestPaused()) return
       // When a per-chat cap is set, never request more than what's left.
       const remaining =
         TG_BACKFILL_PER_CHAT > 0 ? TG_BACKFILL_PER_CHAT - fetched : Infinity
-      if (remaining <= 0) break
+      if (remaining <= 0) {
+        // Cap reached counts as done — otherwise every sweep would re-walk
+        // the capped window forever without ever finishing.
+        await repo
+          .upsertBackfillWatermark(ctx.channelId, handle, { complete: true })
+          .catch(() => {})
+        break
+      }
       const pageSize = Math.min(TG_BACKFILL_BATCH, remaining)
       const messages = await client.getMessages(entity, {
         limit: pageSize,
         ...(offsetId ? { offsetId } : {}),
       })
-      if (!messages || messages.length === 0) break
-
-      // Ingest oldest-first within the page so the stored thread keeps natural
-      // chronological order regardless of paging direction.
-      for (const msg of [...messages].reverse()) {
-        if (!msg) continue
-        const media = classifyTgMedia(msg)
-        const text = msg.message || (media ? media.placeholder : '')
-        if (!text && !media) continue // skip service/empty messages
-        const out = Boolean(msg.out)
-
-        // For groups, prefix the sender name using cached data only
-        // (msg.sender is populated by getMessages) — never await getSender().
-        let body = text
-        if (!isUser && !out) {
-          const s = msg.sender as Api.User | null
-          const senderName =
-            s && 'firstName' in s
-              ? [s.firstName, s.lastName].filter(Boolean).join(' ') ||
-                (s.username ? `@${s.username}` : 'Участник')
-              : 'Участник'
-          body = `${senderName}: ${text}`
-        }
-
-        const histIngest = await repo.ingestInbound({
-          channelId: ctx.channelId,
-          managerId: ctx.managerId,
-          channelType: 'telegram',
-          contactName,
-          contactHandle: handle,
-          body,
-          direction: out ? 'out' : 'in',
-          author: out ? 'Вы' : undefined,
-          providerMessageId: String(msg.id),
-          createdAt: msg.date ? new Date(msg.date * 1000) : undefined,
-          countUnread: false,
-          ...(media
-            ? {
-                mediaType: media.mediaType,
-                mediaMime: media.mediaMime,
-                mediaName: media.mediaName,
-                mediaRef: { peer: handle, msgId: String(msg.id) },
-              }
-            : {}),
-        })
-
-        // Persist historical media bytes too (throttled to stay flood-safe).
-        if (media && TG_STORE_MEDIA_BACKFILL && histIngest.messageId) {
-          await ctx.persistMediaBytes(histIngest.messageId, msg)
-          if (TG_BACKFILL_MEDIA_THROTTLE_MS > 0) {
-            await new Promise((r) =>
-              setTimeout(r, TG_BACKFILL_MEDIA_THROTTLE_MS),
-            )
-          }
-        }
+      if (!messages || messages.length === 0) {
+        await repo
+          .upsertBackfillWatermark(ctx.channelId, handle, { complete: true })
+          .catch(() => {})
+        break
       }
 
+      const { maxId, minId } = await ingestPage(messages)
       fetched += messages.length
-      // The oldest message in this page (last, since newest-first) seeds the
-      // next page. A short page means we've reached the first message.
-      const oldest = messages[messages.length - 1]
-      if (!oldest) break
-      offsetId = oldest.id
-      if (messages.length < pageSize) break
+      // Persist progress after EVERY page so an interruption resumes here.
+      await repo
+        .upsertBackfillWatermark(ctx.channelId, handle, {
+          ...(maxId > 0 ? { newestSyncedId: maxId } : {}),
+          ...(minId > 0 ? { oldestSyncedId: minId } : {}),
+        })
+        .catch(() => {})
+
+      // A short page means we've reached the first message.
+      if (messages.length < pageSize || minId <= 0) {
+        await repo
+          .upsertBackfillWatermark(ctx.channelId, handle, { complete: true })
+          .catch(() => {})
+        break
+      }
+      offsetId = minId
 
       // Pace between pages so a long history can't trip the flood limiter.
       await new Promise((r) => setTimeout(r, TG_BACKFILL_PAGE_THROTTLE_MS))
     }
   } catch (err) {
     // Log what we managed to import so a mid-sweep flood-wait is visible; the
-    // next reconnect resumes (ingest is idempotent, so no dupes).
+    // next reconnect RESUMES from the persisted watermark (no re-walk, and
+    // ingest is idempotent, so no dupes either).
     logger.warn(
       { channelId: ctx.channelId, handle, fetched, err: errMessage(err) },
       'telegram history backfill interrupted',
