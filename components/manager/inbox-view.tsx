@@ -480,23 +480,43 @@ export function InboxView({
     [conversations],
   )
 
-  // Keep the selection consistent with the current filter.
+  // Keep the selection consistent with the current filter. Deliberately NO
+  // auto-select: nothing opens until the manager clicks a dialog (like
+  // Telegram) — the previous version force-opened the first thread on desktop,
+  // which also marked it read as a side effect. If the active thread is
+  // filtered out, just close it back to the empty state.
   useEffect(() => {
-    const isDesktop =
-      typeof window !== 'undefined' &&
-      window.matchMedia('(min-width: 768px)').matches
-    const stillVisible =
-      activeId !== null && filtered.some((c) => c.id === activeId)
-    /* eslint-disable react-hooks/set-state-in-effect */
-    if (activeId !== null && !stillVisible) {
-      setActiveId(isDesktop && filtered.length > 0 ? filtered[0].id : null)
-      return
+    if (activeId !== null && !filtered.some((c) => c.id === activeId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveId(null)
     }
-    if (activeId === null && isDesktop && filtered.length > 0) {
-      setActiveId(filtered[0].id)
-    }
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, [activeId, filtered])
+
+  // Esc closes the open dialog back to the empty state — but never fights the
+  // layered UI: overlays (details drawer, transfer/history dialogs) take Esc
+  // first, and a focused text field keeps its own Esc (draft/reply cancel).
+  useEffect(() => {
+    if (activeId === null) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (transferForId !== null || historyMessage !== null) return
+      const el = document.activeElement
+      if (
+        el instanceof HTMLElement &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.isContentEditable)
+      )
+        return
+      if (detailsOpen) {
+        setDetailsOpen(false)
+        return
+      }
+      setActiveId(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeId, detailsOpen, transferForId, historyMessage])
 
   const [pending, startTransition] = useTransition()
   const [statusPending, startStatusTransition] = useTransition()
