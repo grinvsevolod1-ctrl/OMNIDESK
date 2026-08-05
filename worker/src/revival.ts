@@ -35,6 +35,15 @@ const MAX_DELAY_MS = 30 * 60_000
 
 const backoff = new Map<string, BackoffState>()
 
+/**
+ * Re-entrancy guard: the sweep runs on a fixed interval, but a single pass can
+ * legitimately take longer than that interval (each reconnect goes through a
+ * proxy and MTProto handshake — 30s+ per channel is normal). Overlapping
+ * passes would race two concurrent start() calls on the SAME session, which
+ * MTProto punishes. One pass at a time; a tick that finds one running skips.
+ */
+let sweepInFlight = false
+
 /** Compute the wait after `attempts` consecutive failures (exponential, capped). */
 function delayFor(attempts: number): number {
   return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** attempts)
@@ -46,6 +55,20 @@ function delayFor(attempts: number): number {
  * `ensure(channel).start()`); the sweep only decides WHO to revive and WHEN.
  */
 export async function runRevivalSweep(
+  startChannel: (
+    channel: repo.ChannelRecord,
+  ) => Promise<{ sessionStatus: repo.SessionStatus }>,
+): Promise<void> {
+  if (sweepInFlight) return
+  sweepInFlight = true
+  try {
+    await runRevivalSweepPass(startChannel)
+  } finally {
+    sweepInFlight = false
+  }
+}
+
+async function runRevivalSweepPass(
   startChannel: (
     channel: repo.ChannelRecord,
   ) => Promise<{ sessionStatus: repo.SessionStatus }>,

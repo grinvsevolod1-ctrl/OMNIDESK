@@ -237,7 +237,7 @@ async function directivesView(): Promise<AssistantResult> {
     sortOrder: d.sortOrder,
   }))
   return ok(`Директив ИИ: ${payload.length}.`, [
-    { kind: 'directives', title: 'Дире��тивы ИИ-менеджера', payload },
+    { kind: 'directives', title: 'Директивы ИИ-менеджера', payload },
   ])
 }
 

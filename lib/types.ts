@@ -236,7 +236,7 @@ export const LEAD_STATUS_META: Record<
   },
   handoff: {
     label: 'Передан человеку',
-    description: 'ИИ передал диалог менедж��ру или менеджер вступил сам',
+    description: 'ИИ передал диалог менеджеру или менеджер вступил сам',
   },
   liquid: {
     label: 'Ликвид',

@@ -31,6 +31,14 @@ function toLocalInputValue(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/**
+ * Client-side floor matching the server rule (>= 2 minutes out).
+ * Module-scope on purpose: Date.now() is impure and must not run during render.
+ */
+function isTooSoon(date: Date): boolean {
+  return date.getTime() < Date.now() + 2 * 60_000
+}
+
 /** Resolve a preset into a concrete Date (in the manager's local time). */
 function presetToDate(minutes: number): Date {
   const d = new Date()
@@ -59,8 +67,7 @@ export function ScheduleSendButton({
   const [value, setValue] = useState('')
 
   function confirm(date: Date) {
-    // Client-side floor matching the server rule (>= 2 minutes out).
-    if (date.getTime() < Date.now() + 2 * 60_000) return
+    if (isTooSoon(date)) return
     setOpen(false)
     onSchedule(date.toISOString())
   }

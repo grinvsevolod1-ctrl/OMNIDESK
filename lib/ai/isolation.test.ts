@@ -86,8 +86,9 @@ describe('AI co-pilot isolation from simulator / god panel', () => {
  * Encoding guard: the Russian-language prompt strings that steer the customer
  * reply live inside these modules. A botched save that mangles a multi-byte
  * character (the U+FFFD replacement char) silently corrupts an instruction the
- * model reads verbatim — e.g. «сохра�ит правила» — which is exactly the kind of
- * bug that slips past a type-check. Fail CI if any of them carry U+FFFD.
+ * model reads verbatim — e.g. a word with a swallowed letter in the middle —
+ * which is exactly the kind of bug that slips past a type-check. Fail CI if
+ * any of them carry U+FFFD.
  */
 /**
  * Purity guard: lib/ai/brain/* is shared with the standalone worker, which

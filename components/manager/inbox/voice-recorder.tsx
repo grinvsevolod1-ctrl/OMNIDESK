@@ -100,8 +100,14 @@ export function VoiceRecorder({ disabled, onSend, onError }: VoiceRecorderProps)
     }
     const mime = pickMime()
     let rec: MediaRecorder
+    // Cap the encoder bitrate: Chrome's default (~128 kbps) would push a full
+    // 90s recording to ~1.4 MB — over the server's 1 MB payload cap, rejecting
+    // a recording the manager already made. 32 kbps opus is plenty for speech
+    // (Telegram voice notes use similar) and keeps 90s ≈ 360 KB.
+    const options: MediaRecorderOptions = { audioBitsPerSecond: 32_000 }
+    if (mime) options.mimeType = mime
     try {
-      rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
+      rec = new MediaRecorder(stream, options)
     } catch {
       stream.getTracks().forEach((t) => t.stop())
       onErrorRef.current('Браузер не поддерживает запись аудио.')

@@ -458,7 +458,7 @@ function CreateAccountCard({
           <Link href="/admin/whatsapp" className="font-medium text-foreground underline">
             WhatsApp
           </Link>
-          , после чего назначьте номеру прокси в таблице ниже.
+          , после чего назначьте номеру ��рокси в таблице ниже.
         </p>
       ) : null}
 
@@ -682,6 +682,9 @@ function CreateAccountCard({
               {tgQrImage ? (
                 // The QR encodes a tg://login deep link that rotates ~every 30s;
                 // the poll swaps the image automatically, no user action needed.
+                // A plain <img> is correct here: the source is a client-side
+                // data URL (qrcode.toDataURL) — next/image can't optimize it.
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={tgQrImage || "/placeholder.svg"}
                   alt="QR-код для входа в Telegram"
@@ -699,7 +702,7 @@ function CreateAccountCard({
               </ol>
               <p className="text-xs text-muted-foreground">
                 Код обновляется автоматически. Если на аккаунте включена
-                двухэтапная аутентификация, после сканирования попросим облачный
+                двухэтап��ая аутентификация, после сканирования попросим облачный
                 пароль.
               </p>
             </div>
