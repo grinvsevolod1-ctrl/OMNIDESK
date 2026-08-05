@@ -414,12 +414,106 @@ export async function markProxy(
   proxyId: string,
   status: 'ok' | 'error',
   error: string | null,
+  latencyMs?: number | null,
 ): Promise<void> {
-  await query('UPDATE proxies SET status = $2, last_error = $3 WHERE id = $1', [
-    proxyId,
-    status,
-    error,
-  ])
+  // latency_ms/last_checked_at exist after scripts/108; fall back gracefully
+  // for deployments that haven't applied it yet.
+  try {
+    await query(
+      `UPDATE proxies
+          SET status = $2, last_error = $3,
+              latency_ms = $4, last_checked_at = now()
+        WHERE id = $1`,
+      [proxyId, status, error, latencyMs ?? null],
+    )
+  } catch {
+    await query(
+      'UPDATE proxies SET status = $2, last_error = $3 WHERE id = $1',
+      [proxyId, status, error],
+    )
+  }
+}
+
+/** A proxy row enriched with id/manager/latency for the failover picker. */
+export interface ProxyPickRow {
+  id: string
+  manager_id: string
+  latency_ms: number | null
+  config: ProxyConfig
+}
+
+/**
+ * All proxies assigned to Telegram channels of this manager — the candidates
+ * the health sweep probes. Includes the channel each proxy currently serves.
+ */
+export async function listTelegramProxyAssignments(): Promise<
+  Array<{ channelId: string; proxyId: string; managerId: string }>
+> {
+  const rows = await query<{
+    channel_id: string
+    proxy_id: string
+    manager_id: string
+  }>(
+    `SELECT c.id AS channel_id, p.id AS proxy_id, p.manager_id
+       FROM channels c
+       JOIN proxies p ON p.id = c.proxy_id
+      WHERE c.type = 'telegram' AND c.proxy_id IS NOT NULL`,
+  )
+  return rows.map((r) => ({
+    channelId: r.channel_id,
+    proxyId: r.proxy_id,
+    managerId: r.manager_id,
+  }))
+}
+
+/**
+ * Healthy, UNASSIGNED-for-telegram proxies of one manager, fastest first —
+ * the candidate pool for automatic failover. Respects the allocation rule
+ * from scripts/040 (one proxy serves at most one account per channel type):
+ * a proxy already backing another Telegram channel is excluded.
+ */
+export async function listFailoverProxyCandidates(
+  managerId: string,
+): Promise<ProxyPickRow[]> {
+  const rows = await query<
+    ProxyRow & { id: string; manager_id: string; latency_ms: number | null }
+  >(
+    `SELECT ${proxyCols('p')}, p.manager_id, p.latency_ms
+       FROM proxies p
+      WHERE p.manager_id = $1
+        AND p.status = 'ok'
+        AND p.kind IN ('socks5', 'mtproto')
+        AND NOT EXISTS (
+          SELECT 1 FROM channels c
+           WHERE c.proxy_id = p.id AND c.type = 'telegram'
+        )
+      ORDER BY p.latency_ms ASC NULLS LAST, p.created_at ASC`,
+    [managerId],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    manager_id: r.manager_id,
+    latency_ms: r.latency_ms,
+    config: rowToProxyConfig(r),
+  }))
+}
+
+/**
+ * Atomically repoint a channel at a new proxy. The WHERE guard keeps the
+ * migration honest if an admin reassigned the proxy mid-sweep.
+ */
+export async function reassignChannelProxy(
+  channelId: string,
+  fromProxyId: string,
+  toProxyId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE channels SET proxy_id = $3
+      WHERE id = $1 AND proxy_id = $2
+      RETURNING id`,
+    [channelId, fromProxyId, toProxyId],
+  )
+  return rows.length > 0
 }
 
 /* --------------------- Inbound messages persistence ------------------ */

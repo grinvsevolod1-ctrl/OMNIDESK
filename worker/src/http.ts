@@ -172,7 +172,12 @@ export function startHttpServer(): void {
       if (!config) return json(res, 404, { ok: false, error: 'Proxy not found' })
       const result = await probeProxy(config)
       await repo
-        .markProxy(proxyId, result.ok ? 'ok' : 'error', result.error ?? null)
+        .markProxy(
+          proxyId,
+          result.ok ? 'ok' : 'error',
+          result.error ?? null,
+          result.ok ? (result.latencyMs ?? null) : null,
+        )
         .catch(() => {})
       return json(res, 200, result)
     }

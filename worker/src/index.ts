@@ -6,6 +6,7 @@ import * as repo from './repo.js'
 import { registry } from './registry.js'
 import { runNoResponseSweep } from './autopilot.js'
 import { runRevivalSweep } from './revival.js'
+import { proxyHealthSweep } from './proxy-health.js'
 import { captureException, initErrorReporter } from './error-reporter.js'
 import { processDeployJob, drainDeployQueue } from './hosting/jobs.js'
 import { sweepServerHealth } from './hosting/ops.js'
@@ -56,12 +57,23 @@ const JOBS_RETENTION_SWEEP_MS = 24 * 60 * 60 * 1000
  */
 const MEDIA_OFFLOAD_SWEEP_MS = 30_000
 
+/**
+ * Proxy health sweep cadence: probes every proxy that backs a Telegram
+ * channel (TCP tunnel to a real Telegram DC through the proxy), records
+ * latency (scripts/108), and migrates channels off proxies that fail twice
+ * in a row onto the fastest healthy free proxy of the same manager.
+ * 5 minutes keeps probe traffic negligible while catching a dead proxy far
+ * sooner than an admin would.
+ */
+const PROXY_HEALTH_SWEEP_MS = 5 * 60 * 1000
+
 let noResponseTimer: NodeJS.Timeout | null = null
 let hostingHealthTimer: NodeJS.Timeout | null = null
 let revivalTimer: NodeJS.Timeout | null = null
 let fallbackDrainTimer: NodeJS.Timeout | null = null
 let jobsRetentionTimer: NodeJS.Timeout | null = null
 let mediaOffloadTimer: NodeJS.Timeout | null = null
+let proxyHealthTimer: NodeJS.Timeout | null = null
 
 async function main(): Promise<void> {
   logger.info('Omnidesk worker starting')
@@ -187,6 +199,15 @@ async function main(): Promise<void> {
   }, REVIVAL_SWEEP_MS)
   revivalTimer.unref?.()
 
+  // 7. Proxy health + failover: probe assigned proxies, record latency, and
+  //    migrate channels off dead proxies to the fastest healthy free one.
+  proxyHealthTimer = setInterval(() => {
+    proxyHealthSweep().catch((err) =>
+      logger.error({ err }, 'proxy health sweep failed'),
+    )
+  }, PROXY_HEALTH_SWEEP_MS)
+  proxyHealthTimer.unref?.()
+
   logger.info('Omnidesk worker ready')
 }
 
@@ -199,6 +220,7 @@ async function shutdown(signal: string): Promise<void> {
     if (fallbackDrainTimer) clearInterval(fallbackDrainTimer)
     if (jobsRetentionTimer) clearInterval(jobsRetentionTimer)
     if (mediaOffloadTimer) clearInterval(mediaOffloadTimer)
+    if (proxyHealthTimer) clearInterval(proxyHealthTimer)
     await registry.shutdownAll()
     await pool.end()
   } finally {
