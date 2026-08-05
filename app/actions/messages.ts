@@ -11,6 +11,7 @@ import {
   listMessages,
   listMessagesBefore,
   markMessageDeleted,
+  markMessageFailed,
   setConversationAiAutopilot,
   setMessageReaction,
 } from '@/lib/data'
@@ -59,19 +60,33 @@ export async function replyMessageAction(
   })
   if (!msg) return { ok: false, message: 'Не удалось отправить.' }
 
-  await enqueueJob({
-    channelId: conv.channelId,
-    managerId: session.sub,
-    action: 'send_message',
-    payload: {
-      target: conv.contactHandle,
-      body: text,
-      replyToProviderId: target.providerMessageId,
-      messageId: msg.id,
-    },
-  }).catch((err) => {
+  try {
+    await enqueueJob({
+      channelId: conv.channelId,
+      managerId: session.sub,
+      action: 'send_message',
+      payload: {
+        target: conv.contactHandle,
+        body: text,
+        replyToProviderId: target.providerMessageId,
+        messageId: msg.id,
+      },
+    })
+  } catch (err) {
+    // If the job never made it into the queue the worker will never send this
+    // reply. Don't tell the operator it was "sent" — flag the row failed and
+    // report the failure, mirroring sendMessageAction's Telegram branch.
     console.error('[panel] failed to enqueue reply job:', err)
-  })
+    await markMessageFailed(
+      msg.id,
+      'Не удалось поставить ответ в очередь. Попробуйте ещё раз.',
+    ).catch(() => {})
+    revalidatePath('/app/inbox')
+    return {
+      ok: false,
+      message: 'Не удалось отправить — ответ не поставлен в очередь.',
+    }
+  }
 
   revalidatePath('/app/inbox')
   return { ok: true, message: 'Ответ отправлен.' }
@@ -237,19 +252,27 @@ export async function forwardMessageAction(
     return { ok: false, message: 'Не удалось создать сообщение в диалоге получателя.' }
   }
 
-  await enqueueJob({
-    channelId: dest.channelId,
-    managerId: session.sub,
-    action: 'forward_message',
-    payload: {
-      fromTarget: source.contactHandle,
-      toTarget: dest.contactHandle,
-      providerMessageId: source.providerMessageId,
-      messageId: placeholder.id,
-    },
-  }).catch((err) => {
+  try {
+    await enqueueJob({
+      channelId: dest.channelId,
+      managerId: session.sub,
+      action: 'forward_message',
+      payload: {
+        fromTarget: source.contactHandle,
+        toTarget: dest.contactHandle,
+        providerMessageId: source.providerMessageId,
+        messageId: placeholder.id,
+      },
+    })
+  } catch (err) {
     console.error('[panel] failed to enqueue forward job:', err)
-  })
+    await markMessageFailed(
+      placeholder.id,
+      'Не удалось поставить пересылку в очередь. Попробуйте ещё раз.',
+    ).catch(() => {})
+    revalidatePath('/app/inbox')
+    return { ok: false, message: 'Не удалось переслать — задача не поставлена в очередь.' }
+  }
 
   revalidatePath('/app/inbox')
   return { ok: true, message: `Переслано: ${dest.contactName || dest.contactHandle}` }
