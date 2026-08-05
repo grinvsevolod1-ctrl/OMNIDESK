@@ -26,6 +26,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { EmojiPicker, StickerPicker } from '@/components/manager/inbox/pickers'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
+import { ScheduleSendButton } from '@/components/manager/inbox/schedule-send'
 import { TelemostIcon } from '@/components/channel-icons'
 import { cn } from '@/lib/utils'
 import type { ChannelType, QuickReply, StickerItem } from '@/lib/types'
@@ -51,6 +52,8 @@ export interface MessageComposerProps {
   }) => void
   /** Surface a recorder error (mic denied, unsupported browser) to the user. */
   onVoiceError: (message: string) => void
+  /** Schedule the drafted text for later delivery (Telegram only). */
+  onScheduleSend: (text: string, scheduleAtIso: string) => void
   aiLed: boolean
   /** Fired when the manager tries to type/send while the AI leads the thread. */
   onBlockedInteract: () => void
@@ -92,6 +95,7 @@ export const MessageComposer = memo(function MessageComposer({
   onSendMediaFile,
   onSendVoice,
   onVoiceError,
+  onScheduleSend,
   aiLed,
   onBlockedInteract,
   onToggleAi,
@@ -300,6 +304,22 @@ export const MessageComposer = memo(function MessageComposer({
               onSend={onSendVoice}
               onError={onVoiceError}
             />
+            {/* "Send later": hidden while editing — editing an existing
+                message must not fork into a scheduled duplicate. */}
+            {!editing ? (
+              <ScheduleSendButton
+                disabled={pending || aiLed || !text.trim()}
+                hasText={Boolean(text.trim())}
+                onSchedule={(iso) => {
+                  const body = text.trim()
+                  if (!body) return
+                  onScheduleSend(body, iso)
+                  setText('')
+                  persistRef.current('')
+                  requestAnimationFrame(resizeComposer)
+                }}
+              />
+            ) : null}
           </>
         ) : null}
         {channelType === 'whatsapp' || channelType === 'vk' ? (

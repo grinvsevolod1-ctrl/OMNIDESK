@@ -849,6 +849,7 @@ export function InboxView({
     copyMessageText,
     sendSticker,
     sendVoice,
+    scheduleSend,
     handleSendMediaFile,
   } = useMessageActions({
     activeId,
@@ -1013,6 +1014,7 @@ export function InboxView({
               onSendMediaFile={handleSendMediaFile}
               onSendVoice={sendVoice}
               onVoiceError={(message) => toast.error(message)}
+              onScheduleSend={scheduleSend}
               aiLed={activeAiLed}
               onBlockedInteract={() => {
                 pulseAiButton()

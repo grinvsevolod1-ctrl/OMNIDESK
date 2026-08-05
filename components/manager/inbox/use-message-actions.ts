@@ -4,6 +4,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction, type Transitio
 import { toast } from 'sonner'
 import {
   sendMessageAction,
+  sendScheduledMessageAction,
   sendStickerAction,
   sendVkMediaAction,
   sendVoiceAction,
@@ -221,6 +222,28 @@ export function useMessageActions({
     })
   }
 
+  /** Schedule a message for later delivery (Telegram only). Server-side
+   *  schedule_date: Telegram delivers at the chosen time on its own. No
+   *  optimistic bubble — the row appears via the normal revalidate with its
+   *  "[Запланировано на …]" preview, avoiding a duplicate when SWR catches up. */
+  function scheduleSend(body: string, scheduleAtIso: string) {
+    if (!activeId) return
+    if (activeAiLed) {
+      pulseAiButton()
+      toast.error('ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.')
+      return
+    }
+    startTransition(async () => {
+      const res = await sendScheduledMessageAction(
+        activeId,
+        body,
+        scheduleAtIso,
+      )
+      if (res.ok) toast.success(res.message)
+      else toast.error(res.message)
+    })
+  }
+
   /** Send a voice note recorded in the composer (Telegram only). Optimistic:
    *  a 'voice' bubble appears immediately; a rejected send flags it failed. */
   function sendVoice(audio: {
@@ -310,6 +333,7 @@ export function useMessageActions({
     copyMessageText,
     sendSticker,
     sendVoice,
+    scheduleSend,
     handleSendMediaFile,
   }
 }
