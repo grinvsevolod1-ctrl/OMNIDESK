@@ -29,13 +29,17 @@ export default async function CuratorsPage() {
     discipline.map((d) => [d.curatorId, d]),
   )
   const historyById = Object.fromEntries(history)
+  // Multi-city map (curator_cities): show every covered city in the table.
+  const citiesById = Object.fromEntries(
+    activeCurators.map((c) => [c.id, c.cities]),
+  )
 
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-6">
         <PageHeader
           title="Кураторы"
-          description="Кураторы отвечают за город. Создавать может только администратор. Нажмите на куратора, чтобы открыть его лиды."
+          description="Куратор может вести один или несколько городов. Создавать может только администратор. Нажмите на куратора, чтобы открыть его лиды."
           action={<CreateCuratorDialog />}
         />
 
@@ -43,7 +47,7 @@ export default async function CuratorsPage() {
           <EmptyState
             icon={MapPin}
             title="Кураторов пока нет"
-            description="Создайте куратора и укажите город, за который он отвечает."
+            description="Создайте куратора и укажите города, за которые он отвечает."
             action={<CreateCuratorDialog />}
           />
         ) : (
@@ -51,6 +55,7 @@ export default async function CuratorsPage() {
             curators={curators}
             discipline={disciplineById}
             history={historyById}
+            citiesById={citiesById}
           />
         )}
       </div>

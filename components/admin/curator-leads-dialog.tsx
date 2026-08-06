@@ -27,7 +27,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import type { LeadCard, LeadCardComment } from '@/lib/data/lead-cards'
+import type {
+  CuratorWithLoad,
+  LeadCard,
+  LeadCardComment,
+} from '@/lib/data/lead-cards'
 import {
   LEAD_STATUS_TONE,
   leadStatusLabel,
@@ -129,7 +133,7 @@ export function CuratorLeadsDialog({
     { revalidateOnFocus: false },
   )
   const leads: LeadCard[] = listData?.list ?? []
-  const curators: Manager[] = listData?.all ?? []
+  const curators: CuratorWithLoad[] = listData?.all ?? []
 
   const { data: detailData, isLoading: detailLoading } = useSWR(
     open && selectedId ? ['lead-detail-admin', selectedId] : null,
@@ -285,9 +289,11 @@ export function CuratorLeadsDialog({
                                 >
                                   <ArrowRightLeft className="size-3.5" />
                                   <span className="truncate">{c.name}</span>
-                                  {c.city ? (
-                                    <span className="ml-auto text-xs text-muted-foreground">
-                                      {c.city}
+                                  {c.cities?.length || c.city ? (
+                                    <span className="ml-auto max-w-[45%] truncate text-xs text-muted-foreground">
+                                      {c.cities?.length
+                                        ? c.cities.join(', ')
+                                        : c.city}
                                     </span>
                                   ) : null}
                                 </DropdownMenuItem>

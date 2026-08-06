@@ -159,7 +159,11 @@ export function AllLeadsSection({
           {curators.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
-              {c.city ? ` — ${c.city}` : ''}
+              {c.cities?.length
+                ? ` — ${c.cities.join(', ')}`
+                : c.city
+                  ? ` — ${c.city}`
+                  : ''}
             </option>
           ))}
         </select>
@@ -315,8 +319,11 @@ export function AllLeadsSection({
                               onClick={() => transfer(lead.id, c.id)}
                             >
                               <span className="truncate">{c.name}</span>
-                              <span className="ml-auto text-xs text-muted-foreground">
-                                {c.city ?? ''} · {c.activeLeads} лид.
+                              <span className="ml-auto max-w-[50%] truncate text-xs text-muted-foreground">
+                                {c.cities?.length
+                                  ? c.cities.join(', ')
+                                  : (c.city ?? '')}{' '}
+                                · {c.activeLeads} лид.
                               </span>
                             </DropdownMenuItem>
                           ))

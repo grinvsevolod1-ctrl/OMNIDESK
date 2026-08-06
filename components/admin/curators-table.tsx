@@ -98,10 +98,13 @@ export function CuratorsTable({
   curators,
   discipline,
   history,
+  citiesById,
 }: {
   curators: Manager[]
   discipline?: Record<string, CuratorDiscipline>
   history?: Record<string, CuratorDisciplineHistory>
+  /** All covered cities per curator (curator_cities, migration 115). */
+  citiesById?: Record<string, string[]>
 }) {
   const [selected, setSelected] = useState<Manager | null>(null)
   const [editingCities, setEditingCities] = useState<Manager | null>(null)
@@ -139,11 +142,18 @@ export function CuratorsTable({
                 <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
-                    className="group flex items-center gap-1.5"
+                    className="group flex flex-wrap items-center gap-1.5"
                     onClick={() => setEditingCities(c)}
                     title="Изменить города куратора"
                   >
-                    {c.city ? <CityPill city={c.city} /> : null}
+                    {(citiesById?.[c.id]?.length
+                      ? citiesById[c.id]
+                      : c.city
+                        ? [c.city]
+                        : []
+                    ).map((city) => (
+                      <CityPill key={city} city={city} />
+                    ))}
                     <Pencil className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                     <span className="sr-only">Изменить города</span>
                   </button>
@@ -190,7 +200,14 @@ export function CuratorsTable({
             <div className="mt-3 flex items-center justify-between">
               <div className="flex flex-wrap items-center gap-1.5">
                 <StatusPill status={c.status} />
-                {c.city ? <CityPill city={c.city} /> : null}
+                {(citiesById?.[c.id]?.length
+                  ? citiesById[c.id]
+                  : c.city
+                    ? [c.city]
+                    : []
+                ).map((city) => (
+                  <CityPill key={city} city={city} />
+                ))}
                 <DisciplinePill d={discipline?.[c.id]} h={history?.[c.id]} />
               </div>
               <span className="text-xs text-muted-foreground">

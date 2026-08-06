@@ -27,7 +27,7 @@ export function curatorTools(_state: RunState) {
   return {
     listCurators: tool({
       description:
-        'Показать всех активных кураторов: имя, город и текущая нагрузка (сколько активных лидов у каждого). Вызывай, когда админ спрашивает «какие у нас кураторы», «кто ведёт Казань», «кто самый загруженный», «кому можно отдать лида».',
+        'Показать всех активных кураторов: имя, города (куратор может вести несколько городов) и текущая нагрузка (сколько активных лидов у каждого). Вызывай, когда админ спрашивает «какие у нас кураторы», «кто ведёт Казань», «кто самый загруженный», «кому можно отдать лида».',
       inputSchema: z.object({}),
       execute: async () => {
         const curators = await listActiveCurators()
@@ -36,7 +36,7 @@ export function curatorTools(_state: RunState) {
           count: curators.length,
           curators: curators.map((c) => ({
             name: c.name,
-            city: c.city,
+            cities: c.cities.length ? c.cities : c.city ? [c.city] : [],
             activeLeads: c.activeLeads,
           })),
         }

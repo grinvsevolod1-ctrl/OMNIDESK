@@ -262,9 +262,13 @@ export function LeadCardPanel({
                         >
                           <span className="font-medium">{c.name}</span>
                           <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span className="flex items-center gap-1">
-                              <MapPin className="size-3" />
-                              {c.city}
+                            <span className="flex min-w-0 items-center gap-1">
+                              <MapPin className="size-3 shrink-0" />
+                              <span className="truncate">
+                                {c.cities?.length
+                                  ? c.cities.join(', ')
+                                  : c.city}
+                              </span>
                             </span>
                             <span
                               className="rounded bg-muted px-1.5 py-0.5 text-[10px]"

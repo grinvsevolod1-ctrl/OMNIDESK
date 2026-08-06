@@ -286,7 +286,18 @@ export async function autoArchiveFinalLeads(afterDays: number): Promise<number> 
 /** A curator (or any manager row) with the number of active leads assigned. */
 export interface CuratorWithLoad extends Manager {
   activeLeads: number
+  /** All covered cities (curator_cities, migration 115). Falls back to [city]. */
+  cities: string[]
 }
+
+/** SQL fragment: aggregated city list with legacy managers.city fallback. */
+const CITIES_AGG = `
+  COALESCE(
+    (SELECT array_agg(cc.city ORDER BY cc.city)
+       FROM curator_cities cc WHERE cc.curator_id = managers.id),
+    CASE WHEN city IS NOT NULL AND city <> ''
+         THEN ARRAY[city] ELSE ARRAY[]::text[] END
+  ) AS cities`
 
 /**
  * Active curators covering a matching city (case-insensitive contains),
@@ -299,13 +310,16 @@ export async function findCuratorsByCity(
 ): Promise<CuratorWithLoad[]> {
   const q = cityKey(cityQuery)
   if (!q) return []
-  const rows = await query<ManagerRow & { active_leads: string }>(
+  const rows = await query<
+    ManagerRow & { active_leads: string; cities: string[] | null }
+  >(
     `SELECT ${managerColumns()},
             (SELECT count(*) FROM lead_cards lc
               WHERE lc.curator_id = managers.id
                 AND lc.transferred_at IS NOT NULL
                 AND (lc.status IS NULL OR lc.status NOT IN ('refused', 'left'))
-            )::int AS active_leads
+            )::int AS active_leads,
+            ${CITIES_AGG}
        FROM managers
       WHERE role = 'curator'
         AND status = 'active'
@@ -324,18 +338,22 @@ export async function findCuratorsByCity(
   return rows.map((r) => ({
     ...toManager(r),
     activeLeads: Number(r.active_leads ?? 0),
+    cities: r.cities ?? [],
   }))
 }
 
 /** All active curators (for admin transfer picker), with load counts. */
 export async function listActiveCurators(): Promise<CuratorWithLoad[]> {
-  const rows = await query<ManagerRow & { active_leads: string }>(
+  const rows = await query<
+    ManagerRow & { active_leads: string; cities: string[] | null }
+  >(
     `SELECT ${managerColumns()},
             (SELECT count(*) FROM lead_cards lc
               WHERE lc.curator_id = managers.id
                 AND lc.transferred_at IS NOT NULL
                 AND (lc.status IS NULL OR lc.status NOT IN ('refused', 'left'))
-            )::int AS active_leads
+            )::int AS active_leads,
+            ${CITIES_AGG}
        FROM managers
       WHERE role = 'curator' AND status = 'active'
       ORDER BY city ASC NULLS LAST, name ASC`,
@@ -343,6 +361,7 @@ export async function listActiveCurators(): Promise<CuratorWithLoad[]> {
   return rows.map((r) => ({
     ...toManager(r),
     activeLeads: Number(r.active_leads ?? 0),
+    cities: r.cities ?? [],
   }))
 }
 
