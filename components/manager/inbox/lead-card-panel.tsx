@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState, useTransition } from 'react'
+import useSWR from 'swr'
 import { ClipboardList, Loader2, MapPin, Send, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -44,8 +45,6 @@ export function LeadCardPanel({
   const [address, setAddress] = useState('')
   const [vacancy, setVacancy] = useState('')
   const [curatorId, setCuratorId] = useState<string | null>(null)
-  const [curators, setCurators] = useState<CuratorWithLoad[]>([])
-  const [searching, setSearching] = useState(false)
   const [transferredAt, setTransferredAt] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
 
@@ -66,38 +65,30 @@ export function LeadCardPanel({
     setLoaded(true)
   }, [conversationId, defaults])
 
-  useEffect(() => {
-    if (open && !loaded) void load()
-  }, [open, loaded, load])
-
-  // Reset load flag when conversation changes.
-  useEffect(() => {
+  // Reset when the conversation changes — state adjustment during render
+  // (the React-recommended alternative to a setState-in-effect).
+  const [prevConversationId, setPrevConversationId] = useState(conversationId)
+  if (prevConversationId !== conversationId) {
+    setPrevConversationId(conversationId)
     setLoaded(false)
     setOpen(false)
-  }, [conversationId])
+  }
 
-  useEffect(() => {
-    if (!open) return
-    const q = city.trim()
-    if (q.length < 2) {
-      setCurators([])
-      return
-    }
-    let cancelled = false
-    const t = setTimeout(() => {
-      setSearching(true)
-      void findCuratorsByCityAction(q).then((list) => {
-        if (!cancelled) {
-          setCurators(list)
-          setSearching(false)
-        }
-      })
-    }, 250)
-    return () => {
-      cancelled = true
-      clearTimeout(t)
-    }
-  }, [city, open])
+  function toggleOpen() {
+    const next = !open
+    setOpen(next)
+    if (next && !loaded) void load()
+  }
+
+  // Curator search by city (SWR keyed by the trimmed query).
+  const cityQuery = open ? city.trim() : ''
+  const { data: curatorsData, isLoading: searching } = useSWR(
+    cityQuery.length >= 2 ? ['curator-city-search', cityQuery] : null,
+    () => findCuratorsByCityAction(cityQuery),
+    { revalidateOnFocus: false, keepPreviousData: true, dedupingInterval: 300 },
+  )
+  const curators: CuratorWithLoad[] =
+    cityQuery.length >= 2 ? (curatorsData ?? []) : []
 
   // Lock body scroll while panel is open on mobile.
   useEffect(() => {
@@ -142,7 +133,7 @@ export function LeadCardPanel({
         title="Карточка лида"
         aria-label="Карточка лида"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggleOpen}
       >
         <ClipboardList className="size-4" />
         <span className="hidden sm:inline">Карточка</span>

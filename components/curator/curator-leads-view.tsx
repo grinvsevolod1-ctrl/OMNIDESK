@@ -49,6 +49,17 @@ export function CuratorLeadsView({
   )
   const locked = isPastDailyDeadline() && pending.length > 0
 
+  // Render in chunks so hundreds of leads don't weigh the page down.
+  // Leads that still need today's confirmation always come first.
+  const PAGE = 50
+  const [visible, setVisible] = useState(PAGE)
+  const ordered = useMemo(() => {
+    const needs = (l: LeadCard) => needsDailyStatusUpdate(l.statusConfirmedDate)
+    return [...leads].sort((a, b) => Number(needs(b)) - Number(needs(a)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tick re-evaluates the deadline
+  }, [leads, tick])
+  const shown = ordered.slice(0, visible)
+
   const refresh = useCallback(async () => {
     // Soft refresh via full navigation is heavy; re-fetch through list action.
     const { listMyCuratorLeadsAction } = await import('@/app/actions/lead-cards')
@@ -102,7 +113,7 @@ export function CuratorLeadsView({
         />
       ) : (
         <div className="flex flex-col gap-3">
-          {leads.map((lead) => {
+          {shown.map((lead) => {
             const needs = needsDailyStatusUpdate(lead.statusConfirmedDate)
             return (
               <Card
@@ -150,6 +161,16 @@ export function CuratorLeadsView({
               </Card>
             )
           })}
+
+          {ordered.length > visible ? (
+            <button
+              type="button"
+              onClick={() => setVisible((v) => v + PAGE)}
+              className="rounded-xl border border-border py-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted/40"
+            >
+              Показать ещё ({ordered.length - visible})
+            </button>
+          ) : null}
         </div>
       )}
 

@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState, useTransition } from 'react'
+import { useState, useTransition } from 'react'
+import useSWR from 'swr'
 import {
   ArrowRightLeft,
   Loader2,
@@ -102,56 +103,41 @@ export function CuratorLeadsDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const [leads, setLeads] = useState<LeadCard[]>([])
-  const [loading, setLoading] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [detail, setDetail] = useState<{
-    card: LeadCard
-    comments: LeadCardComment[]
-  } | null>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
-  const [curators, setCurators] = useState<Manager[]>([])
   const [pending, startTransition] = useTransition()
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
+  // Reset selection when the dialog is (re)opened — adjustment during render.
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    setSelectedId(null)
+  }
+
+  const {
+    data: listData,
+    isLoading: loading,
+    mutate: reloadList,
+  } = useSWR(
+    open ? ['curator-leads-admin', curator.id] : null,
+    async () => {
       const [list, all] = await Promise.all([
         listCuratorLeadsAdminAction(curator.id),
         listActiveCuratorsAction(),
       ])
-      setLeads(list)
-      setCurators(all.filter((c) => c.id !== curator.id))
-    } finally {
-      setLoading(false)
-    }
-  }, [curator.id])
+      return { list, all: all.filter((c) => c.id !== curator.id) }
+    },
+    { revalidateOnFocus: false },
+  )
+  const leads: LeadCard[] = listData?.list ?? []
+  const curators: Manager[] = listData?.all ?? []
 
-  useEffect(() => {
-    if (open) {
-      setSelectedId(null)
-      setDetail(null)
-      void load()
-    }
-  }, [open, load])
-
-  useEffect(() => {
-    if (!selectedId) {
-      setDetail(null)
-      return
-    }
-    let cancelled = false
-    setDetailLoading(true)
-    void getLeadCardDetailAction(selectedId).then((res) => {
-      if (!cancelled) {
-        setDetail(res)
-        setDetailLoading(false)
-      }
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [selectedId])
+  const { data: detailData, isLoading: detailLoading } = useSWR(
+    open && selectedId ? ['lead-detail-admin', selectedId] : null,
+    () => getLeadCardDetailAction(selectedId as string),
+    { revalidateOnFocus: false },
+  )
+  const detail: { card: LeadCard; comments: LeadCardComment[] } | null =
+    selectedId && detailData ? detailData : null
 
   function transfer(leadId: string, toCuratorId: string) {
     startTransition(async () => {
@@ -162,7 +148,7 @@ export function CuratorLeadsDialog({
       if (res.ok) {
         toast.success(res.message)
         setSelectedId(null)
-        void load()
+        void reloadList()
       } else {
         toast.error(res.message)
       }
