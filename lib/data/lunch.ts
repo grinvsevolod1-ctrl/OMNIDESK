@@ -2,6 +2,9 @@
  * Manager lunch / availability: on-lunch flag, available-manager count and
  * lunch substitution routing.
  * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
+ *
+ * All availability queries filter role = 'manager' so curators (who share the
+ * managers table) never inflate the online pool or receive substituted dialogs.
  */
 import { query, withTransaction } from '../db'
 import { nextRoundRobinIndex } from './shared'
@@ -22,10 +25,10 @@ export async function setManagerOnLunch(
   managerId: string,
   onLunch: boolean,
 ): Promise<void> {
-  await query('UPDATE managers SET on_lunch = $2 WHERE id = $1', [
-    managerId,
-    onLunch,
-  ])
+  await query(
+    `UPDATE managers SET on_lunch = $2 WHERE id = $1 AND role = 'manager'`,
+    [managerId, onLunch],
+  )
 }
 
 /**
@@ -52,13 +55,17 @@ export async function tryGoOnLunch(managerId: string): Promise<boolean> {
     await db.query('SELECT pg_advisory_xact_lock($1)', [LUNCH_LOCK_KEY])
     const rows = await db.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM managers
-        WHERE status = 'active' AND on_lunch = false AND id <> $1::uuid`,
+        WHERE role = 'manager'
+          AND status = 'active'
+          AND on_lunch = false
+          AND id <> $1::uuid`,
       [managerId],
     )
     if (Number(rows[0]?.n ?? 0) < 1) return false
-    await db.query('UPDATE managers SET on_lunch = true WHERE id = $1', [
-      managerId,
-    ])
+    await db.query(
+      `UPDATE managers SET on_lunch = true WHERE id = $1 AND role = 'manager'`,
+      [managerId],
+    )
     return true
   })
 }
@@ -66,13 +73,13 @@ export async function tryGoOnLunch(managerId: string): Promise<boolean> {
 /**
  * Count managers currently AVAILABLE to take new conversations: active and not
  * on lunch. Used to guarantee at least one manager always stays online — the
- * last available manager can't go on lunch.
+ * last available manager can't go on lunch. Curators are excluded.
  */
 export async function countAvailableManagers(): Promise<number> {
   try {
     const rows = await query<{ n: string | number }>(
       `SELECT count(*)::int AS n FROM managers
-        WHERE status = 'active' AND on_lunch = false`,
+        WHERE role = 'manager' AND status = 'active' AND on_lunch = false`,
     )
     return Number(rows[0]?.n ?? 0)
   } catch (err) {
@@ -109,6 +116,7 @@ export async function getManagerOnLunch(managerId: string): Promise<boolean> {
  * manager returning from lunch keeps whatever the substitute already picked up.
  *
  * Safe to call from both ingest paths (app-side webhooks and the worker).
+ * Curators are never selected as substitutes.
  */
 export async function applyLunchSubstitution(
   ownerId: string | null,
@@ -116,20 +124,26 @@ export async function applyLunchSubstitution(
   if (!ownerId) return ownerId
 
   try {
-    // Is the natural owner available? (exists, active, not on lunch)
+    // Is the natural owner available? (exists, active manager, not on lunch)
     const ownerRows = await query<{ id: string }>(
       `SELECT id FROM managers
-        WHERE id = $1 AND status = 'active' AND on_lunch = false
+        WHERE id = $1
+          AND role = 'manager'
+          AND status = 'active'
+          AND on_lunch = false
         LIMIT 1`,
       [ownerId],
     )
     if (ownerRows[0]) return ownerId
 
-    // Owner is away — gather available substitutes (active, not on lunch, not
-    // the owner), ordered deterministically so the round-robin cursor is stable.
+    // Owner is away — gather available substitutes (active managers, not on
+    // lunch, not the owner), ordered deterministically so the RR cursor is stable.
     const subs = await query<{ id: string }>(
       `SELECT id FROM managers
-        WHERE status = 'active' AND on_lunch = false AND id <> $1::uuid
+        WHERE role = 'manager'
+          AND status = 'active'
+          AND on_lunch = false
+          AND id <> $1::uuid
         ORDER BY id ASC`,
       [ownerId],
     )
