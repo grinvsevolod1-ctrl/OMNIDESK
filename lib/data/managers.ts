@@ -1,10 +1,12 @@
 /**
  * Managers CRUD, auth state and status.
+ * Also hosts curator accounts (role = 'curator') which share the same table
+ * and credential machinery but are filtered out of the managers pool.
  * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
  */
 import { randomUUID } from 'crypto'
 import { query } from '../db'
-import type { Manager, ManagerStatus } from '../types'
+import type { AccountRole, Manager, ManagerStatus } from '../types'
 import {
   excludeAdminSql,
   managerColumns,
@@ -67,7 +69,7 @@ export function usernameFromEmail(email: string): string {
 /**
  * Look up a manager by either their email (identifier contains '@') or their
  * login. Case-insensitive. Used by the login flow so a single field accepts
- * both forms.
+ * both forms. Returns both managers and curators (same table).
  */
 export async function getManagerByIdentifier(
   identifier: string,
@@ -121,9 +123,10 @@ export function invalidateManagerAuthState(id: string): void {
 
 /**
  * Lightweight auth-state lookup used on every authenticated request to validate
- * a manager's session against the live DB (blocked status + session version).
- * Returns null when the manager no longer exists. Results are cached for a few
- * seconds; see invalidateManagerAuthState for immediate revocation.
+ * a manager's (or curator's) session against the live DB (blocked status +
+ * session version). Returns null when the account no longer exists. Results are
+ * cached for a few seconds; see invalidateManagerAuthState for immediate
+ * revocation.
  */
 export async function getManagerAuthState(
   id: string,
@@ -158,24 +161,39 @@ export async function getManagerById(id: string): Promise<Manager | null> {
  * How many of the given ids correspond to real managers, in ONE query. Lets
  * callers validate a whole pool of manager ids (e.g. a live-chat round-robin
  * queue) without a getManagerById-per-id N+1: compare the returned count to the
- * number of distinct ids passed in.
+ * number of distinct ids passed in. Curators are intentionally excluded — they
+ * are not part of the conversation-handling pool.
  */
 export async function countExistingManagers(ids: string[]): Promise<number> {
   const unique = [...new Set(ids)].filter(Boolean)
   if (unique.length === 0) return 0
   const rows = await query<{ n: string }>(
-    `SELECT COUNT(*)::int AS n FROM managers WHERE id = ANY($1::uuid[])`,
+    `SELECT COUNT(*)::int AS n FROM managers WHERE id = ANY($1::uuid[]) AND role = 'manager'`,
     [unique],
   )
   return Number(rows[0]?.n ?? 0)
 }
 
+/**
+ * List real managers only (role = 'manager'). Curators never appear in the
+ * managers pool (assignment, transfer, blocking of sales accounts, etc.).
+ */
 export async function listManagers(): Promise<Manager[]> {
   // Exclude the env-backed administrator: it is not a real manager and must
   // never appear in the managers pool (assignment, transfer, blocking, etc.).
   const rows = await query<ManagerRow>(
     `SELECT ${managerColumns()} FROM managers
-      WHERE true ${excludeAdminSql('managers')}
+      WHERE role = 'manager' ${excludeAdminSql('managers')}
+      ORDER BY created_at DESC`,
+  )
+  return rows.map(toManager)
+}
+
+/** List curator accounts (role = 'curator'), ordered newest-first. */
+export async function listCurators(): Promise<Manager[]> {
+  const rows = await query<ManagerRow>(
+    `SELECT ${managerColumns()} FROM managers
+      WHERE role = 'curator' ${excludeAdminSql('managers')}
       ORDER BY created_at DESC`,
   )
   return rows.map(toManager)
@@ -187,6 +205,10 @@ export async function createManager(input: {
   passwordHash: string
   /** Optional custom login; defaults to the email local-part when omitted. */
   username?: string
+  /** Defaults to 'manager'. Pass 'curator' together with a non-empty city. */
+  role?: AccountRole
+  /** Required when role = 'curator'; must be null/omitted for managers. */
+  city?: string | null
 }): Promise<Manager> {
   const id = randomUUID()
   const email = input.email.trim().toLowerCase()
@@ -194,12 +216,33 @@ export async function createManager(input: {
     ? input.username
     : usernameFromEmail(email)
   const username = await resolveUniqueUsername(desired)
+  const role: AccountRole = input.role === 'curator' ? 'curator' : 'manager'
+  const city =
+    role === 'curator' ? String(input.city ?? '').trim() || null : null
+  if (role === 'curator' && !city) {
+    throw new Error('Curator requires a non-empty city')
+  }
   const rows = await query<ManagerRow>(
-    `INSERT INTO managers (id, name, email, username, password_hash, status)
-     VALUES ($1, $2, $3, $4, $5, 'active') RETURNING *`,
-    [id, input.name.trim(), email, username, input.passwordHash],
+    `INSERT INTO managers (id, name, email, username, password_hash, status, role, city)
+     VALUES ($1, $2, $3, $4, $5, 'active', $6, $7) RETURNING *`,
+    [id, input.name.trim(), email, username, input.passwordHash, role, city],
   )
   return toManager(rows[0])
+}
+
+/** Convenience wrapper: create a curator with a required city. */
+export async function createCurator(input: {
+  name: string
+  email: string
+  passwordHash: string
+  username?: string
+  city: string
+}): Promise<Manager> {
+  return createManager({
+    ...input,
+    role: 'curator',
+    city: input.city,
+  })
 }
 
 export async function updateManagerStatus(
@@ -234,11 +277,28 @@ export async function updateManagerPassword(
   invalidateManagerAuthState(id)
 }
 
+/**
+ * Update the city a curator is responsible for. No-op / refused for managers
+ * (the CHECK constraint also enforces city IS NULL on role = 'manager').
+ */
+export async function updateCuratorCity(
+  id: string,
+  city: string,
+): Promise<void> {
+  const trimmed = city.trim()
+  if (!trimmed) throw new Error('City must be non-empty')
+  await query(
+    `UPDATE managers SET city = $2 WHERE id = $1 AND role = 'curator'`,
+    [id, trimmed],
+  )
+}
+
 export async function deleteManager(id: string): Promise<void> {
   // Telegram/WhatsApp channels are bound to this manager's worker session, so
   // they should still go away with the manager. After migration 008 the FK is
   // ON DELETE SET NULL (to protect live-chat), so we remove them explicitly to
   // preserve the previous behaviour for these worker-backed channels.
+  // Curators never own channels, so the DELETEs are harmless no-ops for them.
   await query(
     `DELETE FROM channels WHERE manager_id = $1 AND type <> 'livechat'`,
     [id],
@@ -266,10 +326,10 @@ export async function deleteManager(id: string): Promise<void> {
         AND config->'pool' IS NOT NULL`,
     [id],
   )
-  // Finally remove the manager. Their own conversations cascade away; live-chat
-  // channels they owned have manager_id set to NULL by the FK.
+  // Finally remove the manager/curator. Their own conversations cascade away;
+  // live-chat channels they owned have manager_id set to NULL by the FK.
   await query('DELETE FROM managers WHERE id = $1', [id])
-  // Drop cached auth state so the deleted manager is logged out immediately.
+  // Drop cached auth state so the deleted account is logged out immediately.
   invalidateManagerAuthState(id)
 }
 
@@ -350,4 +410,3 @@ export async function getManagerTempPassword(
     return { password: null, setAt: row.temp_password_set_at }
   }
 }
-
