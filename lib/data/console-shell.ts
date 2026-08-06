@@ -259,7 +259,9 @@ export async function listConsoleSchedules(
   userId: string,
 ): Promise<ConsoleSchedule[]> {
   const rows = await query<ScheduleRow>(
-    `SELECT * FROM console_schedules WHERE user_id = $1 ORDER BY created_at`,
+    `SELECT id, user_id, label, prompt, schedule, run_minute, enabled,
+            next_run_at, last_run_at, last_result, created_at
+       FROM console_schedules WHERE user_id = $1 ORDER BY created_at`,
     [userId],
   )
   return rows.map(mapSchedule)

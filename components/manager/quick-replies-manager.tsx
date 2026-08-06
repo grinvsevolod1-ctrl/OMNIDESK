@@ -20,6 +20,7 @@ import {
 } from '@/app/actions/quick-replies'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { CharCounter } from '@/components/ui/char-counter'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { EmptyState } from '@/components/page-parts'
@@ -139,9 +140,7 @@ function ReplyEditor({
           placeholder="Здравствуйте! Чем могу помочь?"
           onSubmitShortcut={submit}
         />
-        <span className="text-right text-[11px] text-muted-foreground tabular-nums">
-          {body.length}/{MAX_BODY}
-        </span>
+        <CharCounter value={body} max={MAX_BODY} className="self-end" />
       </div>
       <div className="flex items-center justify-end gap-2">
         <Button

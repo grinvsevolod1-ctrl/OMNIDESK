@@ -30,6 +30,7 @@ import {
   type AutopilotRuleConfig,
 } from '@/lib/autopilot/match'
 import { Button } from '@/components/ui/button'
+import { CharCounter } from '@/components/ui/char-counter'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -357,9 +358,11 @@ function RuleEditor({
           placeholder="Здравствуйте! Спасибо за обращение, менеджер скоро ответит."
           className="min-h-[80px] w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm leading-relaxed shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
-        <span className="text-right text-[11px] tabular-nums text-muted-foreground">
-          {draft.replyText.length}/{MAX_REPLY}
-        </span>
+        <CharCounter
+          value={draft.replyText}
+          max={MAX_REPLY}
+          className="self-end"
+        />
       </div>
 
       {/* Delay */}

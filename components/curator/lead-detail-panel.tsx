@@ -14,6 +14,7 @@ import {
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { CharCounter } from '@/components/ui/char-counter'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -343,21 +344,14 @@ export function LeadDetailPanel({
                 })}
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label className="text-xs">
-                  Комментарий к статусу{' '}
-                  <span className="text-muted-foreground">
-                    (мин. {STATUS_COMMENT_MIN_LEN} символов)
-                  </span>
-                </Label>
+                <Label className="text-xs">Комментарий к статусу</Label>
                 <Textarea
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
                   placeholder="Почему сейчас такой статус?"
                   rows={3}
                 />
-                <p className="text-[11px] text-muted-foreground">
-                  {comment.trim().length}/{STATUS_COMMENT_MIN_LEN}
-                </p>
+                <CharCounter value={comment} min={STATUS_COMMENT_MIN_LEN} />
               </div>
               <Button
                 className="w-full"

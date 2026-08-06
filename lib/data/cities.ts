@@ -74,28 +74,41 @@ export async function setCuratorCities(
   rawCities: string[],
 ): Promise<string[]> {
   const seen = new Set<string>()
-  const canonical: string[] = []
+  const names: string[] = []
   for (const raw of rawCities) {
     const name = normalizeCityName(raw)
     if (!name) continue
     const key = name.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    canonical.push(await rememberCity(name))
+    names.push(name)
   }
-  if (canonical.length === 0) {
+  if (names.length === 0) {
     throw new Error('Укажите хотя бы один город')
   }
 
+  // Batch: remember every city in one round-trip (instead of one per city)
+  // and read back the canonical spellings keyed by name_norm.
+  const keys = names.map((n) => n.toLowerCase())
+  const dictRows = await query<{ name: string; name_norm: string }>(
+    `INSERT INTO cities (name, name_norm)
+     SELECT n, k FROM unnest($1::text[], $2::text[]) AS t(n, k)
+     ON CONFLICT (name_norm) DO UPDATE SET name_norm = EXCLUDED.name_norm
+     RETURNING name, name_norm`,
+    [names, keys],
+  )
+  const canonicalByKey = new Map(dictRows.map((r) => [r.name_norm, r.name]))
+  const canonical = names.map(
+    (n) => canonicalByKey.get(n.toLowerCase()) ?? n,
+  )
+
   await query(`DELETE FROM curator_cities WHERE curator_id = $1`, [curatorId])
-  for (const city of canonical) {
-    await query(
-      `INSERT INTO curator_cities (curator_id, city, city_norm)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (curator_id, city_norm) DO NOTHING`,
-      [curatorId, city, city.toLowerCase()],
-    )
-  }
+  await query(
+    `INSERT INTO curator_cities (curator_id, city, city_norm)
+     SELECT $1, c, lower(c) FROM unnest($2::text[]) AS t(c)
+     ON CONFLICT (curator_id, city_norm) DO NOTHING`,
+    [curatorId, canonical],
+  )
   await query(
     `UPDATE managers SET city = $2, updated_at = now() WHERE id = $1`,
     [curatorId, canonical[0]],
