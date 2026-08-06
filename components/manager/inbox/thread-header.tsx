@@ -28,13 +28,14 @@ import {
   StatusChip,
   StatusRadioItems,
 } from '@/components/manager/inbox/atoms'
+import { LeadCardPanel } from '@/components/manager/inbox/lead-card-panel'
 import type { Conversation } from '@/lib/types'
 import type { PresenceState } from '@/components/manager/inbox/visual'
 
 /**
  * Header of the open thread: back button (mobile), contact identity (opens the
- * details drawer), the AI-lead toggle, status chip and the actions dropdown.
- * Extracted verbatim from inbox-view.tsx.
+ * details drawer), the AI-lead toggle, lead card, status chip and the actions
+ * dropdown. Extracted verbatim from inbox-view.tsx.
  */
 export function ThreadHeader({
   active,
@@ -125,6 +126,19 @@ export function ThreadHeader({
             {activeAiLed ? 'ИИ ведёт' : 'ИИ'}
           </span>
         </Button>
+
+        <LeadCardPanel
+          conversationId={active.id}
+          defaults={{
+            fullName: active.contactName !== 'NULL' ? active.contactName : '',
+            telegramUsername: active.contactUsername,
+            phone:
+              active.channelType === 'whatsapp' || active.channelType === 'telegram'
+                ? active.contactHandle
+                : undefined,
+          }}
+        />
+
         <StatusChip
           status={active.status}
           auto={!active.statusManual}
