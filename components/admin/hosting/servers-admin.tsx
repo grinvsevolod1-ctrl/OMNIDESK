@@ -141,8 +141,8 @@ export function ServersAdmin({ servers }: { servers: HostingServer[] }) {
                     required
                   />
                 </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2 flex flex-col gap-2">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="flex flex-col gap-2 sm:col-span-2">
                     <Label htmlFor="srv-ip">IP-адрес или хост</Label>
                     <Input id="srv-ip" name="ipAddress" placeholder="1.2.3.4" required />
                   </div>

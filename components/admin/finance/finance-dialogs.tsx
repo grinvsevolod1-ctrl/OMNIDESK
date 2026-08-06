@@ -522,7 +522,7 @@ export function StatDialog({
                 />
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="stat-impr">Показы</Label>
                 <Input id="stat-impr" name="impressions" inputMode="numeric" defaultValue="0" />
@@ -686,7 +686,7 @@ export function EntryDialog({
                 по курсу на сегодня
               </p>
             ) : null}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="entry-status">Статус</Label>
                 <Select
