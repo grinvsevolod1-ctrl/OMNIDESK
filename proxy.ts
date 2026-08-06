@@ -60,16 +60,14 @@ function buildCsp(nonce: string): string {
 /**
  * Re-validate an authenticated session against the live DB.
  *
- * Only managers are checked: the administrator is env-backed and has no row in
- * `managers`. A manager session is invalid when the account is gone, blocked, or
- * its session version was bumped (password change / forced logout). On a DB
- * hiccup we fail OPEN here — the redirect layer is UX only; the page-level
- * `requireManager` re-checks and is the real data boundary. (getManagerAuthState
- * caches for a few seconds, so this adds at most one tiny query per manager per
- * few seconds of navigation.)
+ * Managers AND curators are checked: both live in the `managers` table. The
+ * administrator is env-backed and has no row. A session is invalid when the
+ * account is gone, blocked, or its session version was bumped (password change
+ * / forced logout). On a DB hiccup we fail OPEN here — the redirect layer is UX
+ * only; the page-level require* helpers re-check and are the real data boundary.
  */
 async function sessionIsValid(session: SessionUser): Promise<boolean> {
-  if (session.role !== 'manager') return true
+  if (session.role !== 'manager' && session.role !== 'curator') return true
   try {
     const state = await getManagerAuthState(session.sub)
     if (!state) return false
@@ -115,25 +113,31 @@ export async function proxy(req: NextRequest) {
   const redirectTo = (path: string) =>
     decorate(NextResponse.redirect(new URL(path, req.url)))
 
-  const homeFor = (role: string) => (role === 'admin' ? '/admin' : '/app')
+  const homeFor = (role: string) => {
+    if (role === 'admin') return '/admin'
+    if (role === 'manager') return '/app'
+    // Curators have no dedicated workspace yet — keep them on login.
+    return '/login'
+  }
 
-  // Already authenticated users should not see the login page.
+  // Already authenticated users should not see the login page — except curators,
+  // who currently have nowhere else to land until their area is built.
   if (pathname === '/login') {
-    if (session) return redirectTo(homeFor(session.role))
+    if (session && session.role !== 'curator') return redirectTo(homeFor(session.role))
     return nextWithId()
   }
 
   // Admin area.
   if (pathname.startsWith('/admin')) {
     if (!session) return redirectTo('/login')
-    if (session.role !== 'admin') return redirectTo('/app')
+    if (session.role !== 'admin') return redirectTo(homeFor(session.role))
     return nextWithId()
   }
 
-  // Manager area.
+  // Manager area — managers only (curators are not part of the sales workspace).
   if (pathname.startsWith('/app')) {
     if (!session) return redirectTo('/login')
-    if (session.role !== 'manager') return redirectTo('/admin')
+    if (session.role !== 'manager') return redirectTo(homeFor(session.role))
     return nextWithId()
   }
 
