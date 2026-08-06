@@ -161,7 +161,24 @@ export async function createCuratorAction(
     city: cities[0],
   })
   // Store the full (canonicalized) city set; also fixes managers.city spelling.
-  const canonical = await setCuratorCities(created.id, cities)
+  let canonical: string[]
+  try {
+    canonical = await setCuratorCities(created.id, cities)
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      // Migrations 114+ not applied yet: the account exists (legacy
+      // managers.city is set), only the multi-city dictionary is missing.
+      revalidatePath('/admin/managers')
+      revalidatePath('/admin')
+      return {
+        ok: true,
+        message: `Куратор ${name} (${cities[0]}) создан, но список городов не сохранён: на сервере не применены миграции БД. Выполните pnpm db:migrate и задайте города повторно.`,
+        password,
+        username: created.username ?? undefined,
+      }
+    }
+    throw err
+  }
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   return {
@@ -170,6 +187,16 @@ export async function createCuratorAction(
     password,
     username: created.username ?? undefined,
   }
+}
+
+/** Postgres 42P01 (undefined_table): pending migration on this deployment. */
+function isMissingTableError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: string }).code === '42P01'
+  )
 }
 
 export async function setManagerStatusAction(
@@ -231,7 +258,19 @@ export async function updateCuratorCityAction(
   if (cities.length === 0) {
     return { ok: false, message: 'Укажите хотя бы один город.' }
   }
-  const canonical = await setCuratorCities(id, cities)
+  let canonical: string[]
+  try {
+    canonical = await setCuratorCities(id, cities)
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      return {
+        ok: false,
+        message:
+          'На сервере не применены миграции БД (таблицы городов ещё нет). Выполните pnpm db:migrate на VPS и повторите.',
+      }
+    }
+    throw err
+  }
   revalidatePath('/admin/managers')
   revalidatePath('/admin/curators')
   return { ok: true, message: `Города обновлены: ${canonical.join(', ')}.` }
