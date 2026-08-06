@@ -30,11 +30,12 @@ export function StatusReminder({ leads }: { leads: LeadCard[] }) {
           n === 1
             ? '1 лид ждёт обновления статуса'
             : `${n} лидов ждут обновления статуса`
-        new Notification('Omnidesk — обновите статусы', {
+        const opts: NotificationOptions & { renotify?: boolean } = {
           body: `${body}. Пока статусы не подтверждены, рабочее место ограничено.`,
           tag: 'omnidesk-curator-status',
           renotify: true,
-        })
+        }
+        new Notification('Omnidesk — обновите статусы', opts)
       } catch {
         /* ignore */
       }
