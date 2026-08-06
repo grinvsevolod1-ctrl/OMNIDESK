@@ -664,7 +664,7 @@ export async function sendStickerAction(
 ): Promise<SimpleResult> {
   const session = await requireManager()
   if (!sticker || !sticker.id || !sticker.accessHash || !sticker.fileReference) {
-    return { ok: false, message: 'Некорректный стике��.' }
+    return { ok: false, message: 'Некорректный стикер.' }
   }
 
   const conv = await getConversation(conversationId, session.sub)

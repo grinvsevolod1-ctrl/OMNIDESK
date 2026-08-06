@@ -2,6 +2,11 @@
  * Lead cards: structured lead data filled from a conversation and optionally
  * transferred to a curator matched by city. Curators maintain a daily status
  * and comment trail on each transferred lead.
+ *
+ * Integrity rules (migration 114):
+ * - Deleting a manager keeps the cards (manager_id -> NULL).
+ * - Deleting a comment author keeps the comment with a name snapshot.
+ * - Every transfer is recorded in lead_transfers with name snapshots.
  */
 import { randomUUID } from 'crypto'
 import { query } from '../db'
@@ -17,7 +22,7 @@ import { managerColumns, toManager, type ManagerRow } from './shared'
 export interface LeadCard {
   id: string
   conversationId: string | null
-  managerId: string
+  managerId: string | null
   managerName: string | null
   curatorId: string | null
   curatorName: string | null
@@ -41,17 +46,26 @@ export interface LeadCard {
 export interface LeadCardComment {
   id: string
   leadCardId: string
-  authorId: string
+  authorId: string | null
   authorName: string | null
   body: string
   status: LeadStatus | null
   createdAt: string
 }
 
+export interface LeadTransfer {
+  id: string
+  leadCardId: string
+  fromCuratorName: string | null
+  toCuratorName: string | null
+  initiatedByRole: string
+  createdAt: string
+}
+
 interface LeadCardRow {
   id: string
   conversation_id: string | null
-  manager_id: string
+  manager_id: string | null
   manager_name: string | null
   curator_id: string | null
   curator_name: string | null
@@ -74,7 +88,7 @@ interface LeadCardRow {
 interface CommentRow {
   id: string
   lead_card_id: string
-  author_id: string
+  author_id: string | null
   author_name: string | null
   body: string
   status: string | null
@@ -185,33 +199,118 @@ export async function listLeadCardsForCurator(
   return rows.map(toLeadCard)
 }
 
-/** Active curators whose city matches (case-insensitive contains) the query. */
-export async function findCuratorsByCity(cityQuery: string): Promise<Manager[]> {
+/** A curator (or any manager row) with the number of active leads assigned. */
+export interface CuratorWithLoad extends Manager {
+  activeLeads: number
+}
+
+/**
+ * Active curators whose city matches (case-insensitive contains) the query,
+ * sorted by current load ascending so the least-busy curator comes first.
+ */
+export async function findCuratorsByCity(
+  cityQuery: string,
+): Promise<CuratorWithLoad[]> {
   const q = cityQuery.trim()
   if (!q) return []
-  const rows = await query<ManagerRow>(
-    `SELECT ${managerColumns()}
+  const rows = await query<ManagerRow & { active_leads: string }>(
+    `SELECT ${managerColumns()},
+            (SELECT count(*) FROM lead_cards lc
+              WHERE lc.curator_id = managers.id
+                AND lc.transferred_at IS NOT NULL
+                AND (lc.status IS NULL OR lc.status NOT IN ('refused', 'left'))
+            )::int AS active_leads
        FROM managers
       WHERE role = 'curator'
         AND status = 'active'
         AND city IS NOT NULL
         AND lower(city) LIKE lower($1)
-      ORDER BY city ASC, name ASC
+      ORDER BY active_leads ASC, city ASC, name ASC
       LIMIT 20`,
     [`%${q}%`],
   )
-  return rows.map(toManager)
+  return rows.map((r) => ({
+    ...toManager(r),
+    activeLeads: Number(r.active_leads ?? 0),
+  }))
 }
 
-/** All active curators (for admin transfer picker). */
-export async function listActiveCurators(): Promise<Manager[]> {
-  const rows = await query<ManagerRow>(
-    `SELECT ${managerColumns()}
+/** All active curators (for admin transfer picker), with load counts. */
+export async function listActiveCurators(): Promise<CuratorWithLoad[]> {
+  const rows = await query<ManagerRow & { active_leads: string }>(
+    `SELECT ${managerColumns()},
+            (SELECT count(*) FROM lead_cards lc
+              WHERE lc.curator_id = managers.id
+                AND lc.transferred_at IS NOT NULL
+                AND (lc.status IS NULL OR lc.status NOT IN ('refused', 'left'))
+            )::int AS active_leads
        FROM managers
       WHERE role = 'curator' AND status = 'active'
       ORDER BY city ASC NULLS LAST, name ASC`,
   )
-  return rows.map(toManager)
+  return rows.map((r) => ({
+    ...toManager(r),
+    activeLeads: Number(r.active_leads ?? 0),
+  }))
+}
+
+/** Record one transfer event with name snapshots. Never throws. */
+async function recordTransfer(input: {
+  leadCardId: string
+  fromCuratorId: string | null
+  toCuratorId: string
+  initiatedById: string | null
+  initiatedByRole: 'manager' | 'admin'
+}): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO lead_transfers
+         (id, lead_card_id, from_curator_id, to_curator_id,
+          from_curator_name, to_curator_name, initiated_by, initiated_by_role)
+       VALUES ($1, $2, $3, $4,
+               (SELECT name FROM managers WHERE id = $3),
+               (SELECT name FROM managers WHERE id = $4),
+               $5, $6)`,
+      [
+        randomUUID(),
+        input.leadCardId,
+        input.fromCuratorId,
+        input.toCuratorId,
+        input.initiatedById,
+        input.initiatedByRole,
+      ],
+    )
+  } catch {
+    /* history must never break the transfer itself */
+  }
+}
+
+export async function listLeadTransfers(
+  leadCardId: string,
+): Promise<LeadTransfer[]> {
+  const rows = await query<{
+    id: string
+    lead_card_id: string
+    from_curator_name: string | null
+    to_curator_name: string | null
+    initiated_by_role: string
+    created_at: string | Date
+  }>(
+    `SELECT id, lead_card_id, from_curator_name, to_curator_name,
+            initiated_by_role, created_at
+       FROM lead_transfers
+      WHERE lead_card_id = $1
+      ORDER BY created_at DESC`,
+    [leadCardId],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    leadCardId: r.lead_card_id,
+    fromCuratorName: r.from_curator_name,
+    toCuratorName: r.to_curator_name,
+    initiatedByRole: r.initiated_by_role,
+    createdAt: new Date(r.created_at).toISOString(),
+  }))
 }
 
 export interface UpsertLeadCardInput {
@@ -225,11 +324,56 @@ export interface UpsertLeadCardInput {
   vacancy: string
   /** When set, the card is transferred to this curator. */
   curatorId?: string | null
+  /** True when the caller is an admin (may reassign an already-assigned lead). */
+  isAdmin?: boolean
+}
+
+export interface UpsertLeadCardResult {
+  card: LeadCard
+  /** True when the curator changed in this call (fresh transfer happened). */
+  transferred: boolean
+  /** Non-blocking duplicate warning, if any. */
+  duplicateWarning: string | null
+}
+
+/**
+ * Non-blocking duplicate probe: does another card share this phone or
+ * telegram username? Returns a human warning or null.
+ */
+export async function findDuplicateLeadWarning(input: {
+  conversationId: string
+  phone: string
+  telegramUsername: string
+}): Promise<string | null> {
+  const phone = input.phone.replace(/\D/g, '')
+  const tg = input.telegramUsername.trim().replace(/^@/, '').toLowerCase()
+  if (!phone && !tg) return null
+  const rows = await query<{
+    full_name: string
+    curator_name: string | null
+  }>(
+    `SELECT lc.full_name, c.name AS curator_name
+       FROM lead_cards lc
+       LEFT JOIN managers c ON c.id = lc.curator_id
+      WHERE ($1 IS DISTINCT FROM lc.conversation_id OR lc.conversation_id IS NULL)
+        AND (
+          ($2 <> '' AND regexp_replace(lc.phone, '\\D', '', 'g') = $2)
+          OR ($3 <> '' AND lower(regexp_replace(lc.telegram_username, '^@', '')) = $3)
+        )
+      LIMIT 1`,
+    [input.conversationId, phone, tg],
+  )
+  const dup = rows[0]
+  if (!dup) return null
+  const who = dup.full_name || 'без имени'
+  return dup.curator_name
+    ? `Возможный дубль: карточка «${who}» уже существует и закреплена за куратором ${dup.curator_name}.`
+    : `Возможный дубль: карточка «${who}» с теми же контактами уже существует.`
 }
 
 export async function upsertLeadCard(
   input: UpsertLeadCardInput,
-): Promise<LeadCard> {
+): Promise<UpsertLeadCardResult> {
   const fullName = input.fullName.trim()
   const phone = input.phone.trim()
   const telegramUsername = input.telegramUsername.trim().replace(/^@/, '')
@@ -248,13 +392,37 @@ export async function upsertLeadCard(
     if (!ok[0]) throw new Error('Curator not found or inactive')
   }
 
-  const existing = await query<{ id: string }>(
-    `SELECT id FROM lead_cards WHERE conversation_id = $1 LIMIT 1`,
+  const existing = await query<{
+    id: string
+    curator_id: string | null
+  }>(
+    `SELECT id, curator_id FROM lead_cards WHERE conversation_id = $1 LIMIT 1`,
     [input.conversationId],
   )
 
+  const duplicateWarning = await findDuplicateLeadWarning({
+    conversationId: input.conversationId,
+    phone,
+    telegramUsername,
+  }).catch(() => null)
+
   if (existing[0]) {
-    const rows = await query<{ id: string }>(
+    const prevCuratorId = existing[0].curator_id
+    const isReassign =
+      curatorId !== null && prevCuratorId !== null && curatorId !== prevCuratorId
+
+    // A manager must not silently hijack a lead already assigned to another
+    // curator — reassignment goes through the admin (with a status reset).
+    if (isReassign && !input.isAdmin) {
+      throw new Error(
+        'Лид уже закреплён за другим куратором. Переназначение выполняет администратор.',
+      )
+    }
+
+    const isFreshTransfer =
+      curatorId !== null && curatorId !== prevCuratorId
+
+    await query(
       `UPDATE lead_cards
           SET full_name = $2,
               phone = $3,
@@ -265,12 +433,23 @@ export async function upsertLeadCard(
               manager_id = $8,
               curator_id = COALESCE($9, curator_id),
               transferred_at = CASE
-                WHEN $9::uuid IS NOT NULL THEN now()
+                WHEN $10::boolean THEN now()
                 ELSE transferred_at
               END,
+              -- Fresh transfer: the new curator must confirm status today.
+              status = CASE WHEN $10::boolean THEN NULL ELSE status END,
+              previous_status = CASE
+                WHEN $10::boolean THEN COALESCE(status, previous_status)
+                ELSE previous_status
+              END,
+              status_confirmed_at = CASE
+                WHEN $10::boolean THEN NULL ELSE status_confirmed_at
+              END,
+              status_confirmed_date = CASE
+                WHEN $10::boolean THEN NULL ELSE status_confirmed_date
+              END,
               updated_at = now()
-        WHERE id = $1
-        RETURNING id`,
+        WHERE id = $1`,
       [
         existing[0].id,
         fullName,
@@ -281,11 +460,23 @@ export async function upsertLeadCard(
         vacancy,
         input.managerId,
         curatorId,
+        isFreshTransfer,
       ],
     )
-    const card = await getLeadCardById(rows[0].id)
+
+    if (isFreshTransfer && curatorId) {
+      await recordTransfer({
+        leadCardId: existing[0].id,
+        fromCuratorId: prevCuratorId,
+        toCuratorId: curatorId,
+        initiatedById: input.isAdmin ? null : input.managerId,
+        initiatedByRole: input.isAdmin ? 'admin' : 'manager',
+      })
+    }
+
+    const card = await getLeadCardById(existing[0].id)
     if (!card) throw new Error('Lead card update failed')
-    return card
+    return { card, transferred: isFreshTransfer, duplicateWarning }
   }
 
   const id = randomUUID()
@@ -309,12 +500,23 @@ export async function upsertLeadCard(
       vacancy,
     ],
   )
+
+  if (curatorId) {
+    await recordTransfer({
+      leadCardId: id,
+      fromCuratorId: null,
+      toCuratorId: curatorId,
+      initiatedById: input.isAdmin ? null : input.managerId,
+      initiatedByRole: input.isAdmin ? 'admin' : 'manager',
+    })
+  }
+
   const card = await getLeadCardById(id)
   if (!card) throw new Error('Lead card create failed')
-  return card
+  return { card, transferred: Boolean(curatorId), duplicateWarning }
 }
 
-/** Admin: reassign a transferred lead to another active curator. */
+/** Admin: (re)assign a lead to another active curator with a status reset. */
 export async function transferLeadToCurator(
   leadCardId: string,
   newCuratorId: string,
@@ -327,6 +529,12 @@ export async function transferLeadToCurator(
   )
   if (!ok[0]) throw new Error('Curator not found or inactive')
 
+  const prev = await query<{ curator_id: string | null }>(
+    `SELECT curator_id FROM lead_cards WHERE id = $1 LIMIT 1`,
+    [leadCardId],
+  )
+  if (!prev[0]) throw new Error('Лид не найден')
+
   const rows = await query<{ id: string }>(
     `UPDATE lead_cards
         SET curator_id = $2,
@@ -337,11 +545,20 @@ export async function transferLeadToCurator(
             status_confirmed_at = NULL,
             status_confirmed_date = NULL,
             updated_at = now()
-      WHERE id = $1 AND transferred_at IS NOT NULL
+      WHERE id = $1
       RETURNING id`,
     [leadCardId, newCuratorId],
   )
-  if (!rows[0]) throw new Error('Lead not found or not transferred yet')
+  if (!rows[0]) throw new Error('Лид не найден')
+
+  await recordTransfer({
+    leadCardId,
+    fromCuratorId: prev[0].curator_id,
+    toCuratorId: newCuratorId,
+    initiatedById: null,
+    initiatedByRole: 'admin',
+  })
+
   const card = await getLeadCardById(rows[0].id)
   if (!card) throw new Error('Lead transfer failed')
   return card
@@ -403,8 +620,8 @@ export async function updateLeadStatus(input: {
   )
 
   await query(
-    `INSERT INTO lead_card_comments (id, lead_card_id, author_id, body, status)
-     VALUES ($1, $2, $3, $4, $5)`,
+    `INSERT INTO lead_card_comments (id, lead_card_id, author_id, author_name, body, status)
+     VALUES ($1, $2, $3, (SELECT name FROM managers WHERE id = $3), $4, $5)`,
     [randomUUID(), input.leadCardId, input.curatorId, comment, input.status],
   )
 
@@ -424,10 +641,9 @@ export async function addLeadComment(input: {
 
   const id = randomUUID()
   const rows = await query<CommentRow>(
-    `INSERT INTO lead_card_comments (id, lead_card_id, author_id, body, status)
-     VALUES ($1, $2, $3, $4, NULL)
-     RETURNING id, lead_card_id, author_id, body, status, created_at,
-               (SELECT name FROM managers WHERE id = $3) AS author_name`,
+    `INSERT INTO lead_card_comments (id, lead_card_id, author_id, author_name, body, status)
+     VALUES ($1, $2, $3, (SELECT name FROM managers WHERE id = $3), $4, NULL)
+     RETURNING id, lead_card_id, author_id, author_name, body, status, created_at`,
     [id, input.leadCardId, input.authorId, body],
   )
   return toComment(rows[0])
@@ -438,7 +654,7 @@ export async function listLeadComments(
 ): Promise<LeadCardComment[]> {
   const rows = await query<CommentRow>(
     `SELECT c.id, c.lead_card_id, c.author_id, c.body, c.status, c.created_at,
-            m.name AS author_name
+            COALESCE(m.name, c.author_name) AS author_name
        FROM lead_card_comments c
        LEFT JOIN managers m ON m.id = c.author_id
       WHERE c.lead_card_id = $1
@@ -448,18 +664,181 @@ export async function listLeadComments(
   return rows.map(toComment)
 }
 
-/** Count of leads a curator still must confirm today (after deadline logic is client-side). */
+/**
+ * Count of leads a curator must still confirm.
+ * Mirrors needsDailyStatusUpdate():
+ * - before the deadline only never-confirmed leads count;
+ * - past the deadline any lead not confirmed for today counts.
+ */
 export async function countLeadsNeedingStatus(
   curatorId: string,
   todayMsk: string,
+  pastDeadline: boolean,
 ): Promise<number> {
   const rows = await query<{ n: string }>(
-    `SELECT count(*)::int AS n
-       FROM lead_cards
-      WHERE curator_id = $1
-        AND transferred_at IS NOT NULL
-        AND (status_confirmed_date IS NULL OR status_confirmed_date < $2::date)`,
+    pastDeadline
+      ? `SELECT count(*)::int AS n
+           FROM lead_cards
+          WHERE curator_id = $1
+            AND transferred_at IS NOT NULL
+            AND (status_confirmed_date IS NULL OR status_confirmed_date < $2::date)`
+      : `SELECT count(*)::int AS n
+           FROM lead_cards
+          WHERE curator_id = $1
+            AND transferred_at IS NOT NULL
+            AND status_confirmed_date IS NULL
+            AND $2::date IS NOT NULL`,
     [curatorId, todayMsk],
   )
   return Number(rows[0]?.n ?? 0)
+}
+
+/* ----------------------------- Admin overview ----------------------------- */
+
+export interface AllLeadsFilter {
+  curatorId?: string | null
+  status?: LeadStatus | 'none' | null
+  city?: string | null
+  /** Only leads transferred but currently without a curator. */
+  orphanedOnly?: boolean
+  limit?: number
+  offset?: number
+}
+
+/** Admin: all transferred leads with optional filters, newest first. */
+export async function listAllTransferredLeads(
+  filter: AllLeadsFilter = {},
+): Promise<{ leads: LeadCard[]; total: number }> {
+  const conds: string[] = ['lc.transferred_at IS NOT NULL']
+  const params: unknown[] = []
+
+  if (filter.orphanedOnly) {
+    conds.push('lc.curator_id IS NULL')
+  } else if (filter.curatorId) {
+    params.push(filter.curatorId)
+    conds.push(`lc.curator_id = $${params.length}`)
+  }
+  if (filter.status === 'none') {
+    conds.push('lc.status IS NULL')
+  } else if (filter.status) {
+    params.push(filter.status)
+    conds.push(`lc.status = $${params.length}`)
+  }
+  if (filter.city?.trim()) {
+    params.push(`%${filter.city.trim()}%`)
+    conds.push(`lower(lc.city) LIKE lower($${params.length})`)
+  }
+
+  const where = conds.join(' AND ')
+  const totalRows = await query<{ n: string }>(
+    `SELECT count(*)::int AS n FROM lead_cards lc WHERE ${where}`,
+    params,
+  )
+
+  const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500)
+  const offset = Math.max(filter.offset ?? 0, 0)
+  params.push(limit, offset)
+
+  const rows = await query<LeadCardRow>(
+    `SELECT ${CARD_SELECT}
+       FROM lead_cards lc
+       LEFT JOIN managers m ON m.id = lc.manager_id
+       LEFT JOIN managers c ON c.id = lc.curator_id
+      WHERE ${where}
+      ORDER BY lc.transferred_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
+  )
+  return { leads: rows.map(toLeadCard), total: Number(totalRows[0]?.n ?? 0) }
+}
+
+export interface CuratorDiscipline {
+  curatorId: string
+  curatorName: string
+  city: string | null
+  totalLeads: number
+  confirmedToday: number
+  /** Leads that still need today's confirmation (deadline-agnostic count). */
+  pendingToday: number
+  statusCounts: Partial<Record<LeadStatus, number>>
+}
+
+/** Admin: per-curator discipline snapshot for today (MSK). */
+export async function getCuratorDiscipline(): Promise<CuratorDiscipline[]> {
+  const today = mskDayKey(new Date())
+  const rows = await query<{
+    curator_id: string
+    curator_name: string
+    city: string | null
+    total_leads: string
+    confirmed_today: string
+    status: string | null
+    status_count: string
+  }>(
+    `SELECT c.id AS curator_id, c.name AS curator_name, c.city,
+            count(lc.id) FILTER (WHERE lc.id IS NOT NULL)
+              OVER (PARTITION BY c.id) AS total_leads,
+            count(lc.id) FILTER (WHERE lc.status_confirmed_date = $1::date)
+              OVER (PARTITION BY c.id) AS confirmed_today,
+            lc.status,
+            count(lc.id) OVER (PARTITION BY c.id, lc.status) AS status_count
+       FROM managers c
+       LEFT JOIN lead_cards lc
+         ON lc.curator_id = c.id AND lc.transferred_at IS NOT NULL
+      WHERE c.role = 'curator' AND c.status = 'active'`,
+    [today],
+  )
+
+  const byId = new Map<string, CuratorDiscipline>()
+  for (const r of rows) {
+    let cur = byId.get(r.curator_id)
+    if (!cur) {
+      cur = {
+        curatorId: r.curator_id,
+        curatorName: r.curator_name,
+        city: r.city,
+        totalLeads: Number(r.total_leads ?? 0),
+        confirmedToday: Number(r.confirmed_today ?? 0),
+        pendingToday: 0,
+        statusCounts: {},
+      }
+      byId.set(r.curator_id, cur)
+    }
+    if (isLeadStatus(r.status)) {
+      cur.statusCounts[r.status] = Number(r.status_count ?? 0)
+    }
+  }
+  for (const cur of byId.values()) {
+    cur.pendingToday = Math.max(cur.totalLeads - cur.confirmedToday, 0)
+  }
+  return [...byId.values()].sort((a, b) =>
+    a.curatorName.localeCompare(b.curatorName, 'ru'),
+  )
+}
+
+/** Curators (id + name) who still have unconfirmed statuses for today. */
+export async function listCuratorsWithOverdueStatuses(): Promise<
+  { curatorId: string; curatorName: string; pending: number }[]
+> {
+  const today = mskDayKey(new Date())
+  const rows = await query<{
+    curator_id: string
+    curator_name: string
+    pending: string
+  }>(
+    `SELECT c.id AS curator_id, c.name AS curator_name, count(lc.id)::int AS pending
+       FROM managers c
+       JOIN lead_cards lc
+         ON lc.curator_id = c.id
+        AND lc.transferred_at IS NOT NULL
+        AND (lc.status_confirmed_date IS NULL OR lc.status_confirmed_date < $1::date)
+      WHERE c.role = 'curator' AND c.status = 'active'
+      GROUP BY c.id, c.name`,
+    [today],
+  )
+  return rows.map((r) => ({
+    curatorId: r.curator_id,
+    curatorName: r.curator_name,
+    pending: Number(r.pending ?? 0),
+  }))
 }

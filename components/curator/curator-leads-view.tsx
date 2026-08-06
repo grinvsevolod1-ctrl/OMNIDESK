@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { MapPin, User } from 'lucide-react'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
@@ -34,10 +34,18 @@ export function CuratorLeadsView({
 }) {
   const [leads, setLeads] = useState(initialLeads)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Minute tick so the 10:00 MSK deadline kicks in live, without a reload.
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
 
   const pending = useMemo(
     () => leads.filter((l) => needsDailyStatusUpdate(l.statusConfirmedDate)),
-    [leads],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tick re-evaluates the deadline
+    [leads, tick],
   )
   const locked = isPastDailyDeadline() && pending.length > 0
 

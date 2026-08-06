@@ -14,11 +14,15 @@ export function StatusReminder({ leads }: { leads: LeadCard[] }) {
   const pendingCount = leads.filter((l) =>
     needsDailyStatusUpdate(l.statusConfirmedDate),
   ).length
+  const hasPending = pendingCount > 0
   const countRef = useRef(pendingCount)
-  countRef.current = pendingCount
 
   useEffect(() => {
-    if (pendingCount === 0) return
+    countRef.current = pendingCount
+  }, [pendingCount])
+
+  useEffect(() => {
+    if (!hasPending) return
     if (typeof window === 'undefined' || !('Notification' in window)) return
 
     function notify() {
@@ -45,7 +49,7 @@ export function StatusReminder({ leads }: { leads: LeadCard[] }) {
     notify()
     const id = window.setInterval(notify, INTERVAL_MS)
     return () => window.clearInterval(id)
-  }, [pendingCount > 0]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hasPending])
 
   return null
 }

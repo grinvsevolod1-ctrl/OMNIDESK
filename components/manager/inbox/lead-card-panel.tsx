@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
-import type { Manager } from '@/lib/types'
+import type { CuratorWithLoad } from '@/lib/data/lead-cards'
 
 /**
  * «Карточка лида» — кнопка рядом с ИИ.
@@ -43,7 +43,7 @@ export function LeadCardPanel({
   const [address, setAddress] = useState('')
   const [vacancy, setVacancy] = useState('')
   const [curatorId, setCuratorId] = useState<string | null>(null)
-  const [curators, setCurators] = useState<Manager[]>([])
+  const [curators, setCurators] = useState<CuratorWithLoad[]>([])
   const [searching, setSearching] = useState(false)
   const [transferredAt, setTransferredAt] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -269,9 +269,17 @@ export function LeadCardPanel({
                           )}
                         >
                           <span className="font-medium">{c.name}</span>
-                          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                            <MapPin className="size-3" />
-                            {c.city}
+                          <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1">
+                              <MapPin className="size-3" />
+                              {c.city}
+                            </span>
+                            <span
+                              className="rounded bg-muted px-1.5 py-0.5 text-[10px]"
+                              title="Активных лидов у куратора"
+                            >
+                              {c.activeLeads} лид.
+                            </span>
                           </span>
                         </button>
                       ))}

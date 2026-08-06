@@ -164,6 +164,22 @@ module.exports = {
       },
     },
     {
+      // Curator daily-status push reminders: past 10:00 MSK, pushes every
+      // curator who still has unconfirmed lead statuses (see
+      // /api/cron/curator-status). Runs every 20 minutes; before the deadline
+      // the route is a no-op and the push uses a collapse tag, so frequent
+      // runs are safe. Requires CRON_SECRET in the shared .env.
+      name: 'omnidesk-cron-curator-status',
+      script: 'scripts/cron-curator-status.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '*/20 * * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
       // OS shell scheduled commands («каждый понедельник — отчёт по лидам»):
       // sweeps due console_schedules through the shell copilot (see
       // /api/cron/console-schedules). Claiming is atomic (SKIP LOCKED), so a

@@ -6,6 +6,7 @@ import { CuratorLeadsDialog } from '@/components/admin/curator-leads-dialog'
 import { ManagerActions } from '@/components/admin/manager-actions'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
+import type { CuratorDiscipline } from '@/lib/data/lead-cards'
 import { APP_TIME_ZONE } from '@/lib/time'
 import type { Manager } from '@/lib/types'
 
@@ -52,7 +53,33 @@ function CityPill({ city }: { city: string }) {
   )
 }
 
-export function CuratorsTable({ curators }: { curators: Manager[] }) {
+function DisciplinePill({ d }: { d: CuratorDiscipline | undefined }) {
+  if (!d || d.totalLeads === 0) {
+    return <span className="text-xs text-muted-foreground">Нет лидов</span>
+  }
+  const allDone = d.pendingToday === 0
+  return (
+    <Badge
+      variant="outline"
+      className={
+        allDone
+          ? 'gap-1.5 border-transparent bg-success/15 text-success'
+          : 'gap-1.5 border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400'
+      }
+      title="Подтверждено статусов сегодня / всего лидов"
+    >
+      {d.confirmedToday}/{d.totalLeads} сегодня
+    </Badge>
+  )
+}
+
+export function CuratorsTable({
+  curators,
+  discipline,
+}: {
+  curators: Manager[]
+  discipline?: Record<string, CuratorDiscipline>
+}) {
   const [selected, setSelected] = useState<Manager | null>(null)
 
   return (
@@ -63,6 +90,7 @@ export function CuratorsTable({ curators }: { curators: Manager[] }) {
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="px-5 py-3 font-medium">Имя</th>
               <th className="px-5 py-3 font-medium">Город</th>
+              <th className="px-5 py-3 font-medium">Дисциплина</th>
               <th className="px-5 py-3 font-medium">Статус</th>
               <th className="px-5 py-3 font-medium">Создан</th>
               <th className="px-5 py-3 font-medium text-right">Действия</th>
@@ -86,6 +114,9 @@ export function CuratorsTable({ curators }: { curators: Manager[] }) {
                 </td>
                 <td className="px-5 py-3">
                   {c.city ? <CityPill city={c.city} /> : null}
+                </td>
+                <td className="px-5 py-3">
+                  <DisciplinePill d={discipline?.[c.id]} />
                 </td>
                 <td className="px-5 py-3">
                   <StatusPill status={c.status} />
@@ -127,6 +158,7 @@ export function CuratorsTable({ curators }: { curators: Manager[] }) {
               <div className="flex flex-wrap items-center gap-1.5">
                 <StatusPill status={c.status} />
                 {c.city ? <CityPill city={c.city} /> : null}
+                <DisciplinePill d={discipline?.[c.id]} />
               </div>
               <span className="text-xs text-muted-foreground">
                 {formatDate(c.createdAt)}

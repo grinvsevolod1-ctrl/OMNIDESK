@@ -13,7 +13,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import type { LeadCard, LeadCardComment } from '@/lib/data/lead-cards'
+import type {
+  LeadCard,
+  LeadCardComment,
+  LeadTransfer,
+} from '@/lib/data/lead-cards'
 import {
   LEAD_STATUSES,
   LEAD_STATUS_LABELS,
@@ -48,6 +52,7 @@ export function LeadDetailPanel({
 }) {
   const [card, setCard] = useState<LeadCard | null>(null)
   const [comments, setComments] = useState<LeadCardComment[]>([])
+  const [transfers, setTransfers] = useState<LeadTransfer[]>([])
   const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState<LeadStatus | ''>('')
   const [comment, setComment] = useState('')
@@ -61,6 +66,7 @@ export function LeadDetailPanel({
       if (cancelled || !res) return
       setCard(res.card)
       setComments(res.comments)
+      setTransfers(res.transfers ?? [])
       setStatus(res.card.status ?? '')
       setLoading(false)
     })
@@ -204,6 +210,32 @@ export function LeadDetailPanel({
                   </dd>
                 </div>
               </dl>
+
+              {transfers.length > 0 ? (
+                <div>
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                    История передач
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {transfers.map((t) => (
+                      <li
+                        key={t.id}
+                        className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+                      >
+                        <span>{formatDateTime(t.createdAt)}</span>
+                        <span>
+                          {t.fromCuratorName
+                            ? `${t.fromCuratorName} → ${t.toCuratorName ?? '—'}`
+                            : `→ ${t.toCuratorName ?? '—'}`}
+                        </span>
+                        <span className="rounded bg-muted px-1 py-0.5 text-[10px]">
+                          {t.initiatedByRole === 'admin' ? 'админ' : 'менеджер'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
 
             {/* Status form */}

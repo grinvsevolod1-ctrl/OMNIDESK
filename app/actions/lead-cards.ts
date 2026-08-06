@@ -5,22 +5,29 @@ import { getSession, requireAdmin, requireCurator } from '@/lib/auth'
 import { query } from '@/lib/db'
 import {
   addLeadComment,
+  countLeadsNeedingStatus,
   findCuratorsByCity,
+  getCuratorDiscipline,
   getLeadCardByConversation,
   getLeadCardById,
   listActiveCurators,
+  listAllTransferredLeads,
   listLeadCardsForCurator,
   listLeadComments,
+  listLeadTransfers,
   transferLeadToCurator,
   updateLeadStatus,
   upsertLeadCard,
+  type AllLeadsFilter,
 } from '@/lib/data/lead-cards'
 import {
   isLeadStatus,
+  isPastDailyDeadline,
   needsDailyStatusUpdate,
   STATUS_COMMENT_MIN_LEN,
   type LeadStatus,
 } from '@/lib/lead-status'
+import { sendPushToManager } from '@/lib/push'
 import { mskDayKey } from '@/lib/time'
 
 export interface LeadCardActionResult {
@@ -34,6 +41,25 @@ async function requireManagerOrAdmin() {
   if (session.role === 'admin') return session
   if (session.role === 'manager') return session
   throw new Error('Forbidden')
+}
+
+/**
+ * Server-side discipline gate: past the daily deadline a curator with
+ * unconfirmed statuses may ONLY confirm statuses. Everything else is refused
+ * here — the client overlay is a hint, this is the actual enforcement.
+ */
+async function assertCuratorNotLocked(curatorId: string): Promise<void> {
+  if (!isPastDailyDeadline()) return
+  const pending = await countLeadsNeedingStatus(
+    curatorId,
+    mskDayKey(new Date()),
+    true,
+  )
+  if (pending > 0) {
+    throw new Error(
+      `Рабочее место ограничено: подтвердите статусы всех лидов (осталось ${pending}).`,
+    )
+  }
 }
 
 async function resolveCardManagerId(
@@ -57,6 +83,24 @@ async function resolveCardManagerId(
     }
   }
   return { ok: true, managerId }
+}
+
+/** Push the curator about a lead handed to them. Never throws. */
+async function notifyCuratorOfTransfer(
+  curatorId: string,
+  leadName: string,
+  city: string,
+): Promise<void> {
+  try {
+    await sendPushToManager(curatorId, {
+      title: 'Omnidesk — новый лид',
+      body: `Вам передан лид: ${leadName || 'без имени'}${city ? ` (${city})` : ''}. Подтвердите статус.`,
+      url: '/curator',
+      tag: 'omnidesk-curator-lead',
+    })
+  } catch {
+    /* notification must never break the transfer */
+  }
 }
 
 export async function getLeadCardAction(conversationId: string) {
@@ -98,7 +142,7 @@ export async function saveLeadCardAction(input: {
   if (!resolved.ok) return resolved
 
   try {
-    const card = await upsertLeadCard({
+    const { card, transferred, duplicateWarning } = await upsertLeadCard({
       conversationId: input.conversationId,
       managerId: resolved.managerId,
       fullName: input.fullName,
@@ -108,17 +152,24 @@ export async function saveLeadCardAction(input: {
       address: input.address,
       vacancy: input.vacancy,
       curatorId: input.curatorId ?? null,
+      isAdmin: session.role === 'admin',
     })
     revalidatePath('/app/inbox')
     revalidatePath('/curator')
     revalidatePath('/admin/curators')
-    if (card.transferredAt) {
+
+    if (transferred && card.curatorId) {
+      void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
+    }
+
+    const warn = duplicateWarning ? ` ${duplicateWarning}` : ''
+    if (transferred) {
       return {
         ok: true,
-        message: `Лид передан куратору${card.curatorName ? ` ${card.curatorName}` : ''}.`,
+        message: `Лид передан куратору${card.curatorName ? ` ${card.curatorName}` : ''}.${warn}`,
       }
     }
-    return { ok: true, message: 'Карточка сохранена.' }
+    return { ok: true, message: `Карточка сохранена.${warn}` }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Ошибка сохранения'
     return { ok: false, message: msg }
@@ -137,15 +188,18 @@ export async function getLeadCardDetailAction(leadCardId: string) {
   const card = await getLeadCardById(leadCardId)
   if (!card) return null
 
-  if (session.role === 'curator' && card.curatorId !== session.sub) {
-    throw new Error('Forbidden')
-  }
-  if (session.role !== 'admin' && session.role !== 'curator') {
-    throw new Error('Forbidden')
-  }
+  const allowed =
+    session.role === 'admin' ||
+    (session.role === 'curator' && card.curatorId === session.sub) ||
+    // The manager who owns the card may read its history too.
+    (session.role === 'manager' && card.managerId === session.sub)
+  if (!allowed) throw new Error('Forbidden')
 
-  const comments = await listLeadComments(leadCardId)
-  return { card, comments }
+  const [comments, transfers] = await Promise.all([
+    listLeadComments(leadCardId),
+    listLeadTransfers(leadCardId),
+  ])
+  return { card, comments, transfers }
 }
 
 export async function updateLeadStatusAction(input: {
@@ -192,6 +246,8 @@ export async function addLeadCommentAction(input: {
     return { ok: false, message: 'Лид не найден.' }
   }
   try {
+    // Free comments are part of the restricted workspace: confirm statuses first.
+    await assertCuratorNotLocked(session.sub)
     await addLeadComment({
       leadCardId: input.leadCardId,
       authorId: session.sub,
@@ -228,6 +284,9 @@ export async function transferLeadAdminAction(input: {
     const card = await transferLeadToCurator(input.leadCardId, input.curatorId)
     revalidatePath('/admin/curators')
     revalidatePath('/curator')
+    if (card.curatorId) {
+      void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
+    }
     return {
       ok: true,
       message: `Лид передан${card.curatorName ? ` куратору ${card.curatorName}` : ''}.`,
@@ -238,7 +297,7 @@ export async function transferLeadAdminAction(input: {
   }
 }
 
-/** Curator daily gate payload. */
+/** Curator daily gate payload (used by the workspace to re-check live). */
 export async function getCuratorStatusGateAction() {
   const session = await requireCurator()
   const leads = await listLeadCardsForCurator(session.sub)
@@ -249,14 +308,39 @@ export async function getCuratorStatusGateAction() {
     total: leads.length,
     pendingCount: pending.length,
     pendingIds: pending.map((l) => l.id),
+    locked: isPastDailyDeadline() && pending.length > 0,
     today: mskDayKey(new Date()),
   }
 }
 
-export async function listAllTransferredLeadsAction() {
+/** Admin: all transferred leads with filters (incl. orphaned ones). */
+export async function listAllLeadsAdminAction(filter: {
+  curatorId?: string | null
+  status?: string | null
+  city?: string | null
+  orphanedOnly?: boolean
+  limit?: number
+  offset?: number
+}) {
   await requireAdmin()
-  const rows = await query<{ n: string }>(
-    `SELECT count(*)::int AS n FROM lead_cards WHERE transferred_at IS NOT NULL`,
-  )
-  return { total: Number(rows[0]?.n ?? 0) }
+  const safe: AllLeadsFilter = {
+    curatorId: filter.curatorId ?? null,
+    status:
+      filter.status === 'none'
+        ? 'none'
+        : isLeadStatus(filter.status)
+          ? filter.status
+          : null,
+    city: filter.city ?? null,
+    orphanedOnly: Boolean(filter.orphanedOnly),
+    limit: filter.limit,
+    offset: filter.offset,
+  }
+  return listAllTransferredLeads(safe)
+}
+
+/** Admin: per-curator discipline snapshot for today. */
+export async function getCuratorDisciplineAction() {
+  await requireAdmin()
+  return getCuratorDiscipline()
 }

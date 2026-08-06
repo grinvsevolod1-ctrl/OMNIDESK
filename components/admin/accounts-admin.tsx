@@ -458,7 +458,7 @@ function CreateAccountCard({
           <Link href="/admin/whatsapp" className="font-medium text-foreground underline">
             WhatsApp
           </Link>
-          , после чего назначьте номеру ��рокси в таблице ниже.
+          , после чего назначьте номеру прокси в таблице ниже.
         </p>
       ) : null}
 
@@ -702,7 +702,7 @@ function CreateAccountCard({
               </ol>
               <p className="text-xs text-muted-foreground">
                 Код обновляется автоматически. Если на аккаунте включена
-                двухэтап��ая аутентификация, после сканирования попросим облачный
+                двухэтапная аутентификация, после сканирования попросим облачный
                 пароль.
               </p>
             </div>
