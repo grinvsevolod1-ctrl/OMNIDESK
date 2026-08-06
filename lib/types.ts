@@ -1,4 +1,7 @@
-export type Role = 'admin' | 'manager'
+export type Role = 'admin' | 'manager' | 'curator'
+
+/** DB-backed account role stored on the managers table (admin is env-only). */
+export type AccountRole = 'manager' | 'curator'
 
 export type ManagerStatus = 'active' | 'blocked'
 
@@ -11,6 +14,17 @@ export interface Manager {
   status: ManagerStatus
   /** True while the manager is on lunch — new conversations route elsewhere. */
   onLunch: boolean
+  /**
+   * Account role on the managers table. Defaults to 'manager' for every row
+   * that predates migration 111. Curators are created by the admin and carry
+   * a required `city`.
+   */
+  role: AccountRole
+  /**
+   * City the curator is responsible for. Always set for role = 'curator',
+   * always null for role = 'manager'.
+   */
+  city: string | null
   createdAt: string
 }
 
@@ -552,6 +566,7 @@ export interface SessionUser {
    * Session version stamped into the JWT at login. Re-checked against the
    * manager's current `session_version` on every request so password changes
    * or blocks revoke outstanding sessions immediately. Admin sessions are 0.
+   * Curators share the same session_version machinery as managers.
    */
   sv?: number
 }
