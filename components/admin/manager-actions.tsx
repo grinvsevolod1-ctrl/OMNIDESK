@@ -6,6 +6,7 @@ import {
   Check,
   Copy,
   KeyRound,
+  MapPin,
   MoreHorizontal,
   ShieldCheck,
   Trash2,
@@ -33,6 +34,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Label } from '@/components/ui/label'
+import { EditCuratorCitiesDialog } from '@/components/admin/edit-curator-cities-dialog'
 import type { Manager } from '@/lib/types'
 
 export function ManagerActions({ manager }: { manager: Manager }) {
@@ -40,6 +42,7 @@ export function ManagerActions({ manager }: { manager: Manager }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [newPassword, setNewPassword] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [editingCities, setEditingCities] = useState(false)
 
   function toggleStatus() {
     const next = manager.status === 'active' ? 'blocked' : 'active'
@@ -116,6 +119,18 @@ export function ManagerActions({ manager }: { manager: Manager }) {
               </span>
             }
           />
+          {manager.role === 'curator' ? (
+            <DropdownMenuItem
+              onClick={() => setEditingCities(true)}
+              disabled={pending}
+              render={
+                <span className="flex cursor-pointer items-center gap-2">
+                  <MapPin className="size-4" />
+                  Изменить города
+                </span>
+              }
+            />
+          ) : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             variant="destructive"
@@ -178,6 +193,15 @@ export function ManagerActions({ manager }: { manager: Manager }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Города куратора */}
+      {manager.role === 'curator' ? (
+        <EditCuratorCitiesDialog
+          curator={manager}
+          open={editingCities}
+          onOpenChange={setEditingCities}
+        />
+      ) : null}
 
       {/* Подтверждение удаления */}
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
