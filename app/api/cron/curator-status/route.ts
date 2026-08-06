@@ -1,7 +1,11 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
-import { listCuratorsWithOverdueStatuses } from '@/lib/data/lead-cards'
-import { isPastDailyDeadline } from '@/lib/lead-status'
+import {
+  autoArchiveFinalLeads,
+  listCuratorsWithOverdueStatuses,
+} from '@/lib/data/lead-cards'
+import { findSlaBreaches, getLeadSlaSettings } from '@/lib/data/lead-sla'
+import { isPastDailyDeadline, LEAD_STATUS_LABELS } from '@/lib/lead-status'
 import { sendPushToManager } from '@/lib/push'
 import { runWithRequestContext } from '@/lib/request-context'
 import { logServerError } from '@/lib/server-log'
@@ -48,11 +52,56 @@ async function handle(request: Request): Promise<Response> {
     )
   }
 
-  if (!isPastDailyDeadline()) {
-    return NextResponse.json({ ok: true, result: { skipped: 'before_deadline' } })
-  }
-
   try {
+    // Lifecycle sweeps run regardless of the deadline (migration 117):
+    // auto-archive of final leads + SLA escalation pushes to lead owners.
+    const sla = await getLeadSlaSettings().catch(() => null)
+    let autoArchived = 0
+    let slaNotified = 0
+    if (sla) {
+      autoArchived = await autoArchiveFinalLeads(sla.archiveAfterDays).catch(
+        () => 0,
+      )
+      // Escalations fire only during the 09:00 MSK hour — once a day, not
+      // every 20-minute sweep (the collapse tag dedups within the hour).
+      const mskHour = Number(
+        new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Europe/Moscow',
+          hour: 'numeric',
+          hour12: false,
+        }).format(new Date()),
+      ) % 24
+      const breaches =
+        mskHour === 9 ? await findSlaBreaches(sla).catch(() => []) : []
+      // One push per curator with their worst stuck leads; the collapse tag
+      // makes repeats replace each other instead of piling up.
+      const byCurator = new Map<string, typeof breaches>()
+      for (const b of breaches) {
+        if (!b.curatorId) continue
+        const list = byCurator.get(b.curatorId) ?? []
+        list.push(b)
+        byCurator.set(b.curatorId, list)
+      }
+      for (const [curatorId, list] of byCurator) {
+        const worst = list[0]
+        const more = list.length > 1 ? ` и ещё ${list.length - 1}` : ''
+        const { sent } = await sendPushToManager(curatorId, {
+          title: 'Omnidesk — лид завис',
+          body: `«${worst.fullName || 'Без имени'}» в статусе «${LEAD_STATUS_LABELS[worst.status]}» уже ${worst.daysInStatus} дн.${more} Займитесь или верните в воронку ИИ.`,
+          url: '/curator',
+          tag: 'omnidesk-curator-sla',
+        })
+        if (sent > 0) slaNotified += 1
+      }
+    }
+
+    if (!isPastDailyDeadline()) {
+      return NextResponse.json({
+        ok: true,
+        result: { skipped: 'before_deadline', autoArchived, slaNotified },
+      })
+    }
+
     const overdue = await listCuratorsWithOverdueStatuses()
     let notified = 0
     for (const c of overdue) {
@@ -70,7 +119,12 @@ async function handle(request: Request): Promise<Response> {
     }
     return NextResponse.json({
       ok: true,
-      result: { curatorsOverdue: overdue.length, notified },
+      result: {
+        curatorsOverdue: overdue.length,
+        notified,
+        autoArchived,
+        slaNotified,
+      },
     })
   } catch (error) {
     const errorId = logServerError('cron.curator-status', error)

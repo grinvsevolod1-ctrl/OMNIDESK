@@ -8,14 +8,20 @@ import {
   listAllTransferredLeads,
   listLeadCardsForCurator,
 } from '@/lib/data/lead-cards'
+import {
+  findSlaBreaches,
+  getLeadSlaSettings,
+  updateLeadSlaSettings,
+} from '@/lib/data/lead-sla'
 import { LEAD_STATUS_LABELS, isLeadStatus } from '@/lib/lead-status'
 import type { RunState } from './run-state'
 
 /**
- * Read-only curator observability for the co-pilot: who the curators are, how
- * loaded they are, whether they keep the daily status discipline, and what is
- * happening with transferred leads. All read-only — managing curators
- * (create/block) stays in the admin UI.
+ * Curator observability + lead-lifecycle SLA for the co-pilot: who the
+ * curators are, how loaded they are, whether they keep the daily status
+ * discipline, what is happening with transferred leads, and the chat-managed
+ * lifecycle thresholds (auto-archive + stuck-lead escalations, migration 117).
+ * Managing curators themselves (create/block) stays in the admin UI.
  */
 export function curatorTools(_state: RunState) {
   return {
@@ -147,6 +153,85 @@ export function curatorTools(_state: RunState) {
             status: l.status ? LEAD_STATUS_LABELS[l.status] : 'Не указан',
           })),
         }
+      },
+    }),
+
+    getLeadLifecycle: tool({
+      description:
+        'Жизненный цикл лидов: текущие SLA-настройки (через сколько дней финальные лиды «Отказался»/«Кинул» уходят в архив, когда эскалировать зависших в «Игнор» и «Ожидает выхода») и список лидов, которые прямо сейчас превысили пороги. Вызывай, когда админ спрашивает «какие лиды зависли», «кто давно в игноре», «что с архивом», «какие пороги эскалации».',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const settings = await getLeadSlaSettings()
+        const breaches = await findSlaBreaches(settings).catch(() => [])
+        return {
+          ok: true,
+          settings: {
+            archiveAfterDays: settings.archiveAfterDays,
+            ignoreAlertDays: settings.ignoreAlertDays,
+            awaitingExitAlertDays: settings.awaitingExitAlertDays,
+            hint: 'Значение 0 отключает соответствующее правило.',
+          },
+          stuckLeads: breaches.slice(0, 30).map((b) => ({
+            name: b.fullName,
+            city: b.city,
+            status: LEAD_STATUS_LABELS[b.status],
+            curator: b.curatorName ?? 'БЕЗ КУРАТОРА',
+            daysInStatus: b.daysInStatus,
+            threshold: b.thresholdDays,
+          })),
+          totalStuck: breaches.length,
+        }
+      },
+    }),
+
+    configureLeadSla: tool({
+      description:
+        'Изменить SLA-пороги жизненного цикла лидов: archiveAfterDays — через сколько дней финальный лид («Отказался»/«Кинул») автоматически уходит в архив (0 — не архивировать автоматически); ignoreAlertDays — через сколько дней в «Игноре» эскалировать куратору (0 — выкл); awaitingExitAlertDays — то же для «Ожидает выхода». Вызывай на фразы «архивируй кинутых через неделю», «напоминай про игнор через 3 дня», «отключи авто-архив». Передавай только те поля, которые админ просил поменять.',
+      inputSchema: z.object({
+        archiveAfterDays: z.number().int().min(0).max(365).optional(),
+        ignoreAlertDays: z.number().int().min(0).max(365).optional(),
+        awaitingExitAlertDays: z.number().int().min(0).max(365).optional(),
+      }),
+      execute: async (patch) => {
+        if (
+          patch.archiveAfterDays === undefined &&
+          patch.ignoreAlertDays === undefined &&
+          patch.awaitingExitAlertDays === undefined
+        ) {
+          return {
+            ok: false,
+            error: 'Не передано ни одного параметра для изменения.',
+          }
+        }
+        const before = await getLeadSlaSettings()
+        const after = await updateLeadSlaSettings(patch)
+        const parts: string[] = []
+        if (before.archiveAfterDays !== after.archiveAfterDays) {
+          parts.push(
+            after.archiveAfterDays === 0
+              ? 'авто-архив выключен'
+              : `авто-архив финальных через ${after.archiveAfterDays} дн.`,
+          )
+        }
+        if (before.ignoreAlertDays !== after.ignoreAlertDays) {
+          parts.push(
+            after.ignoreAlertDays === 0
+              ? 'эскалация «Игнор» выключена'
+              : `эскалация «Игнор» через ${after.ignoreAlertDays} дн.`,
+          )
+        }
+        if (before.awaitingExitAlertDays !== after.awaitingExitAlertDays) {
+          parts.push(
+            after.awaitingExitAlertDays === 0
+              ? 'эскалация «Ожидает выхода» выключена'
+              : `эскалация «Ожидает выхода» через ${after.awaitingExitAlertDays} дн.`,
+          )
+        }
+        _state.actions.push({
+          kind: 'followup',
+          label: `SLA лидов: ${parts.join('; ') || 'без изменений'}`,
+        })
+        return { ok: true, settings: after, changed: parts }
       },
     }),
   }

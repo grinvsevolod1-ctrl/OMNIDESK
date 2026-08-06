@@ -25,7 +25,7 @@ import {
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
   leadStatusLabel,
-  needsDailyStatusUpdate,
+  leadNeedsDailyStatus,
 } from '@/lib/lead-status'
 import { APP_TIME_ZONE } from '@/lib/time'
 import { cn } from '@/lib/utils'
@@ -222,7 +222,7 @@ export function AllLeadsSection({
         ) : (
           <ul className="divide-y divide-border">
             {leads.map((lead) => {
-              const needs = needsDailyStatusUpdate(lead.statusConfirmedDate)
+              const needs = leadNeedsDailyStatus(lead)
               const tone = lead.status ? LEAD_STATUS_TONE[lead.status] : null
               return (
                 <li

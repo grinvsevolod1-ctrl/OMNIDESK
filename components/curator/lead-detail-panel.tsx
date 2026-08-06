@@ -7,6 +7,8 @@ import useSWR from 'swr'
 import {
   addLeadCommentAction,
   getLeadCardDetailAction,
+  returnLeadToFunnelAction,
+  setLeadArchivedAction,
   updateLeadStatusAction,
 } from '@/app/actions/lead-cards'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
@@ -15,11 +17,12 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
+  isFinalLeadStatus,
   LEAD_STATUSES,
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
   leadStatusLabel,
-  needsDailyStatusUpdate,
+  leadNeedsDailyStatus,
   STATUS_COMMENT_MIN_LEN,
   type LeadStatus,
 } from '@/lib/lead-status'
@@ -90,6 +93,32 @@ export function LeadDetailPanel({
     })
   }
 
+  function toggleArchive(archived: boolean) {
+    startTransition(async () => {
+      const res = await setLeadArchivedAction({ leadCardId: leadId, archived })
+      if (res.ok) {
+        toast.success(res.message)
+        onUpdated()
+        await mutate()
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }
+
+  function returnToFunnel() {
+    startTransition(async () => {
+      const res = await returnLeadToFunnelAction({ leadCardId: leadId })
+      if (res.ok) {
+        toast.success(res.message)
+        onUpdated()
+        onClose()
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }
+
   function saveFreeComment() {
     if (!freeComment.trim()) return
     startTransition(async () => {
@@ -150,7 +179,7 @@ export function LeadDetailPanel({
                 <div className="mt-2">
                   <LeadStatusBadge
                     status={card.status}
-                    needsUpdate={needsDailyStatusUpdate(card.statusConfirmedDate)}
+                    needsUpdate={leadNeedsDailyStatus(card)}
                     previousStatus={card.previousStatus}
                   />
                 </div>
@@ -247,6 +276,47 @@ export function LeadDetailPanel({
                 </div>
               ) : null}
             </div>
+
+            {/* Lifecycle: final leads can be archived or sent back to the AI */}
+            {isFinalLeadStatus(card.status) ? (
+              <div className="space-y-2 border-b border-border px-4 py-4 sm:px-5">
+                <p className="text-sm font-semibold">Жизненный цикл</p>
+                <p className="text-xs text-muted-foreground">
+                  Финальный статус: ежедневное подтверждение больше не требуется.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {card.archivedAt ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => toggleArchive(false)}
+                    >
+                      Вернуть из архива
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => toggleArchive(true)}
+                    >
+                      В архив
+                    </Button>
+                  )}
+                  {card.conversationId ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pending}
+                      onClick={returnToFunnel}
+                    >
+                      Вернуть в воронку ИИ
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
 
             {/* Status form */}
             <div className="space-y-3 border-b border-border px-4 py-4 sm:px-5">

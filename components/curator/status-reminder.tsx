@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { needsDailyStatusUpdate } from '@/lib/lead-status'
+import { leadNeedsDailyStatus } from '@/lib/lead-status'
 import type { LeadCard } from '@/lib/data/lead-cards'
 
 const INTERVAL_MS = 20 * 60 * 1000 // 20 minutes
@@ -12,7 +12,7 @@ const INTERVAL_MS = 20 * 60 * 1000 // 20 minutes
  */
 export function StatusReminder({ leads }: { leads: LeadCard[] }) {
   const pendingCount = leads.filter((l) =>
-    needsDailyStatusUpdate(l.statusConfirmedDate),
+    leadNeedsDailyStatus(l),
   ).length
   const hasPending = pendingCount > 0
   const countRef = useRef(pendingCount)

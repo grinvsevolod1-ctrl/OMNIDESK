@@ -31,7 +31,7 @@ import type { LeadCard, LeadCardComment } from '@/lib/data/lead-cards'
 import {
   LEAD_STATUS_TONE,
   leadStatusLabel,
-  needsDailyStatusUpdate,
+  leadNeedsDailyStatus,
   type LeadStatus,
 } from '@/lib/lead-status'
 import { APP_TIME_ZONE } from '@/lib/time'
@@ -222,7 +222,7 @@ export function CuratorLeadsDialog({
             ) : (
               <ul className="divide-y divide-border">
                 {leads.map((lead) => {
-                  const needs = needsDailyStatusUpdate(lead.statusConfirmedDate)
+                  const needs = leadNeedsDailyStatus(lead)
                   return (
                     <li key={lead.id}>
                       <div
@@ -343,9 +343,7 @@ export function CuratorLeadsDialog({
                   <div className="mt-3">
                     <StatusBadge
                       status={detail.card.status}
-                      needsUpdate={needsDailyStatusUpdate(
-                        detail.card.statusConfirmedDate,
-                      )}
+                      needsUpdate={leadNeedsDailyStatus(detail.card)}
                       previousStatus={detail.card.previousStatus}
                     />
                   </div>

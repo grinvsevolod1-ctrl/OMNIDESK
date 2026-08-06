@@ -40,6 +40,8 @@ export interface LeadCard {
   /** YYYY-MM-DD in MSK when the current status was confirmed. */
   statusConfirmedDate: string | null
   transferredAt: string | null
+  /** Set when the lead left the active workspace (final status, migration 117). */
+  archivedAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -82,6 +84,7 @@ interface LeadCardRow {
   status_confirmed_at: string | Date | null
   status_confirmed_date: string | Date | null
   transferred_at: string | Date | null
+  archived_at: string | Date | null
   created_at: string | Date
   updated_at: string | Date
 }
@@ -129,6 +132,7 @@ function toLeadCard(r: LeadCardRow): LeadCard {
     transferredAt: r.transferred_at
       ? new Date(r.transferred_at).toISOString()
       : null,
+    archivedAt: r.archived_at ? new Date(r.archived_at).toISOString() : null,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   }
@@ -150,7 +154,7 @@ const CARD_SELECT = `
   lc.id, lc.conversation_id, lc.manager_id, lc.curator_id,
   lc.full_name, lc.phone, lc.telegram_username, lc.city, lc.address, lc.vacancy,
   lc.status, lc.previous_status, lc.status_confirmed_at, lc.status_confirmed_date,
-  lc.transferred_at, lc.created_at, lc.updated_at,
+  lc.transferred_at, lc.archived_at, lc.created_at, lc.updated_at,
   m.name AS manager_name,
   c.name AS curator_name,
   c.city AS curator_city
@@ -194,10 +198,89 @@ export async function listLeadCardsForCurator(
        LEFT JOIN managers c ON c.id = lc.curator_id
       WHERE lc.curator_id = $1
         AND lc.transferred_at IS NOT NULL
+        AND lc.archived_at IS NULL
       ORDER BY lc.transferred_at DESC`,
     [curatorId],
   )
   return rows.map(toLeadCard)
+}
+
+/** Archived leads of a curator, newest archive first (migration 117). */
+export async function listArchivedLeadsForCurator(
+  curatorId: string,
+  limit = 200,
+): Promise<LeadCard[]> {
+  const rows = await query<LeadCardRow>(
+    `SELECT ${CARD_SELECT}
+       FROM lead_cards lc
+       LEFT JOIN managers m ON m.id = lc.manager_id
+       LEFT JOIN managers c ON c.id = lc.curator_id
+      WHERE lc.curator_id = $1
+        AND lc.transferred_at IS NOT NULL
+        AND lc.archived_at IS NOT NULL
+      ORDER BY lc.archived_at DESC
+      LIMIT $2`,
+    [curatorId, Math.max(1, Math.min(500, limit))],
+  )
+  return rows.map(toLeadCard)
+}
+
+/**
+ * Archive a final lead (refused/left) or unarchive it back to the active
+ * workspace. Archiving requires the lead to be in a final status — active
+ * leads stay under the daily gate.
+ */
+export async function setLeadArchived(input: {
+  leadCardId: string
+  curatorId: string
+  archived: boolean
+}): Promise<LeadCard> {
+  const rows = await query<{ id: string }>(
+    input.archived
+      ? `UPDATE lead_cards
+            SET archived_at = now(), updated_at = now()
+          WHERE id = $1 AND curator_id = $2
+            AND status IN ('refused', 'left')
+            AND archived_at IS NULL
+          RETURNING id`
+      : `UPDATE lead_cards
+            SET archived_at = NULL, updated_at = now()
+          WHERE id = $1 AND curator_id = $2
+            AND archived_at IS NOT NULL
+          RETURNING id`,
+    [input.leadCardId, input.curatorId],
+  )
+  if (!rows[0]) {
+    throw new Error(
+      input.archived
+        ? 'В архив можно отправить только лид с финальным статусом («Отказался» или «Кинул»).'
+        : 'Лид не найден в архиве.',
+    )
+  }
+  const card = await getLeadCardById(rows[0].id)
+  if (!card) throw new Error('Archive update failed')
+  return card
+}
+
+/**
+ * Auto-archive final leads whose final status was confirmed more than
+ * `afterDays` days ago. Returns the number of leads archived. Called from
+ * the curator-status cron; 0 days disables the sweep.
+ */
+export async function autoArchiveFinalLeads(afterDays: number): Promise<number> {
+  if (afterDays <= 0) return 0
+  const rows = await query<{ id: string }>(
+    `UPDATE lead_cards
+        SET archived_at = now(), updated_at = now()
+      WHERE archived_at IS NULL
+        AND transferred_at IS NOT NULL
+        AND status IN ('refused', 'left')
+        AND status_confirmed_at IS NOT NULL
+        AND status_confirmed_at < now() - make_interval(days => $1)
+      RETURNING id`,
+    [afterDays],
+  )
+  return rows.length
 }
 
 /** A curator (or any manager row) with the number of active leads assigned. */
@@ -765,11 +848,15 @@ export async function countLeadsNeedingStatus(
            FROM lead_cards
           WHERE curator_id = $1
             AND transferred_at IS NOT NULL
+            AND archived_at IS NULL
+            AND (status IS NULL OR status NOT IN ('refused', 'left'))
             AND (status_confirmed_date IS NULL OR status_confirmed_date < $2::date)`
       : `SELECT count(*)::int AS n
            FROM lead_cards
           WHERE curator_id = $1
             AND transferred_at IS NOT NULL
+            AND archived_at IS NULL
+            AND (status IS NULL OR status NOT IN ('refused', 'left'))
             AND status_confirmed_date IS NULL
             AND $2::date IS NOT NULL`,
     [curatorId, todayMsk],
@@ -785,6 +872,8 @@ export interface AllLeadsFilter {
   city?: string | null
   /** Only leads transferred but currently without a curator. */
   orphanedOnly?: boolean
+  /** Show archived leads instead of active ones. */
+  archivedOnly?: boolean
   limit?: number
   offset?: number
 }
@@ -793,7 +882,12 @@ export interface AllLeadsFilter {
 export async function listAllTransferredLeads(
   filter: AllLeadsFilter = {},
 ): Promise<{ leads: LeadCard[]; total: number }> {
-  const conds: string[] = ['lc.transferred_at IS NOT NULL']
+  const conds: string[] = [
+    'lc.transferred_at IS NOT NULL',
+    filter.archivedOnly
+      ? 'lc.archived_at IS NOT NULL'
+      : 'lc.archived_at IS NULL',
+  ]
   const params: unknown[] = []
 
   if (filter.orphanedOnly) {
@@ -856,6 +950,7 @@ export async function getCuratorDiscipline(): Promise<CuratorDiscipline[]> {
     city: string | null
     total_leads: string
     confirmed_today: string
+    pending_today: string
     status: string | null
     status_count: string
   }>(
@@ -864,11 +959,19 @@ export async function getCuratorDiscipline(): Promise<CuratorDiscipline[]> {
               OVER (PARTITION BY c.id) AS total_leads,
             count(lc.id) FILTER (WHERE lc.status_confirmed_date = $1::date)
               OVER (PARTITION BY c.id) AS confirmed_today,
+            -- Final leads (refused/left) are exempt from the daily gate.
+            count(lc.id) FILTER (
+              WHERE (lc.status IS NULL OR lc.status NOT IN ('refused', 'left'))
+                AND (lc.status_confirmed_date IS NULL
+                     OR lc.status_confirmed_date < $1::date)
+            ) OVER (PARTITION BY c.id) AS pending_today,
             lc.status,
             count(lc.id) OVER (PARTITION BY c.id, lc.status) AS status_count
        FROM managers c
        LEFT JOIN lead_cards lc
-         ON lc.curator_id = c.id AND lc.transferred_at IS NOT NULL
+         ON lc.curator_id = c.id
+        AND lc.transferred_at IS NOT NULL
+        AND lc.archived_at IS NULL
       WHERE c.role = 'curator' AND c.status = 'active'`,
     [today],
   )
@@ -883,7 +986,7 @@ export async function getCuratorDiscipline(): Promise<CuratorDiscipline[]> {
         city: r.city,
         totalLeads: Number(r.total_leads ?? 0),
         confirmedToday: Number(r.confirmed_today ?? 0),
-        pendingToday: 0,
+        pendingToday: Number(r.pending_today ?? 0),
         statusCounts: {},
       }
       byId.set(r.curator_id, cur)
@@ -891,9 +994,6 @@ export async function getCuratorDiscipline(): Promise<CuratorDiscipline[]> {
     if (isLeadStatus(r.status)) {
       cur.statusCounts[r.status] = Number(r.status_count ?? 0)
     }
-  }
-  for (const cur of byId.values()) {
-    cur.pendingToday = Math.max(cur.totalLeads - cur.confirmedToday, 0)
   }
   return [...byId.values()].sort((a, b) =>
     a.curatorName.localeCompare(b.curatorName, 'ru'),
@@ -970,6 +1070,8 @@ export async function listCuratorsWithOverdueStatuses(): Promise<
        JOIN lead_cards lc
          ON lc.curator_id = c.id
         AND lc.transferred_at IS NOT NULL
+        AND lc.archived_at IS NULL
+        AND (lc.status IS NULL OR lc.status NOT IN ('refused', 'left'))
         AND (lc.status_confirmed_date IS NULL OR lc.status_confirmed_date < $1::date)
       WHERE c.role = 'curator' AND c.status = 'active'
       GROUP BY c.id, c.name`,

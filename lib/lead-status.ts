@@ -71,6 +71,22 @@ export function isLeadStatus(value: string | null | undefined): value is LeadSta
   return !!value && (LEAD_STATUSES as readonly string[]).includes(value)
 }
 
+/**
+ * Final statuses end the lead's active lifecycle: the person refused or
+ * disappeared for good. Final leads are exempt from the daily confirmation
+ * gate and are auto-archived after the configured number of days.
+ */
+export const FINAL_LEAD_STATUSES = ['refused', 'left'] as const satisfies
+  readonly LeadStatus[]
+
+export function isFinalLeadStatus(
+  value: string | null | undefined,
+): value is (typeof FINAL_LEAD_STATUSES)[number] {
+  return (
+    !!value && (FINAL_LEAD_STATUSES as readonly string[]).includes(value)
+  )
+}
+
 export function leadStatusLabel(value: string | null | undefined): string {
   if (isLeadStatus(value)) return LEAD_STATUS_LABELS[value]
   return 'Не указан'
@@ -107,4 +123,20 @@ export function needsDailyStatusUpdate(
   if (!statusConfirmedDate) return true
   if (!isPastDailyDeadline(now)) return false
   return statusConfirmedDate !== today
+}
+
+/**
+ * Lifecycle-aware daily gate check: final leads (refused/left) never require
+ * a daily confirmation again — their story is over. Use this instead of raw
+ * needsDailyStatusUpdate() wherever the lead's status is available.
+ */
+export function leadNeedsDailyStatus(
+  lead: {
+    status: string | null
+    statusConfirmedDate: string | null | undefined
+  },
+  now: Date = new Date(),
+): boolean {
+  if (isFinalLeadStatus(lead.status)) return false
+  return needsDailyStatusUpdate(lead.statusConfirmedDate, now)
 }
