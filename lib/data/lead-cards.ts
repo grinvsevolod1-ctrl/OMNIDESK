@@ -1,9 +1,16 @@
 /**
  * Lead cards: structured lead data filled from a conversation and optionally
- * transferred to a curator matched by city.
+ * transferred to a curator matched by city. Curators maintain a daily status
+ * and comment trail on each transferred lead.
  */
 import { randomUUID } from 'crypto'
 import { query } from '../db'
+import {
+  isLeadStatus,
+  type LeadStatus,
+  STATUS_COMMENT_MIN_LEN,
+} from '../lead-status'
+import { mskDayKey } from '../time'
 import type { Manager } from '../types'
 import { managerColumns, toManager, type ManagerRow } from './shared'
 
@@ -21,9 +28,24 @@ export interface LeadCard {
   city: string
   address: string
   vacancy: string
+  status: LeadStatus | null
+  previousStatus: LeadStatus | null
+  statusConfirmedAt: string | null
+  /** YYYY-MM-DD in MSK when the current status was confirmed. */
+  statusConfirmedDate: string | null
   transferredAt: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface LeadCardComment {
+  id: string
+  leadCardId: string
+  authorId: string
+  authorName: string | null
+  body: string
+  status: LeadStatus | null
+  createdAt: string
 }
 
 interface LeadCardRow {
@@ -40,9 +62,32 @@ interface LeadCardRow {
   city: string
   address: string
   vacancy: string
+  status: string | null
+  previous_status: string | null
+  status_confirmed_at: string | Date | null
+  status_confirmed_date: string | Date | null
   transferred_at: string | Date | null
   created_at: string | Date
   updated_at: string | Date
+}
+
+interface CommentRow {
+  id: string
+  lead_card_id: string
+  author_id: string
+  author_name: string | null
+  body: string
+  status: string | null
+  created_at: string | Date
+}
+
+function toDateOnly(v: string | Date | null | undefined): string | null {
+  if (!v) return null
+  if (typeof v === 'string') {
+    // Postgres date may arrive as 'YYYY-MM-DD' or ISO timestamp.
+    return v.slice(0, 10)
+  }
+  return v.toISOString().slice(0, 10)
 }
 
 function toLeadCard(r: LeadCardRow): LeadCard {
@@ -60,6 +105,12 @@ function toLeadCard(r: LeadCardRow): LeadCard {
     city: r.city ?? '',
     address: r.address ?? '',
     vacancy: r.vacancy ?? '',
+    status: isLeadStatus(r.status) ? r.status : null,
+    previousStatus: isLeadStatus(r.previous_status) ? r.previous_status : null,
+    statusConfirmedAt: r.status_confirmed_at
+      ? new Date(r.status_confirmed_at).toISOString()
+      : null,
+    statusConfirmedDate: toDateOnly(r.status_confirmed_date),
     transferredAt: r.transferred_at
       ? new Date(r.transferred_at).toISOString()
       : null,
@@ -68,9 +119,22 @@ function toLeadCard(r: LeadCardRow): LeadCard {
   }
 }
 
+function toComment(r: CommentRow): LeadCardComment {
+  return {
+    id: r.id,
+    leadCardId: r.lead_card_id,
+    authorId: r.author_id,
+    authorName: r.author_name,
+    body: r.body,
+    status: isLeadStatus(r.status) ? r.status : null,
+    createdAt: new Date(r.created_at).toISOString(),
+  }
+}
+
 const CARD_SELECT = `
   lc.id, lc.conversation_id, lc.manager_id, lc.curator_id,
   lc.full_name, lc.phone, lc.telegram_username, lc.city, lc.address, lc.vacancy,
+  lc.status, lc.previous_status, lc.status_confirmed_at, lc.status_confirmed_date,
   lc.transferred_at, lc.created_at, lc.updated_at,
   m.name AS manager_name,
   c.name AS curator_name,
@@ -88,6 +152,19 @@ export async function getLeadCardByConversation(
       WHERE lc.conversation_id = $1
       LIMIT 1`,
     [conversationId],
+  )
+  return rows[0] ? toLeadCard(rows[0]) : null
+}
+
+export async function getLeadCardById(id: string): Promise<LeadCard | null> {
+  const rows = await query<LeadCardRow>(
+    `SELECT ${CARD_SELECT}
+       FROM lead_cards lc
+       LEFT JOIN managers m ON m.id = lc.manager_id
+       LEFT JOIN managers c ON c.id = lc.curator_id
+      WHERE lc.id = $1
+      LIMIT 1`,
+    [id],
   )
   return rows[0] ? toLeadCard(rows[0]) : null
 }
@@ -126,6 +203,17 @@ export async function findCuratorsByCity(cityQuery: string): Promise<Manager[]> 
   return rows.map(toManager)
 }
 
+/** All active curators (for admin transfer picker). */
+export async function listActiveCurators(): Promise<Manager[]> {
+  const rows = await query<ManagerRow>(
+    `SELECT ${managerColumns()}
+       FROM managers
+      WHERE role = 'curator' AND status = 'active'
+      ORDER BY city ASC NULLS LAST, name ASC`,
+  )
+  return rows.map(toManager)
+}
+
 export interface UpsertLeadCardInput {
   conversationId: string
   managerId: string
@@ -139,10 +227,6 @@ export interface UpsertLeadCardInput {
   curatorId?: string | null
 }
 
-/**
- * Create or update the lead card for a conversation. When curatorId is provided
- * and valid, sets transferred_at = now().
- */
 export async function upsertLeadCard(
   input: UpsertLeadCardInput,
 ): Promise<LeadCard> {
@@ -170,7 +254,7 @@ export async function upsertLeadCard(
   )
 
   if (existing[0]) {
-    const rows = await query<LeadCardRow>(
+    const rows = await query<{ id: string }>(
       `UPDATE lead_cards
           SET full_name = $2,
               phone = $3,
@@ -230,15 +314,152 @@ export async function upsertLeadCard(
   return card
 }
 
-async function getLeadCardById(id: string): Promise<LeadCard | null> {
-  const rows = await query<LeadCardRow>(
-    `SELECT ${CARD_SELECT}
-       FROM lead_cards lc
-       LEFT JOIN managers m ON m.id = lc.manager_id
-       LEFT JOIN managers c ON c.id = lc.curator_id
-      WHERE lc.id = $1
+/** Admin: reassign a transferred lead to another active curator. */
+export async function transferLeadToCurator(
+  leadCardId: string,
+  newCuratorId: string,
+): Promise<LeadCard> {
+  const ok = await query<{ id: string }>(
+    `SELECT id FROM managers
+      WHERE id = $1 AND role = 'curator' AND status = 'active'
       LIMIT 1`,
-    [id],
+    [newCuratorId],
   )
-  return rows[0] ? toLeadCard(rows[0]) : null
+  if (!ok[0]) throw new Error('Curator not found or inactive')
+
+  const rows = await query<{ id: string }>(
+    `UPDATE lead_cards
+        SET curator_id = $2,
+            transferred_at = now(),
+            -- New curator must confirm status for today.
+            status = NULL,
+            previous_status = COALESCE(status, previous_status),
+            status_confirmed_at = NULL,
+            status_confirmed_date = NULL,
+            updated_at = now()
+      WHERE id = $1 AND transferred_at IS NOT NULL
+      RETURNING id`,
+    [leadCardId, newCuratorId],
+  )
+  if (!rows[0]) throw new Error('Lead not found or not transferred yet')
+  const card = await getLeadCardById(rows[0].id)
+  if (!card) throw new Error('Lead transfer failed')
+  return card
+}
+
+/**
+ * Curator confirms today's status for a lead. Always requires a comment
+ * (>= STATUS_COMMENT_MIN_LEN). Moves the previous confirmed status into
+ * previous_status when the day changes.
+ */
+export async function updateLeadStatus(input: {
+  leadCardId: string
+  curatorId: string
+  status: LeadStatus
+  comment: string
+}): Promise<LeadCard> {
+  const comment = input.comment.trim()
+  if (comment.length < STATUS_COMMENT_MIN_LEN) {
+    throw new Error(
+      `Комментарий должен быть не короче ${STATUS_COMMENT_MIN_LEN} символов.`,
+    )
+  }
+  if (!isLeadStatus(input.status)) {
+    throw new Error('Некорректный статус')
+  }
+
+  const existing = await query<{
+    id: string
+    curator_id: string | null
+    status: string | null
+    status_confirmed_date: string | Date | null
+  }>(
+    `SELECT id, curator_id, status, status_confirmed_date
+       FROM lead_cards WHERE id = $1 LIMIT 1`,
+    [input.leadCardId],
+  )
+  const row = existing[0]
+  if (!row) throw new Error('Лид не найден')
+  if (row.curator_id !== input.curatorId) {
+    throw new Error('Этот лид принадлежит другому куратору')
+  }
+
+  const today = mskDayKey(new Date())
+  const prevDate = toDateOnly(row.status_confirmed_date)
+  const carryPrevious =
+    isLeadStatus(row.status) && prevDate && prevDate !== today
+      ? row.status
+      : null
+
+  await query(
+    `UPDATE lead_cards
+        SET previous_status = COALESCE($3, previous_status),
+            status = $2,
+            status_confirmed_at = now(),
+            status_confirmed_date = $4::date,
+            updated_at = now()
+      WHERE id = $1`,
+    [input.leadCardId, input.status, carryPrevious, today],
+  )
+
+  await query(
+    `INSERT INTO lead_card_comments (id, lead_card_id, author_id, body, status)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [randomUUID(), input.leadCardId, input.curatorId, comment, input.status],
+  )
+
+  const card = await getLeadCardById(input.leadCardId)
+  if (!card) throw new Error('Status update failed')
+  return card
+}
+
+/** Free-form comment without changing status (optional helper). */
+export async function addLeadComment(input: {
+  leadCardId: string
+  authorId: string
+  body: string
+}): Promise<LeadCardComment> {
+  const body = input.body.trim()
+  if (body.length < 1) throw new Error('Пустой комментарий')
+
+  const id = randomUUID()
+  const rows = await query<CommentRow>(
+    `INSERT INTO lead_card_comments (id, lead_card_id, author_id, body, status)
+     VALUES ($1, $2, $3, $4, NULL)
+     RETURNING id, lead_card_id, author_id, body, status, created_at,
+               (SELECT name FROM managers WHERE id = $3) AS author_name`,
+    [id, input.leadCardId, input.authorId, body],
+  )
+  return toComment(rows[0])
+}
+
+export async function listLeadComments(
+  leadCardId: string,
+): Promise<LeadCardComment[]> {
+  const rows = await query<CommentRow>(
+    `SELECT c.id, c.lead_card_id, c.author_id, c.body, c.status, c.created_at,
+            m.name AS author_name
+       FROM lead_card_comments c
+       LEFT JOIN managers m ON m.id = c.author_id
+      WHERE c.lead_card_id = $1
+      ORDER BY c.created_at DESC`,
+    [leadCardId],
+  )
+  return rows.map(toComment)
+}
+
+/** Count of leads a curator still must confirm today (after deadline logic is client-side). */
+export async function countLeadsNeedingStatus(
+  curatorId: string,
+  todayMsk: string,
+): Promise<number> {
+  const rows = await query<{ n: string }>(
+    `SELECT count(*)::int AS n
+       FROM lead_cards
+      WHERE curator_id = $1
+        AND transferred_at IS NOT NULL
+        AND (status_confirmed_date IS NULL OR status_confirmed_date < $2::date)`,
+    [curatorId, todayMsk],
+  )
+  return Number(rows[0]?.n ?? 0)
 }

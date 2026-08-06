@@ -4,18 +4,30 @@ import { revalidatePath } from 'next/cache'
 import { getSession, requireAdmin, requireCurator } from '@/lib/auth'
 import { query } from '@/lib/db'
 import {
+  addLeadComment,
   findCuratorsByCity,
   getLeadCardByConversation,
+  getLeadCardById,
+  listActiveCurators,
   listLeadCardsForCurator,
+  listLeadComments,
+  transferLeadToCurator,
+  updateLeadStatus,
   upsertLeadCard,
 } from '@/lib/data/lead-cards'
+import {
+  isLeadStatus,
+  needsDailyStatusUpdate,
+  STATUS_COMMENT_MIN_LEN,
+  type LeadStatus,
+} from '@/lib/lead-status'
+import { mskDayKey } from '@/lib/time'
 
 export interface LeadCardActionResult {
   ok: boolean
   message: string
 }
 
-/** Manager or admin may fill/transfer a lead card. */
 async function requireManagerOrAdmin() {
   const session = await getSession()
   if (!session) throw new Error('Unauthorized')
@@ -24,11 +36,6 @@ async function requireManagerOrAdmin() {
   throw new Error('Forbidden')
 }
 
-/**
- * Resolve the managers.id that owns the card.
- * Manager session → session.sub.
- * Admin session → conversation's assigned manager (FK requires a real row).
- */
 async function resolveCardManagerId(
   session: { role: string; sub: string },
   conversationId: string,
@@ -104,6 +111,7 @@ export async function saveLeadCardAction(input: {
     })
     revalidatePath('/app/inbox')
     revalidatePath('/curator')
+    revalidatePath('/admin/curators')
     if (card.transferredAt) {
       return {
         ok: true,
@@ -122,7 +130,129 @@ export async function listMyCuratorLeadsAction() {
   return listLeadCardsForCurator(session.sub)
 }
 
-/** Admin overview: all transferred leads (optional). */
+export async function getLeadCardDetailAction(leadCardId: string) {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+
+  const card = await getLeadCardById(leadCardId)
+  if (!card) return null
+
+  if (session.role === 'curator' && card.curatorId !== session.sub) {
+    throw new Error('Forbidden')
+  }
+  if (session.role !== 'admin' && session.role !== 'curator') {
+    throw new Error('Forbidden')
+  }
+
+  const comments = await listLeadComments(leadCardId)
+  return { card, comments }
+}
+
+export async function updateLeadStatusAction(input: {
+  leadCardId: string
+  status: string
+  comment: string
+}): Promise<LeadCardActionResult> {
+  const session = await requireCurator()
+  if (!isLeadStatus(input.status)) {
+    return { ok: false, message: 'Выберите корректный статус.' }
+  }
+  if (input.comment.trim().length < STATUS_COMMENT_MIN_LEN) {
+    return {
+      ok: false,
+      message: `Комментарий — минимум ${STATUS_COMMENT_MIN_LEN} символов.`,
+    }
+  }
+  try {
+    await updateLeadStatus({
+      leadCardId: input.leadCardId,
+      curatorId: session.sub,
+      status: input.status as LeadStatus,
+      comment: input.comment,
+    })
+    revalidatePath('/curator')
+    revalidatePath('/admin/curators')
+    return { ok: true, message: 'Статус обновлён.' }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка обновления'
+    return { ok: false, message: msg }
+  }
+}
+
+export async function addLeadCommentAction(input: {
+  leadCardId: string
+  body: string
+}): Promise<LeadCardActionResult> {
+  const session = await requireCurator()
+  if (input.body.trim().length < 1) {
+    return { ok: false, message: 'Введите комментарий.' }
+  }
+  const card = await getLeadCardById(input.leadCardId)
+  if (!card || card.curatorId !== session.sub) {
+    return { ok: false, message: 'Лид не найден.' }
+  }
+  try {
+    await addLeadComment({
+      leadCardId: input.leadCardId,
+      authorId: session.sub,
+      body: input.body,
+    })
+    revalidatePath('/curator')
+    return { ok: true, message: 'Комментарий добавлен.' }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка'
+    return { ok: false, message: msg }
+  }
+}
+
+/** Admin: list leads for a specific curator. */
+export async function listCuratorLeadsAdminAction(curatorId: string) {
+  await requireAdmin()
+  return listLeadCardsForCurator(curatorId)
+}
+
+export async function listActiveCuratorsAction() {
+  const session = await getSession()
+  if (!session || (session.role !== 'admin' && session.role !== 'manager')) {
+    throw new Error('Forbidden')
+  }
+  return listActiveCurators()
+}
+
+export async function transferLeadAdminAction(input: {
+  leadCardId: string
+  curatorId: string
+}): Promise<LeadCardActionResult> {
+  await requireAdmin()
+  try {
+    const card = await transferLeadToCurator(input.leadCardId, input.curatorId)
+    revalidatePath('/admin/curators')
+    revalidatePath('/curator')
+    return {
+      ok: true,
+      message: `Лид передан${card.curatorName ? ` куратору ${card.curatorName}` : ''}.`,
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка передачи'
+    return { ok: false, message: msg }
+  }
+}
+
+/** Curator daily gate payload. */
+export async function getCuratorStatusGateAction() {
+  const session = await requireCurator()
+  const leads = await listLeadCardsForCurator(session.sub)
+  const pending = leads.filter((l) =>
+    needsDailyStatusUpdate(l.statusConfirmedDate),
+  )
+  return {
+    total: leads.length,
+    pendingCount: pending.length,
+    pendingIds: pending.map((l) => l.id),
+    today: mskDayKey(new Date()),
+  }
+}
+
 export async function listAllTransferredLeadsAction() {
   await requireAdmin()
   const rows = await query<{ n: string }>(

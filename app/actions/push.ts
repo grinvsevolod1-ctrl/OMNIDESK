@@ -1,7 +1,7 @@
 'use server'
 
 import { headers } from 'next/headers'
-import { requireManager } from '@/lib/auth'
+import { getSession, requireManager } from '@/lib/auth'
 import {
   getVapidPublicKey,
   isPushConfigured,
@@ -14,15 +14,20 @@ import {
 } from '@/lib/push'
 
 export interface PushConfig {
-  /** Whether the server has VAPID keys configured (push is available). */
   configured: boolean
-  /** Public key for pushManager.subscribe(); empty when not configured. */
   publicKey: string
 }
 
-/** Client bootstrap: is push available and what key to subscribe with. */
+/** Manager or curator may bootstrap push. */
+async function requirePushUser() {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+  if (session.role === 'manager' || session.role === 'curator') return session
+  throw new Error('Forbidden')
+}
+
 export async function getPushConfigAction(): Promise<PushConfig> {
-  await requireManager()
+  await requirePushUser()
   return {
     configured: isPushConfigured(),
     publicKey: getVapidPublicKey(),
@@ -34,13 +39,12 @@ export interface PushResult {
   message: string
 }
 
-/** Store the browser's push subscription for the signed-in manager. */
 export async function subscribePushAction(input: {
   endpoint: string
   p256dh: string
   auth: string
 }): Promise<PushResult> {
-  const session = await requireManager()
+  const session = await requirePushUser()
   if (!isPushConfigured()) {
     return { ok: false, message: 'Push is not configured on the server.' }
   }
@@ -60,11 +64,10 @@ export async function subscribePushAction(input: {
   }
 }
 
-/** Remove a subscription (manager turned notifications off on this device). */
 export async function unsubscribePushAction(
   endpoint: string,
 ): Promise<PushResult> {
-  const session = await requireManager()
+  const session = await requirePushUser()
   if (!endpoint) return { ok: false, message: 'No endpoint.' }
   try {
     await removeSubscription(session.sub, endpoint)
@@ -75,19 +78,9 @@ export async function unsubscribePushAction(
 }
 
 export interface TestPushResult extends PushResult {
-  /**
-   * Set when THIS device's subscription is broken server-side and the client
-   * should re-subscribe (ensurePushSubscription) and retry the test.
-   */
   needsResubscribe?: boolean
 }
 
-/**
- * Send a test push. When the client passes its own subscription endpoint the
- * test targets THAT device and reports its true status — the old broadcast
- * behavior said "sent" as long as ANY device got it, which is exactly how a
- * broken desktop kept looking fine while the phone received the test.
- */
 export async function sendTestPushAction(
   endpoint?: string,
 ): Promise<TestPushResult> {
@@ -138,17 +131,10 @@ export async function sendTestPushAction(
 
 export interface PushDiagnostics {
   configured: boolean
-  /** Server VAPID public key (base64url) — client compares with its own. */
   publicKey: string
   devices: SubscriptionInfo[]
 }
 
-/**
- * Settings-page diagnostics: whether the server can push at all and which
- * devices it believes belong to this manager. Lets the client render an
- * honest per-device picture (this browser registered? key matching? when was
- * the device last confirmed?) instead of guessing from local state.
- */
 export async function getPushDiagnosticsAction(): Promise<PushDiagnostics> {
   const session = await requireManager()
   const configured = isPushConfigured()
