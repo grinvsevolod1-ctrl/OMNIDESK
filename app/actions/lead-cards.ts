@@ -1,7 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { getSession, requireAdmin, requireCurator, requireManager } from '@/lib/auth'
+import { getSession, requireAdmin, requireCurator } from '@/lib/auth'
+import { query } from '@/lib/db'
 import {
   findCuratorsByCity,
   getLeadCardByConversation,
@@ -21,6 +22,34 @@ async function requireManagerOrAdmin() {
   if (session.role === 'admin') return session
   if (session.role === 'manager') return session
   throw new Error('Forbidden')
+}
+
+/**
+ * Resolve the managers.id that owns the card.
+ * Manager session → session.sub.
+ * Admin session → conversation's assigned manager (FK requires a real row).
+ */
+async function resolveCardManagerId(
+  session: { role: string; sub: string },
+  conversationId: string,
+): Promise<{ ok: true; managerId: string } | { ok: false; message: string }> {
+  if (session.role === 'manager') {
+    return { ok: true, managerId: session.sub }
+  }
+
+  const rows = await query<{ manager_id: string | null }>(
+    `SELECT manager_id FROM conversations WHERE id = $1 LIMIT 1`,
+    [conversationId],
+  )
+  const managerId = rows[0]?.manager_id
+  if (!managerId) {
+    return {
+      ok: false,
+      message:
+        'У диалога нет назначенного менеджера — нельзя сохранить карточку.',
+    }
+  }
+  return { ok: true, managerId }
 }
 
 export async function getLeadCardAction(conversationId: string) {
@@ -58,25 +87,13 @@ export async function saveLeadCardAction(input: {
     return { ok: false, message: 'Выберите куратора.' }
   }
 
-  // Admin has no managers-table id — store under a sentinel is not allowed.
-  // Admin fills cards only when acting; we require a real manager session for
-  // manager_id FK. Admins use god tools separately; for inbox admin views we
-  // still need an id. Fall back: admin cannot own cards without a manager row.
-  // Practical path: only managers transfer from /app inbox; admin from god panel
-  // can pass later. For now if admin, refuse with clear message unless we have
-  // a manager sub.
-  if (session.role === 'admin') {
-    return {
-      ok: false,
-      message:
-        'Карточку лида заполняет менеджер из входящих. Админ видит переданные лиды у кураторов.',
-    }
-  }
+  const resolved = await resolveCardManagerId(session, input.conversationId)
+  if (!resolved.ok) return resolved
 
   try {
     const card = await upsertLeadCard({
       conversationId: input.conversationId,
-      managerId: session.sub,
+      managerId: resolved.managerId,
       fullName: input.fullName,
       phone: input.phone,
       telegramUsername: input.telegramUsername,
@@ -108,8 +125,6 @@ export async function listMyCuratorLeadsAction() {
 /** Admin overview: all transferred leads (optional). */
 export async function listAllTransferredLeadsAction() {
   await requireAdmin()
-  // Reuse curator list pattern via direct query through find — kept simple.
-  const { query } = await import('@/lib/db')
   const rows = await query<{ n: string }>(
     `SELECT count(*)::int AS n FROM lead_cards WHERE transferred_at IS NOT NULL`,
   )
