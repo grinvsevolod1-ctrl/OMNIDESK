@@ -110,7 +110,11 @@ export async function getSession(): Promise<SessionUser | null> {
 export async function requireAdmin(): Promise<SessionUser> {
   const session = await getSession()
   if (!session) redirect('/login')
-  if (session.role !== 'admin') redirect('/app')
+  if (session.role !== 'admin') {
+    if (session.role === 'manager') redirect('/app')
+    if (session.role === 'curator') redirect('/curator')
+    redirect('/login')
+  }
   return session
 }
 
@@ -119,7 +123,7 @@ export async function requireManager(): Promise<SessionUser> {
   if (!session) redirect('/login')
   if (session.role !== 'manager') {
     if (session.role === 'admin') redirect('/admin')
-    // Curators are not managers — keep them out of the manager workspace.
+    if (session.role === 'curator') redirect('/curator')
     redirect('/login')
   }
   return session
