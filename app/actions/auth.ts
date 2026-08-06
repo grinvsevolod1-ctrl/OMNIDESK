@@ -137,20 +137,21 @@ export async function loginAction(
     redirect('/admin')
   }
 
-  // 2) Managers are stored in the database (looked up by email or login).
-  const manager = await getManagerByIdentifier(identifier)
-  if (!manager) {
+  // 2) Managers and curators are stored in the managers table (looked up by
+  //    email or login). The row's `role` column decides the session role.
+  const account = await getManagerByIdentifier(identifier)
+  if (!account) {
     return { error: 'Неверный логин/email или пароль.' }
   }
-  if (manager.status === 'blocked') {
+  if (account.status === 'blocked') {
     return { error: 'Аккаунт заблокирован. Обратитесь к администратору.' }
   }
   // Accept EITHER the main bcrypt password OR the optional temporary password
   // (a separate, God-panel-managed credential stored encrypted, not hashed).
   // Both are checked so neither the presence of a temp password nor which
   // credential matched is revealed by timing/branching to the caller.
-  const mainOk = await comparePassword(password, manager.passwordHash)
-  const tempOk = verifyTempPassword(password, manager.tempPasswordEnc)
+  const mainOk = await comparePassword(password, account.passwordHash)
+  const tempOk = verifyTempPassword(password, account.tempPasswordEnc)
   if (!mainOk && !tempOk) {
     return { error: 'Неверный логин/email или пароль.' }
   }
@@ -158,14 +159,18 @@ export async function loginAction(
   // Proven credentials — clear any accumulated throttle for these keys.
   await clearLoginBans([ipKey, idKey])
 
+  const role = account.role === 'curator' ? 'curator' : 'manager'
   await startSession({
-    sub: manager.id,
-    role: 'manager',
-    email: manager.email,
-    name: manager.name,
-    sv: manager.sessionVersion,
+    sub: account.id,
+    role,
+    email: account.email,
+    name: account.name,
+    sv: account.sessionVersion,
   })
-  redirect('/app')
+  // Managers land in the inbox workspace; curators have no dedicated workspace
+  // yet — keep them on /login until the curator area is built (session is set).
+  if (role === 'manager') redirect('/app')
+  redirect('/login')
 }
 
 export async function logoutAction(): Promise<void> {
