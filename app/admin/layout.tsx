@@ -15,6 +15,7 @@ import { loadConsoleSession } from '@/lib/data/console-shell'
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
   { href: '/admin/managers', label: 'Менеджеры', icon: 'managers' },
+  { href: '/admin/curators', label: 'Кураторы', icon: 'curators' },
   { href: '/admin/ai', label: 'ИИ-ассистент', icon: 'ai' },
   {
     href: '/admin/accounts',
@@ -44,21 +45,13 @@ export default async function AdminLayout({
 }) {
   const user = await requireAdmin()
 
-  // God-panel maintenance kill-switch: when on, admins see a fake 502 instead
-  // of the dashboard. The god panel is never gated by this, so it can be undone.
   if (await getFake502()) return <Fake502 />
 
-  // Managed dictionaries (lead-status labels, channel captions...) resolved
-  // server-side once per request — no client fetch, no default-label flash.
   const dictionaries = await getDictionaries()
 
-  // OS shell is the DEFAULT admin experience; the cookie ('0') opts back into
-  // the classic tab UI. Read server-side so there is no mode flash (FOUC).
   const jar = await cookies()
   const shellEnabled = jar.get(SHELL_MODE_COOKIE)?.value !== '0'
 
-  // Proactive insights + saved dialog: only pay the cost when the shell is on.
-  // Both are fail-open — a hiccup degrades to a plain greeting, never a 500.
   const [insights, savedSession] = shellEnabled
     ? await Promise.all([detectShellInsights(), loadConsoleSession(user.sub)])
     : [[], null]
