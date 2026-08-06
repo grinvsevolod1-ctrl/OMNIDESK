@@ -17,6 +17,7 @@ import { directiveTools } from './tools-directives'
 import { dialogTools } from './tools-dialogs'
 import { analyticsTools } from './tools-analytics'
 import { qualityTools } from './tools-quality'
+import { curatorTools } from './tools-curators'
 
 /**
  * Shared orchestration for the AI-manager co-pilot, used by BOTH the server
@@ -33,6 +34,7 @@ import { qualityTools } from './tools-quality'
  *   tools-dialogs.ts     attach/detach AI, transcripts, follow-up config
  *   tools-analytics.ts   performance, heat, health, briefing, reports, losses
  *   tools-quality.ts     preview, check cases, business memory, experiments
+ *   tools-curators.ts    read-only curator load, discipline and lead lists
  */
 
 const ASSISTANT_MODEL =
@@ -104,6 +106,7 @@ export async function prepareAssistantRun(
     ...dialogTools(state),
     ...analyticsTools(state),
     ...qualityTools(state),
+    ...curatorTools(state),
   }
 
   // Long-term business memory survives the trimmed chat history: every note
