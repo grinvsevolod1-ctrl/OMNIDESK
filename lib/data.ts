@@ -4,15 +4,6 @@
  * The implementation is split into cohesive domain modules under ./data/*.
  * This file re-exports them so the rest of the app keeps importing everything
  * from a single entry point (`@/lib/data`), unchanged.
- *
- * Architecture:
- *  - ./data/shared      cross-cutting primitives (row types, row→domain
- *                       converters, SQL fragments, read pool, round-robin).
- *                       Imported by the domain modules; intentionally NOT
- *                       re-exported here (internal to the data layer).
- *  - Domain modules import shared directly; the few genuinely cross-domain
- *    calls import from this facade at runtime, which keeps the module graph
- *    free of problematic load-time cycles.
  */
 
 /* Managers */
@@ -35,6 +26,9 @@ export * from './data/conversations'
 
 /* Admin-only contacts / leads database */
 export * from './data/contacts'
+
+/* Lead cards transferred to curators */
+export * from './data/lead-cards'
 
 /* AI manager-assistant: shared settings, training lessons, playbook */
 export * from './data/ai-assist'
