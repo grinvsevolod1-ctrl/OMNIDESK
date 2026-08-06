@@ -14,6 +14,7 @@ import {
   listAllTransferredLeads,
   listLeadCardsForCurator,
   listLeadComments,
+  listLeadStatusHistory,
   listLeadTransfers,
   transferLeadToCurator,
   updateLeadStatus,
@@ -195,11 +196,12 @@ export async function getLeadCardDetailAction(leadCardId: string) {
     (session.role === 'manager' && card.managerId === session.sub)
   if (!allowed) throw new Error('Forbidden')
 
-  const [comments, transfers] = await Promise.all([
+  const [comments, transfers, statusHistory] = await Promise.all([
     listLeadComments(leadCardId),
     listLeadTransfers(leadCardId),
+    listLeadStatusHistory(leadCardId).catch(() => []),
   ])
-  return { card, comments, transfers }
+  return { card, comments, transfers, statusHistory }
 }
 
 export async function updateLeadStatusAction(input: {

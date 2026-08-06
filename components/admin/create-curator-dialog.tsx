@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { CityInput } from '@/components/shared/city-input'
 
 export function CreateCuratorDialog() {
   const [open, setOpen] = useState(false)
@@ -147,16 +148,15 @@ export function CreateCuratorDialog() {
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="curator-city">Город</Label>
-                <Input
+                <Label htmlFor="curator-city">Города</Label>
+                <CityInput
                   id="curator-city"
                   name="city"
-                  type="text"
-                  placeholder="Москва"
+                  placeholder="Москва, Казань"
                   required
                 />
                 <p className="text-xs text-muted-foreground">
-                  Город, за который отвечает этот куратор.
+                  Один или несколько городов через запятую. Первый — основной.
                 </p>
               </div>
               <div className="flex flex-col gap-2">

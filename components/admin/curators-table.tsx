@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { MapPin } from 'lucide-react'
+import { MapPin, Pencil } from 'lucide-react'
 import { CuratorLeadsDialog } from '@/components/admin/curator-leads-dialog'
+import { EditCuratorCitiesDialog } from '@/components/admin/edit-curator-cities-dialog'
 import { ManagerActions } from '@/components/admin/manager-actions'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
@@ -81,6 +82,7 @@ export function CuratorsTable({
   discipline?: Record<string, CuratorDiscipline>
 }) {
   const [selected, setSelected] = useState<Manager | null>(null)
+  const [editingCities, setEditingCities] = useState<Manager | null>(null)
 
   return (
     <>
@@ -112,8 +114,17 @@ export function CuratorsTable({
                     </div>
                   ) : null}
                 </td>
-                <td className="px-5 py-3">
-                  {c.city ? <CityPill city={c.city} /> : null}
+                <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="group flex items-center gap-1.5"
+                    onClick={() => setEditingCities(c)}
+                    title="Изменить города куратора"
+                  >
+                    {c.city ? <CityPill city={c.city} /> : null}
+                    <Pencil className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                    <span className="sr-only">Изменить города</span>
+                  </button>
                 </td>
                 <td className="px-5 py-3">
                   <DisciplinePill d={discipline?.[c.id]} />
@@ -174,6 +185,16 @@ export function CuratorsTable({
           open={!!selected}
           onOpenChange={(o) => {
             if (!o) setSelected(null)
+          }}
+        />
+      ) : null}
+
+      {editingCities ? (
+        <EditCuratorCitiesDialog
+          curator={editingCities}
+          open={!!editingCities}
+          onOpenChange={(o) => {
+            if (!o) setEditingCities(null)
           }}
         />
       ) : null}

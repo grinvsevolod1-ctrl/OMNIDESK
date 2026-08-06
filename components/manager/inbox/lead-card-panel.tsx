@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
+import { CityInput } from '@/components/shared/city-input'
 import type { CuratorWithLoad } from '@/lib/data/lead-cards'
 
 /**
@@ -216,10 +217,10 @@ export function LeadCardPanel({
                 </Field>
               </div>
               <Field label="Город" required>
-                <Input
+                <CityInput
                   value={city}
-                  onChange={(e) => {
-                    setCity(e.target.value)
+                  onValueChange={(v) => {
+                    setCity(v)
                     setCuratorId(null)
                   }}
                   placeholder="Москва"

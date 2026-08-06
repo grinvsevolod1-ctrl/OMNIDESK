@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { invalidateAnalytics } from '@/lib/analytics-cache'
-import { hashPassword, requireAdmin } from '@/lib/auth'
+import { getSession, hashPassword, requireAdmin } from '@/lib/auth'
 import { generatePassword } from '@/lib/crypto'
 import {
   createCurator,
@@ -12,10 +12,15 @@ import {
   getManagerById,
   getManagerByIdentifier,
   sanitizeUsername,
-  updateCuratorCity,
   updateManagerPassword,
   updateManagerStatus,
 } from '@/lib/data'
+import {
+  listCuratorCities,
+  parseCityList,
+  setCuratorCities,
+  suggestCities,
+} from '@/lib/data/cities'
 import { isAdminIdentity } from '@/lib/data/shared'
 
 export interface ActionResult {
@@ -95,8 +100,9 @@ export async function createManagerAction(
 }
 
 /**
- * Create a curator account. Same credentials flow as managers, plus a required
- * city the curator is responsible for. Only the admin may call this.
+ * Create a curator account. Same credentials flow as managers, plus one or
+ * more cities the curator is responsible for (comma-separated; the first is
+ * primary). Only the admin may call this.
  */
 export async function createCuratorAction(
   formData: FormData,
@@ -107,14 +113,17 @@ export async function createCuratorAction(
     .trim()
     .toLowerCase()
   const usernameRaw = String(formData.get('username') ?? '').trim()
-  const city = String(formData.get('city') ?? '').trim()
+  const cities = parseCityList(String(formData.get('city') ?? ''))
   let password = String(formData.get('password') ?? '')
 
   if (!name || !email) {
     return { ok: false, message: 'Укажите имя и email.' }
   }
-  if (!city) {
-    return { ok: false, message: 'Укажите город, за который отвечает куратор.' }
+  if (cities.length === 0) {
+    return {
+      ok: false,
+      message: 'Укажите хотя бы один город, за который отвечает куратор.',
+    }
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { ok: false, message: 'Введите корректный email.' }
@@ -149,13 +158,15 @@ export async function createCuratorAction(
     email,
     passwordHash,
     username: username || undefined,
-    city,
+    city: cities[0],
   })
+  // Store the full (canonicalized) city set; also fixes managers.city spelling.
+  const canonical = await setCuratorCities(created.id, cities)
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   return {
     ok: true,
-    message: `Куратор ${name} (${city}) создан.`,
+    message: `Куратор ${name} (${canonical.join(', ')}) создан.`,
     password,
     username: created.username ?? undefined,
   }
@@ -202,6 +213,10 @@ export async function resetManagerPasswordAction(
   }
 }
 
+/**
+ * Replace the curator's city list (comma-separated, first = primary).
+ * managers.city is kept in sync with the primary city.
+ */
 export async function updateCuratorCityAction(
   id: string,
   city: string,
@@ -212,13 +227,27 @@ export async function updateCuratorCityAction(
   if (account.role !== 'curator') {
     return { ok: false, message: 'Город задаётся только для кураторов.' }
   }
-  const trimmed = city.trim()
-  if (!trimmed) {
-    return { ok: false, message: 'Укажите город.' }
+  const cities = parseCityList(city)
+  if (cities.length === 0) {
+    return { ok: false, message: 'Укажите хотя бы один город.' }
   }
-  await updateCuratorCity(id, trimmed)
+  const canonical = await setCuratorCities(id, cities)
   revalidatePath('/admin/managers')
-  return { ok: true, message: `Город обновлён: ${trimmed}.` }
+  revalidatePath('/admin/curators')
+  return { ok: true, message: `Города обновлены: ${canonical.join(', ')}.` }
+}
+
+/** City name suggestions from the dictionary (for form autocompletes). */
+export async function suggestCitiesAction(q?: string): Promise<string[]> {
+  const session = await getSession()
+  if (!session) return []
+  return suggestCities(q).catch(() => [])
+}
+
+/** Cities covered by a curator (admin UI helper). */
+export async function listCuratorCitiesAction(id: string): Promise<string[]> {
+  await requireAdmin()
+  return listCuratorCities(id).catch(() => [])
 }
 
 export async function deleteManagerAction(id: string): Promise<ActionResult> {

@@ -17,6 +17,7 @@ import {
 } from '../lead-status'
 import { mskDayKey } from '../time'
 import type { Manager } from '../types'
+import { cityKey, normalizeCityName, rememberCity } from './cities'
 import { managerColumns, toManager, type ManagerRow } from './shared'
 
 export interface LeadCard {
@@ -205,13 +206,15 @@ export interface CuratorWithLoad extends Manager {
 }
 
 /**
- * Active curators whose city matches (case-insensitive contains) the query,
+ * Active curators covering a matching city (case-insensitive contains),
  * sorted by current load ascending so the least-busy curator comes first.
+ * A curator may cover several cities (curator_cities, migration 115);
+ * managers.city is a legacy fallback for rows without links.
  */
 export async function findCuratorsByCity(
   cityQuery: string,
 ): Promise<CuratorWithLoad[]> {
-  const q = cityQuery.trim()
+  const q = cityKey(cityQuery)
   if (!q) return []
   const rows = await query<ManagerRow & { active_leads: string }>(
     `SELECT ${managerColumns()},
@@ -223,9 +226,15 @@ export async function findCuratorsByCity(
        FROM managers
       WHERE role = 'curator'
         AND status = 'active'
-        AND city IS NOT NULL
-        AND lower(city) LIKE lower($1)
-      ORDER BY active_leads ASC, city ASC, name ASC
+        AND (
+          EXISTS (SELECT 1 FROM curator_cities cc
+                   WHERE cc.curator_id = managers.id
+                     AND cc.city_norm LIKE $1)
+          OR (NOT EXISTS (SELECT 1 FROM curator_cities cc2
+                           WHERE cc2.curator_id = managers.id)
+              AND city IS NOT NULL AND lower(city) LIKE $1)
+        )
+      ORDER BY active_leads ASC, city ASC NULLS LAST, name ASC
       LIMIT 20`,
     [`%${q}%`],
   )
@@ -251,6 +260,59 @@ export async function listActiveCurators(): Promise<CuratorWithLoad[]> {
   return rows.map((r) => ({
     ...toManager(r),
     activeLeads: Number(r.active_leads ?? 0),
+  }))
+}
+
+/** One row of the full status trail (migration 115). */
+export interface LeadStatusHistoryEntry {
+  id: string
+  status: LeadStatus | null
+  curatorName: string | null
+  reason: 'confirm' | 'transfer_reset'
+  createdAt: string
+}
+
+/** Record one status-history event. Never throws. */
+async function recordStatusHistory(input: {
+  leadCardId: string
+  curatorId: string | null
+  status: LeadStatus | null
+  reason: 'confirm' | 'transfer_reset'
+}): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO lead_status_history (lead_card_id, curator_id, curator_name, status, reason)
+       VALUES ($1, $2, (SELECT name FROM managers WHERE id = $2), $3, $4)`,
+      [input.leadCardId, input.curatorId, input.status, input.reason],
+    )
+  } catch {
+    /* history must never break the main write */
+  }
+}
+
+export async function listLeadStatusHistory(
+  leadCardId: string,
+): Promise<LeadStatusHistoryEntry[]> {
+  const rows = await query<{
+    id: string
+    status: string | null
+    curator_name: string | null
+    reason: string
+    created_at: string | Date
+  }>(
+    `SELECT id, status, curator_name, reason, created_at
+       FROM lead_status_history
+      WHERE lead_card_id = $1
+      ORDER BY created_at DESC
+      LIMIT 100`,
+    [leadCardId],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    status: isLeadStatus(r.status) ? r.status : null,
+    curatorName: r.curator_name,
+    reason: r.reason === 'transfer_reset' ? 'transfer_reset' : 'confirm',
+    createdAt: new Date(r.created_at).toISOString(),
   }))
 }
 
@@ -377,7 +439,10 @@ export async function upsertLeadCard(
   const fullName = input.fullName.trim()
   const phone = input.phone.trim()
   const telegramUsername = input.telegramUsername.trim().replace(/^@/, '')
-  const city = input.city.trim()
+  // Canonical spelling from the city dictionary («москва» -> «Москва»).
+  const city = normalizeCityName(input.city)
+    ? await rememberCity(input.city).catch(() => normalizeCityName(input.city))
+    : ''
   const address = input.address.trim()
   const vacancy = input.vacancy.trim()
   const curatorId = input.curatorId?.trim() || null
@@ -472,6 +537,12 @@ export async function upsertLeadCard(
         initiatedById: input.isAdmin ? null : input.managerId,
         initiatedByRole: input.isAdmin ? 'admin' : 'manager',
       })
+      await recordStatusHistory({
+        leadCardId: existing[0].id,
+        curatorId,
+        status: null,
+        reason: 'transfer_reset',
+      })
     }
 
     const card = await getLeadCardById(existing[0].id)
@@ -558,6 +629,12 @@ export async function transferLeadToCurator(
     initiatedById: null,
     initiatedByRole: 'admin',
   })
+  await recordStatusHistory({
+    leadCardId,
+    curatorId: newCuratorId,
+    status: null,
+    reason: 'transfer_reset',
+  })
 
   const card = await getLeadCardById(rows[0].id)
   if (!card) throw new Error('Lead transfer failed')
@@ -624,6 +701,13 @@ export async function updateLeadStatus(input: {
      VALUES ($1, $2, $3, (SELECT name FROM managers WHERE id = $3), $4, $5)`,
     [randomUUID(), input.leadCardId, input.curatorId, comment, input.status],
   )
+
+  await recordStatusHistory({
+    leadCardId: input.leadCardId,
+    curatorId: input.curatorId,
+    status: input.status,
+    reason: 'confirm',
+  })
 
   const card = await getLeadCardById(input.leadCardId)
   if (!card) throw new Error('Status update failed')

@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState, useTransition } from 'react'
+import { useState, useTransition } from 'react'
 import { Loader2, X } from 'lucide-react'
 import { toast } from 'sonner'
+import useSWR from 'swr'
 import {
   addLeadCommentAction,
   getLeadCardDetailAction,
@@ -13,11 +14,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import type {
-  LeadCard,
-  LeadCardComment,
-  LeadTransfer,
-} from '@/lib/data/lead-cards'
 import {
   LEAD_STATUSES,
   LEAD_STATUS_LABELS,
@@ -50,30 +46,22 @@ export function LeadDetailPanel({
   onClose: () => void
   onUpdated: () => void
 }) {
-  const [card, setCard] = useState<LeadCard | null>(null)
-  const [comments, setComments] = useState<LeadCardComment[]>([])
-  const [transfers, setTransfers] = useState<LeadTransfer[]>([])
-  const [loading, setLoading] = useState(true)
-  const [status, setStatus] = useState<LeadStatus | ''>('')
+  // Explicit status pick; when null, mirror the card's current status.
+  const [pickedStatus, setPickedStatus] = useState<LeadStatus | null>(null)
   const [comment, setComment] = useState('')
   const [freeComment, setFreeComment] = useState('')
   const [pending, startTransition] = useTransition()
 
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    void getLeadCardDetailAction(leadId).then((res) => {
-      if (cancelled || !res) return
-      setCard(res.card)
-      setComments(res.comments)
-      setTransfers(res.transfers ?? [])
-      setStatus(res.card.status ?? '')
-      setLoading(false)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [leadId])
+  const { data: detail, isLoading: loading, mutate } = useSWR(
+    ['lead-detail', leadId],
+    () => getLeadCardDetailAction(leadId),
+    { revalidateOnFocus: false },
+  )
+  const card = detail?.card ?? null
+  const comments = detail?.comments ?? []
+  const transfers = detail?.transfers ?? []
+  const statusHistory = detail?.statusHistory ?? []
+  const status: LeadStatus | '' = pickedStatus ?? card?.status ?? ''
 
   function saveStatus() {
     if (!status) {
@@ -93,12 +81,9 @@ export function LeadDetailPanel({
       if (res.ok) {
         toast.success(res.message)
         setComment('')
+        setPickedStatus(null)
         onUpdated()
-        const fresh = await getLeadCardDetailAction(leadId)
-        if (fresh) {
-          setCard(fresh.card)
-          setComments(fresh.comments)
-        }
+        await mutate()
       } else {
         toast.error(res.message)
       }
@@ -115,8 +100,7 @@ export function LeadDetailPanel({
       if (res.ok) {
         toast.success(res.message)
         setFreeComment('')
-        const fresh = await getLeadCardDetailAction(leadId)
-        if (fresh) setComments(fresh.comments)
+        await mutate()
       } else {
         toast.error(res.message)
       }
@@ -211,6 +195,32 @@ export function LeadDetailPanel({
                 </div>
               </dl>
 
+              {statusHistory.length > 0 ? (
+                <div>
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                    История статусов
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {statusHistory.slice(0, 10).map((h) => (
+                      <li
+                        key={h.id}
+                        className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+                      >
+                        <span>{formatDateTime(h.createdAt)}</span>
+                        {h.reason === 'transfer_reset' ? (
+                          <span className="rounded bg-muted px-1 py-0.5 text-[10px]">
+                            сброс при передаче
+                          </span>
+                        ) : h.status ? (
+                          <LeadStatusBadge status={h.status} />
+                        ) : null}
+                        {h.curatorName ? <span>— {h.curatorName}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
               {transfers.length > 0 ? (
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">
@@ -249,7 +259,7 @@ export function LeadDetailPanel({
                     <button
                       key={s}
                       type="button"
-                      onClick={() => setStatus(s)}
+                      onClick={() => setPickedStatus(s)}
                       className={cn(
                         'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
                         active

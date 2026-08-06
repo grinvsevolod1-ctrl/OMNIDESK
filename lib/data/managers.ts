@@ -277,22 +277,6 @@ export async function updateManagerPassword(
   invalidateManagerAuthState(id)
 }
 
-/**
- * Update the city a curator is responsible for. No-op / refused for managers
- * (the CHECK constraint also enforces city IS NULL on role = 'manager').
- */
-export async function updateCuratorCity(
-  id: string,
-  city: string,
-): Promise<void> {
-  const trimmed = city.trim()
-  if (!trimmed) throw new Error('City must be non-empty')
-  await query(
-    `UPDATE managers SET city = $2 WHERE id = $1 AND role = 'curator'`,
-    [id, trimmed],
-  )
-}
-
 export async function deleteManager(id: string): Promise<void> {
   // Telegram/WhatsApp channels are bound to this manager's worker session, so
   // they should still go away with the manager. After migration 008 the FK is
