@@ -6,15 +6,20 @@ import { EmptyState, PageHeader } from '@/components/page-parts'
 import { listCurators } from '@/lib/data'
 import {
   getCuratorDiscipline,
+  getCuratorDisciplineHistory,
   listActiveCurators,
   listAllTransferredLeads,
+  type CuratorDisciplineHistory,
 } from '@/lib/data/lead-cards'
 
 export default async function CuratorsPage() {
-  const [curators, discipline, activeCurators, allLeads, orphaned] =
+  const [curators, discipline, history, activeCurators, allLeads, orphaned] =
     await Promise.all([
       listCurators(),
       getCuratorDiscipline(),
+      getCuratorDisciplineHistory(30).catch(
+        () => new Map<string, CuratorDisciplineHistory>(),
+      ),
       listActiveCurators(),
       listAllTransferredLeads({ limit: 50 }),
       listAllTransferredLeads({ orphanedOnly: true, limit: 1 }),
@@ -23,6 +28,7 @@ export default async function CuratorsPage() {
   const disciplineById = Object.fromEntries(
     discipline.map((d) => [d.curatorId, d]),
   )
+  const historyById = Object.fromEntries(history)
 
   return (
     <div className="flex flex-col gap-8">
@@ -41,7 +47,11 @@ export default async function CuratorsPage() {
             action={<CreateCuratorDialog />}
           />
         ) : (
-          <CuratorsTable curators={curators} discipline={disciplineById} />
+          <CuratorsTable
+            curators={curators}
+            discipline={disciplineById}
+            history={historyById}
+          />
         )}
       </div>
 

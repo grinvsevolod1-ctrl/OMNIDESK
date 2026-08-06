@@ -3,6 +3,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import {
   getCuratorDiscipline,
+  getCuratorDisciplineHistory,
   listActiveCurators,
   listAllTransferredLeads,
   listLeadCardsForCurator,
@@ -38,25 +39,38 @@ export function curatorTools(_state: RunState) {
 
     curatorDiscipline: tool({
       description:
-        'Сводка дисциплины кураторов на сегодня: сколько лидов у каждого, сколько статусов подтверждено сегодня, сколько просрочено, распределение по статусам («В работе», «Игнор», «Кинул»…). Вызывай, когда админ спрашивает «как дела у кураторов», «кто не обновил статусы», «как дисциплина», «что по лидам у кураторов».',
+        'Сводка дисциплины кураторов: сегодня (сколько лидов, сколько статусов подтверждено, сколько просрочено, распределение по статусам) плюс история за 30 дней — процент подтверждений, сделанных вовремя (до 10:00 МСК). Вызывай, когда админ спрашивает «как дела у кураторов», «кто не обновил статусы», «как дисциплина», «кто стабильно опаздывает».',
       inputSchema: z.object({}),
       execute: async () => {
-        const rows = await getCuratorDiscipline()
+        const [rows, history] = await Promise.all([
+          getCuratorDiscipline(),
+          getCuratorDisciplineHistory(30).catch(() => new Map()),
+        ])
         return {
           ok: true,
-          curators: rows.map((d) => ({
-            name: d.curatorName,
-            city: d.city,
-            totalLeads: d.totalLeads,
-            confirmedToday: d.confirmedToday,
-            pendingToday: d.pendingToday,
-            statuses: Object.fromEntries(
-              Object.entries(d.statusCounts).map(([k, v]) => [
-                isLeadStatus(k) ? LEAD_STATUS_LABELS[k] : k,
-                v,
-              ]),
-            ),
-          })),
+          curators: rows.map((d) => {
+            const h = history.get(d.curatorId)
+            return {
+              name: d.curatorName,
+              city: d.city,
+              totalLeads: d.totalLeads,
+              confirmedToday: d.confirmedToday,
+              pendingToday: d.pendingToday,
+              last30Days: h
+                ? {
+                    onTimeRatePct: h.onTimeRatePct,
+                    totalConfirms: h.totalConfirms,
+                    activeDays: h.activeDays,
+                  }
+                : null,
+              statuses: Object.fromEntries(
+                Object.entries(d.statusCounts).map(([k, v]) => [
+                  isLeadStatus(k) ? LEAD_STATUS_LABELS[k] : k,
+                  v,
+                ]),
+              ),
+            }
+          }),
         }
       },
     }),

@@ -7,7 +7,10 @@ import { EditCuratorCitiesDialog } from '@/components/admin/edit-curator-cities-
 import { ManagerActions } from '@/components/admin/manager-actions'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import type { CuratorDiscipline } from '@/lib/data/lead-cards'
+import type {
+  CuratorDiscipline,
+  CuratorDisciplineHistory,
+} from '@/lib/data/lead-cards'
 import { APP_TIME_ZONE } from '@/lib/time'
 import type { Manager } from '@/lib/types'
 
@@ -54,32 +57,51 @@ function CityPill({ city }: { city: string }) {
   )
 }
 
-function DisciplinePill({ d }: { d: CuratorDiscipline | undefined }) {
+function DisciplinePill({
+  d,
+  h,
+}: {
+  d: CuratorDiscipline | undefined
+  h?: CuratorDisciplineHistory
+}) {
   if (!d || d.totalLeads === 0) {
     return <span className="text-xs text-muted-foreground">Нет лидов</span>
   }
   const allDone = d.pendingToday === 0
   return (
-    <Badge
-      variant="outline"
-      className={
-        allDone
-          ? 'gap-1.5 border-transparent bg-success/15 text-success'
-          : 'gap-1.5 border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400'
-      }
-      title="Подтверждено статусов сегодня / всего лидов"
-    >
-      {d.confirmedToday}/{d.totalLeads} сегодня
-    </Badge>
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Badge
+        variant="outline"
+        className={
+          allDone
+            ? 'gap-1.5 border-transparent bg-success/15 text-success'
+            : 'gap-1.5 border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400'
+        }
+        title="Подтверждено статусов сегодня / всего лидов"
+      >
+        {d.confirmedToday}/{d.totalLeads} сегодня
+      </Badge>
+      {h && h.totalConfirms > 0 ? (
+        <Badge
+          variant="outline"
+          className="gap-1.5 border-transparent bg-muted text-muted-foreground"
+          title={`За 30 дней: ${h.onTimeConfirms} из ${h.totalConfirms} подтверждений до 10:00 МСК, активных дней: ${h.activeDays}`}
+        >
+          {h.onTimeRatePct}% вовремя · 30 дн.
+        </Badge>
+      ) : null}
+    </div>
   )
 }
 
 export function CuratorsTable({
   curators,
   discipline,
+  history,
 }: {
   curators: Manager[]
   discipline?: Record<string, CuratorDiscipline>
+  history?: Record<string, CuratorDisciplineHistory>
 }) {
   const [selected, setSelected] = useState<Manager | null>(null)
   const [editingCities, setEditingCities] = useState<Manager | null>(null)
@@ -127,7 +149,7 @@ export function CuratorsTable({
                   </button>
                 </td>
                 <td className="px-5 py-3">
-                  <DisciplinePill d={discipline?.[c.id]} />
+                  <DisciplinePill d={discipline?.[c.id]} h={history?.[c.id]} />
                 </td>
                 <td className="px-5 py-3">
                   <StatusPill status={c.status} />
@@ -169,7 +191,7 @@ export function CuratorsTable({
               <div className="flex flex-wrap items-center gap-1.5">
                 <StatusPill status={c.status} />
                 {c.city ? <CityPill city={c.city} /> : null}
-                <DisciplinePill d={discipline?.[c.id]} />
+                <DisciplinePill d={discipline?.[c.id]} h={history?.[c.id]} />
               </div>
               <span className="text-xs text-muted-foreground">
                 {formatDate(c.createdAt)}

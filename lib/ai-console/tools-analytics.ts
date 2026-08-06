@@ -18,6 +18,13 @@ import { getFollowupSettings } from '@/lib/data/ai-followup'
 import { countManualCorrections } from '@/lib/data/ai-assist-corrections'
 import { countDirectives } from '@/lib/data/ai-directives'
 import { listAiLogs } from '@/lib/data/ai-log'
+import {
+  getCuratorDiscipline,
+  getCuratorDisciplineHistory,
+  listAllTransferredLeads,
+  type CuratorDisciplineHistory,
+} from '@/lib/data/lead-cards'
+import { LEAD_STATUS_LABELS, isLeadStatus } from '@/lib/lead-status'
 import type { AssistantReport } from './assistant'
 import type { RunState } from './run-state'
 
@@ -97,14 +104,19 @@ export function analyticsTools(state: RunState) {
 
     exportReport: tool({
       description:
-        'Собрать выгружаемый отчёт о работе ИИ-менеджера и дать админу файл для скачивания. Вызывай, когда админ просит «выгрузи отчёт», «сделай отчёт», «скачать статистику», «отчёт за месяц», «отчёт в файл/таблицу», «пришли сводку». Формат md — читаемый текстовый отчёт со всеми разделами; формат csv — таблица «горячих» сделок для Excel. Передай days (по умолчанию 7). После вызова коротко скажи, что отчёт готов к скачиванию по кнопке под сообщением, и назови 2–3 главные цифры.',
+        'Собрать выгружаемый отчёт и дать админу файл для скачивания. Вызывай, когда админ просит «выгрузи отчёт», «сделай отчёт», «скачать статистику», «отчёт за месяц», «отчёт в файл/таблицу», «пришли сводку». scope=ai (по умолчанию) — отчёт о работе ИИ-менеджера; scope=curators — отчёт по кураторам и переданным лидам («выгрузи лиды кураторов», «отчёт по кураторам», «таблицу лидов в Excel»). Формат md — читаемый текстовый отчёт; csv — таблица для Excel (для scope=curators это полный список переданных лидов). Передай days (по умолчанию 7, для кураторов влияет только на текстовую сводку). После вызова коротко скажи, что отчёт готов к скачиванию по кнопке под сообщением, и назови 2–3 главные цифры.',
       inputSchema: z.object({
         days: z.number().int().min(1).max(365).optional(),
         format: z.enum(['md', 'csv']).optional(),
+        scope: z.enum(['ai', 'curators']).optional(),
       }),
-      execute: async ({ days, format }) => {
+      execute: async ({ days, format, scope }) => {
         const win = days ?? 7
         const fmt = format ?? 'md'
+
+        if (scope === 'curators') {
+          return exportCuratorReport(state, fmt)
+        }
         const [perf, models, deals, followup, directives, lessons, corrections] =
           await Promise.all([
             getAiPerformanceSummary(win),
@@ -298,5 +310,109 @@ export function analyticsTools(state: RunState) {
         }
       },
     }),
+  }
+}
+
+/**
+ * Build the curators report (scope=curators of exportReport): md — discipline
+ * summary with per-curator status breakdowns and orphaned-lead warnings;
+ * csv — the full table of transferred leads for Excel.
+ */
+async function exportCuratorReport(state: RunState, fmt: 'md' | 'csv') {
+  const [discipline, history, all, orphaned] = await Promise.all([
+    getCuratorDiscipline(),
+    getCuratorDisciplineHistory(30).catch(
+      () => new Map<string, CuratorDisciplineHistory>(),
+    ),
+    listAllTransferredLeads({ limit: 1000 }),
+    listAllTransferredLeads({ orphanedOnly: true, limit: 1 }),
+  ])
+  const today = new Date().toISOString().slice(0, 10)
+  const statusLabel = (s: string | null) =>
+    isLeadStatus(s) ? LEAD_STATUS_LABELS[s] : 'Не указан'
+
+  let report: AssistantReport
+  if (fmt === 'csv') {
+    const esc = (v: string | number | null) =>
+      `"${String(v ?? '').replace(/"/g, '""')}"`
+    const rows: (string | number | null)[][] = [
+      ['ФИО', 'Телефон', 'Telegram', 'Город', 'Куратор', 'Статус', 'Статус подтверждён', 'Передан', 'Вакансия'],
+      ...all.leads.map((l) => [
+        l.fullName,
+        l.phone,
+        l.telegramUsername,
+        l.city,
+        l.curatorName ?? 'БЕЗ КУРАТОРА',
+        statusLabel(l.status),
+        l.statusConfirmedDate ?? '',
+        l.transferredAt ? l.transferredAt.slice(0, 10) : '',
+        l.vacancy,
+      ]),
+    ]
+    // Prepend BOM so Excel opens Cyrillic UTF-8 correctly; CRLF line ends.
+    const content =
+      '\uFEFF' + rows.map((r) => r.map(esc).join(',')).join('\r\n')
+    report = {
+      filename: `omnidesk-curator-leads-${today}.csv`,
+      mimeType: 'text/csv;charset=utf-8',
+      content,
+      label: `Лиды кураторов (CSV, ${all.leads.length})`,
+    }
+  } else {
+    const lines: string[] = [
+      `# Отчёт по кураторам OMNIDESK`,
+      ``,
+      `Сформирован: ${today} · Переданных лидов всего: ${all.total}${orphaned.total > 0 ? ` · БЕЗ КУРАТОРА: ${orphaned.total}` : ''}`,
+      ``,
+      ...(orphaned.total > 0
+        ? [
+            `> Внимание: ${orphaned.total} лид(ов) остались без куратора — переназначьте их на странице «Кураторы».`,
+            ``,
+          ]
+        : []),
+      `## Дисциплина по кураторам`,
+      ...(discipline.length
+        ? discipline.flatMap((d) => {
+            const h = history.get(d.curatorId)
+            const statuses = Object.entries(d.statusCounts)
+              .map(([k, v]) => `${statusLabel(k)}: ${v}`)
+              .join(' · ')
+            return [
+              `### ${d.curatorName}${d.city ? ` (${d.city})` : ''}`,
+              `- Лидов: ${d.totalLeads} · сегодня подтверждено: ${d.confirmedToday} · осталось: ${d.pendingToday}`,
+              ...(h && h.totalConfirms > 0
+                ? [
+                    `- За 30 дней: ${h.onTimeRatePct}% подтверждений вовремя (до 10:00 МСК) · всего ${h.totalConfirms} · активных дней ${h.activeDays}`,
+                  ]
+                : []),
+              ...(statuses ? [`- Статусы: ${statuses}`] : []),
+              ``,
+            ]
+          })
+        : ['- Активных кураторов нет', '']),
+    ]
+    report = {
+      filename: `omnidesk-curators-${today}.md`,
+      mimeType: 'text/markdown;charset=utf-8',
+      content: lines.join('\n'),
+      label: `Отчёт по кураторам`,
+    }
+  }
+
+  state.report = report
+  state.actions.push({
+    kind: 'report',
+    label: `Сформировал отчёт: ${report.label}`,
+  })
+  return {
+    ok: true,
+    scope: 'curators',
+    format: fmt,
+    summary: {
+      totalLeads: all.total,
+      orphanedLeads: orphaned.total,
+      curators: discipline.length,
+      pendingToday: discipline.reduce((s, d) => s + d.pendingToday, 0),
+    },
   }
 }

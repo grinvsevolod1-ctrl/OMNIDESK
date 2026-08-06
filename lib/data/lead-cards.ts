@@ -900,6 +900,61 @@ export async function getCuratorDiscipline(): Promise<CuratorDiscipline[]> {
   )
 }
 
+/** Historical discipline over the last N days, from lead_status_history. */
+export interface CuratorDisciplineHistory {
+  curatorId: string
+  /** Distinct MSK days with at least one status confirmation. */
+  activeDays: number
+  /** Total 'confirm' events in the window. */
+  totalConfirms: number
+  /** Confirms made before the 10:00 MSK deadline. */
+  onTimeConfirms: number
+  /** onTimeConfirms / totalConfirms, in percent (0 when no confirms). */
+  onTimeRatePct: number
+}
+
+/**
+ * Admin: per-curator discipline over the last `days` days (default 30).
+ * Counts only 'confirm' events (transfer resets are not the curator's doing).
+ * «Вовремя» = the confirmation happened before 10:00 MSK that day.
+ */
+export async function getCuratorDisciplineHistory(
+  days = 30,
+): Promise<Map<string, CuratorDisciplineHistory>> {
+  const rows = await query<{
+    curator_id: string
+    active_days: string
+    total_confirms: string
+    on_time: string
+  }>(
+    `SELECT h.curator_id,
+            count(DISTINCT (h.created_at AT TIME ZONE 'Europe/Moscow')::date) AS active_days,
+            count(*) AS total_confirms,
+            count(*) FILTER (
+              WHERE extract(hour FROM h.created_at AT TIME ZONE 'Europe/Moscow') < 10
+            ) AS on_time
+       FROM lead_status_history h
+      WHERE h.reason = 'confirm'
+        AND h.curator_id IS NOT NULL
+        AND h.created_at >= now() - make_interval(days => $1)
+      GROUP BY h.curator_id`,
+    [days],
+  )
+  const map = new Map<string, CuratorDisciplineHistory>()
+  for (const r of rows) {
+    const total = Number(r.total_confirms ?? 0)
+    const onTime = Number(r.on_time ?? 0)
+    map.set(r.curator_id, {
+      curatorId: r.curator_id,
+      activeDays: Number(r.active_days ?? 0),
+      totalConfirms: total,
+      onTimeConfirms: onTime,
+      onTimeRatePct: total > 0 ? Math.round((onTime / total) * 100) : 0,
+    })
+  }
+  return map
+}
+
 /** Curators (id + name) who still have unconfirmed statuses for today. */
 export async function listCuratorsWithOverdueStatuses(): Promise<
   { curatorId: string; curatorName: string; pending: number }[]
