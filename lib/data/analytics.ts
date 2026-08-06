@@ -23,17 +23,12 @@ import {
   type ConversationRow,
   type MessageRow,
 } from './shared'
-// Cross-domain reads. Imported from the facade (lib/data) rather than the
-// individual domain modules to keep a single public surface; these are only
-// ever called at runtime, so the resulting import cycle is safe.
 import {
   listAllChannels,
   listChannels,
   listConversations,
   listManagers,
 } from '../data'
-
-/* ------------------------------ Stats ------------------------------- */
 
 export interface AdminStats {
   totalManagers: number
@@ -89,8 +84,6 @@ export async function getManagerStats(
   }
 }
 
-/* ------------------- Lead & messenger analytics -------------------- */
-
 export type GoalMessenger = 'any' | 'telegram' | 'whatsapp'
 export type ClickMessenger = 'telegram' | 'whatsapp'
 
@@ -103,33 +96,18 @@ function emptyReasonCounts(): Record<NotLiquidReason, number> {
 }
 
 export interface LeadAnalytics {
-  /** Total leads (conversations that wrote in). */
   totalLeads: number
-  /** Lead count grouped by effective status. */
   byStatus: Record<LeadStatus, number>
-  /** «Не ликвид» lead count grouped by reason sub-status. */
   byReason: Record<NotLiquidReason, number>
-  /** Leads whose first message arrived within the last 7 days. */
   newThisWeek: number
-  /** Leads with at least one unanswered incoming message. */
   unanswered: number
-  /** New leads per day for the last 7 days (oldest first). */
   byDay: { date: string; count: number }[]
 }
 
-/**
- * Lead analytics for a manager (or the whole system when managerId is omitted).
- * "New leads per day" uses each conversation's FIRST message timestamp so the
- * dynamics reflect when a contact actually started writing in.
- */
 async function getLeadAnalyticsUncached(
   managerId?: string,
 ): Promise<LeadAnalytics> {
-  // Simulator-created conversations are real leads and are counted here just
-  // like any other. Only manager scoping is applied.
   const scope = managerId ? 'WHERE manager_id = $1' : ''
-  // "Не ликвид" breakdown and the first-message-time windows always need their
-  // own WHERE; prepend the manager filter when present.
   const reasonScope = managerId ? 'WHERE manager_id = $1 AND' : 'WHERE'
   const params = managerId ? [managerId] : []
 
@@ -154,8 +132,6 @@ async function getLeadAnalyticsUncached(
          FROM conversations ${scope}`,
       params,
     ),
-    // Reads the denormalized conversations.first_message_at (maintained by a
-    // trigger) instead of aggregating the messages table on every load.
     query<{ n: string }>(
       `SELECT count(*)::int AS n
          FROM conversations
@@ -182,7 +158,6 @@ async function getLeadAnalyticsUncached(
     if (r.reason in byReason) byReason[r.reason] = Number(r.n)
   }
 
-  // Build a dense 7-day series (fill gaps with 0) so the chart is stable.
   const dayMap = new Map<string, number>()
   for (const r of byDayRows) {
     const key = new Date(r.d).toISOString().slice(0, 10)
@@ -207,12 +182,10 @@ async function getLeadAnalyticsUncached(
   }
 }
 
-/** Lead analytics for the manager home dashboard (time-cached). */
 export const getLeadAnalytics = cachedAnalytics(getLeadAnalyticsUncached, [
   'getLeadAnalytics',
 ])
 
-/** Record a chat → messenger transition (off-hours widget link tap). */
 export async function recordMessengerClick(
   channelId: string | null,
   messenger: ClickMessenger,
@@ -227,14 +200,9 @@ export interface MessengerAnalytics {
   totalClicks: number
   telegramClicks: number
   whatsappClicks: number
-  /** Clicks per day for the last 7 days, split by messenger (oldest first). */
   byDay: { date: string; telegram: number; whatsapp: number }[]
 }
 
-/**
- * Chat → messenger transition analytics. Scoped to a manager's channels when
- * managerId is supplied, otherwise system-wide (admin).
- */
 async function getMessengerAnalyticsUncached(
   managerId?: string,
 ): Promise<MessengerAnalytics> {
@@ -293,13 +261,10 @@ async function getMessengerAnalyticsUncached(
   }
 }
 
-/** Messenger click analytics (time-cached). */
 export const getMessengerAnalytics = cachedAnalytics(
   getMessengerAnalyticsUncached,
   ['getMessengerAnalytics'],
 )
-
-/* --------------------------- Conversion goals --------------------------- */
 
 export interface ConversionGoal {
   id: string
@@ -365,14 +330,9 @@ export async function deleteConversionGoal(id: string): Promise<void> {
 }
 
 export interface GoalResult extends ConversionGoal {
-  /** Number of messenger transitions matching this goal's filter. */
   completions: number
 }
 
-/**
- * Conversion goals with their completion counts (matching messenger clicks).
- * Scoped to a manager's channels when managerId is supplied.
- */
 export async function getConversionGoalResults(
   managerId?: string,
 ): Promise<GoalResult[]> {
@@ -389,33 +349,18 @@ export async function getConversionGoalResults(
   })
 }
 
-/* ----------------------- Admin dashboard rollups ----------------------- */
-
 export interface ManagerPerformance {
   manager: Manager
-  /** Total leads (conversations) owned by this manager. */
   totalLeads: number
-  /** Leads whose first message arrived within the last 7 days. */
   newThisWeek: number
-  /** Leads with at least one unanswered incoming message. */
   unanswered: number
-  /** Effective-status breakdown. */
   byStatus: Record<LeadStatus, number>
-  /** Chat → messenger transitions attributed to this manager's channels. */
   clicks: number
-  /** Connected vs total channels. */
   connectedChannels: number
   totalChannels: number
-  /** ISO timestamp of the most recent message in any of their conversations. */
   lastActivityAt: string | null
 }
 
-/**
- * Per-manager performance rollup powering the admin overview leaderboard. Every
- * manager is included (even with zero activity) so the admin sees full coverage.
- * A handful of grouped queries are stitched together in JS keyed by manager id —
- * cheap at this app's scale and far clearer than one giant join.
- */
 async function getManagerPerformanceUncached(): Promise<ManagerPerformance[]> {
   const managers = await listManagers()
   if (managers.length === 0) return []
@@ -448,8 +393,6 @@ async function getManagerPerformanceUncached(): Promise<ManagerPerformance[]> {
          ) c
         GROUP BY manager_id`,
     ),
-    // Uses the denormalized first_message_at column (trigger-maintained)
-    // instead of a full JOIN+MIN aggregation over the messages table.
     query<{ manager_id: string; n: string }>(
       `SELECT manager_id, count(*)::int AS n
          FROM conversations
@@ -505,17 +448,11 @@ async function getManagerPerformanceUncached(): Promise<ManagerPerformance[]> {
   })
 }
 
-/** Admin overview leaderboard rollup (time-cached). */
 export const getManagerPerformance = cachedAnalytics(
   getManagerPerformanceUncached,
   ['getManagerPerformance'],
 )
 
-/**
- * Admin-only: fetch a single conversation by id WITHOUT manager scoping, along
- * with its owning manager's display name. Authorization is enforced by the
- * caller (server action guarded with requireAdmin).
- */
 export async function getConversationAdmin(
   conversationId: string,
 ): Promise<
@@ -544,17 +481,10 @@ export async function getConversationAdmin(
   }
 }
 
-/**
- * Admin-only: full message transcript for any conversation (no manager scope).
- * Authorization is enforced by the caller (requireAdmin).
- */
 export async function listMessagesAdmin(
   conversationId: string,
   opts?: { limit?: number },
 ): Promise<Message[]> {
-  // Bounded: fetch only the NEWEST N rows (via the DESC subquery), then flip
-  // back to ascending for display. An unbounded transcript makes every open /
-  // refresh of a long thread ship the entire history over the wire.
   const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 2000)
   const rows = await query<MessageRow>(
     `SELECT * FROM (
@@ -571,23 +501,12 @@ export async function listMessagesAdmin(
   return rows.map(toMessage)
 }
 
-/**
- * Admin-only: list EVERY conversation across all managers/channels, enriched
- * with the owning manager's and source channel's display names. Powers the
- * God-mode console conversation rail. No manager scoping — authorization is
- * enforced by the caller (requireAdmin). Optional case-insensitive search over
- * contact name/handle and last message, plus optional channel-type filter.
- */
 export async function listConversationsAdmin(opts?: {
   search?: string
   channelType?: ChannelType
-  /** Only conversations owned by this manager. */
   managerId?: string
-  /** Only conversations with activity at/after this ISO timestamp. */
   activeSince?: string
-  /** Only conversations with unread inbound messages (клиент ждёт ответа). */
   unansweredOnly?: boolean
-  /** Only conversations with NO activity since this ISO timestamp («висят»). */
   quietSince?: string
   limit?: number
 }): Promise<
@@ -657,28 +576,17 @@ export async function listConversationsAdmin(opts?: {
   }))
 }
 
-/** Per-manager activity rollup for a time window (admin copilot). */
 export interface ManagerActivityRow {
   id: string
   name: string
   status: string
-  /** Conversations this manager owns in total. */
   dialogsTotal: number
-  /** Conversations created within the window. */
   newDialogs: number
-  /** Distinct contacts who WROTE (inbound) within the window. */
   contactsWrote: number
-  /** Inbound messages within the window. */
   inboundMessages: number
-  /** Conversations with unread inbound messages right now. */
   unanswered: number
 }
 
-/**
- * Admin-only: who wrote to whom — per-manager dialog/message activity since a
- * timestamp. Answers questions like «сколько людей написало сегодня менеджеру
- * X». Subquery-per-metric keeps each aggregate independently index-friendly.
- */
 export async function listManagerActivity(
   sinceIso: string,
 ): Promise<ManagerActivityRow[]> {
@@ -712,6 +620,7 @@ export async function listManagerActivity(
             (SELECT count(*) FROM conversations c
               WHERE c.manager_id = m.id AND c.unread > 0) AS unanswered
        FROM managers m
+      WHERE m.role = 'manager'
       ORDER BY m.name ASC`,
     [sinceIso],
   )
@@ -727,9 +636,4 @@ export async function listManagerActivity(
   }))
 }
 
-/* --------------------------------------------------------------------------
- * Domain re-export. Source-group / group-analytics concerns were split into a
- * focused sibling module; callers keep importing them from this module.
- * ------------------------------------------------------------------------ */
 export * from './analytics-groups'
-

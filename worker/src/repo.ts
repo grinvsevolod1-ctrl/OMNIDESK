@@ -21,7 +21,7 @@ export type SessionStatus =
 export interface ChannelRecord {
   id: string
   manager_id: string
-  type: 'telegram' | 'whatsapp' | 'livechat'
+  type: 'telegram' | 'whatsapp' | 'livechat' | 'max'
   name: string
   detail: string
   status: string
@@ -259,12 +259,17 @@ export async function getChannel(id: string): Promise<ChannelRecord | null> {
 }
 
 export async function listLiveChannels(): Promise<ChannelRecord[]> {
-  // Only Telegram runs in this worker. WhatsApp (Cloud API), VK and MAX are all
-  // served by the Next.js app, so we never open a session for them here.
-  // Manually stopped channels stay stopped across worker restarts.
+  // Two providers hold a live socket in THIS worker: Telegram (MTProto) and
+  // MAX in ACCOUNT mode (config.mode='account', unofficial WebSocket). MAX in
+  // BOT mode, WhatsApp Cloud API, VK and live-chat are all served by the
+  // Next.js app, so we never open a session for them here. Manually stopped
+  // channels stay stopped across worker restarts.
   return query<ChannelRecord>(
     `SELECT ${CHANNEL_COLUMNS} FROM channels
-     WHERE type = 'telegram'
+     WHERE (
+             type = 'telegram'
+             OR (type = 'max' AND config->>'mode' = 'account')
+           )
        AND session_status IN ('online', 'offline', 'starting')
        AND NOT manually_stopped`,
   )
@@ -281,14 +286,26 @@ export async function listLiveChannels(): Promise<ChannelRecord[]> {
  * skipped so the sweep never races an admin-initiated reconnect.
  */
 export async function listRevivableChannels(): Promise<ChannelRecord[]> {
+  // A channel is revivable when a plain reconnect (no human login) suffices:
+  // it is degraded but has the relevant saved session — tg_session_enc for
+  // Telegram, max_session_enc for a MAX account. The provider/session pairing
+  // is enforced per-type so a Telegram row can't be "revived" off a MAX token
+  // or vice-versa. Everything else (logged_out, rate_limited, no session, or a
+  // pending start job) is intentionally excluded — see the note above.
   return query<ChannelRecord>(
     `SELECT ${CHANNEL_COLUMNS} FROM channels
-     WHERE type = 'telegram'
-       AND session_status IN ('offline', 'error')
+     WHERE session_status IN ('offline', 'error')
        AND NOT manually_stopped
-       AND EXISTS (
-         SELECT 1 FROM channel_secrets s
-          WHERE s.channel_id = channels.id AND s.tg_session_enc IS NOT NULL
+       AND (
+         (type = 'telegram' AND EXISTS (
+            SELECT 1 FROM channel_secrets s
+             WHERE s.channel_id = channels.id AND s.tg_session_enc IS NOT NULL
+         ))
+         OR
+         (type = 'max' AND config->>'mode' = 'account' AND EXISTS (
+            SELECT 1 FROM channel_secrets s
+             WHERE s.channel_id = channels.id AND s.max_session_enc IS NOT NULL
+         ))
        )
        AND NOT EXISTS (
          SELECT 1 FROM channel_jobs j
@@ -390,6 +407,7 @@ interface SecretRow {
   tg_session_enc: string | null
   wa_state_enc: string | null
   token_enc: string | null
+  max_session_enc: string | null
 }
 
 export async function getTgSession(channelId: string): Promise<string> {
@@ -412,6 +430,32 @@ export async function saveTgSession(
      VALUES ($1, $2, now())
      ON CONFLICT (channel_id)
      DO UPDATE SET tg_session_enc = $2, updated_at = now()`,
+    [channelId, enc],
+  )
+}
+
+/** Load the encrypted MAX userbot session token (empty string if none). */
+export async function getMaxSession(channelId: string): Promise<string> {
+  const row = await one<SecretRow>(
+    `SELECT channel_id, tg_session_enc, wa_state_enc, token_enc, max_session_enc
+       FROM channel_secrets WHERE channel_id = $1`,
+    [channelId],
+  )
+  if (!row?.max_session_enc) return ''
+  return decrypt(row.max_session_enc)
+}
+
+/** Persist the MAX userbot session token, encrypted (mirrors saveTgSession). */
+export async function saveMaxSession(
+  channelId: string,
+  session: string,
+): Promise<void> {
+  const enc = encrypt(session)
+  await query(
+    `INSERT INTO channel_secrets (channel_id, max_session_enc, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (channel_id)
+     DO UPDATE SET max_session_enc = $2, updated_at = now()`,
     [channelId, enc],
   )
 }

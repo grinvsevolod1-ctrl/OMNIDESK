@@ -9,6 +9,7 @@
  */
 import { query } from '../db'
 import type {
+  AccountRole,
   Channel,
   ChannelStatus,
   ChannelType,
@@ -36,6 +37,10 @@ export interface ManagerRow {
   status: ManagerStatus
   session_version: number
   on_lunch: boolean | null
+  /** Account role on the managers table (migration 111). */
+  role: AccountRole | null
+  /** City the curator is responsible for; null for managers. */
+  city: string | null
   created_at: string | Date
 }
 
@@ -214,7 +219,7 @@ export const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_m
  */
 const MANAGER_COLUMN_NAMES = [
   'id', 'name', 'email', 'username', 'password_hash', 'status',
-  'session_version', 'on_lunch', 'created_at',
+  'session_version', 'on_lunch', 'role', 'city', 'created_at',
 ] as const
 
 const CHANNEL_COLUMN_NAMES = [
@@ -254,6 +259,8 @@ export function conversationColumns(alias = 'conversations'): string {
 /* ----------------------------- Converters ----------------------------- */
 
 export function toManager(r: ManagerRow): Manager {
+  const role: AccountRole =
+    r.role === 'curator' ? 'curator' : 'manager'
   return {
     id: r.id,
     name: r.name,
@@ -261,6 +268,8 @@ export function toManager(r: ManagerRow): Manager {
     username: r.username ?? null,
     status: r.status,
     onLunch: r.on_lunch ?? false,
+    role,
+    city: role === 'curator' ? (r.city ?? null) : null,
     createdAt: new Date(r.created_at).toISOString(),
   }
 }
@@ -458,14 +467,15 @@ export async function assignManagerRoundRobin(
 
   // Guard against a stale id (e.g. a manager removed from the system but still
   // listed in the pool) so we never violate the conversations FK.
+  // Only real managers (role = 'manager') may receive conversations.
   const valid = await query<{ id: string }>(
-    'SELECT id FROM managers WHERE id = $1 LIMIT 1',
+    `SELECT id FROM managers WHERE id = $1 AND role = 'manager' LIMIT 1`,
     [candidate],
   )
   if (valid[0]) return candidate
 
   const alive = await query<{ id: string }>(
-    'SELECT id FROM managers WHERE id = ANY($1::uuid[]) LIMIT 1',
+    `SELECT id FROM managers WHERE id = ANY($1::uuid[]) AND role = 'manager' LIMIT 1`,
     [pool],
   )
   return alive[0]?.id ?? fallbackManagerId

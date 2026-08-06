@@ -91,30 +91,51 @@ export async function getSession(): Promise<SessionUser | null> {
   if (!session) return null
 
   // Admin sessions are env-backed and have no DB row to validate against.
-  if (session.role !== 'manager') return session
+  if (session.role === 'admin') return session
 
-  // Managers are validated against the live DB on every request so that a
-  // password change or block revokes the JWT immediately instead of waiting
-  // for its 7-day expiry. A version mismatch / missing / blocked account all
-  // collapse to "logged out" (requireManager then redirects to /login).
-  const state = await getManagerAuthState(session.sub)
-  if (!state) return null
-  if (state.status === 'blocked') return null
-  if ((session.sv ?? 0) !== state.sessionVersion) return null
+  // Managers AND curators live in the managers table and are validated against
+  // the live DB on every request so that a password change or block revokes the
+  // JWT immediately instead of waiting for its 7-day expiry.
+  if (session.role === 'manager' || session.role === 'curator') {
+    const state = await getManagerAuthState(session.sub)
+    if (!state) return null
+    if (state.status === 'blocked') return null
+    if ((session.sv ?? 0) !== state.sessionVersion) return null
+    return session
+  }
 
-  return session
+  return null
 }
 
 export async function requireAdmin(): Promise<SessionUser> {
   const session = await getSession()
   if (!session) redirect('/login')
-  if (session.role !== 'admin') redirect('/app')
+  if (session.role !== 'admin') {
+    if (session.role === 'manager') redirect('/app')
+    if (session.role === 'curator') redirect('/curator')
+    redirect('/login')
+  }
   return session
 }
 
 export async function requireManager(): Promise<SessionUser> {
   const session = await getSession()
   if (!session) redirect('/login')
-  if (session.role !== 'manager') redirect('/admin')
+  if (session.role !== 'manager') {
+    if (session.role === 'admin') redirect('/admin')
+    if (session.role === 'curator') redirect('/curator')
+    redirect('/login')
+  }
+  return session
+}
+
+export async function requireCurator(): Promise<SessionUser> {
+  const session = await getSession()
+  if (!session) redirect('/login')
+  if (session.role !== 'curator') {
+    if (session.role === 'admin') redirect('/admin')
+    if (session.role === 'manager') redirect('/app')
+    redirect('/login')
+  }
   return session
 }

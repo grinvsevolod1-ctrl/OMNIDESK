@@ -29,6 +29,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
+import { LeadCardPanel } from '@/components/manager/inbox/lead-card-panel'
 import { TYPE_LABEL, initials, isComposing } from './utils'
 import { MessageBubble } from './message-bubble'
 import { snippetOf } from './reply'
@@ -132,8 +133,6 @@ export function ThreadPane({
       style={{
         transform: backDrag ? `translateX(${backDrag}px)` : undefined,
         transition: backDrag ? 'none' : 'transform 0.2s ease-out',
-        // Promote to its own compositor layer only WHILE dragging, so the
-        // swipe-back tracks the finger without jank on weak GPUs.
         willChange: backDrag ? 'transform' : undefined,
         touchAction: 'pan-y',
       }}
@@ -143,11 +142,6 @@ export function ThreadPane({
       onPointerCancel={conversation ? onBackPointerEnd : undefined}
     >
       {!conversation && selectedId ? (
-        /* Selected but conversation data still loading. This MUST be visible
-           on mobile: the list pane is already hidden the moment a dialog is
-           tapped, so `hidden md:flex` here left the user staring at a
-           pitch-black screen with no way back (the reported bug). Show a
-           skeleton header with a working back button + spinner. */
         <div className="flex flex-1 flex-col">
           <header className="flex items-center gap-2 border-b border-border bg-card/40 px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-3">
             <button
@@ -168,8 +162,6 @@ export function ThreadPane({
             {loadingThread ? (
               <Loader2 className="size-6 animate-spin text-muted-foreground" />
             ) : (
-              /* Retries exhausted and nothing loaded: give the user a way out
-                 instead of an eternal spinner. */
               <div className="flex flex-col items-center gap-3 text-center">
                 <p className="text-sm text-muted-foreground">
                   Не удалось загрузить переписку
@@ -217,6 +209,17 @@ export function ThreadPane({
                 Менеджер: {managerNameOf(conversation.managerId)}
               </p>
             </div>
+            <LeadCardPanel
+              conversationId={conversation.id}
+              defaults={{
+                fullName: conversation.contactName || '',
+                phone:
+                  conversation.channelType === 'whatsapp' ||
+                  conversation.channelType === 'telegram'
+                    ? conversation.contactHandle
+                    : undefined,
+              }}
+            />
           </header>
 
           <div
@@ -224,9 +227,6 @@ export function ThreadPane({
             onScroll={onScrollBox}
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-muted/20 px-2 py-4 sm:px-3"
           >
-            {/* Single content wrapper: the bottom-pinning ResizeObserver
-                watches THIS element, so async media loads / bubble growth
-                anywhere in the thread re-anchor the scroll. */}
             <div className="space-y-1.5">
               {loadingThread ? (
                 <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -262,7 +262,6 @@ export function ThreadPane({
             </div>
           </div>
 
-          {/* ----------------------- Composer ----------------------- */}
           <div
             className="border-t border-border bg-background px-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] pt-2 sm:px-3"
             data-no-swipe
