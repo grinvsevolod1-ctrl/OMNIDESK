@@ -8,6 +8,7 @@ import { runNoResponseSweep } from './autopilot.js'
 import { runRevivalSweep } from './revival.js'
 import { proxyHealthSweep } from './proxy-health.js'
 import { captureException, initErrorReporter } from './error-reporter.js'
+import { startHeartbeat } from './heartbeat.js'
 import { processDeployJob, drainDeployQueue } from './hosting/jobs.js'
 import { sweepServerHealth } from './hosting/ops.js'
 import { recoverStuckDeployments } from './hosting/repo.js'
@@ -67,6 +68,7 @@ const MEDIA_OFFLOAD_SWEEP_MS = 30_000
  */
 const PROXY_HEALTH_SWEEP_MS = 5 * 60 * 1000
 
+let heartbeatTimer: NodeJS.Timeout | null = null
 let noResponseTimer: NodeJS.Timeout | null = null
 let hostingHealthTimer: NodeJS.Timeout | null = null
 let revivalTimer: NodeJS.Timeout | null = null
@@ -83,6 +85,10 @@ async function main(): Promise<void> {
 
   // 1. Internal HTTP API (QR + health)
   startHttpServer()
+
+  // 1a. Liveness heartbeat: one row a minute so the admin panel can show a
+  //     "worker is down" badge instead of learning about it from clients.
+  heartbeatTimer = startHeartbeat()
 
   // 2. Recover channel jobs orphaned in 'running' by the previous process.
   //    MUST run before the listener/drain start claiming: at this point nothing
@@ -214,6 +220,7 @@ async function main(): Promise<void> {
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Shutting down worker')
   try {
+    if (heartbeatTimer) clearInterval(heartbeatTimer)
     if (noResponseTimer) clearInterval(noResponseTimer)
     if (hostingHealthTimer) clearInterval(hostingHealthTimer)
     if (revivalTimer) clearInterval(revivalTimer)

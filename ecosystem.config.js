@@ -194,6 +194,22 @@ module.exports = {
         NODE_ENV: 'production',
       },
     },
+    {
+      // Nightly Postgres backup with 7-day rotation (scripts/backup-db.mjs).
+      // Dumps with pg_dump -Fc into ~/omnidesk-backups (override with
+      // BACKUP_DIR / BACKUP_KEEP_DAYS in the shared .env). 03:30 — after the
+      // day's traffic, before business hours. Requires the postgres client
+      // tools on the box (apt install postgresql-client).
+      name: 'omnidesk-backup-db',
+      script: 'scripts/backup-db.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '30 3 * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
     // NOTE: the former `omnidesk-log-reporter` process (scripts/log-reporter.mjs,
     // which pushed runtime reports to a dedicated `runtime-logs` git branch) was
     // REMOVED deliberately. Its constant commits/pushes and its participation in
