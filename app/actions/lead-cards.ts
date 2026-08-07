@@ -57,6 +57,7 @@ import {
   isLeadStatus,
   isPastDailyDeadline,
   leadNeedsDailyStatus,
+  leadStatusLabel,
   STATUS_COMMENT_MIN_LEN,
   type LeadStatus,
 } from '@/lib/lead-status'
@@ -279,6 +280,18 @@ export async function updateLeadStatusAction(input: {
     })
     revalidatePath('/curator')
     revalidatePath('/admin/curators')
+    // Пуш менеджеру карточки: он сразу видит вердикт куратора, не заходя в
+    // «Мои лиды». Доставка не должна ломать основное действие — fire-and-forget.
+    void (async () => {
+      const card = await getLeadCardById(input.leadCardId)
+      if (!card?.managerId) return
+      await sendPushToManager(card.managerId, {
+        title: `Лид: ${leadStatusLabel(input.status)}`,
+        body: `${card.fullName || 'Лид'} — куратор обновил статус. ${input.comment.trim().slice(0, 120)}`,
+        url: '/app/leads',
+        tag: `lead-status-${input.leadCardId}`,
+      })
+    })().catch(() => {})
     return { ok: true, message: 'Статус обновлён.' }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Ошибка обновления'
@@ -312,6 +325,15 @@ export async function addLeadCommentAction(input: {
     })
     revalidatePath('/curator')
     revalidatePath('/app/leads')
+    // Куратор написал комментарий → пуш менеджеру карточки (не самому себе).
+    if (session.role === 'curator' && card.managerId) {
+      void sendPushToManager(card.managerId, {
+        title: 'Комментарий куратора',
+        body: `${card.fullName || 'Лид'}: ${input.body.trim().slice(0, 140)}`,
+        url: '/app/leads',
+        tag: `lead-comment-${input.leadCardId}`,
+      }).catch(() => {})
+    }
     return { ok: true, message: 'Комментарий добавлен.' }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Ошибка'

@@ -130,8 +130,29 @@ export interface AiAssistLessonLite {
   note: string
 }
 
-/** Read the singleton AI-assist settings. Missing row → disabled defaults. */
+/**
+ * Кэш настроек в памяти воркера с TTL 30 сек: конфиг читается на КАЖДОЕ
+ * входящее сообщение (2 запроса — настройки + директивы), при потоке
+ * сообщений это заметная нагрузка на БД. Настройки меняются из админки
+ * редко; задержка применения до 30 сек — приемлемый компромисс.
+ */
+const SETTINGS_CACHE_TTL_MS = 30_000
+let settingsCache: { value: AiAssistConfig; expiresAt: number } | null = null
+
+/**
+ * Read the singleton AI-assist settings. Missing row → disabled defaults.
+ * Результат кэшируется на 30 сек (см. выше).
+ */
 export async function getAiAssistConfig(): Promise<AiAssistConfig> {
+  if (settingsCache && Date.now() < settingsCache.expiresAt) {
+    return settingsCache.value
+  }
+  const value = await loadAiAssistConfig()
+  settingsCache = { value, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS }
+  return value
+}
+
+async function loadAiAssistConfig(): Promise<AiAssistConfig> {
   // Tolerate the model-config columns being absent (pre-069 migration): select
   // them defensively so an older DB still yields a valid config.
   const row = await one<{

@@ -13,6 +13,7 @@ import {
   CalendarDays,
   Loader2,
   MapPin,
+  MessageSquare,
   RefreshCw,
   UserPlus,
   Users,
@@ -28,8 +29,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import type { LeadCard } from '@/lib/data/lead-cards'
-import type { LeadCardStats } from '@/lib/data/lead-stats'
+import type {
+  LeadCardStats,
+  ManagerLeadListItem,
+} from '@/lib/data/lead-stats'
 import {
   LEAD_STATUSES,
   LEAD_STATUS_LABELS,
@@ -90,7 +93,7 @@ export function ManagerLeadsView({
   initialTotal,
   initialStats,
 }: {
-  initialLeads: LeadCard[]
+  initialLeads: ManagerLeadListItem[]
   initialTotal: number
   initialStats: LeadCardStats
 }) {
@@ -347,6 +350,16 @@ export function ManagerLeadsView({
                         '—'}
                     </p>
                   </button>
+
+                  {lead.curatorCommentCount > 0 ? (
+                    <Badge
+                      variant="outline"
+                      className="gap-1 border-transparent bg-sky-500/15 text-sky-700 dark:text-sky-400"
+                    >
+                      <MessageSquare className="size-3" />
+                      {lead.curatorCommentCount}
+                    </Badge>
+                  ) : null}
 
                   {lead.city ? (
                     <Badge

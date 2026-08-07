@@ -236,7 +236,24 @@ export function useGodComposer({
       }
       setUploading(true)
       pinOnNextGrowth()
-      void secretSendMediaMessageAction(fd)
+      // Fetch-роут вместо server action: POST экшена с крупным файлом режется
+      // прокси-слоями и падает с генерик-ошибкой фреймворка.
+      void fetch('/wijegniwjgwjog/api/upload', { method: 'POST', body: fd })
+        .then(async (resp) => {
+          try {
+            return (await resp.json()) as Awaited<
+              ReturnType<typeof secretSendMediaMessageAction>
+            >
+          } catch {
+            return {
+              ok: false as const,
+              message:
+                resp.status === 413
+                  ? 'Файл слишком большой для сервера.'
+                  : 'Не удалось отправить файл.',
+            }
+          }
+        })
         .then((res) => {
           if (res.ok && res.id) {
             const mediaType: MediaType =

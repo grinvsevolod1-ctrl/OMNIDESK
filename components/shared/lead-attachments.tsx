@@ -10,6 +10,7 @@ import {
   type LeadAttachmentView,
 } from '@/app/actions/lead-cards'
 import { Button } from '@/components/ui/button'
+import { compressImageFile } from '@/lib/compress-image'
 import type { ConversationVideoNote } from '@/lib/data/lead-attachments'
 import { APP_TIME_ZONE } from '@/lib/time'
 import { cn } from '@/lib/utils'
@@ -71,10 +72,17 @@ export function LeadAttachments({
         return
       }
     }
-    const form = new FormData()
-    form.set('leadCardId', leadCardId)
-    for (const f of files) form.append('files', f)
     startTransition(async () => {
+      // Фото сжимаются на клиенте (даунскейл до 2048px + JPEG) — на мобильном
+      // интернете загрузка ускоряется в разы. Видео идёт как есть.
+      const prepared = await Promise.all(
+        files.map((f) =>
+          f.type.startsWith('image/') ? compressImageFile(f) : f,
+        ),
+      )
+      const form = new FormData()
+      form.set('leadCardId', leadCardId)
+      for (const f of prepared) form.append('files', f)
       // Обычный fetch к API-роуту вместо server action: POST экшена с крупным
       // видео режется прокси-слоями и падает с генерик-ошибкой «An unexpected
       // response was received from the server». Роут отвечает честным JSON.

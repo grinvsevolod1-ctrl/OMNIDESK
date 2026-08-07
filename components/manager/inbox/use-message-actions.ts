@@ -6,9 +6,7 @@ import {
   sendMessageAction,
   sendScheduledMessageAction,
   sendStickerAction,
-  sendVkMediaAction,
   sendVoiceAction,
-  sendWhatsappMediaAction,
 } from '@/app/actions/account'
 import {
   replyMessageAction,
@@ -295,28 +293,43 @@ export function useMessageActions({
       return
     }
     const fd = new FormData()
+    fd.append('conversationId', activeId)
+    fd.append('channel', channelType)
     fd.append('file', file)
     const trimmed = caption.trim()
     if (trimmed) fd.append('caption', trimmed)
     startTransition(async () => {
+      // Обычный fetch к API-роуту вместо server action: POST экшена с крупным
+      // файлом режется прокси-слоями и падает с генерик-ошибкой фреймворка.
       try {
-        const res =
-          channelType === 'vk'
-            ? await sendVkMediaAction(activeId, fd)
-            : await sendWhatsappMediaAction(activeId, fd)
-        if (!res.ok) {
-          toast.error(res.message)
-        } else {
-          toast.success(res.message)
+        const resp = await fetch('/api/chat-media/upload', {
+          method: 'POST',
+          body: fd,
+        })
+        let res: { ok?: boolean; message?: string } = {}
+        try {
+          res = (await resp.json()) as typeof res
+        } catch {
+          /* не-JSON ответ (обрезано прокси) — обработаем по статусу ниже */
+        }
+        if (resp.ok && res.ok) {
+          toast.success(res.message ?? 'Файл отправлен.')
           // No router.refresh(): the sent media message arrives back through
           // the SSE stream and is patched into localMessages there.
+        } else {
+          toast.error(
+            res.message ??
+              (resp.status === 413
+                ? 'Файл слишком большой для сервера. Уменьшите его или отправьте ссылкой.'
+                : 'Не удалось отправить файл. Попробуйте ещё раз.'),
+          )
         }
       } catch (err) {
-        // Any transport/framework failure (e.g. body limit, dropped connection)
-        // is contained here as a toast — never bubbled to the error boundary,
+        // Any transport/framework failure (e.g. dropped connection) is
+        // contained here as a toast — never bubbled to the error boundary,
         // which would replace the whole inbox with the crash page.
         console.error('[v0] media upload failed:', err)
-        toast.error('Не удалось отправить файл. Попробуйте ещё раз.')
+        toast.error('Сеть прервала загрузку. Проверьте соединение и попробуйте снова.')
       }
     })
   }

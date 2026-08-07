@@ -213,11 +213,19 @@ export interface ManagerLeadsFilter {
   offset?: number
 }
 
+/** Карточка в списке менеджера + счётчик комментариев куратора для бейджа. */
+export type ManagerLeadListItem = LeadCard & {
+  /** Всего комментариев куратора в карточке (не считая своих). */
+  curatorCommentCount: number
+  /** ISO-время последнего комментария куратора — для метки «новое» на клиенте. */
+  lastCuratorCommentAt: string | null
+}
+
 /** Manager: his own lead cards with period + status filters, newest first. */
 export async function listLeadCardsForManager(
   managerId: string,
   filter: ManagerLeadsFilter = {},
-): Promise<{ leads: LeadCard[]; total: number }> {
+): Promise<{ leads: ManagerLeadListItem[]; total: number }> {
   const from = safeDayKey(filter.from)
   const to = safeDayKey(filter.to)
 
@@ -260,11 +268,23 @@ export async function listLeadCardsForManager(
   const offset = Math.max(filter.offset ?? 0, 0)
   params.push(limit, offset)
 
-  const rows = await query<LeadCardRow>(
-    `SELECT ${CARD_SELECT}
+  // Комментарии куратора считаются латеральным подзапросом: бейдж «есть
+  // ответ куратора» в списке без второго запроса с клиента.
+  const rows = await query<
+    LeadCardRow & { curator_comment_count: string; last_curator_comment_at: string | Date | null }
+  >(
+    `SELECT ${CARD_SELECT},
+            COALESCE(cc.n, 0)::int AS curator_comment_count,
+            cc.last_at              AS last_curator_comment_at
        FROM lead_cards lc
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
+       LEFT JOIN LATERAL (
+         SELECT count(*) AS n, max(k.created_at) AS last_at
+           FROM lead_card_comments k
+          WHERE k.lead_card_id = lc.id
+            AND k.author_id IS DISTINCT FROM lc.manager_id
+       ) cc ON true
       WHERE ${where}
       ORDER BY lc.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -272,7 +292,13 @@ export async function listLeadCardsForManager(
   )
 
   return {
-    leads: rows.map(toLeadCard),
+    leads: rows.map((r) => ({
+      ...toLeadCard(r),
+      curatorCommentCount: Number(r.curator_comment_count ?? 0),
+      lastCuratorCommentAt: r.last_curator_comment_at
+        ? new Date(r.last_curator_comment_at).toISOString()
+        : null,
+    })),
     total: Number(totalRows[0]?.n ?? 0),
   }
 }
