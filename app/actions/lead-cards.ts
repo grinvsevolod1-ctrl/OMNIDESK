@@ -29,6 +29,33 @@ import {
   safeDayKey,
   type ManagerLeadFilterStatus,
 } from '@/lib/data/lead-stats'
+import {
+  addLeadFileAttachment,
+  addLeadVideoNoteAttachment,
+  deleteLeadAttachment,
+  getLeadAttachmentById,
+  listConversationVideoNotes,
+  listLeadAttachments,
+  type ConversationVideoNote,
+  type LeadAttachment,
+} from '@/lib/data/lead-attachments'
+
+/** Лимиты вложений карточки: до 10 файлов за раз, до 50 МБ каждый. */
+const LEAD_ATTACHMENT_MAX_COUNT = 10
+const LEAD_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024
+
+/** Вложение + серверный флаг «можно удалить» (автор или админ). */
+export type LeadAttachmentView = LeadAttachment & { canDelete: boolean }
+
+function withCanDelete(
+  session: { role: string; sub: string },
+  list: LeadAttachment[],
+): LeadAttachmentView[] {
+  return list.map((a) => ({
+    ...a,
+    canDelete: session.role === 'admin' || a.authorId === session.sub,
+  }))
+}
 import { enrollConversationAi } from '@/lib/data/ai-assist'
 import {
   isFinalLeadStatus,
@@ -206,12 +233,31 @@ export async function getLeadCardDetailAction(leadCardId: string) {
     (session.role === 'manager' && card.managerId === session.sub)
   if (!allowed) throw new Error('Forbidden')
 
-  const [comments, transfers, statusHistory] = await Promise.all([
+  const [comments, transfers, statusHistory, attachments] = await Promise.all([
     listLeadComments(leadCardId),
     listLeadTransfers(leadCardId),
     listLeadStatusHistory(leadCardId).catch(() => []),
+    listLeadAttachments(leadCardId).catch(() => []),
   ])
-  return { card, comments, transfers, statusHistory }
+  return {
+    card,
+    comments,
+    transfers,
+    statusHistory,
+    attachments: withCanDelete(session, attachments),
+  }
+}
+
+/** true, когда сессия имеет доступ к карточке (админ / её куратор / её менеджер). */
+function canAccessLeadCard(
+  session: { role: string; sub: string },
+  card: { curatorId: string | null; managerId: string | null },
+): boolean {
+  return (
+    session.role === 'admin' ||
+    (session.role === 'curator' && card.curatorId === session.sub) ||
+    (session.role === 'manager' && card.managerId === session.sub)
+  )
 }
 
 export async function updateLeadStatusAction(input: {
@@ -249,24 +295,181 @@ export async function addLeadCommentAction(input: {
   leadCardId: string
   body: string
 }): Promise<LeadCardActionResult> {
-  const session = await requireCurator()
+  const session = await getSession()
+  if (!session) return { ok: false, message: 'Не авторизовано.' }
   if (input.body.trim().length < 1) {
     return { ok: false, message: 'Введите комментарий.' }
   }
   const card = await getLeadCardById(input.leadCardId)
-  if (!card || card.curatorId !== session.sub) {
+  if (!card || !canAccessLeadCard(session, card)) {
     return { ok: false, message: 'Лид не найден.' }
   }
   try {
-    // Free comments are part of the restricted workspace: confirm statuses first.
-    await assertCuratorNotLocked(session.sub)
+    // Для куратора свободный комментарий — часть ограниченного рабочего места:
+    // сначала подтверди статусы. Менеджер и админ под гейт не попадают.
+    if (session.role === 'curator') {
+      await assertCuratorNotLocked(session.sub)
+    }
     await addLeadComment({
       leadCardId: input.leadCardId,
       authorId: session.sub,
       body: input.body,
     })
     revalidatePath('/curator')
+    revalidatePath('/app/leads')
     return { ok: true, message: 'Комментарий добавлен.' }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка'
+    return { ok: false, message: msg }
+  }
+}
+
+/* --------------------------- Вложения карточки --------------------------- */
+
+/** Список вложений карточки (для менеджера/куратора/админа с доступом). */
+export async function listLeadAttachmentsAction(leadCardId: string) {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+  const card = await getLeadCardById(leadCardId)
+  if (!card || !canAccessLeadCard(session, card)) throw new Error('Forbidden')
+  return withCanDelete(session, await listLeadAttachments(leadCardId))
+}
+
+/** Загрузка фото/видео в карточку (FormData: files[]). Возвращает свежий список. */
+export async function uploadLeadAttachmentsAction(
+  form: FormData,
+): Promise<{ ok: boolean; message: string; attachments?: LeadAttachmentView[] }> {
+  const session = await getSession()
+  if (!session) return { ok: false, message: 'Не авторизовано.' }
+  const leadCardId = String(form.get('leadCardId') || '')
+  if (!leadCardId) return { ok: false, message: 'Нет карточки.' }
+
+  const card = await getLeadCardById(leadCardId)
+  if (!card || !canAccessLeadCard(session, card)) {
+    return { ok: false, message: 'Лид не найден.' }
+  }
+
+  const files = form.getAll('files').filter((f): f is File => f instanceof File)
+  if (files.length === 0) return { ok: false, message: 'Нет файлов.' }
+  if (files.length > LEAD_ATTACHMENT_MAX_COUNT) {
+    return {
+      ok: false,
+      message: `За раз можно до ${LEAD_ATTACHMENT_MAX_COUNT} файлов.`,
+    }
+  }
+
+  try {
+    if (session.role === 'curator') await assertCuratorNotLocked(session.sub)
+    for (const file of files) {
+      if (file.size === 0) continue
+      if (file.size > LEAD_ATTACHMENT_MAX_BYTES) {
+        return {
+          ok: false,
+          message: `Файл «${file.name}» больше ${Math.round(
+            LEAD_ATTACHMENT_MAX_BYTES / (1024 * 1024),
+          )} МБ.`,
+        }
+      }
+      const mime = file.type || 'application/octet-stream'
+      const isImage = mime.startsWith('image/')
+      const isVideo = mime.startsWith('video/')
+      if (!isImage && !isVideo) {
+        return {
+          ok: false,
+          message: `«${file.name}»: только фото или видео.`,
+        }
+      }
+      const bytes = Buffer.from(await file.arrayBuffer())
+      await addLeadFileAttachment({
+        leadCardId,
+        authorId: session.sub,
+        kind: isImage ? 'photo' : 'video',
+        bytes,
+        mime,
+        fileName: file.name || null,
+      })
+    }
+    revalidatePath('/curator')
+    revalidatePath('/app/leads')
+    const attachments = withCanDelete(
+      session,
+      await listLeadAttachments(leadCardId),
+    )
+    return { ok: true, message: 'Файлы прикреплены.', attachments }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка загрузки'
+    return { ok: false, message: msg }
+  }
+}
+
+/** Кружки (video_note) диалога по порядку — для выбора при закреплении. */
+export async function listConversationVideoNotesAction(
+  conversationId: string,
+): Promise<ConversationVideoNote[]> {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+  // Кружки берутся из карточки этого диалога — проверяем доступ по карточке.
+  const card = await getLeadCardByConversation(conversationId)
+  if (card && !canAccessLeadCard(session, card)) throw new Error('Forbidden')
+  return listConversationVideoNotes(conversationId)
+}
+
+/** Закрепить кружок из диалога за карточкой. */
+export async function attachLeadVideoNoteAction(input: {
+  leadCardId: string
+  conversationId: string
+  messageId: string
+}): Promise<{ ok: boolean; message: string; attachments?: LeadAttachmentView[] }> {
+  const session = await getSession()
+  if (!session) return { ok: false, message: 'Не авторизовано.' }
+  const card = await getLeadCardById(input.leadCardId)
+  if (!card || !canAccessLeadCard(session, card)) {
+    return { ok: false, message: 'Лид не найден.' }
+  }
+  if (card.conversationId !== input.conversationId) {
+    return { ok: false, message: 'Кружок из другого диалога.' }
+  }
+  try {
+    if (session.role === 'curator') await assertCuratorNotLocked(session.sub)
+    const res = await addLeadVideoNoteAttachment({
+      leadCardId: input.leadCardId,
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      authorId: session.sub,
+    })
+    if (!res) return { ok: false, message: 'Это не кружок этого диалога.' }
+    revalidatePath('/app/leads')
+    const attachments = withCanDelete(
+      session,
+      await listLeadAttachments(input.leadCardId),
+    )
+    return { ok: true, message: 'Кружок закреплён.', attachments }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка'
+    return { ok: false, message: msg }
+  }
+}
+
+/** Удалить вложение — только автор или админ. */
+export async function deleteLeadAttachmentAction(input: {
+  attachmentId: string
+}): Promise<{ ok: boolean; message: string; attachments?: LeadAttachmentView[] }> {
+  const session = await getSession()
+  if (!session) return { ok: false, message: 'Не авторизовано.' }
+  const attachment = await getLeadAttachmentById(input.attachmentId)
+  if (!attachment) return { ok: false, message: 'Вложение не найдено.' }
+  if (session.role !== 'admin' && attachment.authorId !== session.sub) {
+    return { ok: false, message: 'Удалять может только автор.' }
+  }
+  try {
+    await deleteLeadAttachment(input.attachmentId)
+    revalidatePath('/curator')
+    revalidatePath('/app/leads')
+    const attachments = withCanDelete(
+      session,
+      await listLeadAttachments(attachment.leadCardId),
+    )
+    return { ok: true, message: 'Вложение удалено.', attachments }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Ошибка'
     return { ok: false, message: msg }
