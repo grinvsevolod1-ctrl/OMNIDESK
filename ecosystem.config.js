@@ -58,6 +58,15 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       max_memory_restart: '512M',
+      // Restart hardening (same rationale as the worker below): a broken
+      // .next after a failed deploy used to put the panel into a tight
+      // restart loop (restart counter in the hundreds). Slow the loop down
+      // and give up after enough unstable starts so the failure is VISIBLE
+      // in `pm2 status` instead of silently churning CPU.
+      min_uptime: 15000,
+      restart_delay: 3000,
+      exp_backoff_restart_delay: 500,
+      max_restarts: 25,
       env: {
         ...rootEnv,
         NODE_ENV: 'production',

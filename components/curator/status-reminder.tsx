@@ -34,12 +34,14 @@ export function StatusReminder({ leads }: { leads: LeadCard[] }) {
           n === 1
             ? '1 лид ждёт обновления статуса'
             : `${n} лидов ждут обновления статуса`
-        const opts: NotificationOptions & { renotify?: boolean } = {
+        // `tag` makes each new notification replace the previous one, so we
+        // don't stack 20-minute reminders. `renotify` is deliberately NOT
+        // used: it's missing from NotificationOptions in some TypeScript lib
+        // versions (broke the VPS build) and only affects re-alert sound.
+        new Notification('Omnidesk — обновите статусы', {
           body: `${body}. Пока статусы не подтверждены, рабочее место ограничено.`,
           tag: 'omnidesk-curator-status',
-          renotify: true,
-        }
-        new Notification('Omnidesk — обновите статусы', opts)
+        })
       } catch {
         /* ignore */
       }
