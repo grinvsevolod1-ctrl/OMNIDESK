@@ -8,12 +8,10 @@ import {
   deleteLeadAttachmentAction,
   listConversationVideoNotesAction,
   uploadLeadAttachmentsAction,
+  type LeadAttachmentView,
 } from '@/app/actions/lead-cards'
 import { Button } from '@/components/ui/button'
-import type {
-  ConversationVideoNote,
-  LeadAttachment,
-} from '@/lib/data/lead-attachments'
+import type { ConversationVideoNote } from '@/lib/data/lead-attachments'
 import { APP_TIME_ZONE } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
@@ -46,20 +44,16 @@ export function LeadAttachments({
   conversationId,
   attachments,
   onChanged,
-  currentUserId,
-  isAdmin,
 }: {
   leadCardId: string
   /** Диалог карточки — включает кнопку «Прикрепить кружок». */
   conversationId?: string | null
-  attachments: LeadAttachment[]
-  onChanged: (next: LeadAttachment[]) => void
-  currentUserId: string
-  isAdmin?: boolean
+  attachments: LeadAttachmentView[]
+  onChanged: (next: LeadAttachmentView[]) => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [pending, startTransition] = useTransition()
-  const [viewer, setViewer] = useState<LeadAttachment | null>(null)
+  const [viewer, setViewer] = useState<LeadAttachmentView | null>(null)
 
   function onFilesPicked(list: FileList | null) {
     if (!list || list.length === 0) return
@@ -92,7 +86,7 @@ export function LeadAttachments({
     })
   }
 
-  function remove(att: LeadAttachment) {
+  function remove(att: LeadAttachmentView) {
     startTransition(async () => {
       const res = await deleteLeadAttachmentAction({ attachmentId: att.id })
       if (res.ok && res.attachments) {
@@ -160,7 +154,7 @@ export function LeadAttachments({
       ) : (
         <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           {attachments.map((att) => {
-            const canDelete = isAdmin || att.authorId === currentUserId
+            const canDelete = att.canDelete
             return (
               <li key={att.id} className="group relative">
                 <button
@@ -296,7 +290,7 @@ function VideoNotePicker({
 }: {
   leadCardId: string
   conversationId: string
-  onChanged: (next: LeadAttachment[]) => void
+  onChanged: (next: LeadAttachmentView[]) => void
 }) {
   const [open, setOpen] = useState(false)
   const [notes, setNotes] = useState<ConversationVideoNote[] | null>(null)

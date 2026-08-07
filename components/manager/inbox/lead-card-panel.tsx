@@ -32,12 +32,9 @@ import type { CuratorWithLoad } from '@/lib/data/lead-cards'
  */
 export function LeadCardPanel({
   conversationId,
-  currentUserId,
   defaults,
 }: {
   conversationId: string
-  /** Id менеджера — нужен вложениям, чтобы показывать «удалить» только автору. */
-  currentUserId?: string
   defaults?: {
     fullName?: string
     phone?: string
@@ -260,7 +257,7 @@ export function LeadCardPanel({
                   placeholder="Москва"
                 />
               </Field>
-              <Field label="Адр��с">
+              <Field label="Адрес">
                 <Input
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
@@ -346,7 +343,6 @@ export function LeadCardPanel({
                       conversationId={conversationId}
                       attachments={detail?.attachments ?? []}
                       onChanged={() => void mutateDetail()}
-                      currentUserId={currentUserId ?? ''}
                     />
                   </div>
 

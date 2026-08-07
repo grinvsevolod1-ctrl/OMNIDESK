@@ -22,6 +22,7 @@ import {
   getMyLeadCardStatsAction,
   listMyLeadCardsAction,
 } from '@/app/actions/lead-cards'
+import { ManagerLeadDetailPanel } from '@/components/manager/manager-lead-detail-panel'
 import { StatCard } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -141,6 +142,7 @@ export function ManagerLeadsView({
   // Refetch whenever the resolved period or the status filter changes.
   // The very first render already has server-fetched data for the default
   // «7 дней» window — skip the redundant round-trip.
+  const [openLeadId, setOpenLeadId] = useState<string | null>(null)
   const hydratedRef = useRef(false)
   useEffect(() => {
     if (!hydratedRef.current) {
@@ -326,9 +328,14 @@ export function ManagerLeadsView({
               return (
                 <li
                   key={lead.id}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:px-5"
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors hover:bg-muted/40 sm:px-5"
                 >
-                  <div className="min-w-0 flex-1 basis-48">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 basis-48 text-left"
+                    onClick={() => setOpenLeadId(lead.id)}
+                    aria-label={`Открыть карточку: ${lead.fullName || 'Без имени'}`}
+                  >
                     <p className="truncate text-sm font-medium">
                       {lead.fullName || 'Без имени'}
                     </p>
@@ -336,7 +343,7 @@ export function ManagerLeadsView({
                       {[lead.vacancy, lead.phone].filter(Boolean).join(' · ') ||
                         '—'}
                     </p>
-                  </div>
+                  </button>
 
                   {lead.city ? (
                     <Badge
@@ -414,6 +421,17 @@ export function ManagerLeadsView({
             Вперёд
           </Button>
         </div>
+      ) : null}
+
+      {openLeadId ? (
+        <ManagerLeadDetailPanel
+          leadId={openLeadId}
+          onClose={() => {
+            setOpenLeadId(null)
+            // Куратор мог обновить статус, пока панель была открыта.
+            reload(offset)
+          }}
+        />
       ) : null}
     </div>
   )
