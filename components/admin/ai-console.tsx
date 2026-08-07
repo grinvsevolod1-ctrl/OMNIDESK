@@ -1,13 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  ArrowUp,
-  Mic,
-  Square,
-  Volume2,
-  VolumeX,
-} from 'lucide-react'
 import { toast } from 'sonner'
 import type { AiAssistLesson, AiAssistSettings } from '@/lib/data/ai-assist'
 import { INTENT_BY_ID, type ConsoleIntent } from '@/lib/ai-console/intents'
@@ -25,19 +18,12 @@ import {
   aiRevertSettingsAction,
 } from '@/app/actions/ai-console'
 import { aiSettingsAction, aiListLessonsAction } from '@/app/actions/ai-assist'
-import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Textarea } from '@/components/ui/textarea'
 
 import { useSpeechInput } from '@/components/admin/ai-console/use-speech-input'
-import {
-  PANEL_ICON,
-  type ChatMessage,
-} from '@/components/admin/ai-console/chat-types'
+import { type ChatMessage } from '@/components/admin/ai-console/chat-types'
 import {
   ActionReceipts,
-  Bar,
   EmptyHero,
   MessageBubble,
   ReportDownload,
@@ -48,6 +34,7 @@ import {
   InlinePanel,
   PendingCard,
 } from '@/components/admin/ai-console/inline-panel'
+import { ConsoleComposer } from '@/components/admin/ai-console/console-composer'
 
 /** Quick-access panels shown as a compact row (instant open, no model call). */
 const QUICK_PANELS: ConsoleIntent[] = [
@@ -680,127 +667,28 @@ export function AiConsole({
       {/* Composer — the one place you talk to the assistant. It only pins to the
           bottom once a conversation is going; on the empty screen it sits right
           under the question as the single focal element. */}
-      <Card
-        className={cn(
-          'z-10 flex flex-col gap-3 p-3 shadow-lg',
-          hasChat && 'sticky bottom-4',
-        )}
-      >
-        {voice.listening ? (
-          <div className="flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary duration-300 animate-in fade-in">
-            <span className="flex gap-0.5" aria-hidden="true">
-              <Bar delay="0ms" />
-              <Bar delay="120ms" />
-              <Bar delay="240ms" />
-            </span>
-            Слушаю… говорите
-          </div>
-        ) : null}
-        <div className="relative">
-          <Textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            rows={2}
-            disabled={loading}
-            placeholder="Напишите, что сделать с ИИ-менеджером…"
-            className="resize-none pr-32"
-            aria-label="Сообщение ассистенту ИИ-менеджера"
-          />
-          <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
-            {ttsSupported ? (
-              <Button
-                type="button"
-                size="icon"
-                variant={voiceMode ? 'default' : 'ghost'}
-                className="size-8"
-                onClick={() => {
-                  if (voiceMode && window.speechSynthesis) {
-                    window.speechSynthesis.cancel()
-                  }
-                  setVoiceMode((v) => !v)
-                }}
-                aria-label={
-                  voiceMode ? 'Отключить озвучку ответов' : 'Озвучивать ответы'
-                }
-                aria-pressed={voiceMode}
-                title={voiceMode ? 'Озвучка включена' : 'Озвучивать ответы'}
-              >
-                {voiceMode ? (
-                  <Volume2 className="size-4" />
-                ) : (
-                  <VolumeX className="size-4" />
-                )}
-              </Button>
-            ) : null}
-            {voice.supported ? (
-              <Button
-                type="button"
-                size="icon"
-                variant={voice.listening ? 'default' : 'ghost'}
-                className={cn('size-8', voice.listening && 'animate-pulse')}
-                onClick={voice.toggle}
-                disabled={loading}
-                aria-label={voice.listening ? 'Остановить запись' : 'Голосовой ввод'}
-                aria-pressed={voice.listening}
-              >
-                <Mic className="size-4" />
-              </Button>
-            ) : null}
-            {loading ? (
-              <Button
-                size="icon"
-                variant="secondary"
-                className="size-8"
-                onClick={stop}
-                aria-label="Остановить генерацию"
-              >
-                <Square className="size-3.5" />
-              </Button>
-            ) : (
-              <Button
-                size="icon"
-                className="size-8"
-                disabled={!input.trim()}
-                onClick={() => send(input)}
-                aria-label="Отправить"
-              >
-                <ArrowUp className="size-4" />
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {/* Quick-access panels — instant open, no model call. Kept off the empty
-            screen so the landing view is just the question and the input. */}
-        {hasChat ? (
-          <div className="flex flex-wrap gap-1.5">
-            {QUICK_PANELS.map((intent) => {
-              const meta = INTENT_BY_ID[intent]
-              const Icon = PANEL_ICON[intent]
-              if (!meta) return null
-              return (
-                <button
-                  key={intent}
-                  type="button"
-                  onClick={() => openPanelDirect(intent)}
-                  disabled={loading}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-                    activePanel === intent
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                  )}
-                >
-                  <Icon className="size-3.5" />
-                  {meta.label}
-                </button>
-              )
-            })}
-          </div>
-        ) : null}
-      </Card>
+      <ConsoleComposer
+        inputRef={inputRef}
+        input={input}
+        onInputChange={setInput}
+        onKeyDown={onKeyDown}
+        loading={loading}
+        hasChat={hasChat}
+        voice={voice}
+        voiceMode={voiceMode}
+        ttsSupported={ttsSupported}
+        onToggleVoiceMode={() => {
+          if (voiceMode && window.speechSynthesis) {
+            window.speechSynthesis.cancel()
+          }
+          setVoiceMode((v) => !v)
+        }}
+        onStop={stop}
+        onSend={send}
+        quickPanels={QUICK_PANELS}
+        activePanel={activePanel}
+        onOpenPanel={openPanelDirect}
+      />
     </div>
   )
 }
