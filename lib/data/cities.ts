@@ -109,10 +109,12 @@ export async function setCuratorCities(
      ON CONFLICT (curator_id, city_norm) DO NOTHING`,
     [curatorId, canonical],
   )
-  await query(
-    `UPDATE managers SET city = $2, updated_at = now() WHERE id = $1`,
-    [curatorId, canonical[0]],
-  )
+  // ВАЖНО: у managers НЕТ колонки updated_at — не добавлять её сюда
+  // (ошибка «column updated_at does not exist» роняла сохранение городов).
+  await query(`UPDATE managers SET city = $2 WHERE id = $1`, [
+    curatorId,
+    canonical[0],
+  ])
   return canonical
 }
 
