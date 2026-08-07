@@ -40,7 +40,6 @@ import {
 import {
   AD_STATUS_META,
   PLATFORM_META,
-  useRates,
 } from '@/components/admin/finance/finance-utils'
 import { CurrencySelect } from '@/components/admin/finance/finance-currency-select'
 

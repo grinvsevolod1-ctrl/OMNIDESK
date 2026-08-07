@@ -110,7 +110,7 @@ export function ManagerLeadDetailPanel({
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div className="space-y-4 border-b border-border px-4 py-4 sm:px-5">
+            <div className="flex flex-col gap-4 border-b border-border px-4 py-4 sm:px-5">
               <div>
                 <h2 className="text-lg font-semibold tracking-tight">
                   {card.fullName || 'Без имени'}
@@ -199,7 +199,7 @@ export function ManagerLeadDetailPanel({
             </div>
 
             {/* Комментарии: менеджер видит комментарии куратора и пишет свои */}
-            <div className="space-y-3 px-4 py-4 sm:px-5">
+            <div className="flex flex-col gap-3 px-4 py-4 sm:px-5">
               <p className="text-sm font-semibold">Комментарии</p>
               <div className="flex flex-col gap-2">
                 <Textarea

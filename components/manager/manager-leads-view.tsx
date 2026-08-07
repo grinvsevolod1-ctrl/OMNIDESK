@@ -165,22 +165,25 @@ export function ManagerLeadsView({
     <div className="flex flex-col gap-6">
       {/* Period + status filters */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1 rounded-xl border border-border bg-muted/30 p-1">
-          {presetButtons.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => setPreset(p.key)}
-              className={cn(
-                'rounded-lg px-3 py-1.5 text-sm transition-colors',
-                preset === p.key
-                  ? 'bg-background font-medium shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
+        {/* На узких экранах пресеты уходят в горизонтальный скролл, не ломая сетку */}
+        <div className="scrollbar-thin -mx-1 max-w-full overflow-x-auto px-1 sm:mx-0 sm:px-0">
+          <div className="flex w-max items-center gap-1 rounded-xl border border-border bg-muted/30 p-1">
+            {presetButtons.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => setPreset(p.key)}
+                className={cn(
+                  'shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition-colors',
+                  preset === p.key
+                    ? 'bg-background font-medium shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {preset === 'day' ? (
@@ -195,22 +198,22 @@ export function ManagerLeadsView({
         ) : null}
 
         {preset === 'range' ? (
-          <div className="flex items-center gap-1.5">
+          <div className="flex w-full items-center gap-1.5 sm:w-auto">
             <Input
               type="date"
               value={from}
               max={to}
               onChange={(e) => setFrom(e.target.value || from)}
-              className="h-9 w-40"
+              className="h-9 min-w-0 flex-1 sm:w-40 sm:flex-none"
               aria-label="Начало периода"
             />
-            <span className="text-sm text-muted-foreground">—</span>
+            <span className="shrink-0 text-sm text-muted-foreground">—</span>
             <Input
               type="date"
               value={to}
               max={today}
               onChange={(e) => setTo(e.target.value || to)}
-              className="h-9 w-40"
+              className="h-9 min-w-0 flex-1 sm:w-40 sm:flex-none"
               aria-label="Конец периода"
             />
           </div>

@@ -7,54 +7,122 @@
  * business logic.
  */
 
-import { useState } from 'react'
+import { memo, useCallback, useState } from 'react'
 import useSWR from 'swr'
-import { Loader2, Smile, Sticker } from 'lucide-react'
+import { Clock3, Loader2, Smile, Sticker } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
+import { cn } from '@/lib/utils'
 import type { StickerItem } from '@/lib/types'
+import type { EmojiCategory } from './emoji-data'
 
-const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
-  {
-    label: 'Смайлы',
-    emojis: [
-      '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
-      '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😋', '😎', '🤩',
-      '🥳', '😏', '😢', '😭', '😤', '😠', '😡', '🤔', '🤗', '🤭',
-      '😴', '😬', '🙄', '😱', '😳', '🤯', '😅', '😢',
-    ],
-  },
-  {
-    label: 'Жесты',
-    emojis: [
-      '👍', '👎', '👌', '✌️', '🤞', '🤝', '👏', '🙏', '💪', '🫶',
-      '👋', '🤙', '✋', '🖐️', '👊', '🤛', '🤜', '☝️', '👆', '👉',
-    ],
-  },
-  {
-    label: 'Сердца',
-    emojis: [
-      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💔', '❣️',
-      '💕', '💞', '💓', '💗', '💖', '💘', '💝', '🔥', '⭐', '💯',
-    ],
-  },
-  {
-    label: 'Объекты',
-    emojis: [
-      '🎉', '🎊', '🎁', '🏆', '✅', '❌', '⚡', '💡', '📌', '📎',
-      '💰', '📞', '📧', '📅', '⏰', '🚀', '👀', '💬', '❓', '❗',
-    ],
-  },
-]
+/* ------------------------------ Emoji picker ------------------------------ */
 
-/** Emoji picker popover. Inserts the chosen emoji into the composer draft. */
-export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
+const RECENT_KEY = 'omnidesk-recent-emojis'
+const RECENT_MAX = 30
+
+function readRecent(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY)
+    const arr = raw ? (JSON.parse(raw) as unknown) : []
+    return Array.isArray(arr)
+      ? arr.filter((e): e is string => typeof e === 'string').slice(0, RECENT_MAX)
+      : []
+  } catch {
+    return []
+  }
+}
+
+function pushRecent(emoji: string): string[] {
+  const next = [emoji, ...readRecent().filter((e) => e !== emoji)].slice(
+    0,
+    RECENT_MAX,
+  )
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next))
+  } catch {
+    /* приватный режим — просто без «Недавних» */
+  }
+  return next
+}
+
+/**
+ * Сетка одной категории. Мемоизирована и рендерится ТОЛЬКО для активной
+ * вкладки — открытие пикера монтирует ~100 кнопок вместо ~1200, поэтому
+ * попап открывается мгновенно даже на слабом железе.
+ */
+const EmojiGrid = memo(function EmojiGrid({
+  emojis,
+  onPick,
+}: {
+  emojis: string[]
+  onPick: (emoji: string) => void
+}) {
   return (
-    <Popover>
+    <div className="grid grid-cols-8 gap-0.5">
+      {emojis.map((e) => (
+        <button
+          key={e}
+          type="button"
+          onClick={() => onPick(e)}
+          className="flex size-9 items-center justify-center rounded-md text-xl leading-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+          aria-label={`Вставить ${e}`}
+        >
+          {e}
+        </button>
+      ))}
+    </div>
+  )
+})
+
+/**
+ * Эмодзи-пикер композера: ленивые данные (динамический import при первом
+ * открытии), вкладки категорий, «Недавние» в localStorage. Контент попапа
+ * монтируется только когда он открыт.
+ */
+export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [categories, setCategories] = useState<EmojiCategory[] | null>(null)
+  const [tab, setTab] = useState('smileys')
+  const [recent, setRecent] = useState<string[]>([])
+
+  // Палитра (~1200 эмодзи) не входит в бандл композера — подгружаем модуль
+  // при первом открытии и держим в состоянии навсегда. «Недавние» читаются
+  // в обработчике открытия (не в эффекте), чтобы не плодить каскадные рендеры.
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(next)
+      if (next) {
+        setRecent(readRecent())
+        if (!categories) {
+          void import('./emoji-data').then((m) =>
+            setCategories(m.EMOJI_CATEGORIES),
+          )
+        }
+      }
+    },
+    [categories],
+  )
+
+  const handlePick = useCallback(
+    (emoji: string) => {
+      onPick(emoji)
+      setRecent(pushRecent(emoji))
+    },
+    [onPick],
+  )
+
+  const activeEmojis =
+    tab === 'recent'
+      ? recent
+      : (categories?.find((c) => c.id === tab)?.emojis ?? [])
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger
         render={
           <Button
@@ -68,29 +136,65 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
           </Button>
         }
       />
-      <PopoverContent align="start" className="w-72 p-2">
-        <div className="scrollbar-thin max-h-64 overflow-y-auto">
-          {EMOJI_CATEGORIES.map((cat) => (
-            <div key={cat.label} className="mb-2 last:mb-0">
-              <p className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                {cat.label}
-              </p>
-              <div className="grid grid-cols-8 gap-0.5">
-                {cat.emojis.map((e, i) => (
-                  <button
-                    key={`${e}-${i}`}
-                    type="button"
-                    onClick={() => onPick(e)}
-                    className="flex size-8 items-center justify-center rounded-md text-xl leading-none hover:bg-muted"
-                    aria-label={`Вставить ${e}`}
-                  >
-                    {e}
-                  </button>
-                ))}
-              </div>
+      <PopoverContent align="start" className="w-80 p-0">
+        {!categories ? (
+          <div className="flex h-72 items-center justify-center">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="flex h-72 flex-col">
+            {/* Вкладки категорий */}
+            <div
+              className="flex items-center gap-0.5 border-b border-border px-1.5 py-1"
+              role="tablist"
+              aria-label="Категории эмодзи"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'recent'}
+                onClick={() => setTab('recent')}
+                className={cn(
+                  'flex size-8 shrink-0 items-center justify-center rounded-md transition-colors',
+                  tab === 'recent'
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:bg-muted/60',
+                )}
+                aria-label="Недавние"
+              >
+                <Clock3 className="size-4" />
+              </button>
+              {categories.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === c.id}
+                  onClick={() => setTab(c.id)}
+                  className={cn(
+                    'flex size-8 shrink-0 items-center justify-center rounded-md text-base leading-none transition-colors',
+                    tab === c.id ? 'bg-muted' : 'hover:bg-muted/60',
+                  )}
+                  aria-label={c.label}
+                  title={c.label}
+                >
+                  {c.icon}
+                </button>
+              ))}
             </div>
-          ))}
-        </div>
+
+            {/* Сетка активной категории */}
+            <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
+              {tab === 'recent' && recent.length === 0 ? (
+                <p className="px-2 py-10 text-center text-xs text-muted-foreground">
+                  Здесь появятся эмодзи, которые вы используете чаще всего
+                </p>
+              ) : (
+                <EmojiGrid emojis={activeEmojis} onPick={handlePick} />
+              )}
+            </div>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   )
