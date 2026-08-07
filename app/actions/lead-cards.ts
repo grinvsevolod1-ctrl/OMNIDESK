@@ -23,6 +23,12 @@ import {
   upsertLeadCard,
   type AllLeadsFilter,
 } from '@/lib/data/lead-cards'
+import {
+  getLeadCardStats,
+  listLeadCardsForManager,
+  safeDayKey,
+  type ManagerLeadFilterStatus,
+} from '@/lib/data/lead-stats'
 import { enrollConversationAi } from '@/lib/data/ai-assist'
 import {
   isFinalLeadStatus,
@@ -324,6 +330,8 @@ export async function listAllLeadsAdminAction(filter: {
   curatorId?: string | null
   status?: string | null
   city?: string | null
+  from?: string | null
+  to?: string | null
   orphanedOnly?: boolean
   limit?: number
   offset?: number
@@ -338,11 +346,72 @@ export async function listAllLeadsAdminAction(filter: {
           ? filter.status
           : null,
     city: filter.city ?? null,
+    from: safeDayKey(filter.from),
+    to: safeDayKey(filter.to),
     orphanedOnly: Boolean(filter.orphanedOnly),
     limit: filter.limit,
     offset: filter.offset,
   }
   return listAllTransferredLeads(safe)
+}
+
+/* ------------------------- Lead-card statistics ------------------------- */
+
+/** Manager: stats over HIS lead cards for a period / single day (MSK). */
+export async function getMyLeadCardStatsAction(filter: {
+  from?: string | null
+  to?: string | null
+}) {
+  const session = await getSession()
+  if (!session || session.role !== 'manager') throw new Error('Forbidden')
+  return getLeadCardStats({
+    managerId: session.sub,
+    from: filter.from ?? null,
+    to: filter.to ?? null,
+  })
+}
+
+/** Manager: HIS lead cards with period + status filters («Передан» etc.). */
+export async function listMyLeadCardsAction(filter: {
+  from?: string | null
+  to?: string | null
+  status?: string | null
+  limit?: number
+  offset?: number
+}) {
+  const session = await getSession()
+  if (!session || session.role !== 'manager') throw new Error('Forbidden')
+  const status: ManagerLeadFilterStatus =
+    filter.status === 'transferred' ||
+    filter.status === 'not_transferred' ||
+    filter.status === 'none'
+      ? filter.status
+      : isLeadStatus(filter.status)
+        ? filter.status
+        : null
+  return listLeadCardsForManager(session.sub, {
+    from: filter.from ?? null,
+    to: filter.to ?? null,
+    status,
+    limit: filter.limit,
+    offset: filter.offset,
+  })
+}
+
+/** Admin: lead-card stats by dates, optionally scoped to manager/curator. */
+export async function getLeadCardStatsAdminAction(filter: {
+  from?: string | null
+  to?: string | null
+  managerId?: string | null
+  curatorId?: string | null
+}) {
+  await requireAdmin()
+  return getLeadCardStats({
+    managerId: filter.managerId ?? null,
+    curatorId: filter.curatorId ?? null,
+    from: filter.from ?? null,
+    to: filter.to ?? null,
+  })
 }
 
 /** Admin: per-curator discipline snapshot for today. */

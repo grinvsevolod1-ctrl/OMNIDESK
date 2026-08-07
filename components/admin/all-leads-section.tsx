@@ -1,12 +1,24 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { ArrowRightLeft, Loader2, MapPin, RefreshCw } from 'lucide-react'
+import {
+  ArrowRightLeft,
+  CalendarDays,
+  Loader2,
+  MapPin,
+  RefreshCw,
+  UserPlus,
+  Users,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import {
+  getLeadCardStatsAdminAction,
   listAllLeadsAdminAction,
   transferLeadAdminAction,
 } from '@/app/actions/lead-cards'
+import { StatCard } from '@/components/page-parts'
+import type { LeadCardStats } from '@/lib/data/lead-stats'
+import { mskDayKey } from '@/lib/time'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -42,6 +54,38 @@ function formatDateTime(iso: string): string {
 
 const PAGE_SIZE = 50
 
+type PeriodPreset = 'all' | 'today' | '7d' | '30d' | 'day' | 'range'
+
+function shiftDay(day: string, deltaDays: number): string {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + deltaDays)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Resolve a preset into an inclusive MSK from/to pair (nulls = no limit). */
+function presetRange(
+  preset: PeriodPreset,
+  day: string,
+  from: string,
+  to: string,
+): { from: string | null; to: string | null } {
+  const today = mskDayKey(new Date())
+  switch (preset) {
+    case 'all':
+      return { from: null, to: null }
+    case 'today':
+      return { from: today, to: today }
+    case '7d':
+      return { from: shiftDay(today, -6), to: today }
+    case '30d':
+      return { from: shiftDay(today, -29), to: today }
+    case 'day':
+      return { from: day, to: day }
+    case 'range':
+      return { from, to }
+  }
+}
+
 /**
  * Admin overview of ALL transferred leads: filters by curator/status/city,
  * an "orphaned" mode surfacing leads whose curator was deleted, and a
@@ -58,6 +102,8 @@ export function AllLeadsSection({
   orphanedCount: number
   curators: CuratorWithLoad[]
 }) {
+  const today = mskDayKey(new Date())
+
   const [leads, setLeads] = useState(initialLeads)
   const [total, setTotal] = useState(initialTotal)
   const [offset, setOffset] = useState(0)
@@ -65,6 +111,11 @@ export function AllLeadsSection({
   const [status, setStatus] = useState<string>('')
   const [city, setCity] = useState('')
   const [orphanedOnly, setOrphanedOnly] = useState(false)
+  const [preset, setPreset] = useState<PeriodPreset>('all')
+  const [day, setDay] = useState(today)
+  const [from, setFrom] = useState(shiftDay(today, -6))
+  const [to, setTo] = useState(today)
+  const [stats, setStats] = useState<LeadCardStats | null>(null)
   const [pending, startTransition] = useTransition()
 
   function reload(next: {
@@ -73,6 +124,10 @@ export function AllLeadsSection({
     city?: string
     orphanedOnly?: boolean
     offset?: number
+    preset?: PeriodPreset
+    day?: string
+    from?: string
+    to?: string
   }) {
     const f = {
       curatorId: next.curatorId ?? curatorId,
@@ -80,20 +135,37 @@ export function AllLeadsSection({
       city: next.city ?? city,
       orphanedOnly: next.orphanedOnly ?? orphanedOnly,
       offset: next.offset ?? 0,
+      preset: next.preset ?? preset,
+      day: next.day ?? day,
+      from: next.from ?? from,
+      to: next.to ?? to,
     }
+    const range = presetRange(f.preset, f.day, f.from, f.to)
     startTransition(async () => {
       try {
-        const res = await listAllLeadsAdminAction({
-          curatorId: f.curatorId || null,
-          status: f.status || null,
-          city: f.city || null,
-          orphanedOnly: f.orphanedOnly,
-          limit: PAGE_SIZE,
-          offset: f.offset,
-        })
+        const [res, st] = await Promise.all([
+          listAllLeadsAdminAction({
+            curatorId: f.curatorId || null,
+            status: f.status || null,
+            city: f.city || null,
+            from: range.from,
+            to: range.to,
+            orphanedOnly: f.orphanedOnly,
+            limit: PAGE_SIZE,
+            offset: f.offset,
+          }),
+          f.preset === 'all'
+            ? Promise.resolve(null)
+            : getLeadCardStatsAdminAction({
+                from: range.from,
+                to: range.to,
+                curatorId: f.orphanedOnly ? null : f.curatorId || null,
+              }),
+        ])
         setLeads(res.leads)
         setTotal(res.total)
         setOffset(f.offset)
+        setStats(st)
       } catch {
         toast.error('Не удалось загрузить лиды')
       }
@@ -143,6 +215,153 @@ export function AllLeadsSection({
           </button>
         ) : null}
       </div>
+
+      {/* Period presets: statistics by dates (today / period / single day) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1 rounded-xl border border-border bg-muted/30 p-1">
+          {(
+            [
+              { key: 'all', label: 'Всё время' },
+              { key: 'today', label: 'Сегодня' },
+              { key: '7d', label: '7 дней' },
+              { key: '30d', label: '30 дней' },
+              { key: 'day', label: 'День' },
+              { key: 'range', label: 'Период' },
+            ] as { key: PeriodPreset; label: string }[]
+          ).map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => {
+                setPreset(p.key)
+                reload({ preset: p.key })
+              }}
+              className={cn(
+                'rounded-lg px-3 py-1.5 text-sm transition-colors',
+                preset === p.key
+                  ? 'bg-background font-medium shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {preset === 'day' ? (
+          <Input
+            type="date"
+            value={day}
+            max={today}
+            onChange={(e) => {
+              const v = e.target.value || today
+              setDay(v)
+              reload({ day: v })
+            }}
+            className="h-9 w-40"
+            aria-label="Выбрать день"
+          />
+        ) : null}
+
+        {preset === 'range' ? (
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="date"
+              value={from}
+              max={to}
+              onChange={(e) => {
+                const v = e.target.value || from
+                setFrom(v)
+                reload({ from: v })
+              }}
+              className="h-9 w-40"
+              aria-label="Начало периода"
+            />
+            <span className="text-sm text-muted-foreground">—</span>
+            <Input
+              type="date"
+              value={to}
+              max={today}
+              onChange={(e) => {
+                const v = e.target.value || to
+                setTo(v)
+                reload({ to: v })
+              }}
+              className="h-9 w-40"
+              aria-label="Конец периода"
+            />
+          </div>
+        ) : null}
+      </div>
+
+      {/* Stats for the selected period */}
+      {stats && preset !== 'all' ? (
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard
+              label="Карточек создано"
+              value={stats.created}
+              icon={UserPlus}
+              hint={
+                stats.from === stats.to
+                  ? `за ${stats.from === today ? 'сегодня' : stats.from}`
+                  : `${stats.from} — ${stats.to}`
+              }
+            />
+            <StatCard
+              label="Передано куратору"
+              value={stats.transferred}
+              icon={ArrowRightLeft}
+              hint="за выбранный период"
+            />
+            <StatCard
+              label="Создано сегодня"
+              value={stats.createdToday}
+              icon={CalendarDays}
+              hint="независимо от периода"
+            />
+            <StatCard
+              label="Передано сегодня"
+              value={stats.transferredToday}
+              icon={Users}
+              hint="независимо от периода"
+            />
+          </div>
+          {Object.keys(stats.byStatus).length > 0 || stats.noStatus > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {LEAD_STATUSES.filter((s) => (stats.byStatus[s] ?? 0) > 0).map(
+                (s) => {
+                  const tone = LEAD_STATUS_TONE[s]
+                  return (
+                    <Badge
+                      key={s}
+                      variant="outline"
+                      className={cn(
+                        'gap-1.5 border-transparent',
+                        tone.bg,
+                        tone.text,
+                      )}
+                    >
+                      <span
+                        className={cn('size-1.5 rounded-full', tone.dot)}
+                      />
+                      {LEAD_STATUS_LABELS[s]}: {stats.byStatus[s]}
+                    </Badge>
+                  )
+                },
+              )}
+              {stats.noStatus > 0 ? (
+                <Badge
+                  variant="outline"
+                  className="border-transparent bg-muted text-muted-foreground"
+                >
+                  Без статуса: {stats.noStatus}
+                </Badge>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <select

@@ -63,7 +63,7 @@ export interface LeadTransfer {
   createdAt: string
 }
 
-interface LeadCardRow {
+export interface LeadCardRow {
   id: string
   conversation_id: string | null
   manager_id: string | null
@@ -97,16 +97,26 @@ interface CommentRow {
   created_at: string | Date
 }
 
-function toDateOnly(v: string | Date | null | undefined): string | null {
+export function toDateOnly(v: string | Date | null | undefined): string | null {
   if (!v) return null
   if (typeof v === 'string') {
     // Postgres date may arrive as 'YYYY-MM-DD' or ISO timestamp.
     return v.slice(0, 10)
   }
-  return v.toISOString().slice(0, 10)
+  // node-postgres parses a DATE column into a JS Date at SERVER-LOCAL
+  // midnight. Converting through toISOString() (UTC) shifts the value back
+  // one day whenever the server timezone is ahead of UTC (e.g. a VPS running
+  // in MSK): «2026-08-07 00:00 MSK» -> «2026-08-06T21:00Z» -> "2026-08-06".
+  // That off-by-one made leadNeedsDailyStatus() treat a just-confirmed status
+  // as yesterday's, keeping the curator workspace locked. Read the LOCAL
+  // calendar components instead — they match the stored date exactly.
+  const y = v.getFullYear()
+  const m = String(v.getMonth() + 1).padStart(2, '0')
+  const d = String(v.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
-function toLeadCard(r: LeadCardRow): LeadCard {
+export function toLeadCard(r: LeadCardRow): LeadCard {
   return {
     id: r.id,
     conversationId: r.conversation_id,
@@ -148,7 +158,7 @@ function toComment(r: CommentRow): LeadCardComment {
   }
 }
 
-const CARD_SELECT = `
+export const CARD_SELECT = `
   lc.id, lc.conversation_id, lc.manager_id, lc.curator_id,
   lc.full_name, lc.phone, lc.telegram_username, lc.city, lc.address, lc.vacancy,
   lc.status, lc.previous_status, lc.status_confirmed_at, lc.status_confirmed_date,
@@ -780,6 +790,9 @@ export interface AllLeadsFilter {
   curatorId?: string | null
   status?: LeadStatus | 'none' | null
   city?: string | null
+  /** Inclusive MSK period applied to the transfer day (YYYY-MM-DD). */
+  from?: string | null
+  to?: string | null
   /** Only leads transferred but currently without a curator. */
   orphanedOnly?: boolean
   /** Show archived leads instead of active ones. */
@@ -815,6 +828,20 @@ export async function listAllTransferredLeads(
   if (filter.city?.trim()) {
     params.push(`%${filter.city.trim()}%`)
     conds.push(`lower(lc.city) LIKE lower($${params.length})`)
+  }
+  // Period over the transfer day in MSK (validated YYYY-MM-DD only).
+  const dayRe = /^\d{4}-\d{2}-\d{2}$/
+  if (filter.from && dayRe.test(filter.from)) {
+    params.push(filter.from)
+    conds.push(
+      `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date >= $${params.length}::date`,
+    )
+  }
+  if (filter.to && dayRe.test(filter.to)) {
+    params.push(filter.to)
+    conds.push(
+      `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date <= $${params.length}::date`,
+    )
   }
 
   const where = conds.join(' AND ')

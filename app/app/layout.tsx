@@ -15,6 +15,7 @@ const nav: NavItem[] = [
   { href: '/app', label: 'Обзор', icon: 'overview' },
   { href: '/app/connections', label: 'Подключения', icon: 'connections' },
   { href: '/app/inbox', label: 'Входящие', icon: 'inbox' },
+  { href: '/app/leads', label: 'Мои лиды', icon: 'managers' },
   { href: '/app/quick-replies', label: 'Автоответы', icon: 'quickReplies' },
   { href: '/app/autopilot', label: 'Автопилот', icon: 'autopilot' },
   { href: '/app/meetings', label: 'Видеовстречи', icon: 'telemost' },
