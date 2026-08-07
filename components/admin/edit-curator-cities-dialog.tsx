@@ -1,8 +1,8 @@
 'use client'
 
 /**
- * Admin: edit the list of cities a curator covers. Comma-separated input with
- * dictionary suggestions; the first city becomes the primary one shown in the
+ * Admin: edit the list of cities a curator covers. One field per city with
+ * dictionary suggestions; the first city is the primary one shown in the
  * curators table.
  */
 import { useState, useTransition } from 'react'
@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
-import { CityInput } from '@/components/shared/city-input'
+import { CityListInput } from '@/components/shared/city-list-input'
 import type { Manager } from '@/lib/types'
 
 export function EditCuratorCitiesDialog({
@@ -36,7 +36,7 @@ export function EditCuratorCitiesDialog({
   open: boolean
   onOpenChange: (o: boolean) => void
 }) {
-  const [value, setValue] = useState<string | null>(null)
+  const [value, setValue] = useState<string[] | null>(null)
   const [pending, startTransition] = useTransition()
 
   const { data: cities, mutate } = useSWR(
@@ -45,12 +45,22 @@ export function EditCuratorCitiesDialog({
     { revalidateOnFocus: false },
   )
 
+  // Until the admin edits, show the saved list (with legacy city fallback).
   const current =
-    value ?? (cities && cities.length > 0 ? cities.join(', ') : (curator.city ?? ''))
+    value ??
+    (cities && cities.length > 0
+      ? cities
+      : curator.city
+        ? [curator.city]
+        : [''])
+  const joined = current
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .join(', ')
 
   function save() {
     startTransition(async () => {
-      const res = await updateCuratorCityAction(curator.id, current)
+      const res = await updateCuratorCityAction(curator.id, joined)
       if (res.ok) {
         toast.success(res.message)
         await mutate()
@@ -77,20 +87,16 @@ export function EditCuratorCitiesDialog({
             Города куратора
           </DialogTitle>
           <DialogDescription>
-            {curator.name}: города через запятую, первый — основной.
+            {curator.name}: добавьте по одному городу на поле.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
           <Label htmlFor="curator-cities-input">Города</Label>
-          <CityInput
-            id="curator-cities-input"
-            value={current}
-            onValueChange={setValue}
-            placeholder="Москва, Казань"
+          <CityListInput
+            idPrefix="curator-cities-input"
+            cities={current}
+            onChange={setValue}
           />
-          <p className="text-xs text-muted-foreground">
-            Лиды подбираются по любому из указанных городов.
-          </p>
         </div>
         <DialogFooter>
           <DialogClose
@@ -100,7 +106,7 @@ export function EditCuratorCitiesDialog({
               </Button>
             }
           />
-          <Button onClick={save} disabled={pending || !current.trim()}>
+          <Button onClick={save} disabled={pending || joined.length === 0}>
             {pending ? (
               <>
                 <Loader2 className="size-4 animate-spin" />

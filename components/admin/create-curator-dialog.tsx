@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { CityInput } from '@/components/shared/city-input'
+import { CityListInput } from '@/components/shared/city-list-input'
 
 export function CreateCuratorDialog() {
   const [open, setOpen] = useState(false)
@@ -25,6 +25,7 @@ export function CreateCuratorDialog() {
   const [createdPassword, setCreatedPassword] = useState<string | null>(null)
   const [createdUsername, setCreatedUsername] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [cities, setCities] = useState<string[]>([''])
 
   function handleSubmit(formData: FormData) {
     startTransition(async () => {
@@ -43,6 +44,7 @@ export function CreateCuratorDialog() {
     setCreatedPassword(null)
     setCreatedUsername(null)
     setCopied(false)
+    setCities([''])
   }
 
   return (
@@ -124,7 +126,7 @@ export function CreateCuratorDialog() {
             <DialogHeader>
               <DialogTitle>Создать куратора</DialogTitle>
               <DialogDescription>
-                Добавьте куратора и укажите город, за который он отвечает.
+                Добавьте куратора и укажите города, за которые он отвечает.
               </DialogDescription>
             </DialogHeader>
             <div className="my-4 flex flex-col gap-4">
@@ -149,15 +151,13 @@ export function CreateCuratorDialog() {
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="curator-city">Города</Label>
-                <CityInput
-                  id="curator-city"
+                <CityListInput
+                  idPrefix="curator-city"
                   name="city"
-                  placeholder="Москва, Казань"
+                  cities={cities}
+                  onChange={setCities}
                   required
                 />
-                <p className="text-xs text-muted-foreground">
-                  Один или несколько городов через запятую. Первый — основной.
-                </p>
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="curator-username">
