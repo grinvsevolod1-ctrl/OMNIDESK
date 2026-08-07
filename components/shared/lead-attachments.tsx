@@ -7,7 +7,6 @@ import {
   attachLeadVideoNoteAction,
   deleteLeadAttachmentAction,
   listConversationVideoNotesAction,
-  uploadLeadAttachmentsAction,
   type LeadAttachmentView,
 } from '@/app/actions/lead-cards'
 import { Button } from '@/components/ui/button'
@@ -76,12 +75,37 @@ export function LeadAttachments({
     form.set('leadCardId', leadCardId)
     for (const f of files) form.append('files', f)
     startTransition(async () => {
-      const res = await uploadLeadAttachmentsAction(form)
-      if (res.ok && res.attachments) {
-        toast.success(res.message)
-        onChanged(res.attachments)
-      } else {
-        toast.error(res.message)
+      // Обычный fetch к API-роуту вместо server action: POST экшена с крупным
+      // видео режется прокси-слоями и падает с генерик-ошибкой «An unexpected
+      // response was received from the server». Роут отвечает честным JSON.
+      try {
+        const resp = await fetch('/api/lead-media/upload', {
+          method: 'POST',
+          body: form,
+        })
+        let res: {
+          ok?: boolean
+          message?: string
+          attachments?: LeadAttachmentView[]
+        } = {}
+        try {
+          res = (await resp.json()) as typeof res
+        } catch {
+          /* не-JSON ответ (обрезано прокси) — обработаем ниже по статусу */
+        }
+        if (resp.ok && res.ok && res.attachments) {
+          toast.success(res.message ?? 'Файлы прикреплены.')
+          onChanged(res.attachments)
+        } else {
+          toast.error(
+            res.message ??
+              (resp.status === 413
+                ? 'Файл слишком большой для сервера. Уменьшите видео или загрузите по одному.'
+                : 'Ошибка загрузки. Попробуйте ещё раз.'),
+          )
+        }
+      } catch {
+        toast.error('Сеть прервала загрузку. Проверьте соединение и попробуйте снова.')
       }
     })
   }

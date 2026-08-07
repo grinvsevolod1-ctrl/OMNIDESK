@@ -30,7 +30,6 @@ import {
   type ManagerLeadFilterStatus,
 } from '@/lib/data/lead-stats'
 import {
-  addLeadFileAttachment,
   addLeadVideoNoteAttachment,
   deleteLeadAttachment,
   getLeadAttachmentById,
@@ -39,10 +38,6 @@ import {
   type ConversationVideoNote,
   type LeadAttachment,
 } from '@/lib/data/lead-attachments'
-
-/** Лимиты вложений карточки: до 10 файлов за раз, до 50 МБ каждый. */
-const LEAD_ATTACHMENT_MAX_COUNT = 10
-const LEAD_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024
 
 /** Вложение + серверный флаг «можно удалить» (автор или админ). */
 export type LeadAttachmentView = LeadAttachment & { canDelete: boolean }
@@ -335,72 +330,9 @@ export async function listLeadAttachmentsAction(leadCardId: string) {
   return withCanDelete(session, await listLeadAttachments(leadCardId))
 }
 
-/** Загрузка фото/видео в карточку (FormData: files[]). Возвращает свежий список. */
-export async function uploadLeadAttachmentsAction(
-  form: FormData,
-): Promise<{ ok: boolean; message: string; attachments?: LeadAttachmentView[] }> {
-  const session = await getSession()
-  if (!session) return { ok: false, message: 'Не авторизовано.' }
-  const leadCardId = String(form.get('leadCardId') || '')
-  if (!leadCardId) return { ok: false, message: 'Нет карточки.' }
-
-  const card = await getLeadCardById(leadCardId)
-  if (!card || !canAccessLeadCard(session, card)) {
-    return { ok: false, message: 'Лид не найден.' }
-  }
-
-  const files = form.getAll('files').filter((f): f is File => f instanceof File)
-  if (files.length === 0) return { ok: false, message: 'Нет файлов.' }
-  if (files.length > LEAD_ATTACHMENT_MAX_COUNT) {
-    return {
-      ok: false,
-      message: `За раз можно до ${LEAD_ATTACHMENT_MAX_COUNT} файлов.`,
-    }
-  }
-
-  try {
-    if (session.role === 'curator') await assertCuratorNotLocked(session.sub)
-    for (const file of files) {
-      if (file.size === 0) continue
-      if (file.size > LEAD_ATTACHMENT_MAX_BYTES) {
-        return {
-          ok: false,
-          message: `Файл «${file.name}» больше ${Math.round(
-            LEAD_ATTACHMENT_MAX_BYTES / (1024 * 1024),
-          )} МБ.`,
-        }
-      }
-      const mime = file.type || 'application/octet-stream'
-      const isImage = mime.startsWith('image/')
-      const isVideo = mime.startsWith('video/')
-      if (!isImage && !isVideo) {
-        return {
-          ok: false,
-          message: `«${file.name}»: только фото или видео.`,
-        }
-      }
-      const bytes = Buffer.from(await file.arrayBuffer())
-      await addLeadFileAttachment({
-        leadCardId,
-        authorId: session.sub,
-        kind: isImage ? 'photo' : 'video',
-        bytes,
-        mime,
-        fileName: file.name || null,
-      })
-    }
-    revalidatePath('/curator')
-    revalidatePath('/app/leads')
-    const attachments = withCanDelete(
-      session,
-      await listLeadAttachments(leadCardId),
-    )
-    return { ok: true, message: 'Файлы прикреплены.', attachments }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Ошибка загрузки'
-    return { ok: false, message: msg }
-  }
-}
+// Загрузка фото/видео идёт через POST /api/lead-media/upload (route handler):
+// server action с крупным телом (видео) режется прокси-слоями до обработчика
+// и падает с генерик-ошибкой. Роут возвращает честный JSON и статус.
 
 /** Кружки (video_note) диалога по порядку — для выбора при закреплении. */
 export async function listConversationVideoNotesAction(
