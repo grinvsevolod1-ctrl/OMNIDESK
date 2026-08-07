@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { processDeadLetterQueue } from '@/lib/webhook-replay'
 import { pruneLoginBans } from '@/lib/data'
+import { cleanupOrphanedMediaBlobs } from '@/lib/data/media-archive'
 import { logServerError } from '@/lib/server-log'
 import { runWithRequestContext } from '@/lib/request-context'
 
@@ -49,7 +50,14 @@ async function handle(request: Request): Promise<Response> {
     // Piggyback cheap housekeeping on the same minute tick: drop expired login
     // bans so the table doesn't accumulate dead rows.
     const prunedBans = await pruneLoginBans()
-    return NextResponse.json({ ok: true, result, prunedBans })
+    // …и подчистить осиротевшие media_blobs (байты без единой ссылки из
+    // messages/message_edits/lead_attachments). Не критично для реплея —
+    // ошибка чистки не должна ронять весь тик.
+    const prunedBlobs = await cleanupOrphanedMediaBlobs().catch((err) => {
+      logServerError('cron.cleanup-media-blobs', err)
+      return 0
+    })
+    return NextResponse.json({ ok: true, result, prunedBans, prunedBlobs })
   } catch (error) {
     const errorId = logServerError('cron.retry-dead-letters', error)
     return NextResponse.json(

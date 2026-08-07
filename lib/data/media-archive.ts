@@ -292,3 +292,32 @@ export async function markInboundDeletedByProviderId(
   )
   return rows.map((r) => r.id)
 }
+
+/**
+ * Housekeeping: удалить осиротевшие media_blobs — строки, на которые больше не
+ * ссылается ни messages, ни message_edits, ни lead_attachments (все FK либо
+ * SET NULL, либо CASCADE, так что после удаления родителя байты повисают
+ * навсегда и копят гигабайты в БД).
+ *
+ * Осторожность: только блобы старше 24 часов (свежий блоб мог быть создан
+ * мгновение назад и ещё не привязан к сообщению — гонка с ingest), батч с
+ * LIMIT, чтобы не держать долгую блокировку. Вызывается piggyback'ом из
+ * минутного крона dead-letters. Все проверяющие столбцы покрыты частичными
+ * индексами (064, 077, 119), так что anti-join дешёвый.
+ */
+export async function cleanupOrphanedMediaBlobs(limit = 200): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `DELETE FROM media_blobs mb
+      WHERE mb.id IN (
+        SELECT b.id FROM media_blobs b
+         WHERE b.created_at < now() - interval '24 hours'
+           AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.media_blob_id = b.id)
+           AND NOT EXISTS (SELECT 1 FROM message_edits e WHERE e.media_blob_id = b.id)
+           AND NOT EXISTS (SELECT 1 FROM lead_attachments la WHERE la.media_blob_id = b.id)
+         LIMIT $1
+      )
+      RETURNING mb.id`,
+    [limit],
+  )
+  return rows.length
+}

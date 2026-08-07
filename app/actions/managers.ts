@@ -177,7 +177,17 @@ export async function createCuratorAction(
         username: created.username ?? undefined,
       }
     }
-    throw err
+    // Аккаунт уже создан (managers.city заполнен) — не роняем экшен digest'ом,
+    // а честно сообщаем, что мульти-город не сохранился и почему.
+    console.error('[v0] createCurator setCuratorCities failed:', err)
+    revalidatePath('/admin/managers')
+    revalidatePath('/admin')
+    return {
+      ok: true,
+      message: `Куратор ${name} (${cities[0]}) создан, но список городов не сохранён (${err instanceof Error ? err.message : 'ошибка базы данных'}). Откройте «Города» у куратора и сохраните повторно.`,
+      password,
+      username: created.username ?? undefined,
+    }
   }
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
@@ -269,7 +279,14 @@ export async function updateCuratorCityAction(
           'На сервере не применены миграции БД (таблицы городов ещё нет). Выполните pnpm db:migrate на VPS и повторите.',
       }
     }
-    throw err
+    // Любая другая ошибка БД (права, констрейнты, обрыв соединения): раньше
+    // здесь был `throw err`, и админ получал безликое digest-падение страницы.
+    // Возвращаем реальный текст — этот экшен доступен только админу.
+    console.error('[v0] updateCuratorCityAction failed:', err)
+    return {
+      ok: false,
+      message: `Не удалось сохранить города: ${err instanceof Error ? err.message : 'ошибка базы данных'}`,
+    }
   }
   revalidatePath('/admin/managers')
   revalidatePath('/admin/curators')
