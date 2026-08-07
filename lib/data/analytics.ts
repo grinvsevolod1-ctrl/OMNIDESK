@@ -5,6 +5,7 @@
  */
 import { cachedAnalytics } from '../analytics-cache'
 import { query } from '../db'
+import { mskDayKey } from '../time'
 import type {
   ChannelType,
   Conversation,
@@ -138,10 +139,15 @@ async function getLeadAnalyticsUncached(
          ${reasonScope} first_message_at >= now() - interval '7 days'`,
       params,
     ),
-    query<{ d: string | Date; n: string }>(
-      `SELECT date_trunc('day', first_message_at) AS d, count(*)::int AS n
+    query<{ d: string; n: string }>(
+      // Day buckets are computed in MSK and returned as text: date_trunc in
+      // the DB-server timezone + toISOString() in JS shifted the boundary a
+      // day back whenever the two zones disagreed (the workspace-lock bug).
+      `SELECT to_char(first_message_at AT TIME ZONE 'Europe/Moscow',
+                      'YYYY-MM-DD') AS d,
+              count(*)::int AS n
          FROM conversations
-         ${reasonScope} first_message_at >= now() - interval '6 days'
+         ${reasonScope} first_message_at >= now() - interval '7 days'
         GROUP BY 1
         ORDER BY 1`,
       params,
@@ -160,15 +166,13 @@ async function getLeadAnalyticsUncached(
 
   const dayMap = new Map<string, number>()
   for (const r of byDayRows) {
-    const key = new Date(r.d).toISOString().slice(0, 10)
-    dayMap.set(key, Number(r.n))
+    dayMap.set(r.d, Number(r.n))
   }
+  // Axis of the last 7 MSK calendar days (MSK has no DST, so -24h is safe).
   const byDay: { date: string; count: number }[] = []
+  const now = Date.now()
   for (let i = 6; i >= 0; i--) {
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    d.setDate(d.getDate() - i)
-    const key = d.toISOString().slice(0, 10)
+    const key = mskDayKey(new Date(now - i * 24 * 60 * 60 * 1000))
     byDay.push({ date: key, count: dayMap.get(key) ?? 0 })
   }
 
@@ -218,11 +222,14 @@ async function getMessengerAnalyticsUncached(
         GROUP BY mc.messenger`,
       params,
     ),
-    query<{ d: string | Date; messenger: ClickMessenger; n: string }>(
-      `SELECT date_trunc('day', mc.created_at) AS d, mc.messenger,
+    query<{ d: string; messenger: ClickMessenger; n: string }>(
+      // MSK day buckets as text — see the comment in getLeadAnalytics.
+      `SELECT to_char(mc.created_at AT TIME ZONE 'Europe/Moscow',
+                      'YYYY-MM-DD') AS d,
+              mc.messenger,
               count(*)::int AS n
          FROM messenger_clicks mc ${join}
-        WHERE mc.created_at >= now() - interval '6 days'
+        WHERE mc.created_at >= now() - interval '7 days'
         GROUP BY 1, 2
         ORDER BY 1`,
       params,
@@ -238,17 +245,14 @@ async function getMessengerAnalyticsUncached(
 
   const dayMap = new Map<string, { telegram: number; whatsapp: number }>()
   for (const r of byDayRows) {
-    const key = new Date(r.d).toISOString().slice(0, 10)
-    const cur = dayMap.get(key) ?? { telegram: 0, whatsapp: 0 }
+    const cur = dayMap.get(r.d) ?? { telegram: 0, whatsapp: 0 }
     cur[r.messenger] = Number(r.n)
-    dayMap.set(key, cur)
+    dayMap.set(r.d, cur)
   }
   const byDay: MessengerAnalytics['byDay'] = []
+  const now = Date.now()
   for (let i = 6; i >= 0; i--) {
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    d.setDate(d.getDate() - i)
-    const key = d.toISOString().slice(0, 10)
+    const key = mskDayKey(new Date(now - i * 24 * 60 * 60 * 1000))
     const v = dayMap.get(key) ?? { telegram: 0, whatsapp: 0 }
     byDay.push({ date: key, telegram: v.telegram, whatsapp: v.whatsapp })
   }

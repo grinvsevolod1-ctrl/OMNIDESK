@@ -9,7 +9,7 @@
  * - Every transfer is recorded in lead_transfers with name snapshots.
  */
 import { randomUUID } from 'crypto'
-import { query } from '../db'
+import { query, withTransaction, type DbExecutor } from '../db'
 import {
   isLeadStatus,
   type LeadStatus,
@@ -309,20 +309,32 @@ export interface LeadStatusHistoryEntry {
 }
 
 /** Record one status-history event. Never throws. */
-async function recordStatusHistory(input: {
-  leadCardId: string
-  curatorId: string | null
-  status: LeadStatus | null
-  reason: 'confirm' | 'transfer_reset'
-}): Promise<void> {
-  try {
-    await query(
+async function recordStatusHistory(
+  input: {
+    leadCardId: string
+    curatorId: string | null
+    status: LeadStatus | null
+    reason: 'confirm' | 'transfer_reset'
+  },
+  db?: DbExecutor,
+): Promise<void> {
+  const run = () =>
+    (db ?? { query }).query(
       `INSERT INTO lead_status_history (lead_card_id, curator_id, curator_name, status, reason)
        VALUES ($1, $2, (SELECT name FROM managers WHERE id = $2), $3, $4)`,
       [input.leadCardId, input.curatorId, input.status, input.reason],
     )
+  if (db) {
+    // Inside a transaction errors MUST propagate: a swallowed failure leaves
+    // the tx aborted (COMMIT would fail anyway), and атомарность «статус +
+    // история» — ровно то, ради чего транзакция и нужна.
+    await run()
+    return
+  }
+  try {
+    await run()
   } catch {
-    /* history must never break the main write */
+    /* best-effort outside transactions: history must not break the write */
   }
 }
 
@@ -353,15 +365,18 @@ export async function listLeadStatusHistory(
 }
 
 /** Record one transfer event with name snapshots. Never throws. */
-async function recordTransfer(input: {
-  leadCardId: string
-  fromCuratorId: string | null
-  toCuratorId: string
-  initiatedById: string | null
-  initiatedByRole: 'manager' | 'admin'
-}): Promise<void> {
-  try {
-    await query(
+async function recordTransfer(
+  input: {
+    leadCardId: string
+    fromCuratorId: string | null
+    toCuratorId: string
+    initiatedById: string | null
+    initiatedByRole: 'manager' | 'admin'
+  },
+  db?: DbExecutor,
+): Promise<void> {
+  const run = () =>
+    (db ?? { query }).query(
       `INSERT INTO lead_transfers
          (id, lead_card_id, from_curator_id, to_curator_id,
           from_curator_name, to_curator_name, initiated_by, initiated_by_role)
@@ -378,8 +393,15 @@ async function recordTransfer(input: {
         input.initiatedByRole,
       ],
     )
+  if (db) {
+    // See recordStatusHistory: inside a transaction errors must propagate.
+    await run()
+    return
+  }
+  try {
+    await run()
   } catch {
-    /* history must never break the transfer itself */
+    /* best-effort outside transactions: history must not break the transfer */
   }
 }
 
@@ -623,56 +645,73 @@ export async function upsertLeadCard(
   return { card, transferred: Boolean(curatorId), duplicateWarning }
 }
 
-/** Admin: (re)assign a lead to another active curator with a status reset. */
+/**
+ * Admin: (re)assign a lead to another active curator with a status reset.
+ *
+ * Runs as ONE transaction with a row lock on the lead: the UPDATE, the
+ * transfer record and the history entry either all land or none do. Without
+ * this, two admins transferring the same lead concurrently could both read
+ * the same `fromCuratorId` and write contradictory history, and a crash
+ * mid-way left a re-assigned lead with no trace in lead_transfers.
+ */
 export async function transferLeadToCurator(
   leadCardId: string,
   newCuratorId: string,
 ): Promise<LeadCard> {
-  const ok = await query<{ id: string }>(
-    `SELECT id FROM managers
-      WHERE id = $1 AND role = 'curator' AND status = 'active'
-      LIMIT 1`,
-    [newCuratorId],
-  )
-  if (!ok[0]) throw new Error('Curator not found or inactive')
+  const id = await withTransaction(async (db) => {
+    const ok = await db.query<{ id: string }>(
+      `SELECT id FROM managers
+        WHERE id = $1 AND role = 'curator' AND status = 'active'
+        LIMIT 1`,
+      [newCuratorId],
+    )
+    if (!ok[0]) throw new Error('Curator not found or inactive')
 
-  const prev = await query<{ curator_id: string | null }>(
-    `SELECT curator_id FROM lead_cards WHERE id = $1 LIMIT 1`,
-    [leadCardId],
-  )
-  if (!prev[0]) throw new Error('Лид не найден')
+    // Lock the row so a concurrent transfer serializes behind us and reads
+    // the curator we are about to set, not the stale one.
+    const prev = await db.query<{ curator_id: string | null }>(
+      `SELECT curator_id FROM lead_cards WHERE id = $1 FOR UPDATE`,
+      [leadCardId],
+    )
+    if (!prev[0]) throw new Error('Лид не найден')
 
-  const rows = await query<{ id: string }>(
-    `UPDATE lead_cards
-        SET curator_id = $2,
-            transferred_at = now(),
-            -- New curator must confirm status for today.
-            status = NULL,
-            previous_status = COALESCE(status, previous_status),
-            status_confirmed_at = NULL,
-            status_confirmed_date = NULL,
-            updated_at = now()
-      WHERE id = $1
-      RETURNING id`,
-    [leadCardId, newCuratorId],
-  )
-  if (!rows[0]) throw new Error('Лид не найден')
+    await db.query(
+      `UPDATE lead_cards
+          SET curator_id = $2,
+              transferred_at = now(),
+              -- New curator must confirm status for today.
+              status = NULL,
+              previous_status = COALESCE(status, previous_status),
+              status_confirmed_at = NULL,
+              status_confirmed_date = NULL,
+              updated_at = now()
+        WHERE id = $1`,
+      [leadCardId, newCuratorId],
+    )
 
-  await recordTransfer({
-    leadCardId,
-    fromCuratorId: prev[0].curator_id,
-    toCuratorId: newCuratorId,
-    initiatedById: null,
-    initiatedByRole: 'admin',
+    await recordTransfer(
+      {
+        leadCardId,
+        fromCuratorId: prev[0].curator_id,
+        toCuratorId: newCuratorId,
+        initiatedById: null,
+        initiatedByRole: 'admin',
+      },
+      db,
+    )
+    await recordStatusHistory(
+      {
+        leadCardId,
+        curatorId: newCuratorId,
+        status: null,
+        reason: 'transfer_reset',
+      },
+      db,
+    )
+    return leadCardId
   })
-  await recordStatusHistory({
-    leadCardId,
-    curatorId: newCuratorId,
-    status: null,
-    reason: 'transfer_reset',
-  })
 
-  const card = await getLeadCardById(rows[0].id)
+  const card = await getLeadCardById(id)
   if (!card) throw new Error('Lead transfer failed')
   return card
 }
@@ -698,51 +737,60 @@ export async function updateLeadStatus(input: {
     throw new Error('Некорректный статус')
   }
 
-  const existing = await query<{
-    id: string
-    curator_id: string | null
-    status: string | null
-    status_confirmed_date: string | Date | null
-  }>(
-    `SELECT id, curator_id, status, status_confirmed_date
-       FROM lead_cards WHERE id = $1 LIMIT 1`,
-    [input.leadCardId],
-  )
-  const row = existing[0]
-  if (!row) throw new Error('Лид не найден')
-  if (row.curator_id !== input.curatorId) {
-    throw new Error('Этот лид принадлежит другому куратору')
-  }
+  // One transaction with a row lock: the status write, the mandatory comment
+  // and the history entry land atomically. Curator discipline is computed
+  // from history+comments, so a partial write (status without comment) used
+  // to silently corrupt the discipline picture if the process died mid-way.
+  await withTransaction(async (db) => {
+    const existing = await db.query<{
+      id: string
+      curator_id: string | null
+      status: string | null
+      status_confirmed_date: string | Date | null
+    }>(
+      `SELECT id, curator_id, status, status_confirmed_date
+         FROM lead_cards WHERE id = $1 FOR UPDATE`,
+      [input.leadCardId],
+    )
+    const row = existing[0]
+    if (!row) throw new Error('Лид не найден')
+    if (row.curator_id !== input.curatorId) {
+      throw new Error('Этот лид принадлежит другому куратору')
+    }
 
-  const today = mskDayKey(new Date())
-  const prevDate = toDateOnly(row.status_confirmed_date)
-  const carryPrevious =
-    isLeadStatus(row.status) && prevDate && prevDate !== today
-      ? row.status
-      : null
+    const today = mskDayKey(new Date())
+    const prevDate = toDateOnly(row.status_confirmed_date)
+    const carryPrevious =
+      isLeadStatus(row.status) && prevDate && prevDate !== today
+        ? row.status
+        : null
 
-  await query(
-    `UPDATE lead_cards
-        SET previous_status = COALESCE($3, previous_status),
-            status = $2,
-            status_confirmed_at = now(),
-            status_confirmed_date = $4::date,
-            updated_at = now()
-      WHERE id = $1`,
-    [input.leadCardId, input.status, carryPrevious, today],
-  )
+    await db.query(
+      `UPDATE lead_cards
+          SET previous_status = COALESCE($3, previous_status),
+              status = $2,
+              status_confirmed_at = now(),
+              status_confirmed_date = $4::date,
+              updated_at = now()
+        WHERE id = $1`,
+      [input.leadCardId, input.status, carryPrevious, today],
+    )
 
-  await query(
-    `INSERT INTO lead_card_comments (id, lead_card_id, author_id, author_name, body, status)
-     VALUES ($1, $2, $3, (SELECT name FROM managers WHERE id = $3), $4, $5)`,
-    [randomUUID(), input.leadCardId, input.curatorId, comment, input.status],
-  )
+    await db.query(
+      `INSERT INTO lead_card_comments (id, lead_card_id, author_id, author_name, body, status)
+       VALUES ($1, $2, $3, (SELECT name FROM managers WHERE id = $3), $4, $5)`,
+      [randomUUID(), input.leadCardId, input.curatorId, comment, input.status],
+    )
 
-  await recordStatusHistory({
-    leadCardId: input.leadCardId,
-    curatorId: input.curatorId,
-    status: input.status,
-    reason: 'confirm',
+    await recordStatusHistory(
+      {
+        leadCardId: input.leadCardId,
+        curatorId: input.curatorId,
+        status: input.status,
+        reason: 'confirm',
+      },
+      db,
+    )
   })
 
   const card = await getLeadCardById(input.leadCardId)

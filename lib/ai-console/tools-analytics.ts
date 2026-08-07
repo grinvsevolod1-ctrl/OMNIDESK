@@ -25,6 +25,7 @@ import {
   type CuratorDisciplineHistory,
 } from '@/lib/data/lead-cards'
 import { LEAD_STATUS_LABELS, isLeadStatus } from '@/lib/lead-status'
+import { mskDayKey } from '@/lib/time'
 import type { AssistantReport } from './assistant'
 import type { RunState } from './run-state'
 
@@ -127,7 +128,8 @@ export function analyticsTools(state: RunState) {
             countLessons(),
             countManualCorrections(),
           ])
-        const today = new Date().toISOString().slice(0, 10)
+        // MSK, not UTC: before 03:00 MSK the UTC date is still «yesterday».
+        const today = mskDayKey(new Date())
 
         let report: AssistantReport
         if (fmt === 'csv') {
@@ -327,7 +329,8 @@ async function exportCuratorReport(state: RunState, fmt: 'md' | 'csv') {
     listAllTransferredLeads({ limit: 1000 }),
     listAllTransferredLeads({ orphanedOnly: true, limit: 1 }),
   ])
-  const today = new Date().toISOString().slice(0, 10)
+  // MSK, not UTC: before 03:00 MSK the UTC date is still «yesterday».
+  const today = mskDayKey(new Date())
   const statusLabel = (s: string | null) =>
     isLeadStatus(s) ? LEAD_STATUS_LABELS[s] : 'Не указан'
 
