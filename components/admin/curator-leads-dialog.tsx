@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import useSWR from 'swr'
 import {
   ArrowRightLeft,
@@ -142,6 +142,24 @@ export function CuratorLeadsDialog({
   )
   const detail: { card: LeadCard; comments: LeadCardComment[] } | null =
     selectedId && detailData ? detailData : null
+
+  // Escape closes the modal (custom overlay, so no built-in dialog handling).
+  // On mobile the detail view sits on top of the list, so a first Escape steps
+  // back to the list and a second one closes the whole modal.
+  useEffect(() => {
+    if (!open) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      if (selectedId) {
+        setSelectedId(null)
+      } else {
+        onOpenChange(false)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [open, selectedId, onOpenChange])
 
   function transfer(leadId: string, toCuratorId: string) {
     startTransition(async () => {
