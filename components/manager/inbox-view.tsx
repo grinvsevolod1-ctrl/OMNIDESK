@@ -16,8 +16,6 @@ import { markConversationReadAction } from '@/app/actions/account'
 import {
   toggleConversationAiAction,
   acknowledgeAiHandoffAction,
-  loadOlderMessagesAction,
-  loadThreadMessagesAction,
 } from '@/app/actions/messages'
 import {
   dismissReplyReminderAction,
@@ -62,6 +60,8 @@ import { AiHandoffBanner } from '@/components/manager/inbox/ai-handoff-banner'
 import { ThreadHeader } from '@/components/manager/inbox/thread-header'
 import { MessageList } from '@/components/manager/inbox/message-list'
 import { ComposerBanners } from '@/components/manager/inbox/composer-banners'
+import { useReplyReminder } from '@/components/manager/inbox/use-reply-reminder'
+import { useThreadHistory } from '@/components/manager/inbox/use-thread-history'
 import { useThreadScroll } from '@/components/manager/inbox/use-thread-scroll'
 import { useMessageActions } from '@/components/manager/inbox/use-message-actions'
 
@@ -209,13 +209,6 @@ export function InboxView({
     Record<string, Message[]>
   >(messagesByConversation)
 
-  // "Load older messages" state. Threads hydrate with only the most-recent
-  // slice (see MESSAGE_HISTORY_LIMIT server-side); this lets a manager pull
-  // older history on demand. `noOlder` marks threads with nothing left to load;
-  // the scroll container ref preserves the reading position across a prepend.
-  const [loadingOlder, setLoadingOlder] = useState(false)
-  const [noOlder, setNoOlder] = useState<Record<string, boolean>>({})
-
   // Optimistic "no reply needed" dismissals (conversationId -> dismissal time in
   // ms). Lets the badge/sorting update instantly before the server round-trip,
   // and is merged with the persisted `replyDismissedAt` from the server.
@@ -246,19 +239,7 @@ export function InboxView({
   // Whether to reveal muted/silenced threads in the list (hidden by default).
   const [showMuted, setShowMuted] = useState(false)
 
-  // Latest values for the reminder interval to read without re-subscribing, plus
-  // a per-conversation throttle so we never spam the same unanswered thread.
-  const reminderRef = useRef<{
-    conversations: Conversation[]
-    awaiting: Map<string, { waiting: boolean; since: number }>
-    activeId: string | null
-    lastReminded: Map<string, number>
-  }>({
-    conversations: [],
-    awaiting: new Map(),
-    activeId: null,
-    lastReminded: new Map(),
-  })
+
 
   // Realtime: single /api/stream subscription + typing/presence state, patching
   // in-place message changes locally and debouncing everything else into one
@@ -380,56 +361,13 @@ export function InboxView({
     [conversations, isMuted],
   )
 
-  // Keep the reminder interval's snapshot fresh. Writing to the ref in an effect
-  // (instead of during render) keeps this a proper post-render side-effect.
-  useEffect(() => {
-    reminderRef.current.conversations = conversations
-    reminderRef.current.awaiting = awaitingReply
-    reminderRef.current.activeId = activeId
-  }, [conversations, awaitingReply, activeId])
-
-  // Periodic nudge: if a contact's last message has gone unanswered for a while
-  // and the manager isn't currently looking at that thread, pop a reminder toast.
-  // Throttled per conversation so it nudges instead of nagging non-stop.
-  useEffect(() => {
-    const REMIND_AFTER_MS = 90_000 // grace period before the first nudge
-    const REMIND_COOLDOWN_MS = 180_000 // re-nudge the same thread at most this often
-    const TICK_MS = 30_000
-
-    const tick = () => {
-      if (typeof document !== 'undefined' && document.hidden) return
-      const { conversations, awaiting, activeId, lastReminded } =
-        reminderRef.current
-      const now = Date.now()
-      let pick: { id: string; name: string; since: number } | null = null
-      for (const c of conversations) {
-        if (c.id === activeId) continue // already on screen — no need to nag
-        const a = awaiting.get(c.id)
-        if (!a || !a.waiting) continue
-        if (now - a.since < REMIND_AFTER_MS) continue
-        if (now - (lastReminded.get(c.id) ?? 0) < REMIND_COOLDOWN_MS) continue
-        // Surface the longest-waiting thread first.
-        if (!pick || a.since < pick.since) {
-          pick = { id: c.id, name: c.contactName, since: a.since }
-        }
-      }
-      if (!pick) return
-      reminderRef.current.lastReminded.set(pick.id, now)
-      const waitedMin = Math.max(1, Math.round((now - pick.since) / 60_000))
-      const picked = pick
-      toast.warning(`Чувак, ты не ответил: ${picked.name}`, {
-        description: `Сообщение ждёт ответа уже ${waitedMin} мин. Может, поднимешь жопу?`,
-        duration: 10_000,
-        action: {
-          label: 'Открыть',
-          onClick: () => setActiveId(picked.id),
-        },
-      })
-    }
-
-    const timer = setInterval(tick, TICK_MS)
-    return () => clearInterval(timer)
-  }, [])
+  // Periodic "you have not replied" toast for waiting threads (see hook).
+  const { snoozeReminder } = useReplyReminder({
+    conversations,
+    awaitingReply,
+    activeId,
+    onOpen: setActiveId,
+  })
 
   const filtered = useMemo(
     () =>
@@ -578,7 +516,7 @@ export function InboxView({
       return next
     })
     // Don't nag again about a thread we just dismissed.
-    reminderRef.current.lastReminded.set(conversationId, Date.now())
+    snoozeReminder(conversationId)
     startStatusTransition(async () => {
       const res = await dismissReplyReminderAction(conversationId, clear)
       if (!res.ok) {
@@ -601,7 +539,7 @@ export function InboxView({
   // notifications and are hidden from the default list.
   function toggleMute(conversationId: string, muted: boolean) {
     setMutedOverrides((prev) => ({ ...prev, [conversationId]: muted }))
-    if (muted) reminderRef.current.lastReminded.set(conversationId, Date.now())
+    if (muted) snoozeReminder(conversationId)
     startStatusTransition(async () => {
       const res = await setConversationMutedAction(conversationId, muted)
       if (!res.ok) {
@@ -701,56 +639,11 @@ export function InboxView({
     })
   }
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLocalMessages(messagesByConversation)
-    // The fresh props carry only the most-recent slice again, so any previously
-    // loaded older history is gone — reset the "nothing older" flags so the
-    // load-older control reappears where applicable.
-    setNoOlder({})
-  }, [messagesByConversation])
-
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
     [conversations, activeId],
   )
   const thread = activeId ? (localMessages[activeId] ?? []) : []
-
-  // Lazy hydration for threads outside the SSR preload slice: a missing key in
-  // the map means "transcript not shipped yet" (an empty array means a genuinely
-  // empty thread). First open fetches the recent history once.
-  const [threadLoading, setThreadLoading] = useState(false)
-  const hydratingRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!activeId || activeId in localMessages) return
-    if (hydratingRef.current === activeId) return
-    hydratingRef.current = activeId
-    setThreadLoading(true)
-    void loadThreadMessagesAction(activeId)
-      .then((res) => {
-        if (hydratingRef.current !== activeId) return
-        setLocalMessages((prev) => {
-          // An optimistic send may have created the key mid-flight — merge
-          // the fetched history UNDER those messages instead of dropping it.
-          const existing = prev[activeId]
-          if (!existing || existing.length === 0)
-            return { ...prev, [activeId]: res.ok ? res.messages : [] }
-          if (!res.ok) return prev
-          const known = new Set(existing.map((m) => m.id))
-          const older = res.messages.filter((m) => !known.has(m.id))
-          return older.length === 0
-            ? prev
-            : { ...prev, [activeId]: [...older, ...existing] }
-        })
-      })
-      .catch(() => toast.error('Не удалось загрузить переписку'))
-      .finally(() => {
-        if (hydratingRef.current === activeId) {
-          hydratingRef.current = null
-          setThreadLoading(false)
-        }
-      })
-  }, [activeId, localMessages])
 
   // Is the AI currently leading the open thread? Under global-lead mode the AI
   // leads whenever the master switch is on AND the thread isn't paused. An
@@ -788,39 +681,23 @@ export function InboxView({
     activeTypingDraft,
   })
 
-  const handleLoadOlder = useCallback(async () => {
-    if (!activeId || loadingOlder) return
-    const current = localMessages[activeId] ?? []
-    const oldest = current[0]
-    if (!oldest) return
-    setLoadingOlder(true)
-    const container = messagesScrollRef.current
-    const prevHeight = container?.scrollHeight ?? 0
-    try {
-      const before = new Date(oldest.createdAt).toISOString()
-      const res = await loadOlderMessagesAction(activeId, before)
-      if (res.ok && res.messages.length > 0) {
-        setLocalMessages((prev) => {
-          const existing = prev[activeId] ?? []
-          const known = new Set(existing.map((m) => m.id))
-          const older = res.messages.filter((m) => !known.has(m.id))
-          if (older.length === 0) return prev
-          return { ...prev, [activeId]: [...older, ...existing] }
-        })
-        // Keep the viewport anchored to the same message after older ones are
-        // prepended above it (otherwise the list would jump to the top).
-        requestAnimationFrame(() => {
-          const c = messagesScrollRef.current
-          if (c) c.scrollTop = c.scrollHeight - prevHeight
-        })
-      }
-      if (!res.hasMore) setNoOlder((p) => ({ ...p, [activeId]: true }))
-    } catch {
-      toast.error('Не удалось загрузить историю')
-    } finally {
-      setLoadingOlder(false)
-    }
-  }, [activeId, loadingOlder, localMessages, messagesScrollRef])
+  // Lazy thread hydration + on-demand older-history loading (see hook).
+  const { threadLoading, loadingOlder, noOlder, setNoOlder, handleLoadOlder } =
+    useThreadHistory({
+      activeId,
+      localMessages,
+      setLocalMessages,
+      messagesScrollRef,
+    })
+
+  // Fresh props replace the local message cache wholesale. They carry only the
+  // most-recent slice again, so any previously loaded older history is gone —
+  // reset the "nothing older" flags so the load-older control reappears.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLocalMessages(messagesByConversation)
+    setNoOlder({})
+  }, [messagesByConversation, setNoOlder])
 
   // Live "visitor is typing" state for the open thread (auto-expired by sweep).
   const activeTyping =
