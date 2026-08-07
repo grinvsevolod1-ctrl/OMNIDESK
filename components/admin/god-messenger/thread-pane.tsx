@@ -29,7 +29,6 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
-import { LeadCardPanel } from '@/components/manager/inbox/lead-card-panel'
 import { TYPE_LABEL, initials, isComposing } from './utils'
 import { MessageBubble } from './message-bubble'
 import { snippetOf } from './reply'
@@ -209,17 +208,6 @@ export function ThreadPane({
                 Менеджер: {managerNameOf(conversation.managerId)}
               </p>
             </div>
-            <LeadCardPanel
-              conversationId={conversation.id}
-              defaults={{
-                fullName: conversation.contactName || '',
-                phone:
-                  conversation.channelType === 'whatsapp' ||
-                  conversation.channelType === 'telegram'
-                    ? conversation.contactHandle
-                    : undefined,
-              }}
-            />
           </header>
 
           <div
