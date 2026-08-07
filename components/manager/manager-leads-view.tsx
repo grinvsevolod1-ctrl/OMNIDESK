@@ -1,6 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
 import {
   ArrowRightLeft,
   CalendarDays,
@@ -134,10 +141,10 @@ export function ManagerLeadsView({
   // Refetch whenever the resolved period or the status filter changes.
   // The very first render already has server-fetched data for the default
   // «7 дней» window — skip the redundant round-trip.
-  const [hydrated, setHydrated] = useState(false)
+  const hydratedRef = useRef(false)
   useEffect(() => {
-    if (!hydrated) {
-      setHydrated(true)
+    if (!hydratedRef.current) {
+      hydratedRef.current = true
       return
     }
     reload(0)
