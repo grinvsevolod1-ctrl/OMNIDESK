@@ -3,6 +3,8 @@ import {
   sendVkMediaAction,
   sendWhatsappMediaAction,
 } from '@/app/actions/account'
+import { getSession } from '@/lib/auth'
+import { rateLimit } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 // Files stream to the provider (WhatsApp Graph / VK) through the account's
@@ -21,6 +23,27 @@ export const maxDuration = 120
  * FormData: conversationId, channel ('whatsapp'|'vk'), file, caption?
  */
 export async function POST(req: Request): Promise<NextResponse> {
+  // Ранний auth-чек до чтения тела: неавторизованный запрос не заставит сервер
+  // парсить многомегабайтную форму. Полная проверка владения — внутри экшенов.
+  const session = await getSession()
+  if (!session) {
+    return NextResponse.json(
+      { ok: false, message: 'Не авторизовано.' },
+      { status: 401 },
+    )
+  }
+  // Анти-абьюз: не даём слать крупные файлы в цикле (40 отправок за 10 минут).
+  const guard = await rateLimit(`chat-upload:${session.sub}`, 40, 10 * 60_000)
+  if (!guard.allowed) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: `Слишком много отправок подряд. Повторите через ${Math.ceil(guard.retryAfterSec / 60)} мин.`,
+      },
+      { status: 429 },
+    )
+  }
+
   let form: FormData
   try {
     form = await req.formData()

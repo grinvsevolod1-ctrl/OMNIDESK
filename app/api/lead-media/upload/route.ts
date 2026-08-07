@@ -8,6 +8,7 @@ import {
 import { countLeadsNeedingStatus } from '@/lib/data/lead-discipline'
 import { isPastDailyDeadline } from '@/lib/lead-status'
 import { mskDayKey } from '@/lib/time'
+import { rateLimit } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 // Загрузка всегда идёт с формой пользователя — кэшировать нечего.
@@ -33,6 +34,16 @@ function json(status: number, body: { ok: boolean; message: string; attachments?
 export async function POST(req: Request) {
   const session = await getSession()
   if (!session) return json(401, { ok: false, message: 'Не авторизовано.' })
+
+  // Анти-абьюз: даже валидный аккаунт не может заливать 50-МБ файлы в цикле
+  // и забивать диск. 30 запросов (до 300 файлов) за 10 минут — за глаза.
+  const guard = await rateLimit(`lead-upload:${session.sub}`, 30, 10 * 60_000)
+  if (!guard.allowed) {
+    return json(429, {
+      ok: false,
+      message: `Слишком много загрузок подряд. Повторите через ${Math.ceil(guard.retryAfterSec / 60)} мин.`,
+    })
+  }
 
   let form: FormData
   try {
