@@ -310,6 +310,10 @@ export function OsShell({
     )
   }, [])
 
+  // Стабильная ссылка для мемоизированных строк ленты: инлайн-лямбда ломала
+  // бы memo(ShellMessageRow) — каждый delta-кадр перерендеривал бы ВСЕ пузыри.
+  const sendCommand = useCallback((prompt: string) => void send(prompt), [send])
+
   /* ---------------------------- shortcuts ----------------------------- */
 
   useEffect(() => {
@@ -596,7 +600,7 @@ export function OsShell({
               onConfirm={confirm}
               onCancelPending={cancelPending}
               confirmBusy={confirmBusy}
-              onCommand={(prompt) => void send(prompt)}
+              onCommand={sendCommand}
             />
           ))
         )}
@@ -606,76 +610,81 @@ export function OsShell({
       {/* Command field */}
       <div className="z-20 shrink-0 border-t border-border bg-background/70 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150">
         <form
-          className="mx-auto flex w-full max-w-4xl items-end gap-2 px-4 py-3"
+          className="mx-auto w-full max-w-4xl px-4 py-3"
           onSubmit={(e) => {
             e.preventDefault()
             void send(input)
           }}
         >
-          <div className="relative flex-1">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value)
-                // Auto-grow up to max-h; collapse back when text shrinks.
-                e.target.style.height = 'auto'
-                e.target.style.height = `${Math.min(e.target.scrollHeight, 176)}px`
-              }}
-              onKeyDown={(e) => {
-                if (
-                  e.key === 'Enter' &&
-                  !e.shiftKey &&
-                  !e.nativeEvent.isComposing &&
-                  e.keyCode !== 229
-                ) {
-                  e.preventDefault()
-                  void send(input)
-                }
-              }}
-              rows={1}
-              placeholder="Скомандуйте…"
-              aria-label="Командное поле"
-              className="od-command-glow max-h-44 min-h-[56px] w-full resize-none rounded-2xl border border-input bg-card/70 px-5 py-4 text-base leading-snug text-foreground placeholder:text-muted-foreground/60 backdrop-blur-sm focus:outline-none sm:placeholder:text-transparent"
-            />
-            {/* Desktop-only rich hint. Pure CSS (no JS/hydration dependency):
-                the native placeholder stays short so it can never wrap or
-                clip on narrow screens; on sm+ it turns transparent and this
-                overlay shows the full example instead. */}
-            {input === '' ? (
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 left-5 right-5 hidden items-center truncate text-base leading-snug text-muted-foreground/60 sm:flex"
+          {/* Единая капсула в духе iMessage/Siri: поле и кнопки живут ВНУТРИ
+              одного стеклянного контейнера — выравнивание идеально по
+              построению, кнопкам физически некуда «уехать». */}
+          <div className="od-command-glow flex items-end gap-1.5 rounded-[28px] border border-input bg-card/70 py-2 pl-5 pr-2 backdrop-blur-sm">
+            <div className="relative min-w-0 flex-1">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  // Auto-grow up to max-h; collapse back when text shrinks.
+                  e.target.style.height = 'auto'
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 176)}px`
+                }}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === 'Enter' &&
+                    !e.shiftKey &&
+                    !e.nativeEvent.isComposing &&
+                    e.keyCode !== 229
+                  ) {
+                    e.preventDefault()
+                    void send(input)
+                  }
+                }}
+                rows={1}
+                placeholder="Скомандуйте…"
+                aria-label="Командное поле"
+                className="max-h-44 min-h-10 w-full resize-none bg-transparent py-2 text-base leading-snug text-foreground placeholder:text-muted-foreground/60 focus:outline-none sm:placeholder:text-transparent"
+              />
+              {/* Desktop-only rich hint. Pure CSS (no JS/hydration dependency):
+                  the native placeholder stays short so it can never wrap or
+                  clip on narrow screens; on sm+ it turns transparent and this
+                  overlay shows the full example instead. */}
+              {input === '' ? (
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 hidden items-center truncate text-base leading-snug text-muted-foreground/60 sm:flex"
+                >
+                  {'Скомандуйте: «покажи сводку», «создай менеджера»…  (⌘K)'}
+                </span>
+              ) : null}
+            </div>
+            {voiceSupported ? (
+              <Button
+                type="button"
+                size="icon"
+                variant={listening ? 'destructive' : 'ghost'}
+                onClick={toggleVoice}
+                aria-label={listening ? 'Остановить запись' : 'Голосовой ввод'}
+                aria-pressed={listening}
+                className={cn(
+                  'press-scale size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground',
+                  listening && 'animate-pulse',
+                )}
               >
-                {'Скомандуйте: «покажи сводку», «создай менеджера»…  (⌘K)'}
-              </span>
+                <Mic className="size-5" />
+              </Button>
             ) : null}
-          </div>
-          {voiceSupported ? (
             <Button
-              type="button"
+              type="submit"
               size="icon"
-              variant={listening ? 'destructive' : 'outline'}
-              onClick={toggleVoice}
-              aria-label={listening ? 'Остановить запись' : 'Голосовой ввод'}
-              aria-pressed={listening}
-              className={cn(
-                'press-scale size-[56px] shrink-0 rounded-2xl',
-                listening && 'animate-pulse',
-              )}
+              disabled={busy || !input.trim()}
+              aria-label="Отправить"
+              className="press-scale size-10 shrink-0 rounded-full disabled:opacity-35"
             >
-              <Mic className="size-5" />
+              <ArrowUp className="size-5" />
             </Button>
-          ) : null}
-          <Button
-            type="submit"
-            size="icon"
-            disabled={busy || !input.trim()}
-            aria-label="Отправить"
-            className="press-scale size-[56px] shrink-0 rounded-2xl"
-          >
-            <ArrowUp className="size-5" />
-          </Button>
+          </div>
         </form>
       </div>
 

@@ -5,6 +5,7 @@
  * confirmation card for guarded actions, and the report download button.
  */
 
+import { memo } from 'react'
 import { Check, Command, FileDown, ShieldAlert, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -26,7 +27,14 @@ import type { ShellInsight } from '@/lib/admin-console/insights'
 import type { ShellMessage } from './chat-types'
 import { DataViewPanel } from './data-views'
 
-export function ShellMessageRow({
+/**
+ * Мемоизировано: при стриминге ответа каждый delta-кадр обновляет state и
+ * перерендеривает список — memo отсекает все строки, кроме той, что реально
+ * печатается. На длинном диалоге это разница между «летает» и «вязнет».
+ * content-visibility добавляет то же на уровне отрисовки: оффскрин-пузыри
+ * браузер не раскладывает вообще.
+ */
+export const ShellMessageRow = memo(function ShellMessageRow({
   message,
   onConfirm,
   onCancelPending,
@@ -43,6 +51,7 @@ export function ShellMessageRow({
   const isUser = message.role === 'user'
   return (
     <div
+      style={{ contentVisibility: 'auto' }}
       className={cn(
         'flex flex-col gap-2 duration-300 animate-in fade-in slide-in-from-bottom-2',
         isUser ? 'items-end' : 'items-start',
@@ -112,7 +121,7 @@ export function ShellMessageRow({
       ) : null}
     </div>
   )
-}
+})
 
 /* ----------------------------- receipts ----------------------------- */
 
