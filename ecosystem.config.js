@@ -219,6 +219,21 @@ module.exports = {
         NODE_ENV: 'production',
       },
     },
+    {
+      // Weekly VACUUM ANALYZE on the hot tables (scripts/db-vacuum-analyze.mjs)
+      // so the query planner keeps fresh statistics and keeps choosing the
+      // composite indexes. Plain VACUUM takes no exclusive locks — safe on a
+      // live database. Sundays 04:30 — an hour after the nightly backup.
+      name: 'omnidesk-db-vacuum',
+      script: 'scripts/db-vacuum-analyze.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '30 4 * * 0',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
     // NOTE: the former `omnidesk-log-reporter` process (scripts/log-reporter.mjs,
     // which pushed runtime reports to a dedicated `runtime-logs` git branch) was
     // REMOVED deliberately. Its constant commits/pushes and its participation in
