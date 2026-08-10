@@ -164,6 +164,28 @@ export async function markRetryFailed(
   )
 }
 
+/**
+ * Housekeeping: удалить отработанные dead-letters, чтобы таблица не пухла
+ * годами. resolved — сообщение давно доставлено, строка бесполезна через
+ * 7 дней; failed — оставляем 30 дней на разбирательство (видны в god-панели),
+ * потом удаляем. pending не трогаем никогда. Батч с LIMIT — без долгих
+ * блокировок на живой таблице.
+ */
+export async function pruneDeadLetters(limit = 500): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `DELETE FROM webhook_dead_letter
+      WHERE id IN (
+        SELECT id FROM webhook_dead_letter
+         WHERE (status = 'resolved' AND updated_at < now() - interval '7 days')
+            OR (status = 'failed'   AND updated_at < now() - interval '30 days')
+         LIMIT $1
+      )
+      RETURNING id`,
+    [limit],
+  )
+  return rows.length
+}
+
 /** Counts for the god panel / health metrics. */
 export async function getDeadLetterStats(): Promise<{
   pending: number

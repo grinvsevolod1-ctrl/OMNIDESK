@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { processDeadLetterQueue } from '@/lib/webhook-replay'
 import { pruneLoginBans } from '@/lib/data'
 import { cleanupOrphanedMediaBlobs } from '@/lib/data/media-archive'
+import { pruneDeadLetters } from '@/lib/data/webhook-dead-letter'
 import { logServerError } from '@/lib/server-log'
 import { runWithRequestContext } from '@/lib/request-context'
 
@@ -57,7 +58,19 @@ async function handle(request: Request): Promise<Response> {
       logServerError('cron.cleanup-media-blobs', err)
       return 0
     })
-    return NextResponse.json({ ok: true, result, prunedBans, prunedBlobs })
+    // …и отработанные dead-letters: resolved старше 7 дней, failed старше
+    // 30 дней (pending не трогаются). Без этого таблица растёт вечно.
+    const prunedDeadLetters = await pruneDeadLetters().catch((err) => {
+      logServerError('cron.prune-dead-letters', err)
+      return 0
+    })
+    return NextResponse.json({
+      ok: true,
+      result,
+      prunedBans,
+      prunedBlobs,
+      prunedDeadLetters,
+    })
   } catch (error) {
     const errorId = logServerError('cron.retry-dead-letters', error)
     return NextResponse.json(
