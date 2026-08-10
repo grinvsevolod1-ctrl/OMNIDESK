@@ -473,14 +473,15 @@ export function OsShell({
 
   return (
     <div className="od-os flex h-dvh flex-col overflow-hidden bg-background text-foreground">
-      {/* Ambient glow — pure decoration, kept subtle. */}
+      {/* Ambient light — a soft breathing top glow, like the desktop wallpaper
+          bleeding through macOS glass. Pure CSS, zero JS cost. */}
       <div
         aria-hidden="true"
-        className="pointer-events-none fixed inset-x-0 top-0 h-64 bg-gradient-to-b from-primary/10 to-transparent"
+        className="od-ambient pointer-events-none fixed inset-x-0 top-0 h-72 bg-gradient-to-b from-primary/10 to-transparent"
       />
 
       {/* Titlebar */}
-      <header className="z-20 shrink-0 border-b border-border bg-background/80 backdrop-blur-md">
+      <header className="z-20 shrink-0 border-b border-border bg-background/70 backdrop-blur-xl backdrop-saturate-150">
         <div className="mx-auto flex h-12 w-full max-w-4xl items-center gap-3 px-4">
           <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">
             Omnidesk OS
@@ -574,7 +575,7 @@ export function OsShell({
               onInsight={(prompt) => void send(prompt)}
               onDismissInsights={dismissInsights}
             />
-            <div className="flex flex-wrap justify-center gap-2">
+            <div className="od-rise od-rise-4 flex flex-wrap justify-center gap-2">
               {dictionaries.shellQuickCommands.map((c) => (
                 <button
                   key={c.label}
@@ -603,7 +604,7 @@ export function OsShell({
       </div>
 
       {/* Command field */}
-      <div className="z-20 shrink-0 border-t border-border bg-background/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-md">
+      <div className="z-20 shrink-0 border-t border-border bg-background/70 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150">
         <form
           className="mx-auto flex w-full max-w-4xl items-end gap-2 px-4 py-3"
           onSubmit={(e) => {
@@ -635,7 +636,7 @@ export function OsShell({
               rows={1}
               placeholder="Скомандуйте…"
               aria-label="Командное поле"
-              className="max-h-44 min-h-[56px] w-full resize-none rounded-2xl border border-input bg-card/70 px-5 py-4 text-base leading-snug text-foreground placeholder:text-muted-foreground/60 backdrop-blur-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-ring sm:placeholder:text-transparent"
+              className="od-command-glow max-h-44 min-h-[56px] w-full resize-none rounded-2xl border border-input bg-card/70 px-5 py-4 text-base leading-snug text-foreground placeholder:text-muted-foreground/60 backdrop-blur-sm focus:outline-none sm:placeholder:text-transparent"
             />
             {/* Desktop-only rich hint. Pure CSS (no JS/hydration dependency):
                 the native placeholder stays short so it can never wrap or

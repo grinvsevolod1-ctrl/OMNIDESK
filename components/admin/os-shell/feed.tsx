@@ -52,8 +52,8 @@ export function ShellMessageRow({
         className={cn(
           'max-w-[92%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed sm:max-w-[80%]',
           isUser
-            ? 'rounded-tr-sm bg-primary text-primary-foreground'
-            : 'rounded-tl-sm border border-border bg-card/70 text-foreground backdrop-blur-sm',
+            ? 'rounded-tr-sm bg-primary text-primary-foreground shadow-[0_2px_12px_rgb(0_0_0/0.25)]'
+            : 'od-glass rounded-tl-sm text-foreground',
         )}
       >
         {message.content ? (
@@ -249,13 +249,11 @@ export function ShellHero({
 }) {
   const hasProblems = insights.length > 0
   return (
-    <div className="flex flex-col items-center gap-6 py-14 text-center duration-500 animate-in fade-in sm:py-20">
+    <div className="flex flex-col items-center gap-6 py-14 text-center sm:py-20">
       <span
         className={cn(
-          'flex size-16 items-center justify-center rounded-3xl border sm:size-20',
-          hasProblems
-            ? 'border-warning/40 bg-warning/10 text-warning'
-            : 'border-border bg-card text-foreground',
+          'od-rise od-rise-1 od-glass flex size-16 items-center justify-center rounded-3xl sm:size-20',
+          hasProblems ? 'text-warning' : 'text-foreground',
         )}
       >
         {hasProblems ? (
@@ -264,17 +262,17 @@ export function ShellHero({
           <Command className="size-8 sm:size-10" />
         )}
       </span>
-      <h2 className="max-w-2xl text-4xl font-semibold tracking-tight text-balance sm:text-6xl">
+      <h2 className="od-rise od-rise-2 od-hero-title max-w-2xl text-5xl font-semibold tracking-tighter text-balance sm:text-7xl">
         OMNIDESK OS
       </h2>
-      <p className="max-w-xl text-base leading-relaxed text-pretty text-muted-foreground sm:text-lg">
+      <p className="od-rise od-rise-3 max-w-xl text-base leading-relaxed text-pretty text-muted-foreground sm:text-lg">
         {hasProblems
           ? `Я проверил систему и нашёл ${insights.length === 1 ? 'проблему' : 'проблемы'}. Разберём?`
           : greeting}
       </p>
 
       {hasProblems ? (
-        <div className="flex w-full max-w-lg flex-col gap-2.5">
+        <div className="od-rise od-rise-4 flex w-full max-w-lg flex-col gap-2.5">
           <ul className="flex w-full flex-col gap-2.5 text-left">
             {insights.map((ins, i) => (
               <li key={i}>
