@@ -546,7 +546,7 @@ export function OsShell({
           and scrollTop-based autoscroll is exact. */}
       <div
         ref={scrollRef}
-        className="flex flex-1 flex-col overflow-y-auto overscroll-contain"
+        className="scrollbar-thin flex flex-1 flex-col overflow-y-auto overscroll-contain"
       >
       {/* Section dock — pills wrap onto extra rows instead of clipping into a
           horizontal scroller (no scrollbar, always tidy). */}
@@ -585,7 +585,7 @@ export function OsShell({
                   key={c.label}
                   type="button"
                   onClick={() => void send(c.prompt)}
-                  className="press-scale rounded-full border border-border bg-card/60 px-4 py-2 text-sm text-muted-foreground transition-colors hover:border-foreground/25 hover:bg-card hover:text-foreground"
+                  className="press-scale od-glass rounded-full px-4 py-2 text-sm text-muted-foreground transition-[color,translate,box-shadow] duration-200 hover:-translate-y-0.5 hover:text-foreground hover:shadow-[0_10px_28px_rgb(0_0_0/0.45)]"
                 >
                   {c.label}
                 </button>

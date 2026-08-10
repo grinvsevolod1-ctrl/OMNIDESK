@@ -28,33 +28,28 @@ export default function LoginPage() {
         className="pointer-events-none absolute -top-40 left-1/2 size-[38rem] -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,oklch(0.32_0_0/0.5),transparent)] blur-3xl"
       />
 
-      <div className="relative w-full max-w-md duration-700 animate-in fade-in slide-in-from-bottom-4">
-        {/* Brand */}
+      <div className="relative w-full max-w-md">
+        {/* Brand — каскадное появление, как открытие окна в macOS. */}
         <div className="mb-10 flex flex-col items-center gap-5 text-center">
-          <div className="relative flex size-16 items-center justify-center rounded-3xl border border-border bg-card shadow-lg shadow-black/40">
-            {/* Subtle top sheen on the logo tile, like a physical key/badge. */}
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 rounded-3xl bg-[linear-gradient(180deg,oklch(1_0_0/0.08),transparent_60%)]"
-            />
+          <div className="od-rise od-rise-1 od-glass relative flex size-16 items-center justify-center rounded-3xl">
             <BrandMark className="size-7 text-foreground" />
           </div>
           <div className="space-y-2">
-            <h1 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+            <h1 className="od-rise od-rise-2 od-hero-title text-4xl font-semibold tracking-tighter text-balance sm:text-5xl">
               Вход в Omnidesk
             </h1>
-            <p className="text-base text-muted-foreground text-pretty">
+            <p className="od-rise od-rise-3 text-base text-muted-foreground text-pretty">
               Единый центр входящих для вашей команды
             </p>
           </div>
         </div>
 
         {/* Card */}
-        <div className="rounded-3xl border border-border bg-card/80 p-7 shadow-2xl shadow-black/40 backdrop-blur-xl transition-colors duration-300 focus-within:border-ring/60 sm:p-8">
+        <div className="od-rise od-rise-4 od-command-glow rounded-3xl border border-border bg-card/80 p-7 shadow-2xl shadow-black/40 backdrop-blur-xl sm:p-8">
           <LoginForm />
         </div>
 
-        <p className="mt-8 text-center text-xs text-muted-foreground">
+        <p className="od-rise od-rise-4 mt-8 text-center text-xs text-muted-foreground">
           Защищённый вход · только для сотрудников
         </p>
       </div>
