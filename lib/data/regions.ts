@@ -13,6 +13,8 @@ export interface Region {
 export interface CityWithRegion {
   city: string
   region: string | null
+  /** true — это целый регион как значение («Чеченская Республика»). */
+  isRegion?: boolean
 }
 
 export async function listRegions(): Promise<Region[]> {
@@ -23,7 +25,9 @@ export async function listRegions(): Promise<Region[]> {
 }
 
 /**
- * Единое автодополнение города: матчится и имя города, и имя региона.
+ * Единое автодополнение города: матчится имя города, имя региона и его
+ * алиасы («Чечня» → «Чеченская Республика»). Регионы возвращаются отдельными
+ * подсказками с isRegion=true — их можно выбрать как значение (весь регион).
  * Приоритет: точное совпадение → префикс города → вхождение → регион.
  */
 export async function searchCitiesWithRegions(
@@ -33,6 +37,23 @@ export async function searchCitiesWithRegions(
   const key = cityKey(q)
   if (!key) return []
   const capped = Math.min(Math.max(limit, 1), 30)
+
+  // Регионы (по имени или алиасу) — целиком назначаемые значения.
+  const regionRows = await query<{ name: string }>(
+    `SELECT name FROM regions
+      WHERE name_norm LIKE $2
+         OR EXISTS (SELECT 1 FROM unnest(aliases) a WHERE lower(a) LIKE $2)
+      ORDER BY (name_norm = $1) DESC, name ASC
+      LIMIT 5`,
+    [key, `%${key}%`],
+  )
+  const regions: CityWithRegion[] = regionRows.map((r) => ({
+    city: r.name,
+    region: null,
+    isRegion: true,
+  }))
+
+  const cityLimit = Math.max(capped - regions.length, 4)
   const rows = await query<{ city: string; region: string | null }>(
     `SELECT c.name AS city, r.name AS region
        FROM cities c
@@ -40,14 +61,46 @@ export async function searchCitiesWithRegions(
       WHERE c.name_norm LIKE $2
          OR c.name_norm LIKE $3
          OR lower(COALESCE(r.name, '')) LIKE $3
+         OR EXISTS (SELECT 1 FROM unnest(COALESCE(r.aliases, '{}')) a
+                     WHERE lower(a) LIKE $3)
       ORDER BY (c.name_norm = $1) DESC,
                (c.name_norm LIKE $2) DESC,
                (c.name_norm LIKE $3) DESC,
                c.name ASC
-      LIMIT ${capped}`,
+      LIMIT ${cityLimit}`,
     [key, `${key}%`, `%${key}%`],
   )
-  return rows
+  // Регионы после точного совпадения города, но перед прочими: запрос
+  // «чечня» должен сразу предлагать «Чеченская Республика — весь регион».
+  const exact = rows.filter((r) => cityKey(r.city) === key)
+  const rest = rows.filter((r) => cityKey(r.city) !== key)
+  return [...exact, ...regions, ...rest]
+}
+
+/**
+ * Каноническое значение для поля «город»: город из базы (каноническое
+ * написание), регион по имени/алиасу («чечня» → «Чеченская Республика»)
+ * или null, если в справочнике ничего нет.
+ */
+export async function resolveCityOrRegion(
+  raw: string,
+): Promise<{ value: string; isRegion: boolean } | null> {
+  const key = cityKey(raw)
+  if (!key) return null
+  const city = await query<{ name: string }>(
+    `SELECT name FROM cities WHERE name_norm = $1 LIMIT 1`,
+    [key],
+  )
+  if (city[0]) return { value: city[0].name, isRegion: false }
+  const region = await query<{ name: string }>(
+    `SELECT name FROM regions
+      WHERE name_norm = $1
+         OR EXISTS (SELECT 1 FROM unnest(aliases) a WHERE lower(a) = $1)
+      LIMIT 1`,
+    [key],
+  )
+  if (region[0]) return { value: region[0].name, isRegion: true }
+  return null
 }
 
 /** Регион города по нормализованному имени (для карточки/выгрузки). */

@@ -29,6 +29,11 @@ const CITIES_AGG = `
  * sorted by current load ascending so the least-busy curator comes first.
  * A curator may cover several cities (curator_cities, migration 115);
  * managers.city is a legacy fallback for rows without links.
+ *
+ * Region awareness (migration 124): a curator whose covered entry is a REGION
+ * («Чеченская Республика») matches every city of that region; and when the
+ * lead's city IS a region (or its alias, e.g. «Чечня»), curators covering any
+ * city inside that region match too.
  */
 export async function findCuratorsByCity(
   cityQuery: string,
@@ -38,7 +43,17 @@ export async function findCuratorsByCity(
   const rows = await query<
     ManagerRow & { active_leads: string; cities: string[] | null }
   >(
-    `SELECT ${managerColumns()},
+    `WITH lead_region AS (
+       -- Регион запроса: сам запрос — регион/алиас, либо регион города.
+       SELECT r.id, r.name_norm FROM regions r
+        WHERE r.name_norm = $2
+           OR EXISTS (SELECT 1 FROM unnest(r.aliases) a WHERE lower(a) = $2)
+       UNION
+       SELECT r.id, r.name_norm
+         FROM cities c JOIN regions r ON r.id = c.region_id
+        WHERE c.name_norm = $2
+     )
+     SELECT ${managerColumns()},
             (SELECT count(*) FROM lead_cards lc
               WHERE lc.curator_id = managers.id
                 AND lc.transferred_at IS NOT NULL
@@ -49,16 +64,28 @@ export async function findCuratorsByCity(
       WHERE role = 'curator'
         AND status = 'active'
         AND (
+          -- Прямое совпадение по городу/тексту (как раньше).
           EXISTS (SELECT 1 FROM curator_cities cc
                    WHERE cc.curator_id = managers.id
                      AND cc.city_norm LIKE $1)
+          -- Куратор покрывает регион, в котором лежит город запроса.
+          OR EXISTS (SELECT 1
+                       FROM curator_cities cc
+                       JOIN lead_region lr ON lr.name_norm = cc.city_norm
+                      WHERE cc.curator_id = managers.id)
+          -- Запрос — регион: матчатся кураторы любого города этого региона.
+          OR EXISTS (SELECT 1
+                       FROM curator_cities cc
+                       JOIN cities c ON c.name_norm = cc.city_norm
+                       JOIN lead_region lr ON lr.id = c.region_id
+                      WHERE cc.curator_id = managers.id)
           OR (NOT EXISTS (SELECT 1 FROM curator_cities cc2
                            WHERE cc2.curator_id = managers.id)
               AND city IS NOT NULL AND lower(city) LIKE $1)
         )
       ORDER BY active_leads ASC, city ASC NULLS LAST, name ASC
       LIMIT 20`,
-    [`%${q}%`],
+    [`%${q}%`, q],
   )
   return rows.map((r) => ({
     ...toManager(r),
