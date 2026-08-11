@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
+import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import { fmtDayChip, fmtTime } from './utils'
 import { parseReply } from './reply'
 
