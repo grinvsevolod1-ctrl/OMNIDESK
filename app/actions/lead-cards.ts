@@ -21,8 +21,15 @@ import {
   transferLeadToCurator,
   updateLeadStatus,
   upsertLeadCard,
+  softDeleteLeadCard,
+  restoreLeadCard,
+  listDeletedLeads,
+  updateLeadCardField,
+  isInlineLeadField,
   type AllLeadsFilter,
 } from '@/lib/data/lead-cards'
+import { searchCitiesWithRegions } from '@/lib/data/regions'
+import { addVacancy, listVacancies } from '@/lib/data/vacancies'
 import {
   getLeadCardStats,
   listLeadCardsForManager,
@@ -490,6 +497,9 @@ export async function listAllLeadsAdminAction(filter: {
   from?: string | null
   to?: string | null
   orphanedOnly?: boolean
+  archivedOnly?: boolean
+  search?: string | null
+  sort?: 'newest' | 'oldest'
   limit?: number
   offset?: number
 }) {
@@ -506,10 +516,116 @@ export async function listAllLeadsAdminAction(filter: {
     from: safeDayKey(filter.from),
     to: safeDayKey(filter.to),
     orphanedOnly: Boolean(filter.orphanedOnly),
+    archivedOnly: Boolean(filter.archivedOnly),
+    search: filter.search?.slice(0, 200) ?? null,
+    sort: filter.sort === 'oldest' ? 'oldest' : 'newest',
     limit: filter.limit,
     offset: filter.offset,
   }
   return listAllTransferredLeads(safe)
+}
+
+/* --------------------- Корзина и inline-редактирование --------------------- */
+
+/** Admin: мягкое удаление лида с обязательной причиной (в корзину). */
+export async function softDeleteLeadAction(input: {
+  leadCardId: string
+  reason: string
+}): Promise<LeadCardActionResult> {
+  const session = await requireAdmin()
+  try {
+    // Админ живёт вне таблицы managers (sub = 'admin') — FK хранит NULL,
+    // имя уходит снапшотом в историю.
+    await softDeleteLeadCard({
+      leadCardId: input.leadCardId,
+      reason: input.reason,
+      deletedById: session.sub === 'admin' ? null : session.sub,
+      deletedByName: session.name ?? null,
+    })
+    revalidatePath('/admin/curators')
+    return { ok: true, message: 'Лид перемещён в корзину' }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+  }
+}
+
+/** Admin: восстановление лида из корзины. */
+export async function restoreLeadAction(
+  leadCardId: string,
+): Promise<LeadCardActionResult> {
+  const session = await requireAdmin()
+  try {
+    await restoreLeadCard({
+      leadCardId,
+      restoredById: session.sub === 'admin' ? null : session.sub,
+      restoredByName: session.name ?? null,
+    })
+    revalidatePath('/admin/curators')
+    return { ok: true, message: 'Лид восстановлен' }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+  }
+}
+
+/** Admin: список корзины (удалённые лиды, автоочистка через 30 дней). */
+export async function listTrashAction() {
+  await requireAdmin()
+  return listDeletedLeads()
+}
+
+/** Admin: обновление одного поля лида прямо из строки таблицы. */
+export async function updateLeadFieldAction(input: {
+  leadCardId: string
+  field: string
+  value: string
+}): Promise<LeadCardActionResult> {
+  await requireAdmin()
+  if (!isInlineLeadField(input.field)) {
+    return { ok: false, message: 'Это поле нельзя редактировать из таблицы' }
+  }
+  try {
+    await updateLeadCardField({
+      leadCardId: input.leadCardId,
+      field: input.field,
+      value: input.value,
+    })
+    revalidatePath('/admin/curators')
+    return { ok: true, message: 'Сохранено' }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+  }
+}
+
+/* ------------------- Справочники: города+регионы, должности ------------------- */
+
+/** Автодополнение «город (регион)» — доступно админу и менеджерам. */
+export async function searchCityAction(q: string) {
+  await requireManagerOrAdmin()
+  if (!q || q.trim().length < 1) return []
+  return searchCitiesWithRegions(q, 12)
+}
+
+/** Список должностей из справочника. */
+export async function listVacanciesAction() {
+  await requireManagerOrAdmin()
+  return listVacancies()
+}
+
+/** Добавить должность в справочник (без хардкода в коде). */
+export async function addVacancyAction(
+  name: string,
+): Promise<LeadCardActionResult & { vacancy?: { id: string; name: string } }> {
+  await requireAdmin()
+  try {
+    const v = await addVacancy(name)
+    return {
+      ok: true,
+      message: 'Должность добавлена',
+      vacancy: { id: v.id, name: v.name },
+    }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+  }
 }
 
 /* ------------------------- Lead-card statistics ------------------------- */

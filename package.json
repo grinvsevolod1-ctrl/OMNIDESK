@@ -28,6 +28,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "https-proxy-agent": "^9.0.0",
     "jose": "^6.2.3",
     "lottie-web": "^5.13.0",

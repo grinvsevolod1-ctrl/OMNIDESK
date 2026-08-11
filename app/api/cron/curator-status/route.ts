@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import {
   autoArchiveFinalLeads,
   listCuratorsWithOverdueStatuses,
+  purgeDeletedLeads,
 } from '@/lib/data/lead-cards'
 import { findSlaBreaches, getLeadSlaSettings } from '@/lib/data/lead-sla'
 import { isPastDailyDeadline, LEAD_STATUS_LABELS } from '@/lib/lead-status'
@@ -56,6 +57,8 @@ async function handle(request: Request): Promise<Response> {
     // Lifecycle sweeps run regardless of the deadline (migration 117):
     // auto-archive of final leads + SLA escalation pushes to lead owners.
     const sla = await getLeadSlaSettings().catch(() => null)
+    // Корзина лидов: физическая очистка мягко удалённых старше 30 дней.
+    const trashPurged = await purgeDeletedLeads(30).catch(() => 0)
     let autoArchived = 0
     let slaNotified = 0
     if (sla) {
@@ -98,7 +101,12 @@ async function handle(request: Request): Promise<Response> {
     if (!isPastDailyDeadline()) {
       return NextResponse.json({
         ok: true,
-        result: { skipped: 'before_deadline', autoArchived, slaNotified },
+        result: {
+          skipped: 'before_deadline',
+          autoArchived,
+          slaNotified,
+          trashPurged,
+        },
       })
     }
 
@@ -124,6 +132,7 @@ async function handle(request: Request): Promise<Response> {
         notified,
         autoArchived,
         slaNotified,
+        trashPurged,
       },
     })
   } catch (error) {

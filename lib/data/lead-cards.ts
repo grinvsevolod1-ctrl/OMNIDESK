@@ -30,6 +30,8 @@ export interface LeadCard {
   phone: string
   telegramUsername: string
   city: string
+  /** Регион РФ по справочнику (заполняется в админской выборке). */
+  region?: string | null
   address: string
   vacancy: string
   status: LeadStatus | null
@@ -798,6 +800,79 @@ export async function updateLeadStatus(input: {
   return card
 }
 
+/**
+ * Админ: смена статуса + комментарий из строки таблицы. Как updateLeadStatus,
+ * но без проверки владения (админ может править любой лид). Автор комментария
+ * фиксируется снапшотом — админ живёт вне таблицы managers.
+ */
+export async function adminSetLeadStatus(input: {
+  leadCardId: string
+  status: LeadStatus
+  comment: string
+  authorName: string
+}): Promise<void> {
+  const comment = input.comment.trim()
+  if (comment.length < STATUS_COMMENT_MIN_LEN) {
+    throw new Error(
+      `Комментарий должен быть не короче ${STATUS_COMMENT_MIN_LEN} символов.`,
+    )
+  }
+  if (!isLeadStatus(input.status)) {
+    throw new Error('Некорректный статус')
+  }
+
+  await withTransaction(async (db) => {
+    const existing = await db.query<{
+      id: string
+      status: string | null
+      status_confirmed_date: string | Date | null
+    }>(
+      `SELECT id, status, status_confirmed_date
+         FROM lead_cards WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+      [input.leadCardId],
+    )
+    const row = existing[0]
+    if (!row) throw new Error('Лид не найден')
+
+    const today = mskDayKey(new Date())
+    const prevDate = toDateOnly(row.status_confirmed_date)
+    const carryPrevious =
+      isLeadStatus(row.status) && prevDate && prevDate !== today
+        ? row.status
+        : null
+
+    await db.query(
+      `UPDATE lead_cards
+          SET previous_status = COALESCE($3, previous_status),
+              status = $2,
+              status_confirmed_at = now(),
+              status_confirmed_date = $4::date,
+              updated_at = now()
+        WHERE id = $1`,
+      [input.leadCardId, input.status, carryPrevious, today],
+    )
+
+    await db.query(
+      `INSERT INTO lead_card_comments (id, lead_card_id, author_id, author_name, body, status)
+       VALUES ($1, $2, NULL, $3, $4, $5)`,
+      [
+        randomUUID(),
+        input.leadCardId,
+        input.authorName,
+        comment,
+        input.status,
+      ],
+    )
+
+    await db.query(
+      `INSERT INTO lead_status_history
+         (lead_card_id, curator_id, curator_name, status, reason)
+       VALUES ($1, NULL, $2, $3, 'confirm')`,
+      [input.leadCardId, input.authorName, input.status],
+    )
+  })
+}
+
 /** Free-form comment without changing status (optional helper). */
 export async function addLeadComment(input: {
   leadCardId: string
@@ -845,8 +920,28 @@ export interface AllLeadsFilter {
   orphanedOnly?: boolean
   /** Show archived leads instead of active ones. */
   archivedOnly?: boolean
+  /** Единый поиск: дата (ДД.ММ.ГГГГ), @username, телефон, город, регион, ФИО. */
+  search?: string | null
+  /** Сортировка по дате передачи. По умолчанию новые сверху. */
+  sort?: 'newest' | 'oldest'
   limit?: number
   offset?: number
+}
+
+/**
+ * Разбор поискового запроса: дата ДД.ММ.ГГГГ (или ГГГГ-ММ-ДД) становится
+ * фильтром по дню передачи в МСК, остальное — текстовым поиском.
+ */
+export function parseLeadSearch(raw: string): {
+  day: string | null
+  text: string
+} {
+  const trimmed = raw.replace(/\s+/g, ' ').trim()
+  const ru = trimmed.match(/^(\d{2})\.(\d{2})\.(\d{4})$/)
+  if (ru) return { day: `${ru[3]}-${ru[2]}-${ru[1]}`, text: '' }
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (iso) return { day: trimmed, text: '' }
+  return { day: null, text: trimmed }
 }
 
 /** Admin: all transferred leads with optional filters, newest first. */
@@ -855,6 +950,7 @@ export async function listAllTransferredLeads(
 ): Promise<{ leads: LeadCard[]; total: number }> {
   const conds: string[] = [
     'lc.transferred_at IS NOT NULL',
+    'lc.deleted_at IS NULL',
     filter.archivedOnly
       ? 'lc.archived_at IS NOT NULL'
       : 'lc.archived_at IS NULL',
@@ -892,6 +988,33 @@ export async function listAllTransferredLeads(
     )
   }
 
+  // Единый поиск: одно поле — дата / ФИО / телефон / @username / город / регион.
+  if (filter.search?.trim()) {
+    const { day, text } = parseLeadSearch(filter.search)
+    if (day) {
+      params.push(day)
+      conds.push(
+        `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date = $${params.length}::date`,
+      )
+    } else if (text) {
+      const like = `%${text.replace(/^@/, '')}%`
+      params.push(like)
+      const p = `$${params.length}`
+      conds.push(
+        `(lower(lc.full_name) LIKE lower(${p})
+          OR lc.phone LIKE ${p}
+          OR lower(lc.telegram_username) LIKE lower(${p})
+          OR lower(lc.city) LIKE lower(${p})
+          OR EXISTS (
+               SELECT 1 FROM cities ci
+               JOIN regions rg ON rg.id = ci.region_id
+              WHERE ci.name_norm = lower(lc.city)
+                AND lower(rg.name) LIKE lower(${p})
+             ))`,
+      )
+    }
+  }
+
   const where = conds.join(' AND ')
   const totalRows = await query<{ n: string }>(
     `SELECT count(*)::int AS n FROM lead_cards lc WHERE ${where}`,
@@ -902,17 +1025,188 @@ export async function listAllTransferredLeads(
   const offset = Math.max(filter.offset ?? 0, 0)
   params.push(limit, offset)
 
-  const rows = await query<LeadCardRow>(
-    `SELECT ${CARD_SELECT}
+  const order = filter.sort === 'oldest' ? 'ASC' : 'DESC'
+  const rows = await query<LeadCardRow & { region_name: string | null }>(
+    `SELECT ${CARD_SELECT},
+            (SELECT rg.name FROM cities ci
+              JOIN regions rg ON rg.id = ci.region_id
+             WHERE ci.name_norm = lower(lc.city) LIMIT 1) AS region_name
        FROM lead_cards lc
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
       WHERE ${where}
-      ORDER BY lc.transferred_at DESC
+      ORDER BY lc.transferred_at ${order}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params,
   )
-  return { leads: rows.map(toLeadCard), total: Number(totalRows[0]?.n ?? 0) }
+  return {
+    leads: rows.map((r) => ({ ...toLeadCard(r), region: r.region_name })),
+    total: Number(totalRows[0]?.n ?? 0),
+  }
+}
+
+/* ------------------------- Мягкое удаление (корзина) ------------------------ */
+
+/**
+ * Мягкое удаление лида админом: карточка уходит в «Корзину» с обязательной
+ * причиной, вся история сохраняется. Автоочистка — purgeDeletedLeads (30 дней).
+ */
+export async function softDeleteLeadCard(input: {
+  leadCardId: string
+  reason: string
+  deletedById: string | null
+  deletedByName?: string | null
+}): Promise<void> {
+  const reason = input.reason.replace(/\s+/g, ' ').trim()
+  if (reason.length < 3) {
+    throw new Error('Укажите причину удаления (минимум 3 символа)')
+  }
+  await withTransaction(async (tx) => {
+    const rows = await tx.query<{ id: string }>(
+      `UPDATE lead_cards
+          SET deleted_at = now(), deleted_reason = $2, deleted_by = $3,
+              updated_at = now()
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id`,
+      [input.leadCardId, reason, input.deletedById],
+    )
+    if (rows.length === 0) throw new Error('Лид не найден или уже удалён')
+    await tx.query(
+      `INSERT INTO lead_status_history
+         (lead_card_id, curator_id, curator_name, status, reason)
+       VALUES ($1, $2, $3, NULL, $4)`,
+      [
+        input.leadCardId,
+        input.deletedById,
+        input.deletedByName ?? null,
+        `deleted: ${reason}`,
+      ],
+    )
+  })
+}
+
+/** Восстановление лида из корзины. */
+export async function restoreLeadCard(input: {
+  leadCardId: string
+  restoredById: string | null
+  restoredByName?: string | null
+}): Promise<void> {
+  await withTransaction(async (tx) => {
+    const rows = await tx.query<{ id: string }>(
+      `UPDATE lead_cards
+          SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL,
+              updated_at = now()
+        WHERE id = $1 AND deleted_at IS NOT NULL
+        RETURNING id`,
+      [input.leadCardId],
+    )
+    if (rows.length === 0) throw new Error('Лид не найден в корзине')
+    await tx.query(
+      `INSERT INTO lead_status_history
+         (lead_card_id, curator_id, curator_name, status, reason)
+       VALUES ($1, $2, $3, NULL, 'restored')`,
+      [input.leadCardId, input.restoredById, input.restoredByName ?? null],
+    )
+  })
+}
+
+export interface DeletedLead extends LeadCard {
+  deletedAt: string
+  deletedReason: string
+  deletedByName: string | null
+}
+
+/** Корзина: удалённые лиды, свежие сверху. */
+export async function listDeletedLeads(
+  limit = 100,
+): Promise<DeletedLead[]> {
+  const rows = await query<
+    LeadCardRow & {
+      deleted_at: string | Date
+      deleted_reason: string | null
+      deleted_by_name: string | null
+    }
+  >(
+    `SELECT ${CARD_SELECT},
+            lc.deleted_at, lc.deleted_reason,
+            d.name AS deleted_by_name
+       FROM lead_cards lc
+       LEFT JOIN managers m ON m.id = lc.manager_id
+       LEFT JOIN managers c ON c.id = lc.curator_id
+       LEFT JOIN managers d ON d.id = lc.deleted_by
+      WHERE lc.deleted_at IS NOT NULL
+      ORDER BY lc.deleted_at DESC
+      LIMIT ${Math.min(Math.max(limit, 1), 500)}`,
+  )
+  return rows.map((r) => ({
+    ...toLeadCard(r),
+    deletedAt: new Date(r.deleted_at).toISOString(),
+    deletedReason: r.deleted_reason ?? '',
+    deletedByName: r.deleted_by_name,
+  }))
+}
+
+/** Автоочистка корзины: физически удаляет лиды старше N дней. Возврат: сколько удалено. */
+export async function purgeDeletedLeads(olderThanDays = 30): Promise<number> {
+  const days = Math.max(1, Math.floor(olderThanDays))
+  const rows = await query<{ id: string }>(
+    `DELETE FROM lead_cards
+      WHERE deleted_at IS NOT NULL
+        AND deleted_at < now() - make_interval(days => $1)
+      RETURNING id`,
+    [days],
+  )
+  return rows.length
+}
+
+/* --------------------- Inline-редактирование одного поля -------------------- */
+
+const INLINE_EDITABLE_FIELDS = {
+  full_name: 160,
+  phone: 40,
+  telegram_username: 80,
+  city: 120,
+  address: 300,
+  vacancy: 80,
+} as const
+
+export type InlineLeadField = keyof typeof INLINE_EDITABLE_FIELDS
+
+export function isInlineLeadField(f: string): f is InlineLeadField {
+  return f in INLINE_EDITABLE_FIELDS
+}
+
+/**
+ * Обновление одного поля карточки из строки таблицы (без открытия диалога).
+ * Город запоминается в справочнике; поле whitelisted — SQL-инъекция исключена.
+ */
+export async function updateLeadCardField(input: {
+  leadCardId: string
+  field: InlineLeadField
+  value: string
+}): Promise<void> {
+  if (!isInlineLeadField(input.field)) {
+    throw new Error('Это поле нельзя редактировать из таблицы')
+  }
+  let value = input.value.replace(/\s+/g, ' ').trim()
+  const maxLen = INLINE_EDITABLE_FIELDS[input.field]
+  if (value.length > maxLen) {
+    throw new Error(`Слишком длинное значение (максимум ${maxLen})`)
+  }
+  if (input.field === 'telegram_username') {
+    value = value.replace(/^@/, '')
+  }
+  if (input.field === 'city' && value) {
+    value = await rememberCity(value)
+  }
+  const rows = await query<{ id: string }>(
+    `UPDATE lead_cards
+        SET ${input.field} = $2, updated_at = now()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id`,
+    [input.leadCardId, value],
+  )
+  if (rows.length === 0) throw new Error('Лид не найден')
 }
 
 /*
