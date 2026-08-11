@@ -85,7 +85,6 @@ export async function getManagerStats(
   }
 }
 
-export type GoalMessenger = 'any' | 'telegram' | 'whatsapp'
 export type ClickMessenger = 'telegram' | 'whatsapp'
 
 function emptyStatusCounts(): Record<LeadStatus, number> {
@@ -269,89 +268,6 @@ export const getMessengerAnalytics = cachedAnalytics(
   getMessengerAnalyticsUncached,
   ['getMessengerAnalytics'],
 )
-
-export interface ConversionGoal {
-  id: string
-  name: string
-  messenger: GoalMessenger
-  active: boolean
-  createdAt: string
-}
-
-interface ConversionGoalRow {
-  id: string
-  name: string
-  messenger: GoalMessenger
-  active: boolean
-  created_at: string | Date
-}
-
-function toGoal(r: ConversionGoalRow): ConversionGoal {
-  return {
-    id: r.id,
-    name: r.name,
-    messenger: r.messenger,
-    active: r.active,
-    createdAt: new Date(r.created_at).toISOString(),
-  }
-}
-
-export async function listConversionGoals(): Promise<ConversionGoal[]> {
-  const rows = await query<ConversionGoalRow>(
-    `SELECT id, name, messenger, active, created_at
-       FROM conversion_goals ORDER BY created_at ASC`,
-  )
-  return rows.map(toGoal)
-}
-
-export async function createConversionGoal(input: {
-  name: string
-  messenger: GoalMessenger
-}): Promise<ConversionGoal> {
-  const rows = await query<ConversionGoalRow>(
-    `INSERT INTO conversion_goals (name, messenger) VALUES ($1, $2) RETURNING *`,
-    [input.name.trim(), input.messenger],
-  )
-  return toGoal(rows[0])
-}
-
-export async function updateConversionGoal(
-  id: string,
-  input: { name?: string; messenger?: GoalMessenger; active?: boolean },
-): Promise<void> {
-  await query(
-    `UPDATE conversion_goals
-        SET name = COALESCE($2, name),
-            messenger = COALESCE($3, messenger),
-            active = COALESCE($4, active)
-      WHERE id = $1`,
-    [id, input.name?.trim() ?? null, input.messenger ?? null, input.active ?? null],
-  )
-}
-
-export async function deleteConversionGoal(id: string): Promise<void> {
-  await query(`DELETE FROM conversion_goals WHERE id = $1`, [id])
-}
-
-export interface GoalResult extends ConversionGoal {
-  completions: number
-}
-
-export async function getConversionGoalResults(
-  managerId?: string,
-): Promise<GoalResult[]> {
-  const [goals, messenger] = await Promise.all([
-    listConversionGoals(),
-    getMessengerAnalytics(managerId),
-  ])
-  return goals.map((g) => {
-    let completions = 0
-    if (g.messenger === 'telegram') completions = messenger.telegramClicks
-    else if (g.messenger === 'whatsapp') completions = messenger.whatsappClicks
-    else completions = messenger.totalClicks
-    return { ...g, completions }
-  })
-}
 
 export interface ManagerPerformance {
   manager: Manager
