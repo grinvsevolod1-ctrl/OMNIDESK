@@ -1,32 +1,26 @@
 'use client'
 
-import { useEffect, useState, useTransition } from 'react'
+import { useEffect, useTransition } from 'react'
 import { Loader2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
 import {
-  addLeadCommentAction,
   getLeadCardDetailAction,
   returnLeadToFunnelAction,
   setLeadArchivedAction,
-  updateLeadStatusAction,
 } from '@/app/actions/lead-cards'
+import {
+  LeadFreeCommentForm,
+  LeadStatusForm,
+} from '@/components/curator/lead-panel-forms'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { LeadAttachments } from '@/components/shared/lead-attachments'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { CharCounter } from '@/components/ui/char-counter'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import {
   isFinalLeadStatus,
-  LEAD_STATUSES,
-  LEAD_STATUS_LABELS,
-  LEAD_STATUS_TONE,
   leadStatusLabel,
   leadNeedsDailyStatus,
-  STATUS_COMMENT_MIN_LEN,
-  type LeadStatus,
 } from '@/lib/lead-status'
 import { APP_TIME_ZONE } from '@/lib/time'
 import { cn } from '@/lib/utils'
@@ -51,22 +45,19 @@ export function LeadDetailPanel({
   onClose: () => void
   onUpdated: () => void
 }) {
-  // Explicit status pick; when null, mirror the card's current status.
-  const [pickedStatus, setPickedStatus] = useState<LeadStatus | null>(null)
-  const [comment, setComment] = useState('')
-  const [freeComment, setFreeComment] = useState('')
   const [pending, startTransition] = useTransition()
 
   const { data: detail, isLoading: loading, mutate } = useSWR(
     ['lead-detail', leadId],
     () => getLeadCardDetailAction(leadId),
-    { revalidateOnFocus: false },
+    // keepPreviousData: при ревалидации после сохранения статуса панель не
+    // мигает спиннером — старые данные видны, пока грузятся новые.
+    { revalidateOnFocus: false, keepPreviousData: true },
   )
   const card = detail?.card ?? null
   const comments = detail?.comments ?? []
   const transfers = detail?.transfers ?? []
   const statusHistory = detail?.statusHistory ?? []
-  const status: LeadStatus | '' = pickedStatus ?? card?.status ?? ''
 
   // Esc закрывает карточку (кастомный оверлей — без встроенной обработки).
   useEffect(() => {
@@ -79,31 +70,15 @@ export function LeadDetailPanel({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose])
 
-  function saveStatus() {
-    if (!status) {
-      toast.error('Выберите статус')
-      return
-    }
-    if (comment.trim().length < STATUS_COMMENT_MIN_LEN) {
-      toast.error(`Комментарий — минимум ${STATUS_COMMENT_MIN_LEN} символов`)
-      return
-    }
-    startTransition(async () => {
-      const res = await updateLeadStatusAction({
-        leadCardId: leadId,
-        status,
-        comment,
-      })
-      if (res.ok) {
-        toast.success(res.message)
-        setComment('')
-        setPickedStatus(null)
-        onUpdated()
-        await mutate()
-      } else {
-        toast.error(res.message)
-      }
-    })
+  /** После сохранения статуса: обновить панель и список снаружи. */
+  function onStatusSaved() {
+    onUpdated()
+    void mutate()
+  }
+
+  /** После свободного комментария достаточно обновить панель. */
+  function onCommentSaved() {
+    void mutate()
   }
 
   function toggleArchive(archived: boolean) {
@@ -126,23 +101,6 @@ export function LeadDetailPanel({
         toast.success(res.message)
         onUpdated()
         onClose()
-      } else {
-        toast.error(res.message)
-      }
-    })
-  }
-
-  function saveFreeComment() {
-    if (!freeComment.trim()) return
-    startTransition(async () => {
-      const res = await addLeadCommentAction({
-        leadCardId: leadId,
-        body: freeComment,
-      })
-      if (res.ok) {
-        toast.success(res.message)
-        setFreeComment('')
-        await mutate()
       } else {
         toast.error(res.message)
       }
@@ -345,69 +303,18 @@ export function LeadDetailPanel({
               </div>
             ) : null}
 
-            {/* Status form */}
-            <div className="space-y-3 border-b border-border px-4 py-4 sm:px-5">
-              <p className="text-sm font-semibold">Статус на сегодня</p>
-              <div className="flex flex-wrap gap-1.5">
-                {LEAD_STATUSES.map((s) => {
-                  const tone = LEAD_STATUS_TONE[s]
-                  const active = status === s
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setPickedStatus(s)}
-                      className={cn(
-                        'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-                        active
-                          ? cn('border-transparent ring-1 ring-primary/40', tone.bg, tone.text)
-                          : 'border-border text-muted-foreground hover:bg-muted',
-                      )}
-                    >
-                      {LEAD_STATUS_LABELS[s]}
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label className="text-xs">Комментарий к статусу</Label>
-                <Textarea
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  placeholder="Почему сейчас такой статус?"
-                  rows={3}
-                />
-                <CharCounter value={comment} min={STATUS_COMMENT_MIN_LEN} />
-              </div>
-              <Button
-                className="w-full"
-                disabled={pending || !status}
-                onClick={saveStatus}
-              >
-                {pending ? <Loader2 className="size-4 animate-spin" /> : null}
-                Подтвердить статус
-              </Button>
-            </div>
+            {/* Форма статуса — отдельный memo-компонент с собственным
+                состоянием: ввод комментария не перерисовывает панель. */}
+            <LeadStatusForm
+              leadCardId={leadId}
+              currentStatus={card.status}
+              onSaved={onStatusSaved}
+            />
 
             {/* Comments */}
             <div className="space-y-3 px-4 py-4 sm:px-5">
               <p className="text-sm font-semibold">Комментарии</p>
-              <div className="flex flex-col gap-2">
-                <Textarea
-                  value={freeComment}
-                  onChange={(e) => setFreeComment(e.target.value)}
-                  placeholder="Дополнительный комментарий…"
-                  rows={2}
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={pending || !freeComment.trim()}
-                  onClick={saveFreeComment}
-                >
-                  Добавить комментарий
-                </Button>
-              </div>
+              <LeadFreeCommentForm leadCardId={leadId} onSaved={onCommentSaved} />
               {comments.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Пока пусто</p>
               ) : (

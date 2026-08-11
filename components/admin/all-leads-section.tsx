@@ -117,6 +117,9 @@ export function AllLeadsSection({
   const [curatorId, setCuratorId] = useState<string>('')
   const [status, setStatus] = useState<string>('')
   const [search, setSearch] = useState('')
+  // Компактный поиск: раскрывается на фокусе или пока есть текст,
+  // соседние элементы в этот момент ужимаются.
+  const [searchFocused, setSearchFocused] = useState(false)
   const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
   const [orphanedOnly, setOrphanedOnly] = useState(false)
   const [preset, setPreset] = useState<PeriodPreset>('all')
@@ -350,6 +353,8 @@ export function AllLeadsSection({
     })
   }
 
+  const searchExpanded = searchFocused || search.length > 0
+
   return (
     <section className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -476,7 +481,10 @@ export function AllLeadsSection({
           disabled={orphanedOnly}
         >
           <SelectTrigger
-            className="h-9 max-w-64"
+            className={cn(
+              'h-9 transition-all duration-300',
+              searchExpanded ? 'max-w-44' : 'max-w-64',
+            )}
             aria-label="Фильтр по менеджеру по кадрам"
           >
             <SelectValue />
@@ -528,14 +536,27 @@ export function AllLeadsSection({
           </SelectContent>
         </Select>
 
-        {/* Единый поиск: дата ДД.ММ.ГГГГ / ФИО / телефон / @username / город / регион */}
-        <div className="relative min-w-0 flex-1 basis-56">
+        {/* Единый поиск: дата ДД.ММ.ГГГГ / ФИО / телефон / @username / город /
+            регион. Компактный по умолчанию — плавно раскрывается на фокусе
+            (или пока есть текст), а соседние элементы ужимаются. */}
+        <div
+          className={cn(
+            'relative min-w-0 transition-all duration-300 ease-out',
+            searchExpanded ? 'flex-1 basis-64' : 'flex-none basis-44',
+          )}
+        >
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           {/* Поиск в реальном времени: debounce 350мс, Enter не нужен. */}
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск: дата, ФИО, телефон, @username, город, регион…"
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            placeholder={
+              searchExpanded
+                ? 'Дата, ФИО, телефон, @username, город, регион…'
+                : 'Поиск'
+            }
             className="h-9 pl-8 pr-8"
             aria-label="Поиск по лидам"
           />
@@ -567,7 +588,8 @@ export function AllLeadsSection({
           ) : (
             <ArrowUpNarrowWide className="size-3.5" />
           )}
-          {sort === 'newest' ? 'Новые' : 'Старые'}
+          {/* Пока поиск раскрыт — только иконки, чтобы всё влезло в строку */}
+          {!searchExpanded ? (sort === 'newest' ? 'Новые' : 'Старые') : null}
         </Button>
 
         <Button
@@ -583,7 +605,7 @@ export function AllLeadsSection({
           ) : (
             <FileSpreadsheet className="size-3.5" />
           )}
-          Excel
+          {!searchExpanded ? 'Excel' : null}
         </Button>
 
         <LeadsTrashDialog onChanged={refreshRow} />
