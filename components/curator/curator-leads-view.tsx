@@ -16,6 +16,7 @@ import {
   ArrowUpNarrowWide,
   LayoutGrid,
   List,
+  ListFilter,
   Search,
   User,
   X,
@@ -252,15 +253,16 @@ export function CuratorLeadsView({
         >
           <SelectTrigger
             className={cn(
-              'h-9 transition-all duration-300',
-              searchExpanded && 'max-w-36',
+              'h-10 gap-2 font-medium transition-all duration-300',
+              searchExpanded && 'max-w-40',
             )}
             aria-label="Фильтр по статусу"
           >
+            <ListFilter className="size-4 shrink-0 text-muted-foreground" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="w-auto min-w-44">
-            <SelectItem value="">Все статусы</SelectItem>
+            <SelectItem value="">Все статусы (по умолчанию)</SelectItem>
             <SelectItem value="none">Без статуса</SelectItem>
             {LEAD_STATUSES.map((s) => (
               <SelectItem key={s} value={s}>

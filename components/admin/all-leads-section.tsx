@@ -11,8 +11,10 @@ import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   FileSpreadsheet,
+  ListFilter,
   Loader2,
   Search,
+  Users,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -452,7 +454,7 @@ export function AllLeadsSection({
                 reload({ from: v })
               }}
               className="h-9 min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label="Начало период��"
+              aria-label="Начало период����"
             />
             <span className="shrink-0 text-sm text-muted-foreground">—</span>
             <Input
@@ -521,11 +523,15 @@ export function AllLeadsSection({
             reload({ status: next })
           }}
         >
-          <SelectTrigger className="h-9" aria-label="Фильтр по статусу">
+          <SelectTrigger
+            className="h-10 gap-2 font-medium"
+            aria-label="Фильтр по статусу"
+          >
+            <ListFilter className="size-4 shrink-0 text-muted-foreground" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="w-auto min-w-44">
-            <SelectItem value="">Все статусы</SelectItem>
+            <SelectItem value="">Все статусы (по умолчанию)</SelectItem>
             <SelectItem value="none">Без статуса</SelectItem>
             {LEAD_STATUSES.map((s) => (
               <SelectItem key={s} value={s}>

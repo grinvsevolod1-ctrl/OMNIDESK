@@ -11,6 +11,7 @@ import {
 import {
   ArrowRightLeft,
   CalendarDays,
+  ListFilter,
   UserPlus,
   Users,
 } from 'lucide-react'
@@ -286,11 +287,15 @@ export function ManagerLeadsView({
           value={status}
           onValueChange={(v) => setStatus((v as string) ?? '')}
         >
-          <SelectTrigger className="h-9" aria-label="Фильтр по статусу">
+          <SelectTrigger
+            className="h-10 gap-2 font-medium"
+            aria-label="Фильтр по статусу"
+          >
+            <ListFilter className="size-4 shrink-0 text-muted-foreground" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="w-auto min-w-56">
-            <SelectItem value="">Все лиды</SelectItem>
+            <SelectItem value="">Все лиды (по умолчанию)</SelectItem>
             <SelectItem value="transferred">
               Передан менеджеру по кадрам
             </SelectItem>
