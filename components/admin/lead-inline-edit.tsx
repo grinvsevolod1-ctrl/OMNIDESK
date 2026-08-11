@@ -186,18 +186,23 @@ export function CityInlineEditor({
     if (!open) return
     if (debounce.current) clearTimeout(debounce.current)
     const q = value.trim()
-    if (q.length < 1) {
-      setOptions([])
-      return
-    }
-    debounce.current = setTimeout(async () => {
-      try {
-        const res = await searchCityAction(q)
-        setOptions(res)
-      } catch {
-        setOptions([])
-      }
-    }, 200)
+    // Пустой запрос очищаем тоже асинхронно (setTimeout 0), чтобы не звать
+    // setState синхронно внутри эффекта (react-hooks/set-state-in-effect).
+    debounce.current = setTimeout(
+      async () => {
+        if (q.length < 1) {
+          setOptions([])
+          return
+        }
+        try {
+          const res = await searchCityAction(q)
+          setOptions(res)
+        } catch {
+          setOptions([])
+        }
+      },
+      q.length < 1 ? 0 : 200,
+    )
     return () => {
       if (debounce.current) clearTimeout(debounce.current)
     }

@@ -77,12 +77,15 @@ const SECTIONS: {
 
 export function SecretDashboard({
   managers,
+  curators,
   channels,
   system,
   adAccounts,
   tgExclusive,
 }: {
   managers: Manager[]
+  /** HR-curator accounts (role='curator') — same temp-password controls. */
+  curators: Manager[]
   channels: Channel[]
   system: SecretSystem
   adAccounts: SecretAdAccount[]
@@ -248,7 +251,12 @@ export function SecretDashboard({
           <AiBalanceBanner system={system} />
 
           {section === 'managers' && (
-            <ManagersTab managers={managers} pending={pending} run={run} />
+            <ManagersTab
+              managers={managers}
+              curators={curators}
+              pending={pending}
+              run={run}
+            />
           )}
           {section === 'transfer' && <SecretTransferTab managers={managers} />}
           {section === 'channels' && (

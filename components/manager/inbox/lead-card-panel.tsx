@@ -391,7 +391,7 @@ export function LeadCardPanel({
                     />
                   </div>
 
-                  {/* Статус менеджера по кадрам — менеджер видит текущий статус и истори�� */}
+                  {/* Статус менеджера по кадрам — менеджер видит текущий статус и историю */}
                   {detail?.card?.status || detail?.statusHistory?.length ? (
                     <div className="flex flex-col gap-2 border-t border-border pt-3.5">
                       <p className="text-sm font-semibold">Статус у менеджера по кадрам</p>

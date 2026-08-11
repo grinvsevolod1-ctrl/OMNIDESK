@@ -54,15 +54,20 @@ import { copyText } from './utils'
 
 export function ManagersTab({
   managers,
+  curators,
   pending,
   run,
 }: {
   managers: Manager[]
+  /** HR-curator accounts — same controls (temp password, block) as managers. */
+  curators: Manager[]
   pending: boolean
   run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
 }) {
   const [q, setQ] = useState('')
-  const filtered = managers.filter(
+  const [group, setGroup] = useState<'managers' | 'curators'>('managers')
+  const source = group === 'managers' ? managers : curators
+  const filtered = source.filter(
     (m) =>
       m.name.toLowerCase().includes(q.toLowerCase()) ||
       m.email.toLowerCase().includes(q.toLowerCase()),
@@ -71,23 +76,62 @@ export function ManagersTab({
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-xs">
-          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Поиск по имени или email"
-            className="pl-8"
-          />
+        <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center">
+          {/* Переключатель: менеджеры продаж / менеджеры по кадрам */}
+          <div
+            role="tablist"
+            aria-label="Тип аккаунтов"
+            className="flex w-fit shrink-0 rounded-lg bg-muted/60 p-0.5"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={group === 'managers'}
+              onClick={() => setGroup('managers')}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                group === 'managers'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              Менеджеры
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={group === 'curators'}
+              onClick={() => setGroup('curators')}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                group === 'curators'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              По кадрам
+            </button>
+          </div>
+          <div className="relative w-full sm:max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Поиск по имени или email"
+              className="pl-8"
+            />
+          </div>
         </div>
         <Link
-          href="/admin/managers"
+          href={group === 'managers' ? '/admin/managers' : '/admin/curators'}
           className={cn(
             buttonVariants({ variant: 'outline', size: 'sm' }),
             'gap-1.5',
           )}
         >
-          Управление менеджерами
+          {group === 'managers'
+            ? 'Управление менеджерами'
+            : 'Управление кадрами'}
           <ArrowUpRight className="size-4" />
         </Link>
       </div>
@@ -184,8 +228,12 @@ export function ManagersTab({
         <div className="p-6">
           <EmptyState
             icon={Users}
-            title="Менеджеры не найдены"
-            description="Измените запрос поиска или создайте менеджера в разделе управления."
+            title={
+              group === 'managers'
+                ? 'Менеджеры не найдены'
+                : 'Менеджеры по кадрам не найдены'
+            }
+            description="Измените запрос поиска или создайте аккаунт в разделе управления."
           />
         </div>
       )}
