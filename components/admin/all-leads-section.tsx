@@ -1,19 +1,18 @@
 'use client'
 
-import { useEffect, useRef, useState, useTransition } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
 import {
   ArrowDownWideNarrow,
-  ArrowRightLeft,
   ArrowUpNarrowWide,
-  AtSign,
-  CalendarDays,
-  ChevronLeft,
-  ChevronRight,
   FileSpreadsheet,
   Loader2,
   Search,
-  UserPlus,
-  Users,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -23,27 +22,12 @@ import {
   transferLeadAdminAction,
 } from '@/app/actions/lead-cards'
 import { exportLeadsExcelAction } from '@/app/actions/leads-export'
-import {
-  CityInlineEditor,
-  DeleteLeadButton,
-  StatusInlineEditor,
-  TextInlineEditor,
-} from '@/components/admin/lead-inline-edit'
+import { AdminLeadRow } from '@/components/admin/leads/admin-lead-row'
+import { LeadsPagination } from '@/components/admin/leads/leads-pagination'
+import { LeadsPeriodStats } from '@/components/admin/leads/leads-period-stats'
 import { LeadsTrashDialog } from '@/components/admin/leads-trash-dialog'
-import { StatCard } from '@/components/page-parts'
-import type { LeadCardStats } from '@/lib/data/lead-stats'
-import { mskDayKey } from '@/lib/time'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -52,30 +36,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import type { CuratorWithLoad, LeadCard } from '@/lib/data/lead-cards'
-import {
-  LEAD_STATUSES,
-  LEAD_STATUS_LABELS,
-  LEAD_STATUS_TONE,
-  leadNeedsDailyStatus,
-} from '@/lib/lead-status'
-import { APP_TIME_ZONE } from '@/lib/time'
+import type { LeadCardStats } from '@/lib/data/lead-stats'
+import { LEAD_STATUSES, LEAD_STATUS_LABELS, LEAD_STATUS_TONE } from '@/lib/lead-status'
+import { mskDayKey } from '@/lib/time'
 import { cn } from '@/lib/utils'
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 /** Скачивание готового .xlsx из base64 (server action не умеет стримить файл). */
 function downloadBase64Xlsx(base64: string, fileName: string) {
@@ -128,9 +93,10 @@ function presetRange(
 }
 
 /**
- * Admin overview of ALL transferred leads: filters by curator/status/city,
- * an "orphaned" mode surfacing leads whose curator was deleted, and a
- * reassign action for every row.
+ * Admin overview of ALL transferred leads. Контейнер: состояние фильтров,
+ * realtime-пуллинг и загрузка; строки таблицы (AdminLeadRow), статистика
+ * (LeadsPeriodStats) и пагинация (LeadsPagination) — мемоизированные
+ * подкомпоненты, чтобы 5-секундный пуллинг не перерисовывал весь список.
  */
 export function AllLeadsSection({
   initialLeads,
@@ -208,65 +174,94 @@ export function AllLeadsSection({
     to,
   ])
 
-  function reload(next: {
-    curatorId?: string
-    status?: string
-    search?: string
-    sort?: 'newest' | 'oldest'
-    orphanedOnly?: boolean
-    offset?: number
-    preset?: PeriodPreset
-    day?: string
-    from?: string
-    to?: string
-  }) {
-    const f = {
-      curatorId: next.curatorId ?? curatorId,
-      status: next.status ?? status,
-      search: next.search ?? search,
-      sort: next.sort ?? sort,
-      orphanedOnly: next.orphanedOnly ?? orphanedOnly,
-      offset: next.offset ?? 0,
-      preset: next.preset ?? preset,
-      day: next.day ?? day,
-      from: next.from ?? from,
-      to: next.to ?? to,
-    }
-    const range = presetRange(f.preset, f.day, f.from, f.to)
-    startTransition(async () => {
-      try {
-        const [res, st] = await Promise.all([
-          listAllLeadsAdminAction({
-            curatorId: f.curatorId || null,
-            status: f.status || null,
-            search: f.search || null,
-            sort: f.sort,
-            from: range.from,
-            to: range.to,
-            orphanedOnly: f.orphanedOnly,
-            limit: PAGE_SIZE,
-            offset: f.offset,
-          }),
-          f.preset === 'all'
-            ? Promise.resolve(null)
-            : getLeadCardStatsAdminAction({
-                from: range.from,
-                to: range.to,
-                curatorId: f.orphanedOnly ? null : f.curatorId || null,
-              }),
-        ])
-        setLeads(res.leads)
-        setTotal(res.total)
-        setOffset(f.offset)
-        setStats(st)
-        // Ручная перезагрузка — все текущие лиды считаются известными.
-        knownIdsRef.current = new Set(res.leads.map((l) => l.id))
-        setFreshIds(new Set())
-      } catch {
-        toast.error('Не удалось загрузить лиды')
+  // reload стабилен (useCallback + чтение фильтров из ref) — его можно
+  // безопасно передавать в мемоизированные подкомпоненты.
+  const reload = useCallback(
+    (next: {
+      curatorId?: string
+      status?: string
+      search?: string
+      sort?: 'newest' | 'oldest'
+      orphanedOnly?: boolean
+      offset?: number
+      preset?: PeriodPreset
+      day?: string
+      from?: string
+      to?: string
+    }) => {
+      const cur = filtersRef.current
+      const f = {
+        curatorId: next.curatorId ?? cur.curatorId,
+        status: next.status ?? cur.status,
+        search: next.search ?? cur.search,
+        sort: next.sort ?? cur.sort,
+        orphanedOnly: next.orphanedOnly ?? cur.orphanedOnly,
+        offset: next.offset ?? 0,
+        preset: next.preset ?? cur.preset,
+        day: next.day ?? cur.day,
+        from: next.from ?? cur.from,
+        to: next.to ?? cur.to,
       }
-    })
-  }
+      const range = presetRange(f.preset, f.day, f.from, f.to)
+      startTransition(async () => {
+        try {
+          const [res, st] = await Promise.all([
+            listAllLeadsAdminAction({
+              curatorId: f.curatorId || null,
+              status: f.status || null,
+              search: f.search || null,
+              sort: f.sort,
+              from: range.from,
+              to: range.to,
+              orphanedOnly: f.orphanedOnly,
+              limit: PAGE_SIZE,
+              offset: f.offset,
+            }),
+            f.preset === 'all'
+              ? Promise.resolve(null)
+              : getLeadCardStatsAdminAction({
+                  from: range.from,
+                  to: range.to,
+                  curatorId: f.orphanedOnly ? null : f.curatorId || null,
+                }),
+          ])
+          setLeads(res.leads)
+          setTotal(res.total)
+          setOffset(f.offset)
+          setStats(st)
+          // Ручная перезагрузка — все текущие лиды считаются известными.
+          knownIdsRef.current = new Set(res.leads.map((l) => l.id))
+          setFreshIds(new Set())
+        } catch {
+          toast.error('Не удалось загрузить лиды')
+        }
+      })
+    },
+    [],
+  )
+
+  // Стабильные колбэки для мемоизированных строк.
+  const refreshRow = useCallback(() => {
+    reload({ offset: filtersRef.current.offset })
+  }, [reload])
+
+  const transfer = useCallback(
+    (leadId: string, toCuratorId: string) => {
+      startTransition(async () => {
+        const res = await transferLeadAdminAction({
+          leadCardId: leadId,
+          curatorId: toCuratorId,
+        })
+        if (res.ok) {
+          toast.success(res.message)
+          reload({ offset: filtersRef.current.offset })
+        } else {
+          toast.error(res.message)
+        }
+      })
+    },
+    [reload],
+  )
 
   // Realtime-поиск: перезагрузка через 350мс после остановки ввода, без Enter.
   const searchInitRef = useRef(true)
@@ -277,9 +272,7 @@ export function AllLeadsSection({
     }
     const t = setTimeout(() => reload({ search }), 350)
     return () => clearTimeout(t)
-    // reload намеренно вне deps: пересоздаётся каждый рендер.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search])
+  }, [search, reload])
 
   // Фоновый пуллинг каждые 5с: список обновляется сам, новые лиды
   // подсвечиваются. Без startTransition — никаких спиннеров при фоне.
@@ -353,21 +346,6 @@ export function AllLeadsSection({
         toast.success(`Выгружено лидов: ${res.rows}`)
       } else {
         toast.error(res.message ?? 'Не удалось выгрузить')
-      }
-    })
-  }
-
-  function transfer(leadId: string, toCuratorId: string) {
-    startTransition(async () => {
-      const res = await transferLeadAdminAction({
-        leadCardId: leadId,
-        curatorId: toCuratorId,
-      })
-      if (res.ok) {
-        toast.success(res.message)
-        reload({ offset })
-      } else {
-        toast.error(res.message)
       }
     })
   }
@@ -484,71 +462,7 @@ export function AllLeadsSection({
 
       {/* Stats for the selected period */}
       {stats && preset !== 'all' ? (
-        <div className="flex flex-col gap-2">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatCard
-              label="Карточек создано"
-              value={stats.created}
-              icon={UserPlus}
-              hint={
-                stats.from === stats.to
-                  ? `за ${stats.from === today ? 'сегодня' : stats.from}`
-                  : `${stats.from} — ${stats.to}`
-              }
-            />
-            <StatCard
-              label="Передано менеджеру по кадрам"
-              value={stats.transferred}
-              icon={ArrowRightLeft}
-              hint="за выбранный период"
-            />
-            <StatCard
-              label="Создано сегодня"
-              value={stats.createdToday}
-              icon={CalendarDays}
-              hint="независимо от периода"
-            />
-            <StatCard
-              label="Передано сегодня"
-              value={stats.transferredToday}
-              icon={Users}
-              hint="независимо от периода"
-            />
-          </div>
-          {Object.keys(stats.byStatus).length > 0 || stats.noStatus > 0 ? (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {LEAD_STATUSES.filter((s) => (stats.byStatus[s] ?? 0) > 0).map(
-                (s) => {
-                  const tone = LEAD_STATUS_TONE[s]
-                  return (
-                    <Badge
-                      key={s}
-                      variant="outline"
-                      className={cn(
-                        'gap-1.5 border-transparent',
-                        tone.bg,
-                        tone.text,
-                      )}
-                    >
-                      <span
-                        className={cn('size-1.5 rounded-full', tone.dot)}
-                      />
-                      {LEAD_STATUS_LABELS[s]}: {stats.byStatus[s]}
-                    </Badge>
-                  )
-                },
-              )}
-              {stats.noStatus > 0 ? (
-                <Badge
-                  variant="outline"
-                  className="border-transparent bg-muted text-muted-foreground"
-                >
-                  Без статуса: {stats.noStatus}
-                </Badge>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <LeadsPeriodStats stats={stats} today={today} />
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
@@ -672,7 +586,7 @@ export function AllLeadsSection({
           Excel
         </Button>
 
-        <LeadsTrashDialog onChanged={() => reload({ offset })} />
+        <LeadsTrashDialog onChanged={refreshRow} />
       </div>
 
       <Card className="overflow-hidden">
@@ -682,164 +596,23 @@ export function AllLeadsSection({
           </p>
         ) : (
           <ul className="divide-y divide-border">
-            {leads.map((lead) => {
-              const needs = leadNeedsDailyStatus(lead)
-              const refresh = () => reload({ offset })
-              const isFresh = freshIds.has(lead.id)
-              return (
-                <li
-                  key={lead.id}
-                  className={cn(
-                    'flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 sm:px-5',
-                    // Новый лид, появившийся при фоновом обновлении, —
-                    // плавная подсветка на несколько секунд.
-                    isFresh &&
-                      'bg-primary/10 duration-150 animate-in fade-in slide-in-from-top-2',
-                  )}
-                >
-                  <div className="min-w-0 flex-1 basis-48">
-                    {/* ФИО, должность, телефон редактируются кликом по значению */}
-                    <TextInlineEditor
-                      lead={lead}
-                      field="full_name"
-                      label="ФИО"
-                      display={lead.fullName || 'Без имени'}
-                      className="text-sm font-medium"
-                      onSaved={refresh}
-                    />
-                    <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-                      <TextInlineEditor
-                        lead={lead}
-                        field="vacancy"
-                        label="Должность"
-                        display={lead.vacancy}
-                        placeholder="Курьер, водитель…"
-                        onSaved={refresh}
-                      />
-                      <span aria-hidden>·</span>
-                      <TextInlineEditor
-                        lead={lead}
-                        field="phone"
-                        label="Телефон"
-                        display={lead.phone}
-                        placeholder="+7…"
-                        onSaved={refresh}
-                      />
-                      {lead.telegramUsername ? (
-                        <a
-                          href={`https://t.me/${lead.telegramUsername}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-0.5 text-primary transition-opacity hover:opacity-75"
-                          title="Открыть чат в Telegram"
-                        >
-                          <AtSign className="size-3" />
-                          {lead.telegramUsername}
-                        </a>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <CityInlineEditor lead={lead} onSaved={refresh} />
-
-                  {lead.curatorName ? (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span className="cursor-default text-xs text-muted-foreground">
-                            {lead.curatorName}
-                          </span>
-                        }
-                      />
-                      <TooltipContent side="top">
-                        Менеджер по кадрам
-                      </TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    <Badge
-                      variant="outline"
-                      className="border-transparent bg-destructive/15 text-destructive"
-                    >
-                      Без менеджера по кадрам
-                    </Badge>
-                  )}
-
-                  {needs ? (
-                    <Badge
-                      variant="outline"
-                      className="border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                    >
-                      Нужно обновить
-                    </Badge>
-                  ) : null}
-                  <StatusInlineEditor lead={lead} onSaved={refresh} />
-
-                  {lead.transferredAt ? (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span className="cursor-default text-xs text-muted-foreground">
-                            {formatDateTime(lead.transferredAt)}
-                          </span>
-                        }
-                      />
-                      <TooltipContent side="top">Дата передачи</TooltipContent>
-                    </Tooltip>
-                  ) : null}
-
-                  <div className="flex items-center">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label="Передать"
-                            disabled={pending}
-                          >
-                            <ArrowRightLeft className="size-4" />
-                          </Button>
-                        }
-                      />
-                      <DropdownMenuContent align="end" className="min-w-52">
-                        <DropdownMenuLabel>Передать</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        {curators.filter((c) => c.id !== lead.curatorId)
-                          .length === 0 ? (
-                          <DropdownMenuItem disabled>
-                            Нет доступных сотрудников
-                          </DropdownMenuItem>
-                        ) : (
-                          curators
-                            .filter((c) => c.id !== lead.curatorId)
-                            .map((c) => (
-                              <DropdownMenuItem
-                                key={c.id}
-                                onClick={() => transfer(lead.id, c.id)}
-                              >
-                                <span className="truncate">{c.name}</span>
-                                <span className="ml-auto max-w-[50%] truncate text-xs text-muted-foreground">
-                                  {c.cities?.length
-                                    ? c.cities.join(', ')
-                                    : (c.city ?? '')}{' '}
-                                  · {c.activeLeads} лид.
-                                </span>
-                              </DropdownMenuItem>
-                            ))
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                    <DeleteLeadButton lead={lead} onDeleted={refresh} />
-                  </div>
-                </li>
-              )
-            })}
+            {leads.map((lead) => (
+              <AdminLeadRow
+                key={lead.id}
+                lead={lead}
+                curators={curators}
+                isFresh={freshIds.has(lead.id)}
+                pending={pending}
+                onRefresh={refreshRow}
+                onTransfer={transfer}
+              />
+            ))}
           </ul>
         )}
       </Card>
 
       {total > PAGE_SIZE ? (
-        <Pagination
+        <LeadsPagination
           total={total}
           offset={offset}
           pageSize={PAGE_SIZE}
@@ -848,86 +621,5 @@ export function AllLeadsSection({
         />
       ) : null}
     </section>
-  )
-}
-
-/** Номера страниц с многоточиями: 1 … 4 [5] 6 … 75 — рассчитано на 1500+ лидов. */
-function Pagination({
-  total,
-  offset,
-  pageSize,
-  pending,
-  onPage,
-}: {
-  total: number
-  offset: number
-  pageSize: number
-  pending: boolean
-  onPage: (offset: number) => void
-}) {
-  const pageCount = Math.ceil(total / pageSize)
-  const current = Math.floor(offset / pageSize) + 1
-
-  // Всегда: первая, последняя, текущая ± 1; между разрывами — многоточие.
-  const pages: (number | 'gap')[] = []
-  let prev = 0
-  for (let p = 1; p <= pageCount; p++) {
-    const keep = p === 1 || p === pageCount || Math.abs(p - current) <= 1
-    if (!keep) continue
-    if (prev && p - prev > 1) pages.push('gap')
-    pages.push(p)
-    prev = p
-  }
-
-  return (
-    <nav
-      className="flex flex-wrap items-center justify-center gap-1.5"
-      aria-label="Страницы списка лидов"
-    >
-      <Button
-        variant="outline"
-        size="icon-sm"
-        disabled={pending || current === 1}
-        onClick={() => onPage((current - 2) * pageSize)}
-        aria-label="Предыдущая страница"
-      >
-        <ChevronLeft className="size-4" />
-      </Button>
-      {pages.map((p, i) =>
-        p === 'gap' ? (
-          <span
-            key={`gap-${i}`}
-            className="px-1 text-sm text-muted-foreground"
-            aria-hidden
-          >
-            …
-          </span>
-        ) : (
-          <Button
-            key={p}
-            variant={p === current ? 'default' : 'outline'}
-            size="icon-sm"
-            disabled={pending}
-            onClick={() => onPage((p - 1) * pageSize)}
-            aria-label={`Страница ${p}`}
-            aria-current={p === current ? 'page' : undefined}
-          >
-            {p}
-          </Button>
-        ),
-      )}
-      <Button
-        variant="outline"
-        size="icon-sm"
-        disabled={pending || current === pageCount}
-        onClick={() => onPage(current * pageSize)}
-        aria-label="Следующая страница"
-      >
-        <ChevronRight className="size-4" />
-      </Button>
-      <span className="ml-2 text-xs text-muted-foreground">
-        {offset + 1}–{Math.min(offset + pageSize, total)} из {total}
-      </span>
-    </nav>
   )
 }

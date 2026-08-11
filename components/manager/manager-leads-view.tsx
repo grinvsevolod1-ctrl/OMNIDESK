@@ -11,8 +11,6 @@ import {
 import {
   ArrowRightLeft,
   CalendarDays,
-  MapPin,
-  MessageSquare,
   UserPlus,
   Users,
 } from 'lucide-react'
@@ -22,6 +20,7 @@ import {
   listMyLeadCardsAction,
 } from '@/app/actions/lead-cards'
 import { ManagerLeadDetailPanel } from '@/components/manager/manager-lead-detail-panel'
+import { ManagerLeadRow } from '@/components/manager/manager-lead-row'
 import { StatCard } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -42,24 +41,13 @@ import {
   LEAD_STATUSES,
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
-  leadStatusLabel,
 } from '@/lib/lead-status'
-import { APP_TIME_ZONE, mskDayKey } from '@/lib/time'
+import { mskDayKey } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 50
 
 type PeriodPreset = 'today' | '7d' | '30d' | 'day' | 'range'
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 function shiftDay(day: string, deltaDays: number): string {
   const d = new Date(`${day}T00:00:00Z`)
@@ -216,6 +204,8 @@ export function ManagerLeadsView({
   // The very first render already has server-fetched data for the default
   // «7 дней» window — skip the redundant round-trip.
   const [openLeadId, setOpenLeadId] = useState<string | null>(null)
+  // Стабильный колбэк для мемоизированных строк списка.
+  const openLead = useCallback((id: string) => setOpenLeadId(id), [])
   const hydratedRef = useRef(false)
   useEffect(() => {
     if (!hydratedRef.current) {
@@ -400,93 +390,15 @@ export function ManagerLeadsView({
           </p>
         ) : (
           <ul className="divide-y divide-border">
-            {leads.map((lead) => {
-              const tone = lead.status ? LEAD_STATUS_TONE[lead.status] : null
-              const isFresh = freshIds.has(lead.id)
-              return (
-                <li
-                  key={lead.id}
-                  className={cn(
-                    'flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 hover:bg-muted/40 sm:px-5',
-                    isFresh &&
-                      'bg-primary/10 duration-150 animate-in fade-in slide-in-from-top-2',
-                  )}
-                >
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 basis-48 text-left"
-                    onClick={() => setOpenLeadId(lead.id)}
-                    aria-label={`Открыть карточку: ${lead.fullName || 'Без имени'}`}
-                  >
-                    <p className="truncate text-sm font-medium">
-                      {lead.fullName || 'Без имени'}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {[lead.vacancy, lead.phone].filter(Boolean).join(' · ') ||
-                        '—'}
-                    </p>
-                  </button>
-
-                  {lead.curatorCommentCount > 0 ? (
-                    <Badge
-                      variant="outline"
-                      className="gap-1 border-transparent bg-sky-500/15 text-sky-700 dark:text-sky-400"
-                    >
-                      <MessageSquare className="size-3" />
-                      {lead.curatorCommentCount}
-                    </Badge>
-                  ) : null}
-
-                  {lead.city ? (
-                    <Badge
-                      variant="outline"
-                      className="gap-1 border-transparent bg-muted text-muted-foreground"
-                    >
-                      <MapPin className="size-3" />
-                      {lead.city}
-                    </Badge>
-                  ) : null}
-
-                  {lead.transferredAt ? (
-                    <Badge
-                      variant="outline"
-                      className="border-transparent bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                    >
-                      Передан{lead.curatorName ? `: ${lead.curatorName}` : ''}
-                    </Badge>
-                  ) : (
-                    <Badge
-                      variant="outline"
-                      className="border-transparent bg-muted text-muted-foreground"
-                    >
-                      Не передан
-                    </Badge>
-                  )}
-
-                  {tone && lead.status ? (
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        'gap-1.5 border-transparent',
-                        tone.bg,
-                        tone.text,
-                      )}
-                    >
-                      <span className={cn('size-1.5 rounded-full', tone.dot)} />
-                      {leadStatusLabel(lead.status)}
-                    </Badge>
-                  ) : null}
-
-                  <span className="text-xs text-muted-foreground">
-                    {formatDateTime(
-                      lead.transferredAt && status === 'transferred'
-                        ? lead.transferredAt
-                        : lead.createdAt,
-                    )}
-                  </span>
-                </li>
-              )
-            })}
+            {leads.map((lead) => (
+              <ManagerLeadRow
+                key={lead.id}
+                lead={lead}
+                isFresh={freshIds.has(lead.id)}
+                showTransferredDate={status === 'transferred'}
+                onOpen={openLead}
+              />
+            ))}
           </ul>
         )}
       </Card>

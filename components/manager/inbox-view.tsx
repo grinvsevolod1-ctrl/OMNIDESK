@@ -13,20 +13,7 @@ import dynamic from 'next/dynamic'
 import { MessageCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { markConversationReadAction } from '@/app/actions/account'
-import {
-  toggleConversationAiAction,
-  acknowledgeAiHandoffAction,
-} from '@/app/actions/messages'
-import {
-  dismissReplyReminderAction,
-  setConversationMutedAction,
-  setLeadStatusAction,
-} from '@/app/actions/leads'
-import {
-  createMeetingAction,
-  transferConversationAction,
-} from '@/app/actions/conversations'
-import type { ForwardTarget } from '@/components/manager/message-context-menu'
+import { acknowledgeAiHandoffAction } from '@/app/actions/messages'
 // Edit-history is opened on demand (message context menu), so defer its JS and
 // its SWR fetcher until an operator actually opens it — see the conditional
 // render below, which only mounts it once historyMessage is set.
@@ -38,16 +25,13 @@ const EditHistoryDialog = dynamic(
   { ssr: false },
 )
 import { cn } from '@/lib/utils'
-import { LEAD_STATUS_OPTIONS, leadStatusOptionValue } from '@/lib/types'
+import { leadStatusOptionValue } from '@/lib/types'
 import type {
   ChannelType,
   Conversation,
-  LeadStatus,
   Message,
-  NotLiquidReason,
   QuickReply,
 } from '@/lib/types'
-import { sourceLabel } from '@/components/manager/inbox/visual'
 import { useInboxFilters } from '@/components/manager/inbox/use-inbox-filters'
 import { useDrafts } from '@/components/manager/inbox/use-drafts'
 import { DetailsPanel } from '@/components/manager/inbox/atoms'
@@ -64,11 +48,16 @@ import { useReplyReminder } from '@/components/manager/inbox/use-reply-reminder'
 import { useThreadHistory } from '@/components/manager/inbox/use-thread-history'
 import { useThreadScroll } from '@/components/manager/inbox/use-thread-scroll'
 import { useMessageActions } from '@/components/manager/inbox/use-message-actions'
+import { useConversationActions } from '@/components/manager/inbox/use-conversation-actions'
+import { useTransferMeeting } from '@/components/manager/inbox/use-transfer-meeting'
+import { useInboxDerived } from '@/components/manager/inbox/use-inbox-derived'
 
 /* -------------------------------------------------------------------------- */
-/*  Main component                                                            */
+/*  Main component — orchestrator only. The heavy lifting lives in hooks:     */
+/*  useConversationActions (optimistic overrides + status/mute/AI actions),   */
+/*  useInboxDerived (counters/awaiting-reply/sources), useTransferMeeting     */
+/*  (hand-off dialog + Telemost), useMessageActions (send/edit/react/...).    */
 /* -------------------------------------------------------------------------- */
-
 
 export function InboxView({
   conversations: rawConversations,
@@ -105,83 +94,73 @@ export function InboxView({
   telemostEnabled?: boolean
 }) {
   const router = useRouter()
-  // Optimistic lead-status overrides (conversationId -> status snapshot).
-  // Applied in the merge memo below so EVERY consumer (filters, labels, the
-  // status dropdown) sees the new status instantly — this replaced a
-  // router.refresh() that re-ran the whole inbox page (~8 DB queries) on
-  // every single status change.
-  const [statusOverrides, setStatusOverrides] = useState<
-    Record<
-      string,
-      {
-        status: LeadStatus
-        statusDetail: NotLiquidReason | null
-        statusManual: boolean
-      }
-    >
-  >({})
-  // Drop a status override once the server catches up (fresh props carry the
-  // same status) so stale overrides can never mask NEWER server-side changes.
-  useEffect(() => {
-    // Returns the same reference when nothing changed — no cascading renders.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setStatusOverrides((prev) => {
-      const ids = Object.keys(prev)
-      if (ids.length === 0) return prev
-      let changed = false
-      const next = { ...prev }
-      for (const id of ids) {
-        const server = rawConversations.find((c) => c.id === id)
-        if (
-          server &&
-          server.status === prev[id].status &&
-          (server.statusDetail ?? null) === prev[id].statusDetail
-        ) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-  }, [rawConversations])
-  // Hide foreign account names: blank the channel name for any lead whose
-  // channel this manager doesn't own, so the other account stays invisible.
-  const conversations = useMemo(() => {
-    const owned =
-      ownedChannelIds.length > 0 ? new Set(ownedChannelIds) : null
-    const hasStatusOverrides = Object.keys(statusOverrides).length > 0
-    if (!owned && !hasStatusOverrides) return rawConversations
-    return rawConversations.map((c) => {
-      let next = c
-      if (owned && !owned.has(c.channelId)) {
-        next = { ...next, channelName: undefined }
-      }
-      const so = statusOverrides[c.id]
-      if (so) {
-        next = {
-          ...next,
-          status: so.status,
-          statusDetail: so.statusDetail ?? undefined,
-          statusManual: so.statusManual,
-        }
-      }
-      return next
-    })
-  }, [rawConversations, ownedChannelIds, statusOverrides])
   const [activeId, setActiveId] = useState<string | null>(null)
   // Per-conversation composer drafts (in-memory + localStorage mirror).
   const { persistDraft, getDraft } = useDrafts()
   // Message whose edit history is open in the dialog (null = closed).
   const [historyMessage, setHistoryMessage] = useState<Message | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
-  // Conversation hand-off dialog state. `transferForId` holds the conversation
-  // being handed off (null = dialog closed); the picker/note drive the submit.
-  const [transferForId, setTransferForId] = useState<string | null>(null)
-  const [transferTo, setTransferTo] = useState('')
-  const [transferNote, setTransferNote] = useState('')
-  const [transferPending, setTransferPending] = useState(false)
-  // Telemost video-meeting creation in progress (disables the composer button).
-  const [meetingPending, setMeetingPending] = useState(false)
+
+  // useReplyReminder needs awaitingReply (derived below), while dismiss/mute
+  // actions need snoozeReminder — the ref breaks that cycle. Filled after
+  // useReplyReminder runs.
+  const snoozeReminderRef = useRef<(conversationId: string) => void>(() => {})
+
+  // Optimistic conversation overrides + all status/mute/AI actions.
+  const {
+    conversations,
+    statusPending,
+    startStatusTransition,
+    dismissedOverrides,
+    mutedOverrides,
+    aiOverrides,
+    isMuted,
+    changeStatus,
+    dismissReply,
+    toggleMute,
+    toggleAi,
+  } = useConversationActions({
+    rawConversations,
+    ownedChannelIds,
+    router,
+    snoozeReminderRef,
+  })
+
+  // Hand-off dialog + Telemost meeting creation.
+  const {
+    transferForId,
+    setTransferForId,
+    transferTo,
+    setTransferTo,
+    transferNote,
+    setTransferNote,
+    transferPending,
+    meetingPending,
+    openTransfer,
+    submitTransfer,
+    startVideoMeeting,
+  } = useTransferMeeting({
+    router,
+    activeId,
+    setActiveId,
+    startStatusTransition,
+  })
+
+  // Handoffs already acknowledged this session (guards the ack effect against
+  // duplicate server calls). Not state: acknowledgement clears visually via the
+  // "exclude the active thread" rule, and the server flag drives everything else.
+  const ackedHandoffsRef = useRef<Record<string, boolean>>({})
+  // Set true briefly to shake the AI button — the hint shown when a manager
+  // tries to send while the AI is leading the thread.
+  const [aiButtonPulse, setAiButtonPulse] = useState(false)
+  const aiPulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pulseAiButton = useCallback(() => {
+    if (aiPulseTimer.current) clearTimeout(aiPulseTimer.current)
+    setAiButtonPulse(true)
+    aiPulseTimer.current = setTimeout(() => setAiButtonPulse(false), 600)
+  }, [])
+  // Whether to reveal muted/silenced threads in the list (hidden by default).
+  const [showMuted, setShowMuted] = useState(false)
 
   // List filtering + sorting state (search, Set filters, sort mode).
   const {
@@ -203,43 +182,11 @@ export function InboxView({
   } = useInboxFilters()
 
   // Per-conversation message cache, patched live by the SSE handler. Declared
-  // here (above the list memo) so sorting can detect threads whose last message
-  // is inbound, i.e. still awaiting a manager reply.
+  // here (above the derived memo) so sorting can detect threads whose last
+  // message is inbound, i.e. still awaiting a manager reply.
   const [localMessages, setLocalMessages] = useState<
     Record<string, Message[]>
   >(messagesByConversation)
-
-  // Optimistic "no reply needed" dismissals (conversationId -> dismissal time in
-  // ms). Lets the badge/sorting update instantly before the server round-trip,
-  // and is merged with the persisted `replyDismissedAt` from the server.
-  const [dismissedOverrides, setDismissedOverrides] = useState<
-    Record<string, number>
-  >({})
-
-  // Optimistic mute overrides (conversationId -> muted) so muting/unmuting
-  // reflects instantly. Merged with the persisted `muted` flag from the server.
-  const [mutedOverrides, setMutedOverrides] = useState<Record<string, boolean>>(
-    {},
-  )
-  // Optimistic per-conversation AI-lead state, keyed by conversation id.
-  const [aiOverrides, setAiOverrides] = useState<Record<string, boolean>>({})
-  // Handoffs already acknowledged this session (guards the ack effect against
-  // duplicate server calls). Not state: acknowledgement clears visually via the
-  // "exclude the active thread" rule, and the server flag drives everything else.
-  const ackedHandoffsRef = useRef<Record<string, boolean>>({})
-  // Set true briefly to shake the AI button — the hint shown when a manager
-  // tries to send while the AI is leading the thread.
-  const [aiButtonPulse, setAiButtonPulse] = useState(false)
-  const aiPulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pulseAiButton = useCallback(() => {
-    if (aiPulseTimer.current) clearTimeout(aiPulseTimer.current)
-    setAiButtonPulse(true)
-    aiPulseTimer.current = setTimeout(() => setAiButtonPulse(false), 600)
-  }, [])
-  // Whether to reveal muted/silenced threads in the list (hidden by default).
-  const [showMuted, setShowMuted] = useState(false)
-
-
 
   // Realtime: single /api/stream subscription + typing/presence state, patching
   // in-place message changes locally and debouncing everything else into one
@@ -249,117 +196,27 @@ export function InboxView({
     setLocalMessages,
   })
 
-  const typeCounts = useMemo(() => {
-    const counts: Record<ChannelType, number> = {
-      telegram: 0,
-      whatsapp: 0,
-      livechat: 0,
-      max: 0,
-      vk: 0,
-    }
-    for (const c of conversations) counts[c.channelType] += 1
-    return counts
-  }, [conversations])
-
-  const statusCounts = useMemo(() => {
-    const counts: Record<LeadStatus, number> = {
-      unsubscribed: 0,
-      handoff: 0,
-      liquid: 0,
-      not_liquid: 0,
-      transferred: 0,
-    }
-    for (const c of conversations) counts[c.status] += 1
-    return counts
-  }, [conversations])
-
-  const reasonCounts = useMemo(() => {
-    const counts: Record<NotLiquidReason, number> = {
-      geo: 0,
-      under18: 0,
-      na: 0,
-      trash: 0,
-    }
-    for (const c of conversations) {
-      if (c.status === 'not_liquid' && c.statusDetail)
-        counts[c.statusDetail] += 1
-    }
-    return counts
-  }, [conversations])
-
-  const sources = useMemo(() => {
-    const owned = ownedChannelIds.length > 0 ? new Set(ownedChannelIds) : null
-    const map = new Map<
-      string,
-      { id: string; label: string; type: ChannelType; count: number }
-    >()
-    for (const c of conversations) {
-      if (typeFilter.size > 0 && !typeFilter.has(c.channelType)) continue
-      // Only the manager's own accounts are sortable sources; leads routed in
-      // from a foreign/pool account stay as ordinary leads (no source entry).
-      if (owned && !owned.has(c.channelId)) continue
-      const existing = map.get(c.channelId)
-      if (existing) existing.count += 1
-      else
-        map.set(c.channelId, {
-          id: c.channelId,
-          label: sourceLabel(c),
-          type: c.channelType,
-          count: 1,
-        })
-    }
-    return Array.from(map.values()).sort((a, b) =>
-      a.label.localeCompare(b.label),
-    )
-  }, [conversations, typeFilter, ownedChannelIds])
-
-  // Effective mute state: optimistic override wins, else the persisted flag.
-  const isMuted = useCallback(
-    (c: Conversation) => mutedOverrides[c.id] ?? Boolean(c.muted),
-    [mutedOverrides],
-  )
-
-  // For each conversation, work out whether it is still awaiting a manager reply
-  // (the last message is inbound) and since when. Live-chat threads that have
-  // been resolved are excluded. Falls back to the unread counter when a thread's
-  // messages aren't cached yet. Drives both the "unread/unanswered on top"
-  // sorting and the periodic "you haven't replied" reminder.
-  const awaitingReply = useMemo(() => {
-    const map = new Map<string, { waiting: boolean; since: number }>()
-    for (const c of conversations) {
-      const msgs = localMessages[c.id]
-      let waiting: boolean
-      let since: number
-      if (msgs && msgs.length > 0) {
-        const last = msgs[msgs.length - 1]
-        waiting = last.direction === 'in'
-        since = new Date(last.createdAt).getTime()
-      } else {
-        waiting = c.unread > 0
-        since = new Date(c.lastMessageAt).getTime()
-      }
-      // A manual "no reply needed" dismissal silences the thread until a newer
-      // inbound message arrives (since > dismissedAt reactivates it). We take the
-      // max of the optimistic override and the persisted server timestamp.
-      if (waiting) {
-        const dismissedAt = Math.max(
-          dismissedOverrides[c.id] ?? 0,
-          c.replyDismissedAt ? new Date(c.replyDismissedAt).getTime() : 0,
-        )
-        if (dismissedAt >= since) waiting = false
-      }
-      // Muted contacts never count as awaiting a reply (no badge, no reminder).
-      if (mutedOverrides[c.id] ?? Boolean(c.muted)) waiting = false
-      map.set(c.id, { waiting, since })
-    }
-    return map
-  }, [conversations, localMessages, dismissedOverrides, mutedOverrides])
-
-  // How many muted threads exist (drives the "show silenced" toggle).
-  const mutedCount = useMemo(
-    () => conversations.filter((c) => isMuted(c)).length,
-    [conversations, isMuted],
-  )
+  // Counters, sources, awaiting-reply map, forward targets, handoffs.
+  const {
+    typeCounts,
+    statusCounts,
+    reasonCounts,
+    sources,
+    awaitingReply,
+    mutedCount,
+    unreadTotal,
+    forwardTargets,
+    pendingHandoffs,
+  } = useInboxDerived({
+    conversations,
+    localMessages,
+    dismissedOverrides,
+    mutedOverrides,
+    typeFilter,
+    ownedChannelIds,
+    isMuted,
+    activeId,
+  })
 
   // Periodic "you have not replied" toast for waiting threads (see hook).
   const { snoozeReminder } = useReplyReminder({
@@ -368,6 +225,9 @@ export function InboxView({
     activeId,
     onOpen: setActiveId,
   })
+  useEffect(() => {
+    snoozeReminderRef.current = snoozeReminder
+  }, [snoozeReminder])
 
   const filtered = useMemo(
     () =>
@@ -413,11 +273,6 @@ export function InboxView({
     pruneSources(valid)
   }, [typeFilter, conversations, pruneSources])
 
-  const unreadTotal = useMemo(
-    () => conversations.reduce((n, c) => n + (c.unread > 0 ? 1 : 0), 0),
-    [conversations],
-  )
-
   // Keep the selection consistent with the current filter. Deliberately NO
   // auto-select: nothing opens until the manager clicks a dialog (like
   // Telegram) — the previous version force-opened the first thread on desktop,
@@ -457,187 +312,6 @@ export function InboxView({
   }, [activeId, detailsOpen, transferForId, historyMessage])
 
   const [pending, startTransition] = useTransition()
-  const [statusPending, startStatusTransition] = useTransition()
-
-  // `optionValue` is either 'auto', a plain status, or 'not_liquid:<reason>'.
-  function changeStatus(conversationId: string, optionValue: string) {
-    let status: LeadStatus | 'auto' = 'auto'
-    let reason: NotLiquidReason | null = null
-    if (optionValue !== 'auto') {
-      const opt = LEAD_STATUS_OPTIONS.find((o) => o.value === optionValue)
-      if (opt) {
-        status = opt.status
-        reason = opt.reason ?? null
-      } else {
-        status = optionValue as LeadStatus
-      }
-    }
-    // Optimistic: manual statuses update instantly through statusOverrides.
-    // 'auto' means the SERVER recomputes the status — we can't know the result
-    // client-side, so that (rare) branch is the only one that still refreshes.
-    const prevOverride = statusOverrides[conversationId]
-    if (status !== 'auto') {
-      setStatusOverrides((prev) => ({
-        ...prev,
-        [conversationId]: {
-          status,
-          statusDetail: reason,
-          statusManual: true,
-        },
-      }))
-    }
-    startStatusTransition(async () => {
-      const res = await setLeadStatusAction(conversationId, status, reason)
-      if (!res.ok) {
-        toast.error(res.message)
-        // Roll back the optimistic status on failure.
-        if (status !== 'auto') {
-          setStatusOverrides((prev) => {
-            const next = { ...prev }
-            if (prevOverride) next[conversationId] = prevOverride
-            else delete next[conversationId]
-            return next
-          })
-        }
-        return
-      }
-      toast.success(res.message)
-      if (status === 'auto') router.refresh()
-    })
-  }
-
-  // Mark a thread as "no reply needed" (or restore it). Optimistically stamps the
-  // local override so the badge/sorting/reminders update instantly, then persists.
-  function dismissReply(conversationId: string, clear = false) {
-    setDismissedOverrides((prev) => {
-      const next = { ...prev }
-      if (clear) delete next[conversationId]
-      else next[conversationId] = Date.now()
-      return next
-    })
-    // Don't nag again about a thread we just dismissed.
-    snoozeReminder(conversationId)
-    startStatusTransition(async () => {
-      const res = await dismissReplyReminderAction(conversationId, clear)
-      if (!res.ok) {
-        toast.error(res.message)
-        // Roll back the optimistic override on failure.
-        setDismissedOverrides((prev) => {
-          const next = { ...prev }
-          delete next[conversationId]
-          return next
-        })
-        return
-      }
-      toast.success(res.message)
-      // No router.refresh(): the dismissedOverrides map already drives the
-      // badge/sorting, and the server flag arrives with the next natural sync.
-    })
-  }
-
-  // Mute (silence) or unmute a contact, optimistically. Muted threads send no
-  // notifications and are hidden from the default list.
-  function toggleMute(conversationId: string, muted: boolean) {
-    setMutedOverrides((prev) => ({ ...prev, [conversationId]: muted }))
-    if (muted) snoozeReminder(conversationId)
-    startStatusTransition(async () => {
-      const res = await setConversationMutedAction(conversationId, muted)
-      if (!res.ok) {
-        toast.error(res.message)
-        // Roll back the optimistic override on failure.
-        setMutedOverrides((prev) => {
-          const next = { ...prev }
-          delete next[conversationId]
-          return next
-        })
-        return
-      }
-      toast.success(res.message)
-      // No router.refresh(): mutedOverrides already covers every consumer.
-    })
-  }
-
-  // Turn the AI manager-assistant on/off for the active conversation. When it's
-  // switched on, the assistant re-reads the thread and leads from the next
-  // inbound message; when the manager types a manual reply the server flips it
-  // back off automatically (human takeover).
-  function toggleAi(conversationId: string, enabled: boolean) {
-    setAiOverrides((prev) => ({ ...prev, [conversationId]: enabled }))
-    startStatusTransition(async () => {
-      const res = await toggleConversationAiAction(conversationId, enabled)
-      if (!res.ok) {
-        toast.error(res.message)
-        setAiOverrides((prev) => {
-          const next = { ...prev }
-          delete next[conversationId]
-          return next
-        })
-        return
-      }
-      toast.success(res.message)
-      // No router.refresh(): aiOverrides already drives the composer state.
-    })
-  }
-
-  // Open the hand-off dialog for a conversation, resetting the picker/note.
-  function openTransfer(conversationId: string) {
-    setTransferForId(conversationId)
-    setTransferTo('')
-    setTransferNote('')
-  }
-
-  // Submit the hand-off. On success the thread leaves this manager's inbox, so
-  // we close it and refresh the server data.
-  function submitTransfer() {
-    if (!transferForId || !transferTo) {
-      toast.error('Выберите менеджера для передачи.')
-      return
-    }
-    const convId = transferForId
-    setTransferPending(true)
-    startStatusTransition(async () => {
-      const res = await transferConversationAction(
-        convId,
-        transferTo,
-        transferNote.trim() || undefined,
-      )
-      setTransferPending(false)
-      if (!res.ok) {
-        toast.error(res.message)
-        return
-      }
-      toast.success(res.message)
-      setTransferForId(null)
-      if (activeId === convId) setActiveId(null)
-      router.refresh()
-    })
-  }
-
-  // Create a Yandex Telemost meeting and send the join link into the active
-  // conversation via its own channel (handled server-side).
-  function startVideoMeeting() {
-    if (!activeId || meetingPending) return
-    const convId = activeId
-    setMeetingPending(true)
-    startStatusTransition(async () => {
-      const res = await createMeetingAction(convId)
-      setMeetingPending(false)
-      if (!res.ok) {
-        // If the meeting was created but delivery failed, offer the link so it
-        // isn't lost.
-        if (res.joinUrl) {
-          navigator.clipboard?.writeText(res.joinUrl).catch(() => {})
-          toast.error(`${res.message} Ссылка скопирована в буфер обмена.`)
-        } else {
-          toast.error(res.message)
-        }
-        return
-      }
-      toast.success(res.message)
-      // No router.refresh(): the meeting-link message lands in the thread via
-      // the SSE stream like any other outbound message.
-    })
-  }
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
@@ -654,16 +328,6 @@ export function InboxView({
     if (override !== undefined) return override
     return aiMasterEnabled && !active.aiPaused
   }, [active, aiOverrides, aiMasterEnabled])
-
-  // Leads the AI just judged ready and handed off to a human («Ликвид»). Drives
-  // the inbox banner + list highlight until the manager opens each thread.
-  const pendingHandoffs = useMemo(
-    () =>
-      conversations.filter(
-        (c) => c.aiHandoffPending && c.id !== activeId,
-      ),
-    [conversations, activeId],
-  )
 
   // NOTE: The outbound "agent is typing" indicator (a server action fired on
   // every keystroke) was removed for performance - a network round-trip per
@@ -757,15 +421,6 @@ export function InboxView({
     setLocalMessages,
     startTransition,
   })
-
-  // Other Telegram conversations a message can be forwarded into.
-  const forwardTargets: ForwardTarget[] = useMemo(
-    () =>
-      conversations
-        .filter((c) => c.channelType === 'telegram' && c.id !== activeId)
-        .map((c) => ({ id: c.id, name: c.contactName })),
-    [conversations, activeId],
-  )
 
   // Channel types that actually have chats — drives whether the "Тип" filter
   // menu is worth showing at all.
