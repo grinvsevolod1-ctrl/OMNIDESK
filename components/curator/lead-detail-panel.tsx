@@ -9,42 +9,25 @@ import {
   returnLeadToFunnelAction,
   setLeadArchivedAction,
 } from '@/app/actions/lead-cards'
-import {
-  CityInlineEditor,
-  TextInlineEditor,
-} from '@/components/admin/lead-inline-edit'
-import {
-  LeadFreeCommentForm,
-  LeadStatusForm,
-} from '@/components/curator/lead-panel-forms'
-import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
+import { LeadComments } from '@/components/curator/lead-detail/lead-comments'
+import { LeadDetailFields } from '@/components/curator/lead-detail/lead-fields'
+import { LeadHistory } from '@/components/curator/lead-detail/lead-history'
+import { LeadIdentity } from '@/components/curator/lead-detail/lead-identity'
+import { LeadLifecycleActions } from '@/components/curator/lead-detail/lead-lifecycle-actions'
+import { PanelSection } from '@/components/curator/lead-detail/panel-section'
+import { LeadStatusForm } from '@/components/curator/lead-panel-forms'
 import { LeadAttachments } from '@/components/shared/lead-attachments'
-import { LeadHistoryEvent } from '@/components/shared/lead-history-event'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  isFinalLeadStatus,
-  leadStatusLabel,
-  leadNeedsDailyStatus,
-} from '@/lib/lead-status'
-import { APP_TIME_ZONE } from '@/lib/time'
+import { isFinalLeadStatus } from '@/lib/lead-status'
 import { cn } from '@/lib/utils'
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 /**
  * Полная карточка лида (боковая панель). Используется менеджером по кадрам
  * и админом: variant='admin' переключает сохранение статуса на админский
  * action и показывает владельца-куратора в реквизитах.
+ *
+ * Файл — оркестратор: он владеет загрузкой (SWR), Esc-закрытием и действиями
+ * жизненного цикла, а разметку блоков делегирует под-компонентам в ./lead-detail.
  */
 export function LeadDetailPanel({
   leadId,
@@ -159,204 +142,38 @@ export function LeadDetailPanel({
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div className="space-y-4 border-b border-border px-4 py-4 sm:px-5">
-              <div>
-                {/* ФИО и должность правятся кликом — как в админской таблице */}
-                <TextInlineEditor
-                  lead={card}
-                  field="full_name"
-                  label="ФИО"
-                  display={card.fullName || 'Без имени'}
-                  className="text-lg font-semibold tracking-tight"
-                  onSaved={onFieldSaved}
-                />
-                <div className="text-sm text-muted-foreground">
-                  <TextInlineEditor
-                    lead={card}
-                    field="vacancy"
-                    label="Должность"
-                    display={card.vacancy}
-                    placeholder="Курьер, водитель…"
-                    onSaved={onFieldSaved}
-                  />
-                </div>
-                <div className="mt-2">
-                  <LeadStatusBadge
-                    status={card.status}
-                    needsUpdate={leadNeedsDailyStatus(card)}
-                    previousStatus={card.previousStatus}
-                  />
-                </div>
-              </div>
-
-              <dl className="grid gap-2.5 text-sm sm:grid-cols-2">
-                <div>
-                  <dt className="text-xs text-muted-foreground">Телефон</dt>
-                  <dd className="font-medium">
-                    <TextInlineEditor
-                      lead={card}
-                      field="phone"
-                      label="Телефон"
-                      display={card.phone}
-                      placeholder="+7…"
-                      onSaved={onFieldSaved}
-                    />
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Telegram</dt>
-                  <dd className="font-medium">
-                    <TextInlineEditor
-                      lead={card}
-                      field="telegram_username"
-                      label="Telegram (без @)"
-                      display={
-                        card.telegramUsername ? `@${card.telegramUsername}` : ''
-                      }
-                      placeholder="username"
-                      onSaved={onFieldSaved}
-                    />
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Город</dt>
-                  <dd className="font-medium">
-                    <CityInlineEditor lead={card} onSaved={onFieldSaved} />
-                  </dd>
-                </div>
-                <div className="sm:col-span-2">
-                  <dt className="text-xs text-muted-foreground">Адрес</dt>
-                  <dd className="font-medium">
-                    <TextInlineEditor
-                      lead={card}
-                      field="address"
-                      label="Адрес"
-                      display={card.address}
-                      placeholder="Улица, дом…"
-                      onSaved={onFieldSaved}
-                    />
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Менеджер</dt>
-                  <dd className="font-medium">{card.managerName ?? '—'}</dd>
-                </div>
-                {variant === 'admin' ? (
-                  <div>
-                    <dt className="text-xs text-muted-foreground">
-                      Менеджер по кадрам
-                    </dt>
-                    <dd className="font-medium">{card.curatorName ?? '—'}</dd>
-                  </div>
-                ) : null}
-                <div>
-                  <dt className="text-xs text-muted-foreground">Передан</dt>
-                  <dd className="font-medium">
-                    {card.transferredAt
-                      ? formatDateTime(card.transferredAt)
-                      : '—'}
-                  </dd>
-                </div>
-              </dl>
-
-              {statusHistory.length > 0 ? (
-                <div>
-                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-                    История статусов
-                  </p>
-                  <ul className="flex flex-col gap-1">
-                    {statusHistory.slice(0, 10).map((h) => (
-                      <li
-                        key={h.id}
-                        className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
-                      >
-                        <span>{formatDateTime(h.createdAt)}</span>
-                        <LeadHistoryEvent entry={h} />
-                        {h.curatorName ? <span>— {h.curatorName}</span> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              {transfers.length > 0 ? (
-                <div>
-                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-                    История передач
-                  </p>
-                  <ul className="flex flex-col gap-1">
-                    {transfers.map((t) => (
-                      <li
-                        key={t.id}
-                        className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
-                      >
-                        <span>{formatDateTime(t.createdAt)}</span>
-                        <span>
-                          {t.fromCuratorName
-                            ? `${t.fromCuratorName} → ${t.toCuratorName ?? '—'}`
-                            : `→ ${t.toCuratorName ?? '—'}`}
-                        </span>
-                        <span className="rounded bg-muted px-1 py-0.5 text-[10px]">
-                          {t.initiatedByRole === 'admin' ? 'админ' : 'менеджер'}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </div>
+            <PanelSection className="space-y-4">
+              <LeadIdentity card={card} onFieldSaved={onFieldSaved} />
+              <LeadDetailFields
+                card={card}
+                variant={variant}
+                onFieldSaved={onFieldSaved}
+              />
+              <LeadHistory statusHistory={statusHistory} transfers={transfers} />
+            </PanelSection>
 
             {/* Файлы: фото/видео. Кружки из диалога выбирает МЕНЕДЖЕР в своём
                 инбоксе — менеджер по кадрам диалог не ведёт и содержимое
                 переписки не просматривает, поэтому conversationId не передаём. */}
-            <div className="border-b border-border px-4 py-4 sm:px-5">
+            <PanelSection>
               <LeadAttachments
                 leadCardId={leadId}
                 conversationId={null}
                 attachments={detail?.attachments ?? []}
                 onChanged={() => void mutate()}
               />
-            </div>
+            </PanelSection>
 
-            {/* Lifecycle: final leads can be archived or sent back to the AI */}
+            {/* Lifecycle: финальные лиды можно архивировать или вернуть ИИ. */}
             {isFinalLeadStatus(card.status) ? (
-              <div className="space-y-2 border-b border-border px-4 py-4 sm:px-5">
-                <p className="text-sm font-semibold">Жизненный цикл</p>
-                <p className="text-xs text-muted-foreground">
-                  Финальный статус: ежедневное подтверждение больше не требуется.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {card.archivedAt ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={pending}
-                      onClick={() => toggleArchive(false)}
-                    >
-                      Вернуть из архива
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={pending}
-                      onClick={() => toggleArchive(true)}
-                    >
-                      В архив
-                    </Button>
-                  )}
-                  {card.conversationId ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={pending}
-                      onClick={returnToFunnel}
-                    >
-                      Вернуть в воронку ИИ
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
+              <PanelSection className="space-y-2">
+                <LeadLifecycleActions
+                  card={card}
+                  pending={pending}
+                  onToggleArchive={toggleArchive}
+                  onReturnToFunnel={returnToFunnel}
+                />
+              </PanelSection>
             ) : null}
 
             {/* Форма статуса — отдельный memo-компонент с собственным
@@ -368,43 +185,13 @@ export function LeadDetailPanel({
               variant={variant}
             />
 
-            {/* Comments */}
-            <div className="space-y-3 px-4 py-4 sm:px-5">
-              <p className="text-sm font-semibold">Комментарии</p>
-              <LeadFreeCommentForm leadCardId={leadId} onSaved={onCommentSaved} />
-              {comments.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Пока пусто</p>
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {comments.map((c) => (
-                    <li
-                      key={c.id}
-                      className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
-                    >
-                      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span className="font-medium text-foreground">
-                          {c.authorName ?? 'Менеджер по кадрам'}
-                        </span>
-                        {c.status ? (
-                          <Badge
-                            variant="outline"
-                            className="border-transparent bg-background text-[10px]"
-                          >
-                            {leadStatusLabel(c.status)}
-                          </Badge>
-                        ) : null}
-                        <span className="ml-auto">
-                          {formatDateTime(c.createdAt)}
-                        </span>
-                      </div>
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                        {c.body}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            <PanelSection border={false} className="space-y-3">
+              <LeadComments
+                leadCardId={leadId}
+                comments={comments}
+                onCommentSaved={onCommentSaved}
+              />
+            </PanelSection>
           </div>
         )}
       </aside>
