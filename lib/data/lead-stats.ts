@@ -213,11 +213,11 @@ export interface ManagerLeadsFilter {
   offset?: number
 }
 
-/** Карточка в списке менеджера + счётчик комментариев куратора для бейджа. */
+/** Карточка в списке менеджера + счётчик комментариев менеджера по кадрам для бейджа. */
 export type ManagerLeadListItem = LeadCard & {
-  /** Всего комментариев куратора в карточке (не считая своих). */
+  /** Всего комментариев менеджера по кадрам в карточке (не считая своих). */
   curatorCommentCount: number
-  /** ISO-время последнего комментария куратора — для метки «новое» на клиенте. */
+  /** ISO-время последнего комментария менеджера по кадрам — для метки «новое» на клиенте. */
   lastCuratorCommentAt: string | null
 }
 
@@ -268,8 +268,8 @@ export async function listLeadCardsForManager(
   const offset = Math.max(filter.offset ?? 0, 0)
   params.push(limit, offset)
 
-  // Комментарии куратора считаются латеральным подзапросом: бейдж «есть
-  // ответ куратора» в списке без второго запроса с клиента.
+  // Комментарии менеджера по кадрам считаются латеральным подзапросом: бейдж «есть
+  // ответ менеджера по кадрам» в списке без второго запроса с клиента.
   const rows = await query<
     LeadCardRow & { curator_comment_count: string; last_curator_comment_at: string | Date | null }
   >(

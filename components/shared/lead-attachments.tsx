@@ -30,7 +30,7 @@ function formatDateTime(iso: string): string {
 
 const ROLE_LABEL: Record<string, string> = {
   manager: 'менеджер',
-  curator: 'куратор',
+  curator: 'менеджер по кадрам',
   admin: 'админ',
 }
 
@@ -181,7 +181,7 @@ export function LeadAttachments({
       {attachments.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
           Пока нет файлов. Фото, видео и кружки будут видны менеджеру,
-          куратору и админу.
+          менеджеру по кадрам и админу.
         </p>
       ) : (
         <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">

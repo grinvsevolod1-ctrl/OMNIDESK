@@ -229,9 +229,9 @@ export function ManagerLeadsView({
           aria-label="Фильтр по статусу"
         >
           <option value="">Все лиды</option>
-          <option value="transferred">Передан куратору</option>
+          <option value="transferred">Передан менеджеру по кадрам</option>
           <option value="not_transferred">Не передан</option>
-          <option value="none">Без статуса куратора</option>
+          <option value="none">Без статуса менеджера по кадрам</option>
           {LEAD_STATUSES.map((s) => (
             <option key={s} value={s}>
               {LEAD_STATUS_LABELS[s]}
@@ -269,7 +269,7 @@ export function ManagerLeadsView({
             hint="за выбранный период"
           />
           <StatCard
-            label="Передано куратору"
+            label="Передано менеджеру по кадрам"
             value={stats.transferred}
             icon={ArrowRightLeft}
             hint="за выбранный период"
@@ -444,7 +444,7 @@ export function ManagerLeadsView({
           leadId={openLeadId}
           onClose={() => {
             setOpenLeadId(null)
-            // Куратор мог обновить статус, пока панель была открыта.
+            // Менеджер по кадрам мог обновить статус, пока панель была открыта.
             reload(offset)
           }}
         />

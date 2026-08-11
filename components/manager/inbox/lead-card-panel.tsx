@@ -103,7 +103,7 @@ export function LeadCardPanel({
   const curators: CuratorWithLoad[] =
     cityQuery.length >= 2 ? (curatorsData ?? []) : []
 
-  // Детали карточки (статусы/комментарии куратора + вложения) — после сохранения.
+  // Детали карточки (статусы/комментарии менеджера по кадрам + вложения) — после сохранения.
   const { data: detail, mutate: mutateDetail } = useSWR(
     open && cardId ? ['lead-card-detail', cardId] : null,
     () => getLeadCardDetailAction(cardId as string),
@@ -208,7 +208,7 @@ export function LeadCardPanel({
                   Карточка лида
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Данные для передачи куратору
+                  Данные для передачи менеджеру по кадрам
                 </p>
               </div>
               <Button
@@ -275,7 +275,7 @@ export function LeadCardPanel({
               {city.trim().length >= 2 ? (
                 <div className="flex flex-col gap-2">
                   <span className="text-xs font-medium text-muted-foreground">
-                    Кураторы по городу
+                    Менеджеры по кадрам по городу
                   </span>
                   {searching ? (
                     <p className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -284,7 +284,7 @@ export function LeadCardPanel({
                     </p>
                   ) : curators.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
-                      Нет кураторов для «{city.trim()}»
+                      Нет менеджеров по кадрам для «{city.trim()}»
                     </p>
                   ) : (
                     <div className="flex flex-col gap-1.5">
@@ -312,7 +312,7 @@ export function LeadCardPanel({
                             </span>
                             <span
                               className="rounded bg-muted px-1.5 py-0.5 text-[10px]"
-                              title="Активных лидов у куратора"
+                              title="Активных лидов у менеджера по кадрам"
                             >
                               {c.activeLeads} лид.
                             </span>
@@ -346,10 +346,10 @@ export function LeadCardPanel({
                     />
                   </div>
 
-                  {/* Статус куратора — менеджер видит текущий статус и историю */}
+                  {/* Статус менеджера по кадрам — менеджер видит текущий статус и историю */}
                   {detail?.card?.status || detail?.statusHistory?.length ? (
                     <div className="flex flex-col gap-2 border-t border-border pt-3.5">
-                      <p className="text-sm font-semibold">Статус у куратора</p>
+                      <p className="text-sm font-semibold">Статус у менеджера по кадрам</p>
                       {detail?.card ? (
                         <LeadStatusBadge
                           status={detail.card.status}
@@ -379,13 +379,13 @@ export function LeadCardPanel({
                     </div>
                   ) : null}
 
-                  {/* Комментарии: менеджер пишет свои и видит комментарии куратора */}
+                  {/* Комментарии: менеджер пишет свои и видит комментарии менеджера по кадрам */}
                   <div className="flex flex-col gap-2 border-t border-border pt-3.5">
                     <p className="text-sm font-semibold">Комментарии</p>
                     <Textarea
                       value={freeComment}
                       onChange={(e) => setFreeComment(e.target.value)}
-                      placeholder="Комментарий по лиду (виден куратору и админу)…"
+                      placeholder="Комментарий по лиду (виден менеджеру по кадрам и админу)…"
                       rows={2}
                     />
                     <Button

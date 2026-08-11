@@ -15,7 +15,7 @@ import { loadConsoleSession } from '@/lib/data/console-shell'
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
   { href: '/admin/managers', label: 'Менеджеры', icon: 'managers' },
-  { href: '/admin/curators', label: 'Кураторы', icon: 'managers' },
+  { href: '/admin/curators', label: 'Менеджеры по кадрам', icon: 'managers' },
   { href: '/admin/ai', label: 'ИИ-ассистент', icon: 'ai' },
   {
     href: '/admin/accounts',

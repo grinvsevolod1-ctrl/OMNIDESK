@@ -191,7 +191,7 @@ export function CuratorLeadsDialog({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`Лиды куратора ${curator.name}`}
+        aria-label={`Лиды менеджера по кадрам ${curator.name}`}
         className={cn(
           'relative z-10 flex w-[min(96vw,72rem)] flex-col overflow-hidden rounded-2xl bg-popover text-popover-foreground shadow-2xl ring-1 ring-foreground/10',
           'h-[min(92dvh,56rem)] animate-in fade-in-0 zoom-in-95 duration-200',
@@ -239,7 +239,7 @@ export function CuratorLeadsDialog({
             ) : leads.length === 0 ? (
               <div className="flex flex-col items-center gap-2 px-6 py-16 text-center text-muted-foreground">
                 <User className="size-8 opacity-40" />
-                <p className="text-sm">У куратора пока нет лидов</p>
+                <p className="text-sm">У менеджера по кадрам пока нет лидов</p>
               </div>
             ) : (
               <ul className="divide-y divide-border">
@@ -292,12 +292,12 @@ export function CuratorLeadsDialog({
                           />
                           <DropdownMenuContent align="end" className="min-w-52">
                             <DropdownMenuLabel>
-                              Передать другому куратору
+                              Передать другому менеджеру по кадрам
                             </DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             {curators.length === 0 ? (
                               <DropdownMenuItem disabled>
-                                Нет других кураторов
+                                Нет других менеджеров по кадрам
                               </DropdownMenuItem>
                             ) : (
                               curators.map((c) => (
@@ -431,7 +431,7 @@ export function CuratorLeadsDialog({
                         >
                           <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                             <span className="font-medium text-foreground">
-                              {c.authorName ?? 'Куратор'}
+                              {c.authorName ?? 'Менеджер по кадрам'}
                             </span>
                             {c.status ? (
                               <Badge

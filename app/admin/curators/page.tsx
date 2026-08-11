@@ -38,16 +38,16 @@ export default async function CuratorsPage() {
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-6">
         <PageHeader
-          title="Кураторы"
-          description="Куратор может вести один или несколько городов. Создавать может только администратор. Нажмите на куратора, чтобы открыть его лиды."
+          title="Менеджеры по кадрам"
+          description="Менеджер по кадрам может вести один или несколько городов. Создавать может только администратор. Нажмите на менеджера по кадрам, чтобы открыть его лиды."
           action={<CreateCuratorDialog />}
         />
 
         {curators.length === 0 ? (
           <EmptyState
             icon={MapPin}
-            title="Кураторов пока нет"
-            description="Создайте куратора и укажите города, за которые он отвечает."
+            title="Менеджеров по кадрам пока нет"
+            description="Создайте менеджера по кадрам и укажите города, за которые он отвечает."
             action={<CreateCuratorDialog />}
           />
         ) : (

@@ -122,7 +122,7 @@ export async function createCuratorAction(
   if (cities.length === 0) {
     return {
       ok: false,
-      message: 'Укажите хотя бы один город, за который отвечает куратор.',
+      message: 'Укажите хотя бы один город, за который отвечает менеджер по кадрам.',
     }
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -172,7 +172,7 @@ export async function createCuratorAction(
       revalidatePath('/admin')
       return {
         ok: true,
-        message: `Куратор ${name} (${cities[0]}) создан, но список городов не сохранён: на сервере не применены миграции БД. Выполните pnpm db:migrate и задайте города повторно.`,
+        message: `Менеджер по кадрам ${name} (${cities[0]}) создан, но список городов не сохранён: на сервере не применены миграции БД. Выполните pnpm db:migrate и задайте города повторно.`,
         password,
         username: created.username ?? undefined,
       }
@@ -184,7 +184,7 @@ export async function createCuratorAction(
     revalidatePath('/admin')
     return {
       ok: true,
-      message: `Куратор ${name} (${cities[0]}) создан, но список городов не сохранён (${err instanceof Error ? err.message : 'ошибка базы данных'}). Откройте «Города» у куратора и сохраните повторно.`,
+      message: `Менеджер по кадрам ${name} (${cities[0]}) создан, но список городов не сохранён (${err instanceof Error ? err.message : 'ошибка базы данных'}). Откройте «Города» у менеджера по кадрам и сохраните повторно.`,
       password,
       username: created.username ?? undefined,
     }
@@ -193,7 +193,7 @@ export async function createCuratorAction(
   revalidatePath('/admin')
   return {
     ok: true,
-    message: `Куратор ${name} (${canonical.join(', ')}) создан.`,
+    message: `Менеджер по кадрам ${name} (${canonical.join(', ')}) создан.`,
     password,
     username: created.username ?? undefined,
   }
@@ -224,7 +224,7 @@ export async function setManagerStatusAction(
   await updateManagerStatus(id, status)
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
-  const label = manager.role === 'curator' ? 'Куратор' : 'Менеджер'
+  const label = manager.role === 'curator' ? 'Менеджер по кадрам' : 'Менеджер'
   return {
     ok: true,
     message:
@@ -262,7 +262,7 @@ export async function updateCuratorCityAction(
   const account = await getManagerById(id)
   if (!account) return { ok: false, message: 'Аккаунт не найден.' }
   if (account.role !== 'curator') {
-    return { ok: false, message: 'Город задаётся только для кураторов.' }
+    return { ok: false, message: 'Город задаётся только для менеджеров по кадрам.' }
   }
   const cities = parseCityList(city)
   if (cities.length === 0) {
@@ -317,6 +317,6 @@ export async function deleteManagerAction(id: string): Promise<ActionResult> {
   invalidateAnalytics()
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
-  const label = manager.role === 'curator' ? 'Куратор' : 'Менеджер'
+  const label = manager.role === 'curator' ? 'Менеджер по кадрам' : 'Менеджер'
   return { ok: true, message: `${label} ${manager.name} удалён.` }
 }

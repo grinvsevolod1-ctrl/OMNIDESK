@@ -18,7 +18,7 @@ export default async function CuratorLayout({
         <header className="border-b border-border">
           <div className="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">Куратор</p>
+              <p className="truncate text-sm font-semibold">Менеджер по кадрам</p>
               <p className="truncate text-xs text-muted-foreground">
                 {user.name}
                 {user.email ? ` · ${user.email}` : ''}

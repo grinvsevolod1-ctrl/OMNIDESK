@@ -29,9 +29,9 @@ function formatDateTime(iso: string): string {
 }
 
 /**
- * Карточка лида глазами менеджера: статус и история от куратора,
+ * Карточка лида глазами менеджера: статус и история от менеджера по кадрам,
  * общие комментарии и вложения (фото/видео/кружки). Менеджер может
- * добавлять комментарии и файлы, но не менять статус — это зона куратора.
+ * добавлять комментарии и файлы, но не менять статус — это зона менеджера по кадрам.
  */
 export function ManagerLeadDetailPanel({
   leadId,
@@ -148,7 +148,7 @@ export function ManagerLeadDetailPanel({
                   </div>
                 ) : null}
                 <div>
-                  <dt className="text-xs text-muted-foreground">Куратор</dt>
+                  <dt className="text-xs text-muted-foreground">Менеджер по кадрам</dt>
                   <dd className="font-medium">{card.curatorName ?? '—'}</dd>
                 </div>
                 <div>
@@ -164,7 +164,7 @@ export function ManagerLeadDetailPanel({
               {statusHistory.length > 0 ? (
                 <div>
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-                    История статусов куратора
+                    История статусов менеджера по кадрам
                   </p>
                   <ul className="flex flex-col gap-1">
                     {statusHistory.slice(0, 10).map((h) => (
@@ -198,14 +198,14 @@ export function ManagerLeadDetailPanel({
               />
             </div>
 
-            {/* Комментарии: менеджер видит комментарии куратора и пишет свои */}
+            {/* Комментарии: менеджер видит комментарии менеджера по кадрам и пишет свои */}
             <div className="flex flex-col gap-3 px-4 py-4 sm:px-5">
               <p className="text-sm font-semibold">Комментарии</p>
               <div className="flex flex-col gap-2">
                 <Textarea
                   value={freeComment}
                   onChange={(e) => setFreeComment(e.target.value)}
-                  placeholder="Комментарий по лиду (виден куратору и админу)…"
+                  placeholder="Комментарий по лиду (виден менеджеру по кадрам и админу)…"
                   rows={2}
                 />
                 <Button

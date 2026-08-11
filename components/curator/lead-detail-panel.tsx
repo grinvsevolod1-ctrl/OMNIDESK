@@ -279,7 +279,7 @@ export function LeadDetailPanel({
               ) : null}
             </div>
 
-            {/* Файлы: фото/видео куратора и менеджера + кружки из диалога */}
+            {/* Файлы: фото/видео менеджера по кадрам и менеджера + кружки из диалога */}
             <div className="border-b border-border px-4 py-4 sm:px-5">
               <LeadAttachments
                 leadCardId={leadId}
@@ -404,7 +404,7 @@ export function LeadDetailPanel({
                     >
                       <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         <span className="font-medium text-foreground">
-                          {c.authorName ?? 'Куратор'}
+                          {c.authorName ?? 'Менеджер по кадрам'}
                         </span>
                         {c.status ? (
                           <Badge

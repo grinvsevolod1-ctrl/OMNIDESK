@@ -144,7 +144,7 @@ export function CuratorsTable({
                     type="button"
                     className="group flex flex-wrap items-center gap-1.5"
                     onClick={() => setEditingCities(c)}
-                    title="Изменить города куратора"
+                    title="Изменить города менеджера по кадрам"
                   >
                     {(citiesById?.[c.id]?.length
                       ? citiesById[c.id]

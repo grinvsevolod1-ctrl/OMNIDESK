@@ -489,7 +489,7 @@ export async function findDuplicateLeadWarning(input: {
   if (!dup) return null
   const who = dup.full_name || 'без имени'
   return dup.curator_name
-    ? `Возможный дубль: карточка «${who}» уже существует и закреплена за куратором ${dup.curator_name}.`
+    ? `Возможный дубль: карточка «${who}» уже существует и закреплена за менеджером по кадрам ${dup.curator_name}.`
     : `Возможный дубль: карточка «${who}» с теми же контактами уже существует.`
 }
 
@@ -540,7 +540,7 @@ export async function upsertLeadCard(
     // curator — reassignment goes through the admin (with a status reset).
     if (isReassign && !input.isAdmin) {
       throw new Error(
-        'Лид уже закреплён за другим куратором. Переназначение выполняет администратор.',
+        'Лид уже закреплён за другим менеджером по кадрам. Переназначение выполняет администратор.',
       )
     }
 
@@ -757,7 +757,7 @@ export async function updateLeadStatus(input: {
     const row = existing[0]
     if (!row) throw new Error('Лид не найден')
     if (row.curator_id !== input.curatorId) {
-      throw new Error('Этот лид принадлежит другому куратору')
+      throw new Error('Этот лид принадлежит другому менеджеру по кадрам')
     }
 
     const today = mskDayKey(new Date())

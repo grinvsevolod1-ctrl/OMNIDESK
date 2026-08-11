@@ -76,7 +76,7 @@ export async function POST(req: Request) {
     })
   }
 
-  // Дисциплина куратора: после дедлайна с неподтверждёнными статусами
+  // Дисциплина менеджера по кадрам: после дедлайна с неподтверждёнными статусами
   // рабочее место ограничено — как и в server actions.
   if (session.role === 'curator' && isPastDailyDeadline()) {
     const pending = await countLeadsNeedingStatus(

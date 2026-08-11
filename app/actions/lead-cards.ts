@@ -23,6 +23,7 @@ import {
   upsertLeadCard,
   softDeleteLeadCard,
   restoreLeadCard,
+  adminSetLeadStatus,
   listDeletedLeads,
   updateLeadCardField,
   isInlineLeadField,
@@ -176,7 +177,7 @@ export async function saveLeadCardAction(input: {
     return { ok: false, message: 'Укажите город.' }
   }
   if (input.curatorId && !input.curatorId.trim()) {
-    return { ok: false, message: 'Выберите куратора.' }
+    return { ok: false, message: 'Выберите менеджера по кадрам.' }
   }
 
   const resolved = await resolveCardManagerId(session, input.conversationId)
@@ -207,7 +208,7 @@ export async function saveLeadCardAction(input: {
     if (transferred) {
       return {
         ok: true,
-        message: `Лид передан куратору${card.curatorName ? ` ${card.curatorName}` : ''}.${warn}`,
+        message: `Лид передан менеджеру по кадрам${card.curatorName ? ` ${card.curatorName}` : ''}.${warn}`,
       }
     }
     return { ok: true, message: `Карточка сохранена.${warn}` }
@@ -251,7 +252,7 @@ export async function getLeadCardDetailAction(leadCardId: string) {
   }
 }
 
-/** true, когда сессия имеет доступ к карточке (админ / её куратор / её менеджер). */
+/** true, когда сессия имеет доступ к карточке (админ / её менеджер по кадрам / её менеджер). */
 function canAccessLeadCard(
   session: { role: string; sub: string },
   card: { curatorId: string | null; managerId: string | null },
@@ -287,14 +288,14 @@ export async function updateLeadStatusAction(input: {
     })
     revalidatePath('/curator')
     revalidatePath('/admin/curators')
-    // Пуш менеджеру карточки: он сразу видит вердикт куратора, не заходя в
+    // Пуш менеджеру карточки: он сразу видит вердикт менеджера по кадрам, не заходя в
     // «Мои лиды». Доставка не должна ломать основное действие — fire-and-forget.
     void (async () => {
       const card = await getLeadCardById(input.leadCardId)
       if (!card?.managerId) return
       await sendPushToManager(card.managerId, {
         title: `Лид: ${leadStatusLabel(input.status)}`,
-        body: `${card.fullName || 'Лид'} — куратор обновил статус. ${input.comment.trim().slice(0, 120)}`,
+        body: `${card.fullName || 'Лид'} — менеджер по кадрам обновил статус. ${input.comment.trim().slice(0, 120)}`,
         url: '/app/leads',
         tag: `lead-status-${input.leadCardId}`,
       })
@@ -320,7 +321,7 @@ export async function addLeadCommentAction(input: {
     return { ok: false, message: 'Лид не найден.' }
   }
   try {
-    // Для куратора свободный комментарий — часть ограниченного рабочего места:
+    // Для менеджера по кадрам свободный комментарий — часть ограниченного рабочего места:
     // сначала подтверди статусы. Менеджер и админ под гейт не попадают.
     if (session.role === 'curator') {
       await assertCuratorNotLocked(session.sub)
@@ -332,10 +333,10 @@ export async function addLeadCommentAction(input: {
     })
     revalidatePath('/curator')
     revalidatePath('/app/leads')
-    // Куратор написал комментарий → пуш менеджеру карточки (не самому себе).
+    // Менеджер по кадрам написал комментарий → пуш менеджеру карточки (не самому себе).
     if (session.role === 'curator' && card.managerId) {
       void sendPushToManager(card.managerId, {
-        title: 'Комментарий куратора',
+        title: 'Комментарий менеджера по кадрам',
         body: `${card.fullName || 'Лид'}: ${input.body.trim().slice(0, 140)}`,
         url: '/app/leads',
         tag: `lead-comment-${input.leadCardId}`,
@@ -350,7 +351,7 @@ export async function addLeadCommentAction(input: {
 
 /* --------------------------- Вложения карточки --------------------------- */
 
-/** Список вложений карточки (для менеджера/куратора/админа с доступом). */
+/** Список вложений карточки (для менеджера/менеджера по кадрам/админа с доступом). */
 export async function listLeadAttachmentsAction(leadCardId: string) {
   const session = await getSession()
   if (!session) throw new Error('Unauthorized')
@@ -465,7 +466,7 @@ export async function transferLeadAdminAction(input: {
     }
     return {
       ok: true,
-      message: `Лид передан${card.curatorName ? ` куратору ${card.curatorName}` : ''}.`,
+      message: `Лид передан${card.curatorName ? ` менеджеру по кадрам ${card.curatorName}` : ''}.`,
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Ошибка передачи'
@@ -571,6 +572,30 @@ export async function restoreLeadAction(
 export async function listTrashAction() {
   await requireAdmin()
   return listDeletedLeads()
+}
+
+/** Admin: смена статуса + комментарий из строки таблицы (любой лид). */
+export async function adminSetLeadStatusAction(input: {
+  leadCardId: string
+  status: string
+  comment: string
+}): Promise<LeadCardActionResult> {
+  const session = await requireAdmin()
+  if (!isLeadStatus(input.status)) {
+    return { ok: false, message: 'Некорректный статус' }
+  }
+  try {
+    await adminSetLeadStatus({
+      leadCardId: input.leadCardId,
+      status: input.status,
+      comment: input.comment,
+      authorName: session.name ?? 'Администратор',
+    })
+    revalidatePath('/admin/curators')
+    return { ok: true, message: 'Статус обновлён' }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+  }
 }
 
 /** Admin: обновление одного поля лида прямо из строки таблицы. */

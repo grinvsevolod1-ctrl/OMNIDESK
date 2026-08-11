@@ -489,6 +489,11 @@ export function ConversationList({
                           <PresenceDot state={presenceByConv[c.id].state} />
                         ) : null}
                         <Highlight text={c.contactName} query={search} />
+                        {c.contactUsername ? (
+                          <span className="shrink-0 truncate text-[11px] font-normal text-muted-foreground">
+                            @{c.contactUsername}
+                          </span>
+                        ) : null}
                         {visitorTag(c) ? (
                           <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium tabular-nums text-muted-foreground">
                             {visitorTag(c)}

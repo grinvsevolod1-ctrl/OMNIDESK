@@ -2,13 +2,20 @@
 
 import { useState, useTransition } from 'react'
 import {
+  ArrowDownWideNarrow,
   ArrowRightLeft,
+  ArrowUpNarrowWide,
+  AtSign,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  FileSpreadsheet,
   Loader2,
-  MapPin,
   RefreshCw,
+  Search,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -16,6 +23,14 @@ import {
   listAllLeadsAdminAction,
   transferLeadAdminAction,
 } from '@/app/actions/lead-cards'
+import { exportLeadsExcelAction } from '@/app/actions/leads-export'
+import {
+  CityInlineEditor,
+  DeleteLeadButton,
+  StatusInlineEditor,
+  TextInlineEditor,
+} from '@/components/admin/lead-inline-edit'
+import { LeadsTrashDialog } from '@/components/admin/leads-trash-dialog'
 import { StatCard } from '@/components/page-parts'
 import type { LeadCardStats } from '@/lib/data/lead-stats'
 import { mskDayKey } from '@/lib/time'
@@ -36,7 +51,6 @@ import {
   LEAD_STATUSES,
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
-  leadStatusLabel,
   leadNeedsDailyStatus,
 } from '@/lib/lead-status'
 import { APP_TIME_ZONE } from '@/lib/time'
@@ -52,7 +66,23 @@ function formatDateTime(iso: string): string {
   })
 }
 
-const PAGE_SIZE = 50
+/** Скачивание готового .xlsx из base64 (server action не умеет стримить файл). */
+function downloadBase64Xlsx(base64: string, fileName: string) {
+  const bin = atob(base64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  const blob = new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const PAGE_SIZE = 20
 
 type PeriodPreset = 'all' | 'today' | '7d' | '30d' | 'day' | 'range'
 
@@ -109,7 +139,8 @@ export function AllLeadsSection({
   const [offset, setOffset] = useState(0)
   const [curatorId, setCuratorId] = useState<string>('')
   const [status, setStatus] = useState<string>('')
-  const [city, setCity] = useState('')
+  const [search, setSearch] = useState('')
+  const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
   const [orphanedOnly, setOrphanedOnly] = useState(false)
   const [preset, setPreset] = useState<PeriodPreset>('all')
   const [day, setDay] = useState(today)
@@ -117,11 +148,13 @@ export function AllLeadsSection({
   const [to, setTo] = useState(today)
   const [stats, setStats] = useState<LeadCardStats | null>(null)
   const [pending, startTransition] = useTransition()
+  const [exporting, startExport] = useTransition()
 
   function reload(next: {
     curatorId?: string
     status?: string
-    city?: string
+    search?: string
+    sort?: 'newest' | 'oldest'
     orphanedOnly?: boolean
     offset?: number
     preset?: PeriodPreset
@@ -132,7 +165,8 @@ export function AllLeadsSection({
     const f = {
       curatorId: next.curatorId ?? curatorId,
       status: next.status ?? status,
-      city: next.city ?? city,
+      search: next.search ?? search,
+      sort: next.sort ?? sort,
       orphanedOnly: next.orphanedOnly ?? orphanedOnly,
       offset: next.offset ?? 0,
       preset: next.preset ?? preset,
@@ -147,7 +181,8 @@ export function AllLeadsSection({
           listAllLeadsAdminAction({
             curatorId: f.curatorId || null,
             status: f.status || null,
-            city: f.city || null,
+            search: f.search || null,
+            sort: f.sort,
             from: range.from,
             to: range.to,
             orphanedOnly: f.orphanedOnly,
@@ -168,6 +203,28 @@ export function AllLeadsSection({
         setStats(st)
       } catch {
         toast.error('Не удалось загрузить лиды')
+      }
+    })
+  }
+
+  /** Выгрузка текущей выборки (все страницы, без пагинации) в .xlsx. */
+  function exportExcel() {
+    const range = presetRange(preset, day, from, to)
+    startExport(async () => {
+      const res = await exportLeadsExcelAction({
+        curatorId: curatorId || null,
+        status: status || null,
+        search: search || null,
+        orphanedOnly,
+        from: range.from,
+        to: range.to,
+        sort,
+      })
+      if (res.ok && res.base64 && res.fileName) {
+        downloadBase64Xlsx(res.base64, res.fileName)
+        toast.success(`Выгружено лидов: ${res.rows}`)
+      } else {
+        toast.error(res.message ?? 'Не удалось выгрузить')
       }
     })
   }
@@ -193,7 +250,7 @@ export function AllLeadsSection({
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Все лиды</h2>
           <p className="text-sm text-muted-foreground">
-            Все переданные лиды по всем кураторам. Всего: {total}.
+            Все переданные лиды по всем менеджерам по кадрам. Всего: {total}.
           </p>
         </div>
         {orphanedCount > 0 ? (
@@ -211,7 +268,7 @@ export function AllLeadsSection({
                 : 'border-destructive/40 text-destructive hover:bg-destructive/10',
             )}
           >
-            Без куратора: {orphanedCount}
+            Без менеджера по кадрам: {orphanedCount}
           </button>
         ) : null}
       </div>
@@ -312,7 +369,7 @@ export function AllLeadsSection({
               }
             />
             <StatCard
-              label="Передано куратору"
+              label="Передано менеджеру по кадрам"
               value={stats.transferred}
               icon={ArrowRightLeft}
               hint="за выбранный период"
@@ -375,9 +432,9 @@ export function AllLeadsSection({
           }}
           disabled={orphanedOnly}
           className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-          aria-label="Фильтр по куратору"
+          aria-label="Фильтр по менеджеру по кадрам"
         >
-          <option value="">Все кураторы</option>
+          <option value="">Все менеджеры по кадрам</option>
           {curators.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
@@ -408,36 +465,90 @@ export function AllLeadsSection({
           ))}
         </select>
 
-        <Input
-          value={city}
-          onChange={(e) => setCity(e.target.value)}
-          onKeyDown={(e) => {
-            if (
-              e.key === 'Enter' &&
-              !e.nativeEvent.isComposing &&
-              e.keyCode !== 229
-            ) {
-              reload({ city })
-            }
+        {/* Единый поиск: дата ДД.ММ.ГГГГ / ФИО / телефон / @username / город / регион */}
+        <div className="relative min-w-0 flex-1 basis-56">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === 'Enter' &&
+                !e.nativeEvent.isComposing &&
+                e.keyCode !== 229
+              ) {
+                reload({ search })
+              }
+            }}
+            placeholder="Поиск: дата, ФИО, телефон, @username, город, регион…"
+            className="h-9 pl-8 pr-8"
+            aria-label="Поиск по лидам"
+          />
+          {search ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('')
+                reload({ search: '' })
+              }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="Очистить поиск"
+            >
+              <X className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            const next = sort === 'newest' ? 'oldest' : 'newest'
+            setSort(next)
+            reload({ sort: next })
           }}
-          placeholder="Город…"
-          className="h-9 w-36"
-          aria-label="Фильтр по городу"
-        />
+          aria-label="Переключить сортировку"
+          title={sort === 'newest' ? 'Сначала новые' : 'Сначала старые'}
+        >
+          {sort === 'newest' ? (
+            <ArrowDownWideNarrow className="size-3.5" />
+          ) : (
+            <ArrowUpNarrowWide className="size-3.5" />
+          )}
+          {sort === 'newest' ? 'Новые' : 'Старые'}
+        </Button>
 
         <Button
           variant="outline"
           size="sm"
           disabled={pending}
           onClick={() => reload({})}
+          aria-label="Обновить список"
         >
           {pending ? (
             <Loader2 className="size-3.5 animate-spin" />
           ) : (
             <RefreshCw className="size-3.5" />
           )}
-          Обновить
         </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={exporting}
+          onClick={exportExcel}
+          aria-label="Выгрузить в Excel"
+          title="Выгрузить текущую выборку в Excel"
+        >
+          {exporting ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <FileSpreadsheet className="size-3.5" />
+          )}
+          Excel
+        </Button>
+
+        <LeadsTrashDialog onChanged={() => reload({ offset })} />
       </div>
 
       <Card className="overflow-hidden">
@@ -449,31 +560,56 @@ export function AllLeadsSection({
           <ul className="divide-y divide-border">
             {leads.map((lead) => {
               const needs = leadNeedsDailyStatus(lead)
-              const tone = lead.status ? LEAD_STATUS_TONE[lead.status] : null
+              const refresh = () => reload({ offset })
               return (
                 <li
                   key={lead.id}
                   className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:px-5"
                 >
                   <div className="min-w-0 flex-1 basis-48">
-                    <p className="truncate text-sm font-medium">
-                      {lead.fullName || 'Без имени'}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {[lead.vacancy, lead.phone].filter(Boolean).join(' · ') ||
-                        '—'}
-                    </p>
+                    {/* ФИО, должность, телефон редактируются кликом по значению */}
+                    <TextInlineEditor
+                      lead={lead}
+                      field="full_name"
+                      label="ФИО"
+                      display={lead.fullName || 'Без имени'}
+                      className="text-sm font-medium"
+                      onSaved={refresh}
+                    />
+                    <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                      <TextInlineEditor
+                        lead={lead}
+                        field="vacancy"
+                        label="Должность"
+                        display={lead.vacancy}
+                        placeholder="Курьер, водитель…"
+                        onSaved={refresh}
+                      />
+                      <span aria-hidden>·</span>
+                      <TextInlineEditor
+                        lead={lead}
+                        field="phone"
+                        label="Телефон"
+                        display={lead.phone}
+                        placeholder="+7…"
+                        onSaved={refresh}
+                      />
+                      {lead.telegramUsername ? (
+                        <a
+                          href={`https://t.me/${lead.telegramUsername}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-0.5 text-primary transition-opacity hover:opacity-75"
+                          title="Открыть чат в Telegram"
+                        >
+                          <AtSign className="size-3" />
+                          {lead.telegramUsername}
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
 
-                  {lead.city ? (
-                    <Badge
-                      variant="outline"
-                      className="gap-1 border-transparent bg-muted text-muted-foreground"
-                    >
-                      <MapPin className="size-3" />
-                      {lead.city}
-                    </Badge>
-                  ) : null}
+                  <CityInlineEditor lead={lead} onSaved={refresh} />
 
                   {lead.curatorName ? (
                     <span className="text-xs text-muted-foreground">
@@ -484,7 +620,7 @@ export function AllLeadsSection({
                       variant="outline"
                       className="border-transparent bg-destructive/15 text-destructive"
                     >
-                      Без куратора
+                      Без менеджера по кадрам
                     </Badge>
                   )}
 
@@ -495,15 +631,8 @@ export function AllLeadsSection({
                     >
                       Нужно обновить
                     </Badge>
-                  ) : tone && lead.status ? (
-                    <Badge
-                      variant="outline"
-                      className={cn('gap-1.5 border-transparent', tone.bg, tone.text)}
-                    >
-                      <span className={cn('size-1.5 rounded-full', tone.dot)} />
-                      {leadStatusLabel(lead.status)}
-                    </Badge>
                   ) : null}
+                  <StatusInlineEditor lead={lead} onSaved={refresh} />
 
                   {lead.transferredAt ? (
                     <span className="text-xs text-muted-foreground">
@@ -511,47 +640,50 @@ export function AllLeadsSection({
                     </span>
                   ) : null}
 
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label="Передать куратору"
-                          disabled={pending}
-                        >
-                          <ArrowRightLeft className="size-4" />
-                        </Button>
-                      }
-                    />
-                    <DropdownMenuContent align="end" className="min-w-52">
-                      <DropdownMenuLabel>Передать куратору</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      {curators.filter((c) => c.id !== lead.curatorId).length ===
-                      0 ? (
-                        <DropdownMenuItem disabled>
-                          Нет доступных кураторов
-                        </DropdownMenuItem>
-                      ) : (
-                        curators
-                          .filter((c) => c.id !== lead.curatorId)
-                          .map((c) => (
-                            <DropdownMenuItem
-                              key={c.id}
-                              onClick={() => transfer(lead.id, c.id)}
-                            >
-                              <span className="truncate">{c.name}</span>
-                              <span className="ml-auto max-w-[50%] truncate text-xs text-muted-foreground">
-                                {c.cities?.length
-                                  ? c.cities.join(', ')
-                                  : (c.city ?? '')}{' '}
-                                · {c.activeLeads} лид.
-                              </span>
-                            </DropdownMenuItem>
-                          ))
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <div className="flex items-center">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label="Передать"
+                            disabled={pending}
+                          >
+                            <ArrowRightLeft className="size-4" />
+                          </Button>
+                        }
+                      />
+                      <DropdownMenuContent align="end" className="min-w-52">
+                        <DropdownMenuLabel>Передать</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        {curators.filter((c) => c.id !== lead.curatorId)
+                          .length === 0 ? (
+                          <DropdownMenuItem disabled>
+                            Нет доступных сотрудников
+                          </DropdownMenuItem>
+                        ) : (
+                          curators
+                            .filter((c) => c.id !== lead.curatorId)
+                            .map((c) => (
+                              <DropdownMenuItem
+                                key={c.id}
+                                onClick={() => transfer(lead.id, c.id)}
+                              >
+                                <span className="truncate">{c.name}</span>
+                                <span className="ml-auto max-w-[50%] truncate text-xs text-muted-foreground">
+                                  {c.cities?.length
+                                    ? c.cities.join(', ')
+                                    : (c.city ?? '')}{' '}
+                                  · {c.activeLeads} лид.
+                                </span>
+                              </DropdownMenuItem>
+                            ))
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <DeleteLeadButton lead={lead} onDeleted={refresh} />
+                  </div>
                 </li>
               )
             })}
@@ -560,28 +692,95 @@ export function AllLeadsSection({
       </Card>
 
       {total > PAGE_SIZE ? (
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={pending || offset === 0}
-            onClick={() => reload({ offset: Math.max(offset - PAGE_SIZE, 0) })}
-          >
-            Назад
-          </Button>
-          <span>
-            {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} из {total}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={pending || offset + PAGE_SIZE >= total}
-            onClick={() => reload({ offset: offset + PAGE_SIZE })}
-          >
-            Вперёд
-          </Button>
-        </div>
+        <Pagination
+          total={total}
+          offset={offset}
+          pageSize={PAGE_SIZE}
+          pending={pending}
+          onPage={(nextOffset) => reload({ offset: nextOffset })}
+        />
       ) : null}
     </section>
+  )
+}
+
+/** Номера страниц с многоточиями: 1 … 4 [5] 6 … 75 — рассчитано на 1500+ лидов. */
+function Pagination({
+  total,
+  offset,
+  pageSize,
+  pending,
+  onPage,
+}: {
+  total: number
+  offset: number
+  pageSize: number
+  pending: boolean
+  onPage: (offset: number) => void
+}) {
+  const pageCount = Math.ceil(total / pageSize)
+  const current = Math.floor(offset / pageSize) + 1
+
+  // Всегда: первая, последняя, текущая ± 1; между разрывами — многоточие.
+  const pages: (number | 'gap')[] = []
+  let prev = 0
+  for (let p = 1; p <= pageCount; p++) {
+    const keep = p === 1 || p === pageCount || Math.abs(p - current) <= 1
+    if (!keep) continue
+    if (prev && p - prev > 1) pages.push('gap')
+    pages.push(p)
+    prev = p
+  }
+
+  return (
+    <nav
+      className="flex flex-wrap items-center justify-center gap-1.5"
+      aria-label="Страницы списка лидов"
+    >
+      <Button
+        variant="outline"
+        size="icon-sm"
+        disabled={pending || current === 1}
+        onClick={() => onPage((current - 2) * pageSize)}
+        aria-label="Предыдущая страница"
+      >
+        <ChevronLeft className="size-4" />
+      </Button>
+      {pages.map((p, i) =>
+        p === 'gap' ? (
+          <span
+            key={`gap-${i}`}
+            className="px-1 text-sm text-muted-foreground"
+            aria-hidden
+          >
+            …
+          </span>
+        ) : (
+          <Button
+            key={p}
+            variant={p === current ? 'default' : 'outline'}
+            size="icon-sm"
+            disabled={pending}
+            onClick={() => onPage((p - 1) * pageSize)}
+            aria-label={`Страница ${p}`}
+            aria-current={p === current ? 'page' : undefined}
+          >
+            {p}
+          </Button>
+        ),
+      )}
+      <Button
+        variant="outline"
+        size="icon-sm"
+        disabled={pending || current === pageCount}
+        onClick={() => onPage(current * pageSize)}
+        aria-label="Следующая страница"
+      >
+        <ChevronRight className="size-4" />
+      </Button>
+      <span className="ml-2 text-xs text-muted-foreground">
+        {offset + 1}–{Math.min(offset + pageSize, total)} из {total}
+      </span>
+    </nav>
   )
 }

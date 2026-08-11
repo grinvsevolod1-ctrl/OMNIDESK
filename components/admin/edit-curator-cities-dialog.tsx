@@ -84,7 +84,7 @@ export function EditCuratorCitiesDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MapPin className="size-4" />
-            Города куратора
+            Города менеджера по кадрам
           </DialogTitle>
           <DialogDescription>
             {curator.name}: добавьте по одному городу на поле.

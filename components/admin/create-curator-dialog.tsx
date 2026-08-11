@@ -59,7 +59,7 @@ export function CreateCuratorDialog() {
         render={
           <Button variant="outline">
             <UserPlus className="size-4" />
-            Новый куратор
+            Новый менеджер по кадрам
           </Button>
         }
       />
@@ -67,7 +67,7 @@ export function CreateCuratorDialog() {
         {createdPassword ? (
           <>
             <DialogHeader>
-              <DialogTitle>Куратор создан</DialogTitle>
+              <DialogTitle>Менеджер по кадрам создан</DialogTitle>
               <DialogDescription>
                 Передайте эти данные безопасным способом. Пароль показывается
                 только один раз.
@@ -124,9 +124,9 @@ export function CreateCuratorDialog() {
         ) : (
           <form action={handleSubmit}>
             <DialogHeader>
-              <DialogTitle>Создать куратора</DialogTitle>
+              <DialogTitle>Создать менеджера по кадрам</DialogTitle>
               <DialogDescription>
-                Добавьте куратора и укажите города, за которые он отвечает.
+                Добавьте менеджера по кадрам и укажите города, за которые он отвечает.
               </DialogDescription>
             </DialogHeader>
             <div className="my-4 flex flex-col gap-4">
@@ -212,7 +212,7 @@ export function CreateCuratorDialog() {
                     Создаём…
                   </>
                 ) : (
-                  'Создать куратора'
+                  'Создать менеджера по кадрам'
                 )}
               </Button>
             </DialogFooter>

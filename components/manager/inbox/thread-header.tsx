@@ -91,6 +91,11 @@ export function ThreadHeader({
         <div className="flex min-w-0 flex-col gap-0.5">
           <p className="flex items-center gap-2 truncate text-sm font-semibold">
             {active.contactName}
+            {active.contactUsername ? (
+              <span className="shrink-0 truncate text-xs font-normal text-muted-foreground">
+                @{active.contactUsername}
+              </span>
+            ) : null}
             {visitorTag(active) ? (
               <span className="shrink-0 rounded bg-muted px-1 text-[11px] font-medium tabular-nums text-muted-foreground">
                 {visitorTag(active)}

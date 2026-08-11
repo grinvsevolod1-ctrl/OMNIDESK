@@ -194,7 +194,7 @@ export function ManagerActions({ manager }: { manager: Manager }) {
         </DialogContent>
       </Dialog>
 
-      {/* Города куратора */}
+      {/* Города менеджера по кадрам */}
       {manager.role === 'curator' ? (
         <EditCuratorCitiesDialog
           curator={manager}

@@ -28,7 +28,7 @@ export default async function ManagerLeadsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Мои лиды"
-        description="Карточки лидов, которые вы заполнили: статистика за сегодня, за период или за любой день, фильтр по статусам и передаче куратору."
+        description="Карточки лидов, которые вы заполнили: статистика за сегодня, за период или за любой день, фильтр по статусам и передаче менеджеру по кадрам."
       />
       <ManagerLeadsView
         initialLeads={list.leads}
