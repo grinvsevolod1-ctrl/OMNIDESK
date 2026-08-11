@@ -41,14 +41,21 @@ function formatDateTime(iso: string): string {
   })
 }
 
+/**
+ * Полная карточка лида (боковая панель). Используется менеджером по кадрам
+ * и админом: variant='admin' переключает сохранение статуса на админский
+ * action и показывает владельца-куратора в реквизитах.
+ */
 export function LeadDetailPanel({
   leadId,
   onClose,
   onUpdated,
+  variant = 'curator',
 }: {
   leadId: string
   onClose: () => void
   onUpdated: () => void
+  variant?: 'curator' | 'admin'
 }) {
   const [pending, startTransition] = useTransition()
 
@@ -234,6 +241,14 @@ export function LeadDetailPanel({
                   <dt className="text-xs text-muted-foreground">Менеджер</dt>
                   <dd className="font-medium">{card.managerName ?? '—'}</dd>
                 </div>
+                {variant === 'admin' ? (
+                  <div>
+                    <dt className="text-xs text-muted-foreground">
+                      Менеджер по кадрам
+                    </dt>
+                    <dd className="font-medium">{card.curatorName ?? '—'}</dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt className="text-xs text-muted-foreground">Передан</dt>
                   <dd className="font-medium">
@@ -350,6 +365,7 @@ export function LeadDetailPanel({
               leadCardId={leadId}
               currentStatus={card.status}
               onSaved={onStatusSaved}
+              variant={variant}
             />
 
             {/* Comments */}

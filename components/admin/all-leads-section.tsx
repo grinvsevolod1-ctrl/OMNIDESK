@@ -26,6 +26,7 @@ import { AdminLeadRow } from '@/components/admin/leads/admin-lead-row'
 import { LeadsPagination } from '@/components/admin/leads/leads-pagination'
 import { LeadsPeriodStats } from '@/components/admin/leads/leads-period-stats'
 import { LeadsTrashDialog } from '@/components/admin/leads-trash-dialog'
+import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -247,6 +248,11 @@ export function AllLeadsSection({
   const refreshRow = useCallback(() => {
     reload({ offset: filtersRef.current.offset })
   }, [reload])
+
+  // Полная карточка лида: клик по свободному месту строки — как у
+  // менеджера по кадрам (комментарии, история, вложения, статус).
+  const [openedLeadId, setOpenedLeadId] = useState<string | null>(null)
+  const openLead = useCallback((id: string) => setOpenedLeadId(id), [])
 
   const transfer = useCallback(
     (leadId: string, toCuratorId: string) => {
@@ -627,6 +633,7 @@ export function AllLeadsSection({
                 pending={pending}
                 onRefresh={refreshRow}
                 onTransfer={transfer}
+                onOpen={openLead}
               />
             ))}
           </ul>
@@ -640,6 +647,17 @@ export function AllLeadsSection({
           pageSize={PAGE_SIZE}
           pending={pending}
           onPage={(nextOffset) => reload({ offset: nextOffset })}
+        />
+      ) : null}
+
+      {/* Полная карточка лида — та же панель, что у менеджера по кадрам,
+          в админ-режиме (статус через админский action, виден владелец). */}
+      {openedLeadId ? (
+        <LeadDetailPanel
+          leadId={openedLeadId}
+          variant="admin"
+          onClose={() => setOpenedLeadId(null)}
+          onUpdated={refreshRow}
         />
       ) : null}
     </section>

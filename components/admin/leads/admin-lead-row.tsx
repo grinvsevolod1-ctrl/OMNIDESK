@@ -52,6 +52,7 @@ export const AdminLeadRow = memo(function AdminLeadRow({
   pending,
   onRefresh,
   onTransfer,
+  onOpen,
 }: {
   lead: LeadCard
   curators: CuratorWithLoad[]
@@ -60,6 +61,8 @@ export const AdminLeadRow = memo(function AdminLeadRow({
   pending: boolean
   onRefresh: () => void
   onTransfer: (leadId: string, toCuratorId: string) => void
+  /** Клик по свободному месту строки — открыть полную карточку лида. */
+  onOpen?: (leadId: string) => void
 }) {
   const needs = leadNeedsDailyStatus(lead)
   return (
@@ -70,9 +73,27 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         // плавная подсветка на несколько секунд.
         isFresh &&
           'bg-primary/10 duration-150 animate-in fade-in slide-in-from-top-2',
+        // Свободное место строки открывает полную карточку; интерактивные
+        // элементы внутри гасят всплытие через stopPropagation.
+        onOpen && 'cursor-pointer hover:bg-muted/40',
       )}
+      onClick={onOpen ? () => onOpen(lead.id) : undefined}
+      onKeyDown={
+        onOpen
+          ? (e) => {
+              if (e.key === 'Enter' && e.target === e.currentTarget) {
+                onOpen(lead.id)
+              }
+            }
+          : undefined
+      }
+      tabIndex={onOpen ? 0 : undefined}
+      aria-label={onOpen ? 'Открыть карточку лида' : undefined}
     >
-      <div className="min-w-0 flex-1 basis-48">
+      <div
+        className="min-w-0 flex-1 basis-48"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* ФИО, должность, телефон редактируются кликом по значению */}
         <TextInlineEditor
           lead={lead}
@@ -115,7 +136,9 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         </div>
       </div>
 
-      <CityInlineEditor lead={lead} onSaved={onRefresh} />
+      <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+        <CityInlineEditor lead={lead} onSaved={onRefresh} />
+      </span>
 
       {lead.curatorName ? (
         <Tooltip>
@@ -145,7 +168,9 @@ export const AdminLeadRow = memo(function AdminLeadRow({
           Нужно обновить
         </Badge>
       ) : null}
-      <StatusInlineEditor lead={lead} onSaved={onRefresh} />
+      <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+        <StatusInlineEditor lead={lead} onSaved={onRefresh} />
+      </span>
 
       {lead.transferredAt ? (
         <Tooltip>
@@ -160,7 +185,10 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         </Tooltip>
       ) : null}
 
-      <div className="flex items-center">
+      <div
+        className="flex items-center"
+        onClick={(e) => e.stopPropagation()}
+      >
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
