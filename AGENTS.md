@@ -67,9 +67,23 @@ app/                     Next.js App Router
 components/admin/        UI админки
   ai-console.tsx         чат Admin AI (копилот)
   ai-*-tab.tsx           вкладки: settings, training, corrections, enrollment, logs
+  all-leads-section.tsx  раздел «Все лиды»: презентационный контейнер
+  leads/                 подкомпоненты + логика «Все лиды»: use-leads-data.ts
+                         (хук: фильтры/пагинация/пуллинг/экспорт/передача),
+                         leads-filter-bar, leads-period-filter, period-range,
+                         xlsx-download, admin-lead-row
   os-shell/              ОС-шелл god-панели (командный интерфейс поверх админки)
   secret-*               UI god-панели (ИЗОЛИРОВАНО)
   god-messenger/         god-мессенджер: диалоги от лица аккаунтов (ИЗОЛИРОВАНО)
+components/curator/      UI куратора
+  lead-detail-panel.tsx  боковая карточка лида: оркестратор (загрузка + действия)
+  lead-detail/           подкомпоненты карточки: lead-identity, lead-fields,
+                         lead-history (общий HistoryRow), lead-lifecycle-actions,
+                         lead-comments, panel-section, format.ts, types.ts
+components/manager/      UI менеджера
+  inbox-view.tsx         инбокс: презентационный компонент
+  inbox/use-inbox.ts     хук инбокса: выбор диалога, черновики, действия,
+                         фильтры, realtime, derived-счётчики, гидрация треда
 lib/
   ai-console/            Admin AI: run-assistant.ts (инструменты+промпт), assistant.ts (типы)
   admin-console/         ОС-шелл-копилот всей админки (кроме god-панели): командная строка
@@ -84,7 +98,11 @@ lib/
   followup/              runtime.ts — авто-дожим молчунов
   finance/               финансы: рекламные кабинеты, пополнения, статистика расходов
   http/                  request.ts — валидация входящих JSON-запросов (zod)
-  hooks/                 клиентские React-хуки (use-channel-status и т.п.)
+  hooks/                 клиентские React-хуки (use-channel-status,
+                         use-debounced-value и т.п.)
+  types/                 общие TS-типы, разнесённые по доменам с барелем
+                         index.ts (accounts, channels, proxies, jobs, leads,
+                         messages, conversations, hosting). Импорт: @/lib/types
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
 worker/src/              воркер каналов (telegram.ts, autopilot.ts, jobs.ts, ...)
   hosting/               автономный DevOps-агент: agent.ts (промпт+цикл), ssh.ts,
@@ -174,6 +192,12 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
   директива или урок, управляемые из чата, а не константа в коде.
 - **Не удаляй и не обходи** тест изоляции `lib/ai/isolation.test.ts`.
 - Меняй только то, что нужно; сложную логику покрывай юнит-тестом рядом.
+- **Конвенция декомпозиции монолитов** (сложилась при рефакторинге лидов/инбокса):
+  вся клиентская логика тяжёлого компонента выносится в хук `use-*.ts` рядом,
+  сам компонент остаётся презентационным; верстка режется на подкомпоненты в
+  подпапке; крупные модули типов/данных дробятся по доменам с барелем `index.ts`,
+  чтобы существующие импорты не менялись. Рефакторинг = «переставить, не менять
+  поведение»: JSX и логика переносятся дословно, проверяется `pnpm check`.
 - **Воркараунд GramJS:** `client.catchUp()` в библиотеке `telegram` — пустая
   заглушка, поэтому восстановление пропущенных сообщений в
   `worker/src/telegram.ts` сделано через собственный dialog sync с per-chat
@@ -188,6 +212,10 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist.ts` → инструмент в co-pilot |
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*` |
+| Раздел «Все лиды» (админ) | контейнер `all-leads-section.tsx` + хук `components/admin/leads/use-leads-data.ts` |
+| Карточка лида (куратор) | `lead-detail-panel.tsx` + подкомпоненты `components/curator/lead-detail/*` |
+| Инбокс менеджера | `inbox-view.tsx` (верстка) + хук `components/manager/inbox/use-inbox.ts` |
+| Общие TS-типы | `lib/types/*` (доменные модули), импорт через `@/lib/types` |
 | Аналитика/отчёты | `lib/data/ai-analytics.ts`, `lib/ai/deal-heat.ts` |
 | Дожим молчунов | `lib/followup/runtime.ts`, `lib/data/ai-followup.ts` |
 | god-панель | `app/wijegniwjgwjog/`, `components/admin/secret-*`, `components/admin/god-messenger/` (см. раздел 3!) |
