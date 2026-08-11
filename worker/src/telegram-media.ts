@@ -73,20 +73,23 @@ export function classifyTgMedia(msg: Api.Message): TgMediaInfo | null {
         placeholder: stickerEmoji ? `${stickerEmoji} [Стикер]` : '[Стикер]',
       }
     }
-    if (isVoice) {
-      return {
-        mediaType: 'voice',
-        mediaMime: mime ?? 'audio/ogg',
-        mediaName: null,
-        placeholder: '[Голосовое сообщение]',
-      }
-    }
+    // Round «кружки» BEFORE voice: some clients attach both a video(round)
+    // and an audio attribute to video messages — checking voice first used
+    // to misfile them as plain audio.
     if (isRoundVideo) {
       return {
         mediaType: 'video_note',
         mediaMime: mime ?? 'video/mp4',
         mediaName: null,
         placeholder: '[Видеосообщение]',
+      }
+    }
+    if (isVoice) {
+      return {
+        mediaType: 'voice',
+        mediaMime: mime ?? 'audio/ogg',
+        mediaName: null,
+        placeholder: '[Голосовое сообщение]',
       }
     }
     if (isAudio) {

@@ -72,12 +72,26 @@ export function LeadCardPanel({
       setVacancy(card.vacancy)
       setCuratorId(card.curatorId)
       setTransferredAt(card.transferredAt)
+    } else {
+      // No card for this contact yet — make sure the form shows THIS
+      // conversation's defaults, never leftovers from a previous thread.
+      setCardId(null)
+      setFullName(defaults?.fullName ?? '')
+      setPhone(defaults?.phone ?? '')
+      setTelegramUsername(defaults?.telegramUsername ?? '')
+      setCity(defaults?.city ?? '')
+      setAddress('')
+      setVacancy('')
+      setCuratorId(null)
+      setTransferredAt(null)
     }
     setLoaded(true)
   }, [conversationId, defaults])
 
   // Reset when the conversation changes — state adjustment during render
-  // (the React-recommended alternative to a setState-in-effect).
+  // (the React-recommended alternative to a setState-in-effect). EVERY field
+  // is reset here: previously only cardId/loaded were cleared, which leaked
+  // the previous lead's data into the next dialog until a page reload.
   const [prevConversationId, setPrevConversationId] = useState(conversationId)
   if (prevConversationId !== conversationId) {
     setPrevConversationId(conversationId)
@@ -85,13 +99,37 @@ export function LeadCardPanel({
     setOpen(false)
     setCardId(null)
     setFreeComment('')
+    setFullName(defaults?.fullName ?? '')
+    setPhone(defaults?.phone ?? '')
+    setTelegramUsername(defaults?.telegramUsername ?? '')
+    setCity(defaults?.city ?? '')
+    setAddress('')
+    setVacancy('')
+    setCuratorId(null)
+    setTransferredAt(null)
   }
 
   function toggleOpen() {
     const next = !open
     setOpen(next)
-    if (next && !loaded) void load()
+    // Refetch on every open: the card may have been updated from another
+    // dialog of the same contact or by the curator/admin meanwhile.
+    if (next) void load()
   }
+
+  // Esc closes the card first (capture phase + preventDefault so the
+  // inbox-level handler doesn't ALSO close the dialog in the same press);
+  // a second Esc then closes the dialog as usual.
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      e.preventDefault()
+      setOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [open])
 
   // Curator search by city (SWR keyed by the trimmed query).
   const cityQuery = open ? city.trim() : ''
@@ -179,29 +217,39 @@ export function LeadCardPanel({
         <span className="hidden sm:inline">Карточка</span>
       </Button>
 
-      {open ? (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          {/* Dim backdrop — click closes */}
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/30 supports-backdrop-filter:backdrop-blur-[2px]"
-            aria-label="Закрыть карточку"
-            onClick={() => setOpen(false)}
-          />
+      {/* Mobile-only dim backdrop with a smooth fade (desktop keeps the
+          dialog fully visible and clickable next to the docked panel). */}
+      <button
+        type="button"
+        className={cn(
+          'fixed inset-0 z-40 bg-black/30 transition-opacity duration-200 supports-backdrop-filter:backdrop-blur-[2px] sm:hidden',
+          open ? 'opacity-100' : 'pointer-events-none opacity-0',
+        )}
+        aria-label="Закрыть карточку"
+        aria-hidden={!open}
+        tabIndex={open ? 0 : -1}
+        onClick={() => setOpen(false)}
+      />
 
-          {/* Fixed panel pinned to the viewport edge */}
-          <aside
-            role="dialog"
-            aria-modal="true"
-            aria-label="Карточка лида"
-            className={cn(
-              'relative z-10 flex h-full w-full flex-col bg-popover text-popover-foreground shadow-2xl ring-1 ring-foreground/10',
-              'animate-in slide-in-from-bottom-4 duration-200 sm:slide-in-from-right-4',
-              // Mobile: full width bottom sheet feel; desktop: comfortable 28rem panel
-              'max-sm:mt-auto max-sm:h-[min(92dvh,100%)] max-sm:rounded-t-2xl',
-              'sm:ml-auto sm:w-[min(28rem,100vw)] sm:max-w-[28rem]',
-            )}
-          >
+      {/* Always-mounted panel sliding in/out with the same smooth
+          transition-transform the «О контакте» drawer uses. Docked to the
+          right edge on desktop so the dialog stays readable beside it. */}
+      <aside
+        role="dialog"
+        aria-label="Карточка лида"
+        aria-hidden={!open}
+        className={cn(
+          'fixed z-50 flex flex-col bg-popover text-popover-foreground shadow-2xl ring-1 ring-foreground/10',
+          'transition-transform duration-300 ease-out',
+          // Mobile: bottom sheet sliding up.
+          'max-sm:inset-x-0 max-sm:bottom-0 max-sm:h-[min(92dvh,100dvh)] max-sm:rounded-t-2xl',
+          open ? 'max-sm:translate-y-0' : 'max-sm:translate-y-full',
+          // Desktop: right-docked column sliding in.
+          'sm:inset-y-0 sm:right-0 sm:w-[min(28rem,100vw)] sm:max-w-[28rem] sm:border-l sm:border-border',
+          open ? 'sm:translate-x-0' : 'sm:translate-x-full',
+          !open && 'pointer-events-none',
+        )}
+      >
             <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3.5 sm:px-5">
               <div className="min-w-0">
                 <p className="text-base font-semibold tracking-tight">
@@ -379,7 +427,7 @@ export function LeadCardPanel({
                     </div>
                   ) : null}
 
-                  {/* Комментарии: менеджер пишет свои и видит комментарии менеджера по кадрам */}
+                  {/* Комментарии: менеджер пишет свои и в��дит комментарии менеджера по кадрам */}
                   <div className="flex flex-col gap-2 border-t border-border pt-3.5">
                     <p className="text-sm font-semibold">Комментарии</p>
                     <Textarea
@@ -461,10 +509,8 @@ export function LeadCardPanel({
                 )}
                 Передать
               </Button>
-            </footer>
-          </aside>
-        </div>
-      ) : null}
+        </footer>
+      </aside>
     </>
   )
 }

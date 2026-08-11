@@ -7,6 +7,7 @@ import {
   addLeadComment,
   countLeadsNeedingStatus,
   findCuratorsByCity,
+  findLeadCardForContact,
   getCuratorDiscipline,
   getLeadCardByConversation,
   getLeadCardById,
@@ -147,7 +148,12 @@ async function notifyCuratorOfTransfer(
 
 export async function getLeadCardAction(conversationId: string) {
   await requireManagerOrAdmin()
-  return getLeadCardByConversation(conversationId)
+  // Сначала карточка этого диалога; если её нет — карточка того же контакта
+  // из другого диалога (человек написал на другой наш аккаунт): панель
+  // откроется уже заполненной, дубль не создаётся.
+  const own = await getLeadCardByConversation(conversationId)
+  if (own) return own
+  return findLeadCardForContact(conversationId).catch(() => null)
 }
 
 export async function findCuratorsByCityAction(city: string) {

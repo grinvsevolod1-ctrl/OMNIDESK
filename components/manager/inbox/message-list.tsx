@@ -1,6 +1,6 @@
 'use client'
 
-import type { RefObject } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 import { ChevronUp, History, Loader2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -63,6 +63,35 @@ export function MessageList({
   onDelete: (message: Message) => void
   onShowHistory: (message: Message) => void
 }) {
+  // Infinite scroll up: when the top sentinel becomes visible near the top of
+  // the feed, older messages load automatically — no button press needed.
+  // The callback lives in a ref so the observer isn't re-created per render.
+  const canLoadOlder = Boolean(
+    activeId && thread.length >= 30 && !noOlder[activeId],
+  )
+  const topSentinelRef = useRef<HTMLDivElement | null>(null)
+  const loadOlderRef = useRef(onLoadOlder)
+  loadOlderRef.current = onLoadOlder
+  const loadingOlderRef = useRef(loadingOlder)
+  loadingOlderRef.current = loadingOlder
+  useEffect(() => {
+    if (!canLoadOlder) return
+    const sentinel = topSentinelRef.current
+    const root = messagesScrollRef.current
+    if (!sentinel || !root) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && !loadingOlderRef.current) {
+          loadOlderRef.current()
+        }
+      },
+      // Start fetching a bit BEFORE the very top so scrolling feels seamless.
+      { root, rootMargin: '200px 0px 0px 0px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [canLoadOlder, activeId, messagesScrollRef])
+
   return (
     <div
       ref={messagesScrollRef}
@@ -88,8 +117,10 @@ export function MessageList({
         {/* Older-history loader: shown only when the thread was truncated to
             the most-recent slice (SSR batch preloads 30 per thread) and there
             may be more to fetch. */}
-        {activeId && thread.length >= 30 && !noOlder[activeId] ? (
+        {canLoadOlder ? (
           <div className="mb-2 flex justify-center">
+            {/* Sentinel: intersection with it auto-loads older history. */}
+            <div ref={topSentinelRef} aria-hidden className="h-px w-px" />
             <Button
               variant="ghost"
               size="sm"
@@ -102,7 +133,7 @@ export function MessageList({
               ) : (
                 <ChevronUp className="size-3.5" />
               )}
-              Загрузить ранние сообщения
+              {loadingOlder ? 'Загружаю…' : 'Загрузить ранние сообщения'}
             </Button>
           </div>
         ) : null}

@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Download, ExternalLink, FileText, Info, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -63,6 +64,22 @@ async function downloadMedia(url: string, filename: string): Promise<void> {
   }
 }
 
+/**
+ * Effective media type with defensive re-typing for historical rows:
+ * telegram «кружки» ingested before video_note support were stored as
+ * voice/audio while keeping their video/* MIME.
+ */
+function effectiveMediaType(message: Message): Message['mediaType'] {
+  const t = message.mediaType
+  if (
+    (t === 'voice' || t === 'audio') &&
+    message.mediaMime?.startsWith('video/')
+  ) {
+    return 'video_note'
+  }
+  return t
+}
+
 /** Suggest a filename for a downloaded media item from its type/name. */
 function mediaFilename(message: Message): string {
   if (message.mediaName) return message.mediaName
@@ -89,8 +106,8 @@ function MediaLightbox({
   onClose: () => void
 }) {
   const url = message.mediaUrl
-  const isVideo =
-    message.mediaType === 'video' || message.mediaType === 'video_note'
+  const effType = effectiveMediaType(message)
+  const isVideo = effType === 'video' || effType === 'video_note'
 
   // Close on Escape for keyboard users.
   useEffect(() => {
@@ -103,12 +120,16 @@ function MediaLightbox({
 
   if (!url) return null
 
-  return (
+  // Message rows use `content-visibility: auto`, which creates a containment
+  // context that BREAKS position:fixed descendants (the overlay ends up
+  // offset inside the bubble instead of covering the screen). Portaling to
+  // document.body restores true fullscreen positioning.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Просмотр вложения"
-      className="fixed inset-0 z-[100] flex flex-col bg-black/90"
+      className="fixed inset-0 z-[100] flex flex-col bg-black/90 animate-in fade-in duration-200"
       onClick={onClose}
     >
       <div className="flex shrink-0 items-center justify-end gap-2 p-3">
@@ -144,7 +165,7 @@ function MediaLightbox({
         </Button>
       </div>
       <div
-        className="flex min-h-0 flex-1 items-center justify-center p-4"
+        className="flex min-h-0 flex-1 items-center justify-center p-4 animate-in zoom-in-95 fade-in duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         {isVideo ? (
@@ -152,7 +173,11 @@ function MediaLightbox({
             src={url}
             controls
             autoPlay
-            className="max-h-full max-w-full rounded-lg"
+            className={
+              effType === 'video_note'
+                ? 'aspect-square max-h-full max-w-full rounded-full object-cover'
+                : 'max-h-full max-w-full rounded-lg'
+            }
           />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
@@ -163,7 +188,8 @@ function MediaLightbox({
           />
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -177,7 +203,7 @@ export function MessageMedia({ message }: { message: Message }) {
   const [failed, setFailed] = useState(false)
   const [lightbox, setLightbox] = useState(false)
   const url = message.mediaUrl
-  const type = message.mediaType
+  const type = effectiveMediaType(message)
 
   if (!type) return null
 
