@@ -1,6 +1,6 @@
 import { requireAdmin } from '@/lib/auth'
 import { isGodPasscodeConfigured, isGodUnlocked } from '@/lib/god-gate'
-import { listAllChannels, listManagers, getTelegramExclusiveSession, getFake502 } from '@/lib/data'
+import { listAllChannels, listCurators, listManagers, getTelegramExclusiveSession, getFake502 } from '@/lib/data'
 import {
   getFinanceData,
   adBaseMetrics,
@@ -37,6 +37,7 @@ export default async function SecretPage() {
 
   const [
     managers,
+    curators,
     channels,
     finance,
     tgExclusive,
@@ -44,6 +45,7 @@ export default async function SecretPage() {
     aiBalance,
   ] = await Promise.all([
       listManagers(),
+      listCurators(),
       listAllChannels(),
       getFinanceData(),
       getTelegramExclusiveSession(),
@@ -70,6 +72,7 @@ export default async function SecretPage() {
   return (
     <SecretDashboard
       managers={managers}
+      curators={curators}
       channels={channels}
       adAccounts={adAccounts}
       tgExclusive={tgExclusive}

@@ -177,7 +177,7 @@ export function CityInlineEditor({
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState(lead.city)
   const [options, setOptions] = useState<
-    { city: string; region: string | null }[]
+    { city: string; region: string | null; isRegion?: boolean }[]
   >([])
   const [pending, startTransition] = useTransition()
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -273,7 +273,7 @@ export function CityInlineEditor({
           {options.length > 0 ? (
             <ul className="flex max-h-44 flex-col overflow-y-auto rounded-md border border-border">
               {options.map((o) => (
-                <li key={`${o.city}-${o.region}`}>
+                <li key={`${o.city}-${o.region}-${o.isRegion ? 'r' : 'c'}`}>
                   <button
                     type="button"
                     onClick={() => save(o.city)}
@@ -281,7 +281,7 @@ export function CityInlineEditor({
                   >
                     <span>{o.city}</span>
                     <span className="truncate text-xs text-muted-foreground">
-                      {o.region}
+                      {o.isRegion ? 'весь регион' : o.region}
                     </span>
                   </button>
                 </li>

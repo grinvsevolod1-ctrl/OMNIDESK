@@ -21,6 +21,7 @@ import {
   setCuratorCities,
   suggestCities,
 } from '@/lib/data/cities'
+import { resolveCityOrRegion } from '@/lib/data/regions'
 import { isAdminIdentity } from '@/lib/data/shared'
 
 export interface ActionResult {
@@ -34,6 +35,36 @@ export interface ActionResult {
 // cannot be predicted (Math.random() is not cryptographically secure).
 function genPassword(): string {
   return generatePassword(16)
+}
+
+/**
+ * Города куратора — ТОЛЬКО из справочника (миграция 124): каждый элемент
+ * должен резолвиться в город или регион (по имени/алиасу, «Чечня» →
+ * «Чеченская Республика»). Возвращает канонические имена или текст ошибки.
+ */
+async function resolveCuratorCities(
+  raw: string[],
+): Promise<{ ok: true; cities: string[] } | { ok: false; message: string }> {
+  const resolved: string[] = []
+  const unknown: string[] = []
+  for (const item of raw) {
+    const hit = await resolveCityOrRegion(item).catch(() => null)
+    if (hit) {
+      if (!resolved.includes(hit.value)) resolved.push(hit.value)
+    } else {
+      unknown.push(item)
+    }
+  }
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      message: `Не найдено в справочнике: ${unknown.join(', ')}. Выберите город или регион из подсказок.`,
+    }
+  }
+  if (resolved.length === 0) {
+    return { ok: false, message: 'Укажите хотя бы один город или регион.' }
+  }
+  return { ok: true, cities: resolved }
 }
 
 export async function createManagerAction(
@@ -113,18 +144,22 @@ export async function createCuratorAction(
     .trim()
     .toLowerCase()
   const usernameRaw = String(formData.get('username') ?? '').trim()
-  const cities = parseCityList(String(formData.get('city') ?? ''))
+  const rawCities = parseCityList(String(formData.get('city') ?? ''))
   let password = String(formData.get('password') ?? '')
 
   if (!name || !email) {
     return { ok: false, message: 'Укажите имя и email.' }
   }
-  if (cities.length === 0) {
+  if (rawCities.length === 0) {
     return {
       ok: false,
       message: 'Укажите хотя бы один город, за который отвечает менеджер по кадрам.',
     }
   }
+  // Только справочник: город или регион («Чечня» → «Чеченская Республика»).
+  const cityCheck = await resolveCuratorCities(rawCities)
+  if (!cityCheck.ok) return { ok: false, message: cityCheck.message }
+  const cities = cityCheck.cities
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { ok: false, message: 'Введите корректный email.' }
   }
@@ -264,10 +299,14 @@ export async function updateCuratorCityAction(
   if (account.role !== 'curator') {
     return { ok: false, message: 'Город задаётся только для менеджеров по кадрам.' }
   }
-  const cities = parseCityList(city)
-  if (cities.length === 0) {
+  const rawCities = parseCityList(city)
+  if (rawCities.length === 0) {
     return { ok: false, message: 'Укажите хотя бы один город.' }
   }
+  // Только справочник: город или регион («Чечня» → «Чеченская Республика»).
+  const cityCheck = await resolveCuratorCities(rawCities)
+  if (!cityCheck.ok) return { ok: false, message: cityCheck.message }
+  const cities = cityCheck.cities
   let canonical: string[]
   try {
     canonical = await setCuratorCities(id, cities)

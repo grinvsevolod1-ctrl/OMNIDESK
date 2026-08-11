@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import {
   ArrowDownWideNarrow,
   ArrowRightLeft,
@@ -11,7 +11,6 @@ import {
   ChevronRight,
   FileSpreadsheet,
   Loader2,
-  RefreshCw,
   Search,
   UserPlus,
   Users,
@@ -46,6 +45,18 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { CuratorWithLoad, LeadCard } from '@/lib/data/lead-cards'
 import {
   LEAD_STATUSES,
@@ -150,6 +161,53 @@ export function AllLeadsSection({
   const [pending, startTransition] = useTransition()
   const [exporting, startExport] = useTransition()
 
+  // Realtime: id лидов, появившихся при фоновом пуллинге, — для подсветки.
+  const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set())
+  const knownIdsRef = useRef<Set<string>>(
+    new Set(initialLeads.map((l) => l.id)),
+  )
+
+  // Текущие фильтры в ref (синхронизация в эффекте, по правилу
+  // react-hooks/refs) — фоновый пуллинг всегда видит актуальные значения
+  // без пересоздания интервала на каждый ввод.
+  const filtersRef = useRef({
+    curatorId,
+    status,
+    search,
+    sort,
+    orphanedOnly,
+    offset,
+    preset,
+    day,
+    from,
+    to,
+  })
+  useEffect(() => {
+    filtersRef.current = {
+      curatorId,
+      status,
+      search,
+      sort,
+      orphanedOnly,
+      offset,
+      preset,
+      day,
+      from,
+      to,
+    }
+  }, [
+    curatorId,
+    status,
+    search,
+    sort,
+    orphanedOnly,
+    offset,
+    preset,
+    day,
+    from,
+    to,
+  ])
+
   function reload(next: {
     curatorId?: string
     status?: string
@@ -201,11 +259,81 @@ export function AllLeadsSection({
         setTotal(res.total)
         setOffset(f.offset)
         setStats(st)
+        // Ручная перезагрузка — все текущие лиды считаются известными.
+        knownIdsRef.current = new Set(res.leads.map((l) => l.id))
+        setFreshIds(new Set())
       } catch {
         toast.error('Не удалось загрузить лиды')
       }
     })
   }
+
+  // Realtime-поиск: перезагрузка через 350мс после остановки ввода, без Enter.
+  const searchInitRef = useRef(true)
+  useEffect(() => {
+    if (searchInitRef.current) {
+      searchInitRef.current = false
+      return
+    }
+    const t = setTimeout(() => reload({ search }), 350)
+    return () => clearTimeout(t)
+    // reload намеренно вне deps: пересоздаётся каждый рендер.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search])
+
+  // Фоновый пуллинг каждые 5с: список обновляется сам, новые лиды
+  // подсвечиваются. Без startTransition — никаких спиннеров при фоне.
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      if (document.visibilityState === 'hidden') return
+      const f = filtersRef.current
+      const range = presetRange(f.preset, f.day, f.from, f.to)
+      try {
+        const res = await listAllLeadsAdminAction({
+          curatorId: f.curatorId || null,
+          status: f.status || null,
+          search: f.search || null,
+          sort: f.sort,
+          from: range.from,
+          to: range.to,
+          orphanedOnly: f.orphanedOnly,
+          limit: PAGE_SIZE,
+          offset: f.offset,
+        })
+        if (cancelled) return
+        const arrived = res.leads
+          .map((l) => l.id)
+          .filter((id) => !knownIdsRef.current.has(id))
+        setLeads(res.leads)
+        setTotal(res.total)
+        for (const id of arrived) knownIdsRef.current.add(id)
+        if (arrived.length > 0) {
+          setFreshIds((prev) => {
+            const next = new Set(prev)
+            for (const id of arrived) next.add(id)
+            return next
+          })
+          // Подсветка гаснет через 6 секунд.
+          setTimeout(() => {
+            if (cancelled) return
+            setFreshIds((prev) => {
+              const next = new Set(prev)
+              for (const id of arrived) next.delete(id)
+              return next
+            })
+          }, 6000)
+        }
+      } catch {
+        // Фоновая ошибка — молча, следующий тик повторит.
+      }
+    }
+    const interval = setInterval(tick, 5000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
 
   /** Выгрузка текущей выборки (все страницы, без пагинации) в .xlsx. */
   function exportExcel() {
@@ -424,62 +552,75 @@ export function AllLeadsSection({
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <Select
           value={curatorId}
-          onChange={(e) => {
-            setCuratorId(e.target.value)
-            reload({ curatorId: e.target.value })
+          onValueChange={(v) => {
+            const next = (v as string) ?? ''
+            setCuratorId(next)
+            reload({ curatorId: next })
           }}
           disabled={orphanedOnly}
-          className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-          aria-label="Фильтр по менеджеру по кадрам"
         >
-          <option value="">Все менеджеры по кадрам</option>
-          {curators.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-              {c.cities?.length
-                ? ` — ${c.cities.join(', ')}`
-                : c.city
-                  ? ` — ${c.city}`
-                  : ''}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger
+            className="h-9 max-w-64"
+            aria-label="Фильтр по менеджеру по кадрам"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="w-auto min-w-56">
+            <SelectItem value="">Все менеджеры по кадрам</SelectItem>
+            {curators.map((c) => (
+              <SelectItem key={c.id} value={c.id}>
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="truncate">{c.name}</span>
+                  {c.cities?.length || c.city ? (
+                    <span className="max-w-40 truncate text-xs text-muted-foreground">
+                      {c.cities?.length ? c.cities.join(', ') : c.city}
+                    </span>
+                  ) : null}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-        <select
+        <Select
           value={status}
-          onChange={(e) => {
-            setStatus(e.target.value)
-            reload({ status: e.target.value })
+          onValueChange={(v) => {
+            const next = (v as string) ?? ''
+            setStatus(next)
+            reload({ status: next })
           }}
-          className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-          aria-label="Фильтр по статусу"
         >
-          <option value="">Все статусы</option>
-          <option value="none">Без статуса</option>
-          {LEAD_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {LEAD_STATUS_LABELS[s]}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="h-9" aria-label="Фильтр по статусу">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="w-auto min-w-44">
+            <SelectItem value="">Все статусы</SelectItem>
+            <SelectItem value="none">Без статуса</SelectItem>
+            {LEAD_STATUSES.map((s) => (
+              <SelectItem key={s} value={s}>
+                <span className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      'size-1.5 shrink-0 rounded-full',
+                      LEAD_STATUS_TONE[s].dot,
+                    )}
+                  />
+                  {LEAD_STATUS_LABELS[s]}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
         {/* Единый поиск: дата ДД.ММ.ГГГГ / ФИО / телефон / @username / город / регион */}
         <div className="relative min-w-0 flex-1 basis-56">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          {/* Поиск в реальном времени: debounce 350мс, Enter не нужен. */}
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => {
-              if (
-                e.key === 'Enter' &&
-                !e.nativeEvent.isComposing &&
-                e.keyCode !== 229
-              ) {
-                reload({ search })
-              }
-            }}
             placeholder="Поиск: дата, ФИО, телефон, @username, город, регион…"
             className="h-9 pl-8 pr-8"
             aria-label="Поиск по лидам"
@@ -487,10 +628,7 @@ export function AllLeadsSection({
           {search ? (
             <button
               type="button"
-              onClick={() => {
-                setSearch('')
-                reload({ search: '' })
-              }}
+              onClick={() => setSearch('')}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
               aria-label="Очистить поиск"
             >
@@ -516,20 +654,6 @@ export function AllLeadsSection({
             <ArrowUpNarrowWide className="size-3.5" />
           )}
           {sort === 'newest' ? 'Новые' : 'Старые'}
-        </Button>
-
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={pending}
-          onClick={() => reload({})}
-          aria-label="Обновить список"
-        >
-          {pending ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="size-3.5" />
-          )}
         </Button>
 
         <Button
@@ -561,10 +685,17 @@ export function AllLeadsSection({
             {leads.map((lead) => {
               const needs = leadNeedsDailyStatus(lead)
               const refresh = () => reload({ offset })
+              const isFresh = freshIds.has(lead.id)
               return (
                 <li
                   key={lead.id}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:px-5"
+                  className={cn(
+                    'flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 sm:px-5',
+                    // Новый лид, появившийся при фоновом обновлении, —
+                    // плавная подсветка на несколько секунд.
+                    isFresh &&
+                      'bg-primary/10 duration-150 animate-in fade-in slide-in-from-top-2',
+                  )}
                 >
                   <div className="min-w-0 flex-1 basis-48">
                     {/* ФИО, должность, телефон редактируются кликом по значению */}
@@ -612,9 +743,18 @@ export function AllLeadsSection({
                   <CityInlineEditor lead={lead} onSaved={refresh} />
 
                   {lead.curatorName ? (
-                    <span className="text-xs text-muted-foreground">
-                      {lead.curatorName}
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className="cursor-default text-xs text-muted-foreground">
+                            {lead.curatorName}
+                          </span>
+                        }
+                      />
+                      <TooltipContent side="top">
+                        Менеджер по кадрам
+                      </TooltipContent>
+                    </Tooltip>
                   ) : (
                     <Badge
                       variant="outline"
@@ -635,9 +775,16 @@ export function AllLeadsSection({
                   <StatusInlineEditor lead={lead} onSaved={refresh} />
 
                   {lead.transferredAt ? (
-                    <span className="text-xs text-muted-foreground">
-                      {formatDateTime(lead.transferredAt)}
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className="cursor-default text-xs text-muted-foreground">
+                            {formatDateTime(lead.transferredAt)}
+                          </span>
+                        }
+                      />
+                      <TooltipContent side="top">Дата передачи</TooltipContent>
+                    </Tooltip>
                   ) : null}
 
                   <div className="flex items-center">

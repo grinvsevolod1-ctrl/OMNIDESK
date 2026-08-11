@@ -11,10 +11,8 @@ import {
 import {
   ArrowRightLeft,
   CalendarDays,
-  Loader2,
   MapPin,
   MessageSquare,
-  RefreshCw,
   UserPlus,
   Users,
 } from 'lucide-react'
@@ -29,6 +27,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import type {
   LeadCardStats,
   ManagerLeadListItem,
@@ -111,6 +116,12 @@ export function ManagerLeadsView({
   const [stats, setStats] = useState(initialStats)
   const [pending, startTransition] = useTransition()
 
+  // Realtime: подсветка лидов, появившихся при фоновом пуллинге.
+  const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set())
+  const knownIdsRef = useRef<Set<string>>(
+    new Set(initialLeads.map((l) => l.id)),
+  )
+
   const range = useMemo(
     () => presetRange(preset, day, from, to),
     [preset, day, from, to],
@@ -134,6 +145,9 @@ export function ManagerLeadsView({
           setTotal(list.total)
           setStats(st)
           setOffset(nextOffset)
+          // Ручная перезагрузка — все текущие лиды считаются известными.
+          knownIdsRef.current = new Set(list.leads.map((l) => l.id))
+          setFreshIds(new Set())
         } catch {
           toast.error('Не удалось загрузить лиды')
         }
@@ -141,6 +155,62 @@ export function ManagerLeadsView({
     },
     [range.from, range.to, status],
   )
+
+  // Фоновый пуллинг каждые 5с: список и статистика обновляются сами,
+  // новые лиды подсвечиваются. Без спиннеров.
+  const pollArgsRef = useRef({ range, status, offset })
+  useEffect(() => {
+    pollArgsRef.current = { range, status, offset }
+  }, [range, status, offset])
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      if (document.visibilityState === 'hidden') return
+      const a = pollArgsRef.current
+      try {
+        const [list, st] = await Promise.all([
+          listMyLeadCardsAction({
+            from: a.range.from,
+            to: a.range.to,
+            status: a.status || null,
+            limit: PAGE_SIZE,
+            offset: a.offset,
+          }),
+          getMyLeadCardStatsAction({ from: a.range.from, to: a.range.to }),
+        ])
+        if (cancelled) return
+        const arrived = list.leads
+          .map((l) => l.id)
+          .filter((id) => !knownIdsRef.current.has(id))
+        setLeads(list.leads)
+        setTotal(list.total)
+        setStats(st)
+        for (const id of arrived) knownIdsRef.current.add(id)
+        if (arrived.length > 0) {
+          setFreshIds((prev) => {
+            const next = new Set(prev)
+            for (const id of arrived) next.add(id)
+            return next
+          })
+          setTimeout(() => {
+            if (cancelled) return
+            setFreshIds((prev) => {
+              const next = new Set(prev)
+              for (const id of arrived) next.delete(id)
+              return next
+            })
+          }, 6000)
+        }
+      } catch {
+        // Фоновая ошибка — молча, следующий тик повторит.
+      }
+    }
+    const interval = setInterval(tick, 5000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
 
   // Refetch whenever the resolved period or the status filter changes.
   // The very first render already has server-fetched data for the default
@@ -222,36 +292,37 @@ export function ManagerLeadsView({
           </div>
         ) : null}
 
-        <select
+        <Select
           value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-2.5 text-sm"
-          aria-label="Фильтр по статусу"
+          onValueChange={(v) => setStatus((v as string) ?? '')}
         >
-          <option value="">Все лиды</option>
-          <option value="transferred">Передан менеджеру по кадрам</option>
-          <option value="not_transferred">Не передан</option>
-          <option value="none">Без статуса менеджера по кадрам</option>
-          {LEAD_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {LEAD_STATUS_LABELS[s]}
-            </option>
-          ))}
-        </select>
-
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={pending}
-          onClick={() => reload(offset)}
-        >
-          {pending ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="size-3.5" />
-          )}
-          Обновить
-        </Button>
+          <SelectTrigger className="h-9" aria-label="Фильтр по статусу">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="w-auto min-w-56">
+            <SelectItem value="">Все лиды</SelectItem>
+            <SelectItem value="transferred">
+              Передан менеджеру по кадрам
+            </SelectItem>
+            <SelectItem value="not_transferred">Не передан</SelectItem>
+            <SelectItem value="none">
+              Без статуса менеджера по кадрам
+            </SelectItem>
+            {LEAD_STATUSES.map((s) => (
+              <SelectItem key={s} value={s}>
+                <span className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      'size-1.5 shrink-0 rounded-full',
+                      LEAD_STATUS_TONE[s].dot,
+                    )}
+                  />
+                  {LEAD_STATUS_LABELS[s]}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Stats for the selected period */}
@@ -331,10 +402,15 @@ export function ManagerLeadsView({
           <ul className="divide-y divide-border">
             {leads.map((lead) => {
               const tone = lead.status ? LEAD_STATUS_TONE[lead.status] : null
+              const isFresh = freshIds.has(lead.id)
               return (
                 <li
                   key={lead.id}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors hover:bg-muted/40 sm:px-5"
+                  className={cn(
+                    'flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 hover:bg-muted/40 sm:px-5',
+                    isFresh &&
+                      'bg-primary/10 duration-150 animate-in fade-in slide-in-from-top-2',
+                  )}
                 >
                   <button
                     type="button"
