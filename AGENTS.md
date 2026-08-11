@@ -72,12 +72,19 @@ components/admin/        UI админки
   god-messenger/         god-мессенджер: диалоги от лица аккаунтов (ИЗОЛИРОВАНО)
 lib/
   ai-console/            Admin AI: run-assistant.ts (инструменты+промпт), assistant.ts (типы)
+  admin-console/         ОС-шелл-копилот всей админки (кроме god-панели): командная строка
+                         поверх панели, инструменты tools-*.ts, intents, schedule-runner
+  servers-console/       разговорный ассистент вкладки «Серверы» (флот, установка, SSH)
+  console-core/          общее ядро разговорных консолей (admin-console + servers-console)
   ai/                    manager-brain.ts (мозг продавца), deal-heat.ts (температура сделок)
   data/                  слой БД: ai-assist.ts (настройки/знания/уроки/диалоги),
                          ai-directives.ts (правила), ai-followup.ts, ai-analytics.ts,
                          hosting.ts (серверы/приложения), console-shell.ts (ОС-шелл)
   autopilot/             маршрутизация правил и запуск ответов (runtime.ts, match.ts)
   followup/              runtime.ts — авто-дожим молчунов
+  finance/               финансы: рекламные кабинеты, пополнения, статистика расходов
+  http/                  request.ts — валидация входящих JSON-запросов (zod)
+  hooks/                 клиентские React-хуки (use-channel-status и т.п.)
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
 worker/src/              воркер каналов (telegram.ts, autopilot.ts, jobs.ts, ...)
   hosting/               автономный DevOps-агент: agent.ts (промпт+цикл), ssh.ts,
@@ -134,7 +141,7 @@ scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.m
 
 ## 7. База данных и миграции
 
-- Схема живёт в `scripts/NNN_*.sql` (нумерация возрастает, сейчас до `100`).
+- Схема живёт в `scripts/NNN_*.sql` (нумерация возрастает, сейчас до `121`).
   В нумерации есть исторические пропуски (напр. 001→003, 026→030, 035→037) —
   это НЕ ошибка, не «чини» их и не переиспользуй пропущенные номера.
 - Новая миграция: создай `scripts/NNN_описание.sql` со следующим свободным
@@ -167,6 +174,11 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
   директива или урок, управляемые из чата, а не константа в коде.
 - **Не удаляй и не обходи** тест изоляции `lib/ai/isolation.test.ts`.
 - Меняй только то, что нужно; сложную логику покрывай юнит-тестом рядом.
+- **Воркараунд GramJS:** `client.catchUp()` в библиотеке `telegram` — пустая
+  заглушка, поэтому восстановление пропущенных сообщений в
+  `worker/src/telegram.ts` сделано через собственный dialog sync с per-chat
+  watermarks (миграция 105). При обновлении зависимости `telegram` проверь,
+  не реализовали ли `catchUp()` — тогда воркараунд можно упростить.
 
 ## 10. Частые задачи — с чего начать
 
