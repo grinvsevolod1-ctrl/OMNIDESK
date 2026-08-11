@@ -292,11 +292,13 @@ export function LeadDetailPanel({
               ) : null}
             </div>
 
-            {/* Файлы: фото/видео менеджера по кадрам и менеджера + кружки из диалога */}
+            {/* Файлы: фото/видео. Кружки из диалога выбирает МЕНЕДЖЕР в своём
+                инбоксе — менеджер по кадрам диалог не ведёт и содержимое
+                переписки не просматривает, поэтому conversationId не передаём. */}
             <div className="border-b border-border px-4 py-4 sm:px-5">
               <LeadAttachments
                 leadCardId={leadId}
-                conversationId={card.conversationId}
+                conversationId={null}
                 attachments={detail?.attachments ?? []}
                 onChanged={() => void mutate()}
               />

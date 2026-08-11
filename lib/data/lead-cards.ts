@@ -7,9 +7,14 @@
  * - Deleting a manager keeps the cards (manager_id -> NULL).
  * - Deleting a comment author keeps the comment with a name snapshot.
  * - Every transfer is recorded in lead_transfers with name snapshots.
+ *
+ * Распил монолита: типы/конвертеры — lead-cards-core.ts, журнал статусов и
+ * передач — lead-history.ts, админская выборка/корзина/inline-редактор —
+ * lead-admin.ts, подбор кураторов — lead-curators.ts, дисциплина —
+ * lead-discipline.ts. Всё ре-экспортируется отсюда для обратной совместимости.
  */
 import { randomUUID } from 'crypto'
-import { query, withTransaction, type DbExecutor } from '../db'
+import { query, withTransaction } from '../db'
 import {
   isLeadStatus,
   type LeadStatus,
@@ -17,158 +22,29 @@ import {
 } from '../lead-status'
 import { mskDayKey } from '../time'
 import { normalizeCityName, rememberCity } from './cities'
+import {
+  CARD_SELECT,
+  toComment,
+  toDateOnly,
+  toLeadCard,
+  type CommentRow,
+  type LeadCard,
+  type LeadCardRow,
+} from './lead-cards-core'
+import { recordStatusHistory, recordTransfer } from './lead-history'
 
-export interface LeadCard {
-  id: string
-  conversationId: string | null
-  managerId: string | null
-  managerName: string | null
-  curatorId: string | null
-  curatorName: string | null
-  curatorCity: string | null
-  fullName: string
-  phone: string
-  telegramUsername: string
-  city: string
-  /** Регион РФ по справочнику (заполняется в админской выборке). */
-  region?: string | null
-  address: string
-  vacancy: string
-  status: LeadStatus | null
-  previousStatus: LeadStatus | null
-  statusConfirmedAt: string | null
-  /** YYYY-MM-DD in MSK when the current status was confirmed. */
-  statusConfirmedDate: string | null
-  transferredAt: string | null
-  /** Set when the lead left the active workspace (final status, migration 117). */
-  archivedAt: string | null
-  createdAt: string
-  updatedAt: string
-}
+/* Core types and converters live in lead-cards-core.ts. */
+export {
+  CARD_SELECT,
+  toDateOnly,
+  toLeadCard,
+  type LeadCard,
+  type LeadCardComment,
+  type LeadCardRow,
+  type LeadTransfer,
+} from './lead-cards-core'
 
-export interface LeadCardComment {
-  id: string
-  leadCardId: string
-  authorId: string | null
-  authorName: string | null
-  body: string
-  status: LeadStatus | null
-  createdAt: string
-}
-
-export interface LeadTransfer {
-  id: string
-  leadCardId: string
-  fromCuratorName: string | null
-  toCuratorName: string | null
-  initiatedByRole: string
-  createdAt: string
-}
-
-export interface LeadCardRow {
-  id: string
-  conversation_id: string | null
-  manager_id: string | null
-  manager_name: string | null
-  curator_id: string | null
-  curator_name: string | null
-  curator_city: string | null
-  full_name: string
-  phone: string
-  telegram_username: string
-  city: string
-  address: string
-  vacancy: string
-  status: string | null
-  previous_status: string | null
-  status_confirmed_at: string | Date | null
-  status_confirmed_date: string | Date | null
-  transferred_at: string | Date | null
-  archived_at: string | Date | null
-  created_at: string | Date
-  updated_at: string | Date
-}
-
-interface CommentRow {
-  id: string
-  lead_card_id: string
-  author_id: string | null
-  author_name: string | null
-  body: string
-  status: string | null
-  created_at: string | Date
-}
-
-export function toDateOnly(v: string | Date | null | undefined): string | null {
-  if (!v) return null
-  if (typeof v === 'string') {
-    // Postgres date may arrive as 'YYYY-MM-DD' or ISO timestamp.
-    return v.slice(0, 10)
-  }
-  // node-postgres parses a DATE column into a JS Date at SERVER-LOCAL
-  // midnight. Converting through toISOString() (UTC) shifts the value back
-  // one day whenever the server timezone is ahead of UTC (e.g. a VPS running
-  // in MSK): «2026-08-07 00:00 MSK» -> «2026-08-06T21:00Z» -> "2026-08-06".
-  // That off-by-one made leadNeedsDailyStatus() treat a just-confirmed status
-  // as yesterday's, keeping the curator workspace locked. Read the LOCAL
-  // calendar components instead — they match the stored date exactly.
-  const y = v.getFullYear()
-  const m = String(v.getMonth() + 1).padStart(2, '0')
-  const d = String(v.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-export function toLeadCard(r: LeadCardRow): LeadCard {
-  return {
-    id: r.id,
-    conversationId: r.conversation_id,
-    managerId: r.manager_id,
-    managerName: r.manager_name,
-    curatorId: r.curator_id,
-    curatorName: r.curator_name,
-    curatorCity: r.curator_city,
-    fullName: r.full_name ?? '',
-    phone: r.phone ?? '',
-    telegramUsername: r.telegram_username ?? '',
-    city: r.city ?? '',
-    address: r.address ?? '',
-    vacancy: r.vacancy ?? '',
-    status: isLeadStatus(r.status) ? r.status : null,
-    previousStatus: isLeadStatus(r.previous_status) ? r.previous_status : null,
-    statusConfirmedAt: r.status_confirmed_at
-      ? new Date(r.status_confirmed_at).toISOString()
-      : null,
-    statusConfirmedDate: toDateOnly(r.status_confirmed_date),
-    transferredAt: r.transferred_at
-      ? new Date(r.transferred_at).toISOString()
-      : null,
-    archivedAt: r.archived_at ? new Date(r.archived_at).toISOString() : null,
-    createdAt: new Date(r.created_at).toISOString(),
-    updatedAt: new Date(r.updated_at).toISOString(),
-  }
-}
-
-function toComment(r: CommentRow): LeadCardComment {
-  return {
-    id: r.id,
-    leadCardId: r.lead_card_id,
-    authorId: r.author_id,
-    authorName: r.author_name,
-    body: r.body,
-    status: isLeadStatus(r.status) ? r.status : null,
-    createdAt: new Date(r.created_at).toISOString(),
-  }
-}
-
-export const CARD_SELECT = `
-  lc.id, lc.conversation_id, lc.manager_id, lc.curator_id,
-  lc.full_name, lc.phone, lc.telegram_username, lc.city, lc.address, lc.vacancy,
-  lc.status, lc.previous_status, lc.status_confirmed_at, lc.status_confirmed_date,
-  lc.transferred_at, lc.archived_at, lc.created_at, lc.updated_at,
-  m.name AS manager_name,
-  c.name AS curator_name,
-  c.city AS curator_city
-`
+/* ------------------------------ Core queries ------------------------------ */
 
 export async function getLeadCardByConversation(
   conversationId: string,
@@ -357,147 +233,7 @@ export async function autoArchiveFinalLeads(afterDays: number): Promise<number> 
   return rows.length
 }
 
-/*
- * Curator pickers moved to lead-curators.ts; re-exported for compatibility.
- */
-export {
-  findCuratorsByCity,
-  listActiveCurators,
-  type CuratorWithLoad,
-} from './lead-curators'
-
-export interface LeadStatusHistoryEntry {
-  id: string
-  status: LeadStatus | null
-  curatorName: string | null
-  reason: 'confirm' | 'transfer_reset'
-  createdAt: string
-}
-
-/** Record one status-history event. Never throws. */
-async function recordStatusHistory(
-  input: {
-    leadCardId: string
-    curatorId: string | null
-    status: LeadStatus | null
-    reason: 'confirm' | 'transfer_reset'
-  },
-  db?: DbExecutor,
-): Promise<void> {
-  const run = () =>
-    (db ?? { query }).query(
-      `INSERT INTO lead_status_history (lead_card_id, curator_id, curator_name, status, reason)
-       VALUES ($1, $2, (SELECT name FROM managers WHERE id = $2), $3, $4)`,
-      [input.leadCardId, input.curatorId, input.status, input.reason],
-    )
-  if (db) {
-    // Inside a transaction errors MUST propagate: a swallowed failure leaves
-    // the tx aborted (COMMIT would fail anyway), and атомарность «статус +
-    // история» — ровно то, ради чего транзакция и нужна.
-    await run()
-    return
-  }
-  try {
-    await run()
-  } catch {
-    /* best-effort outside transactions: history must not break the write */
-  }
-}
-
-export async function listLeadStatusHistory(
-  leadCardId: string,
-): Promise<LeadStatusHistoryEntry[]> {
-  const rows = await query<{
-    id: string
-    status: string | null
-    curator_name: string | null
-    reason: string
-    created_at: string | Date
-  }>(
-    `SELECT id, status, curator_name, reason, created_at
-       FROM lead_status_history
-      WHERE lead_card_id = $1
-      ORDER BY created_at DESC
-      LIMIT 100`,
-    [leadCardId],
-  )
-  return rows.map((r) => ({
-    id: r.id,
-    status: isLeadStatus(r.status) ? r.status : null,
-    curatorName: r.curator_name,
-    reason: r.reason === 'transfer_reset' ? 'transfer_reset' : 'confirm',
-    createdAt: new Date(r.created_at).toISOString(),
-  }))
-}
-
-/** Record one transfer event with name snapshots. Never throws. */
-async function recordTransfer(
-  input: {
-    leadCardId: string
-    fromCuratorId: string | null
-    toCuratorId: string
-    initiatedById: string | null
-    initiatedByRole: 'manager' | 'admin'
-  },
-  db?: DbExecutor,
-): Promise<void> {
-  const run = () =>
-    (db ?? { query }).query(
-      `INSERT INTO lead_transfers
-         (id, lead_card_id, from_curator_id, to_curator_id,
-          from_curator_name, to_curator_name, initiated_by, initiated_by_role)
-       VALUES ($1, $2, $3, $4,
-               (SELECT name FROM managers WHERE id = $3),
-               (SELECT name FROM managers WHERE id = $4),
-               $5, $6)`,
-      [
-        randomUUID(),
-        input.leadCardId,
-        input.fromCuratorId,
-        input.toCuratorId,
-        input.initiatedById,
-        input.initiatedByRole,
-      ],
-    )
-  if (db) {
-    // See recordStatusHistory: inside a transaction errors must propagate.
-    await run()
-    return
-  }
-  try {
-    await run()
-  } catch {
-    /* best-effort outside transactions: history must not break the transfer */
-  }
-}
-
-export async function listLeadTransfers(
-  leadCardId: string,
-): Promise<LeadTransfer[]> {
-  const rows = await query<{
-    id: string
-    lead_card_id: string
-    from_curator_name: string | null
-    to_curator_name: string | null
-    initiated_by_role: string
-    created_at: string | Date
-  }>(
-    `SELECT id, lead_card_id, from_curator_name, to_curator_name,
-            initiated_by_role, created_at
-       FROM lead_transfers
-      WHERE lead_card_id = $1
-      ORDER BY created_at DESC`,
-    [leadCardId],
-  )
-  return rows.map((r) => ({
-    id: r.id,
-    leadCardId: r.lead_card_id,
-    fromCuratorName: r.from_curator_name,
-    toCuratorName: r.to_curator_name,
-    initiatedByRole: r.initiated_by_role,
-    createdAt: new Date(r.created_at).toISOString(),
-  }))
-}
+/* ------------------------------- Mutations -------------------------------- */
 
 export interface UpsertLeadCardInput {
   conversationId: string
@@ -956,7 +692,7 @@ export async function addLeadComment(input: {
   leadCardId: string
   authorId: string
   body: string
-}): Promise<LeadCardComment> {
+}): Promise<import('./lead-cards-core').LeadCardComment> {
   const body = input.body.trim()
   if (body.length < 1) throw new Error('Пустой комментарий')
 
@@ -972,7 +708,7 @@ export async function addLeadComment(input: {
 
 export async function listLeadComments(
   leadCardId: string,
-): Promise<LeadCardComment[]> {
+): Promise<import('./lead-cards-core').LeadCardComment[]> {
   const rows = await query<CommentRow>(
     `SELECT c.id, c.lead_card_id, c.author_id, c.body, c.status, c.created_at,
             COALESCE(m.name, c.author_name) AS author_name
@@ -985,307 +721,40 @@ export async function listLeadComments(
   return rows.map(toComment)
 }
 
-/* ----------------------------- Admin overview ----------------------------- */
-
-export interface AllLeadsFilter {
-  curatorId?: string | null
-  status?: LeadStatus | 'none' | null
-  city?: string | null
-  /** Inclusive MSK period applied to the transfer day (YYYY-MM-DD). */
-  from?: string | null
-  to?: string | null
-  /** Only leads transferred but currently without a curator. */
-  orphanedOnly?: boolean
-  /** Show archived leads instead of active ones. */
-  archivedOnly?: boolean
-  /** Единый поиск: дата (ДД.ММ.ГГГГ), @username, телефон, город, регион, ФИО. */
-  search?: string | null
-  /** Сортировка по дате передачи. По умолчанию новые сверху. */
-  sort?: 'newest' | 'oldest'
-  limit?: number
-  offset?: number
-}
-
-/**
- * Разбор поискового запроса: дата ДД.ММ.ГГГГ (или ГГГГ-ММ-ДД) становится
- * фильтром по дню передачи в МСК, остальное — текстовым поиском.
+/*
+ * Curator pickers moved to lead-curators.ts; re-exported for compatibility.
  */
-export function parseLeadSearch(raw: string): {
-  day: string | null
-  text: string
-} {
-  const trimmed = raw.replace(/\s+/g, ' ').trim()
-  const ru = trimmed.match(/^(\d{2})\.(\d{2})\.(\d{4})$/)
-  if (ru) return { day: `${ru[3]}-${ru[2]}-${ru[1]}`, text: '' }
-  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (iso) return { day: trimmed, text: '' }
-  return { day: null, text: trimmed }
-}
+export {
+  findCuratorsByCity,
+  listActiveCurators,
+  type CuratorWithLoad,
+} from './lead-curators'
 
-/** Admin: all transferred leads with optional filters, newest first. */
-export async function listAllTransferredLeads(
-  filter: AllLeadsFilter = {},
-): Promise<{ leads: LeadCard[]; total: number }> {
-  const conds: string[] = [
-    'lc.transferred_at IS NOT NULL',
-    'lc.deleted_at IS NULL',
-    filter.archivedOnly
-      ? 'lc.archived_at IS NOT NULL'
-      : 'lc.archived_at IS NULL',
-  ]
-  const params: unknown[] = []
-
-  if (filter.orphanedOnly) {
-    conds.push('lc.curator_id IS NULL')
-  } else if (filter.curatorId) {
-    params.push(filter.curatorId)
-    conds.push(`lc.curator_id = $${params.length}`)
-  }
-  if (filter.status === 'none') {
-    conds.push('lc.status IS NULL')
-  } else if (filter.status) {
-    params.push(filter.status)
-    conds.push(`lc.status = $${params.length}`)
-  }
-  if (filter.city?.trim()) {
-    params.push(`%${filter.city.trim()}%`)
-    conds.push(`lower(lc.city) LIKE lower($${params.length})`)
-  }
-  // Period over the transfer day in MSK (validated YYYY-MM-DD only).
-  const dayRe = /^\d{4}-\d{2}-\d{2}$/
-  if (filter.from && dayRe.test(filter.from)) {
-    params.push(filter.from)
-    conds.push(
-      `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date >= $${params.length}::date`,
-    )
-  }
-  if (filter.to && dayRe.test(filter.to)) {
-    params.push(filter.to)
-    conds.push(
-      `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date <= $${params.length}::date`,
-    )
-  }
-
-  // Единый поиск: одно поле — дата / ФИО / телефон / @username / город / регион.
-  if (filter.search?.trim()) {
-    const { day, text } = parseLeadSearch(filter.search)
-    if (day) {
-      params.push(day)
-      conds.push(
-        `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date = $${params.length}::date`,
-      )
-    } else if (text) {
-      const like = `%${text.replace(/^@/, '')}%`
-      params.push(like)
-      const p = `$${params.length}`
-      conds.push(
-        `(lower(lc.full_name) LIKE lower(${p})
-          OR lc.phone LIKE ${p}
-          OR lower(lc.telegram_username) LIKE lower(${p})
-          OR lower(lc.city) LIKE lower(${p})
-          OR EXISTS (
-               SELECT 1 FROM cities ci
-               JOIN regions rg ON rg.id = ci.region_id
-              WHERE ci.name_norm = lower(lc.city)
-                AND lower(rg.name) LIKE lower(${p})
-             ))`,
-      )
-    }
-  }
-
-  const where = conds.join(' AND ')
-  const totalRows = await query<{ n: string }>(
-    `SELECT count(*)::int AS n FROM lead_cards lc WHERE ${where}`,
-    params,
-  )
-
-  const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500)
-  const offset = Math.max(filter.offset ?? 0, 0)
-  params.push(limit, offset)
-
-  const order = filter.sort === 'oldest' ? 'ASC' : 'DESC'
-  const rows = await query<LeadCardRow & { region_name: string | null }>(
-    `SELECT ${CARD_SELECT},
-            (SELECT rg.name FROM cities ci
-              JOIN regions rg ON rg.id = ci.region_id
-             WHERE ci.name_norm = lower(lc.city) LIMIT 1) AS region_name
-       FROM lead_cards lc
-       LEFT JOIN managers m ON m.id = lc.manager_id
-       LEFT JOIN managers c ON c.id = lc.curator_id
-      WHERE ${where}
-      ORDER BY lc.transferred_at ${order}
-      LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params,
-  )
-  return {
-    leads: rows.map((r) => ({ ...toLeadCard(r), region: r.region_name })),
-    total: Number(totalRows[0]?.n ?? 0),
-  }
-}
-
-/* ------------------------- Мягкое удаление (корзина) ------------------------ */
-
-/**
- * Мягкое удаление лида админом: карточка уходит в «Корзину» с обязательной
- * причиной, вся история сохраняется. Автоочистка — purgeDeletedLeads (30 дней).
+/*
+ * Status/transfer history moved to lead-history.ts.
  */
-export async function softDeleteLeadCard(input: {
-  leadCardId: string
-  reason: string
-  deletedById: string | null
-  deletedByName?: string | null
-}): Promise<void> {
-  const reason = input.reason.replace(/\s+/g, ' ').trim()
-  if (reason.length < 3) {
-    throw new Error('Укажите причину удаления (минимум 3 символа)')
-  }
-  await withTransaction(async (tx) => {
-    const rows = await tx.query<{ id: string }>(
-      `UPDATE lead_cards
-          SET deleted_at = now(), deleted_reason = $2, deleted_by = $3,
-              updated_at = now()
-        WHERE id = $1 AND deleted_at IS NULL
-        RETURNING id`,
-      [input.leadCardId, reason, input.deletedById],
-    )
-    if (rows.length === 0) throw new Error('Лид не найден или уже удалён')
-    await tx.query(
-      `INSERT INTO lead_status_history
-         (lead_card_id, curator_id, curator_name, status, reason)
-       VALUES ($1, $2, $3, NULL, $4)`,
-      [
-        input.leadCardId,
-        input.deletedById,
-        input.deletedByName ?? null,
-        `deleted: ${reason}`,
-      ],
-    )
-  })
-}
+export {
+  listLeadStatusHistory,
+  listLeadTransfers,
+  type LeadStatusHistoryEntry,
+} from './lead-history'
 
-/** Восстановление лида из корзины. */
-export async function restoreLeadCard(input: {
-  leadCardId: string
-  restoredById: string | null
-  restoredByName?: string | null
-}): Promise<void> {
-  await withTransaction(async (tx) => {
-    const rows = await tx.query<{ id: string }>(
-      `UPDATE lead_cards
-          SET deleted_at = NULL, deleted_reason = NULL, deleted_by = NULL,
-              updated_at = now()
-        WHERE id = $1 AND deleted_at IS NOT NULL
-        RETURNING id`,
-      [input.leadCardId],
-    )
-    if (rows.length === 0) throw new Error('Лид не найден в корзине')
-    await tx.query(
-      `INSERT INTO lead_status_history
-         (lead_card_id, curator_id, curator_name, status, reason)
-       VALUES ($1, $2, $3, NULL, 'restored')`,
-      [input.leadCardId, input.restoredById, input.restoredByName ?? null],
-    )
-  })
-}
-
-export interface DeletedLead extends LeadCard {
-  deletedAt: string
-  deletedReason: string
-  deletedByName: string | null
-}
-
-/** Корзина: удалённые лиды, свежие сверху. */
-export async function listDeletedLeads(
-  limit = 100,
-): Promise<DeletedLead[]> {
-  const rows = await query<
-    LeadCardRow & {
-      deleted_at: string | Date
-      deleted_reason: string | null
-      deleted_by_name: string | null
-    }
-  >(
-    `SELECT ${CARD_SELECT},
-            lc.deleted_at, lc.deleted_reason,
-            d.name AS deleted_by_name
-       FROM lead_cards lc
-       LEFT JOIN managers m ON m.id = lc.manager_id
-       LEFT JOIN managers c ON c.id = lc.curator_id
-       LEFT JOIN managers d ON d.id = lc.deleted_by
-      WHERE lc.deleted_at IS NOT NULL
-      ORDER BY lc.deleted_at DESC
-      LIMIT ${Math.min(Math.max(limit, 1), 500)}`,
-  )
-  return rows.map((r) => ({
-    ...toLeadCard(r),
-    deletedAt: new Date(r.deleted_at).toISOString(),
-    deletedReason: r.deleted_reason ?? '',
-    deletedByName: r.deleted_by_name,
-  }))
-}
-
-/** Автоочистка корзины: физически удаляет лиды старше N дней. Возврат: сколько удалено. */
-export async function purgeDeletedLeads(olderThanDays = 30): Promise<number> {
-  const days = Math.max(1, Math.floor(olderThanDays))
-  const rows = await query<{ id: string }>(
-    `DELETE FROM lead_cards
-      WHERE deleted_at IS NOT NULL
-        AND deleted_at < now() - make_interval(days => $1)
-      RETURNING id`,
-    [days],
-  )
-  return rows.length
-}
-
-/* --------------------- Inline-редактирование одного поля -------------------- */
-
-const INLINE_EDITABLE_FIELDS = {
-  full_name: 160,
-  phone: 40,
-  telegram_username: 80,
-  city: 120,
-  address: 300,
-  vacancy: 80,
-} as const
-
-export type InlineLeadField = keyof typeof INLINE_EDITABLE_FIELDS
-
-export function isInlineLeadField(f: string): f is InlineLeadField {
-  return f in INLINE_EDITABLE_FIELDS
-}
-
-/**
- * Обновление одного поля карточки из строки таблицы (без открытия диалога).
- * Город запоминается в справочнике; поле whitelisted — SQL-инъекция исключена.
+/*
+ * Admin overview, trash (soft delete) and inline editing moved to lead-admin.ts.
  */
-export async function updateLeadCardField(input: {
-  leadCardId: string
-  field: InlineLeadField
-  value: string
-}): Promise<void> {
-  if (!isInlineLeadField(input.field)) {
-    throw new Error('Это поле нельзя редактировать из таблицы')
-  }
-  let value = input.value.replace(/\s+/g, ' ').trim()
-  const maxLen = INLINE_EDITABLE_FIELDS[input.field]
-  if (value.length > maxLen) {
-    throw new Error(`Слишком длинное значение (максимум ${maxLen})`)
-  }
-  if (input.field === 'telegram_username') {
-    value = value.replace(/^@/, '')
-  }
-  if (input.field === 'city' && value) {
-    value = await rememberCity(value)
-  }
-  const rows = await query<{ id: string }>(
-    `UPDATE lead_cards
-        SET ${input.field} = $2, updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id`,
-    [input.leadCardId, value],
-  )
-  if (rows.length === 0) throw new Error('Лид не найден')
-}
+export {
+  isInlineLeadField,
+  listAllTransferredLeads,
+  listDeletedLeads,
+  parseLeadSearch,
+  purgeDeletedLeads,
+  restoreLeadCard,
+  softDeleteLeadCard,
+  updateLeadCardField,
+  type AllLeadsFilter,
+  type DeletedLead,
+  type InlineLeadField,
+} from './lead-admin'
 
 /*
  * Discipline / daily-gate queries moved to lead-discipline.ts.
