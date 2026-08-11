@@ -8,6 +8,7 @@ import {
   searchCityAction,
   softDeleteLeadAction,
   updateLeadFieldAction,
+  updateLeadStatusAction,
 } from '@/app/actions/lead-cards'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -41,13 +42,22 @@ import { cn } from '@/lib/utils'
 /**
  * Клик по статусу в строке → компактный Popover: выбрать статус, вписать
  * комментарий, сохранить. Без открытия полной карточки.
+ *
+ * variant='curator' сохраняет через updateLeadStatusAction (проверка
+ * владельца + дисциплина на сервере); по умолчанию — админский action.
+ * trigger позволяет отрисовать свой бейдж (например, LeadStatusBadge с
+ * подсветкой «нужно обновить» у менеджера по кадрам).
  */
 export function StatusInlineEditor({
   lead,
   onSaved,
+  variant = 'admin',
+  trigger,
 }: {
   lead: LeadCard
   onSaved: () => void
+  variant?: 'admin' | 'curator'
+  trigger?: React.ReactElement
 }) {
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<string>(lead.status ?? '')
@@ -62,7 +72,9 @@ export function StatusInlineEditor({
       return
     }
     startTransition(async () => {
-      const res = await adminSetLeadStatusAction({
+      const action =
+        variant === 'curator' ? updateLeadStatusAction : adminSetLeadStatusAction
+      const res = await action({
         leadCardId: lead.id,
         status,
         comment,
@@ -82,32 +94,34 @@ export function StatusInlineEditor({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
-          <button
-            type="button"
-            className="inline-flex cursor-pointer"
-            aria-label="Изменить статус"
-          >
-            {tone && lead.status ? (
-              <Badge
-                variant="outline"
-                className={cn(
-                  'gap-1.5 border-transparent transition-opacity hover:opacity-75',
-                  tone.bg,
-                  tone.text,
-                )}
-              >
-                <span className={cn('size-1.5 rounded-full', tone.dot)} />
-                {leadStatusLabel(lead.status)}
-              </Badge>
-            ) : (
-              <Badge
-                variant="outline"
-                className="border-dashed text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Статус…
-              </Badge>
-            )}
-          </button>
+          trigger ?? (
+            <button
+              type="button"
+              className="inline-flex cursor-pointer"
+              aria-label="Изменить статус"
+            >
+              {tone && lead.status ? (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'gap-1.5 border-transparent transition-opacity hover:opacity-75',
+                    tone.bg,
+                    tone.text,
+                  )}
+                >
+                  <span className={cn('size-1.5 rounded-full', tone.dot)} />
+                  {leadStatusLabel(lead.status)}
+                </Badge>
+              ) : (
+                <Badge
+                  variant="outline"
+                  className="border-dashed text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Статус…
+                </Badge>
+              )}
+            </button>
+          )
         }
       />
       <PopoverContent align="start" side="bottom" className="w-72 p-3">

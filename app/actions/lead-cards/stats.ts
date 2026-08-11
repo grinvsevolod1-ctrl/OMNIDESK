@@ -43,9 +43,14 @@ export async function getCuratorStatusGateAction() {
 
 /* ------------------- Справочники: города+регионы, должности ------------------- */
 
-/** Автодополнение «город (регион)» — доступно админу и менеджерам. */
+/**
+ * Автодополнение «город (регион)» — справочник без чувствительных данных,
+ * доступен всем авторизованным ролям (админ, менеджер, менеджер по кадрам):
+ * менеджер по кадрам правит город в своих карточках через inline-редактор.
+ */
 export async function searchCityAction(q: string) {
-  await requireManagerOrAdmin()
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
   if (!q || q.trim().length < 1) return []
   return searchCitiesWithRegions(q, 12)
 }

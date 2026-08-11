@@ -10,6 +10,10 @@ import {
   setLeadArchivedAction,
 } from '@/app/actions/lead-cards'
 import {
+  CityInlineEditor,
+  TextInlineEditor,
+} from '@/components/admin/lead-inline-edit'
+import {
   LeadFreeCommentForm,
   LeadStatusForm,
 } from '@/components/curator/lead-panel-forms'
@@ -81,6 +85,12 @@ export function LeadDetailPanel({
     void mutate()
   }
 
+  /** После inline-правки поля: обновить панель и список снаружи. */
+  function onFieldSaved() {
+    onUpdated()
+    void mutate()
+  }
+
   function toggleArchive(archived: boolean) {
     startTransition(async () => {
       const res = await setLeadArchivedAction({ leadCardId: leadId, archived })
@@ -143,12 +153,25 @@ export function LeadDetailPanel({
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <div className="space-y-4 border-b border-border px-4 py-4 sm:px-5">
               <div>
-                <h2 className="text-lg font-semibold tracking-tight">
-                  {card.fullName || 'Без имени'}
-                </h2>
-                {card.vacancy ? (
-                  <p className="text-sm text-muted-foreground">{card.vacancy}</p>
-                ) : null}
+                {/* ФИО и должность правятся кликом — как в админской таблице */}
+                <TextInlineEditor
+                  lead={card}
+                  field="full_name"
+                  label="ФИО"
+                  display={card.fullName || 'Без имени'}
+                  className="text-lg font-semibold tracking-tight"
+                  onSaved={onFieldSaved}
+                />
+                <div className="text-sm text-muted-foreground">
+                  <TextInlineEditor
+                    lead={card}
+                    field="vacancy"
+                    label="Должность"
+                    display={card.vacancy}
+                    placeholder="Курьер, водитель…"
+                    onSaved={onFieldSaved}
+                  />
+                </div>
                 <div className="mt-2">
                   <LeadStatusBadge
                     status={card.status}
@@ -159,30 +182,53 @@ export function LeadDetailPanel({
               </div>
 
               <dl className="grid gap-2.5 text-sm sm:grid-cols-2">
-                {card.phone ? (
-                  <div>
-                    <dt className="text-xs text-muted-foreground">Телефон</dt>
-                    <dd className="font-medium">{card.phone}</dd>
-                  </div>
-                ) : null}
-                {card.telegramUsername ? (
-                  <div>
-                    <dt className="text-xs text-muted-foreground">Telegram</dt>
-                    <dd className="font-medium">@{card.telegramUsername}</dd>
-                  </div>
-                ) : null}
-                {card.city ? (
-                  <div>
-                    <dt className="text-xs text-muted-foreground">Город</dt>
-                    <dd className="font-medium">{card.city}</dd>
-                  </div>
-                ) : null}
-                {card.address ? (
-                  <div className="sm:col-span-2">
-                    <dt className="text-xs text-muted-foreground">Адрес</dt>
-                    <dd className="font-medium">{card.address}</dd>
-                  </div>
-                ) : null}
+                <div>
+                  <dt className="text-xs text-muted-foreground">Телефон</dt>
+                  <dd className="font-medium">
+                    <TextInlineEditor
+                      lead={card}
+                      field="phone"
+                      label="Телефон"
+                      display={card.phone}
+                      placeholder="+7…"
+                      onSaved={onFieldSaved}
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">Telegram</dt>
+                  <dd className="font-medium">
+                    <TextInlineEditor
+                      lead={card}
+                      field="telegram_username"
+                      label="Telegram (без @)"
+                      display={
+                        card.telegramUsername ? `@${card.telegramUsername}` : ''
+                      }
+                      placeholder="username"
+                      onSaved={onFieldSaved}
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">Город</dt>
+                  <dd className="font-medium">
+                    <CityInlineEditor lead={card} onSaved={onFieldSaved} />
+                  </dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-xs text-muted-foreground">Адрес</dt>
+                  <dd className="font-medium">
+                    <TextInlineEditor
+                      lead={card}
+                      field="address"
+                      label="Адрес"
+                      display={card.address}
+                      placeholder="Улица, дом…"
+                      onSaved={onFieldSaved}
+                    />
+                  </dd>
+                </div>
                 <div>
                   <dt className="text-xs text-muted-foreground">Менеджер</dt>
                   <dd className="font-medium">{card.managerName ?? '—'}</dd>

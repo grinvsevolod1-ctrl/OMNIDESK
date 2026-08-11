@@ -8,6 +8,7 @@ import { revalidatePath } from 'next/cache'
 import { getSession, requireAdmin } from '@/lib/auth'
 import {
   adminSetLeadStatus,
+  getLeadCardById,
   isInlineLeadField,
   listActiveCurators,
   listAllTransferredLeads,
@@ -22,6 +23,8 @@ import {
 import { safeDayKey } from '@/lib/data/lead-stats'
 import { isLeadStatus } from '@/lib/lead-status'
 import {
+  assertCuratorNotLocked,
+  canAccessLeadCard,
   notifyCuratorOfTransfer,
   type LeadCardActionResult,
 } from './shared'
@@ -176,7 +179,25 @@ export async function updateLeadFieldAction(input: {
   field: string
   value: string
 }): Promise<LeadCardActionResult> {
-  await requireAdmin()
+  // Редактировать поля карточки может админ ЛИБО менеджер по кадрам,
+  // которому этот лид передан (передача другому сотруднику — по-прежнему
+  // только у админа, это отдельный action).
+  const session = await getSession()
+  if (!session) return { ok: false, message: 'Не авторизован' }
+  if (session.role !== 'admin') {
+    if (session.role !== 'curator') {
+      return { ok: false, message: 'Нет доступа' }
+    }
+    const card = await getLeadCardById(input.leadCardId)
+    if (!card || !canAccessLeadCard(session, card)) {
+      return { ok: false, message: 'Это не ваш лид' }
+    }
+    try {
+      await assertCuratorNotLocked(session.sub)
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+    }
+  }
   if (!isInlineLeadField(input.field)) {
     return { ok: false, message: 'Это поле нельзя редактировать из таблицы' }
   }
@@ -187,6 +208,7 @@ export async function updateLeadFieldAction(input: {
       value: input.value,
     })
     revalidatePath('/admin/curators')
+    revalidatePath('/curator')
     return { ok: true, message: 'Сохранено' }
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }

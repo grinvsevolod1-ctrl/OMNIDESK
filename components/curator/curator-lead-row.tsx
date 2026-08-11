@@ -9,9 +9,13 @@
  */
 
 import { memo } from 'react'
-import { Archive, ArchiveRestore, AtSign, MapPin } from 'lucide-react'
+import { Archive, ArchiveRestore, AtSign } from 'lucide-react'
+import {
+  CityInlineEditor,
+  StatusInlineEditor,
+  TextInlineEditor,
+} from '@/components/admin/lead-inline-edit'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -40,6 +44,7 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
   pending,
   onOpen,
   onToggleArchive,
+  onRefresh,
 }: {
   lead: LeadCard
   view: 'list' | 'grid'
@@ -48,8 +53,34 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
   pending: boolean
   onOpen: (id: string) => void
   onToggleArchive: (id: string, archived: boolean) => void
+  /** Перечитать список после inline-правки поля/статуса. */
+  onRefresh: () => void
 }) {
   const needs = !isArchived && leadNeedsDailyStatus(lead)
+
+  /** Кликабельный бейдж статуса: сохраняет подсветку «нужно обновить». */
+  const statusEditor = (
+    <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+      <StatusInlineEditor
+        lead={lead}
+        variant="curator"
+        onSaved={onRefresh}
+        trigger={
+          <button
+            type="button"
+            className="inline-flex cursor-pointer"
+            aria-label="Изменить статус"
+          >
+            <LeadStatusBadge
+              status={lead.status}
+              needsUpdate={needs}
+              previousStatus={lead.previousStatus}
+            />
+          </button>
+        }
+      />
+    </span>
+  )
 
   const archiveButton = (
     <Tooltip>
@@ -104,34 +135,47 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
         onClick={() => onOpen(lead.id)}
       >
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">
-              {lead.fullName || 'Без имени'}
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              {[lead.vacancy, lead.phone].filter(Boolean).join(' · ') || '—'}
-            </p>
+          <div className="min-w-0" onClick={(e) => e.stopPropagation()}>
+            {/* ФИО, должность, телефон правятся кликом — как у админа */}
+            <TextInlineEditor
+              lead={lead}
+              field="full_name"
+              label="ФИО"
+              display={lead.fullName || 'Без имени'}
+              className="text-sm font-medium"
+              onSaved={onRefresh}
+            />
+            <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+              <TextInlineEditor
+                lead={lead}
+                field="vacancy"
+                label="Должность"
+                display={lead.vacancy}
+                placeholder="Курьер, водитель…"
+                onSaved={onRefresh}
+              />
+              <span aria-hidden>·</span>
+              <TextInlineEditor
+                lead={lead}
+                field="phone"
+                label="Телефон"
+                display={lead.phone}
+                placeholder="+7…"
+                onSaved={onRefresh}
+              />
+            </div>
           </div>
           {archiveButton}
         </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          {lead.city ? (
-            <Badge
-              variant="outline"
-              className="gap-1 border-transparent bg-muted text-muted-foreground"
-            >
-              <MapPin className="size-3" />
-              {lead.city}
-            </Badge>
-          ) : null}
+        <div
+          className="flex flex-wrap items-center gap-1.5 text-xs"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <CityInlineEditor lead={lead} onSaved={onRefresh} />
           {telegramLink}
         </div>
         <div className="mt-auto flex flex-wrap items-center gap-1.5">
-          <LeadStatusBadge
-            status={lead.status}
-            needsUpdate={needs}
-            previousStatus={lead.previousStatus}
-          />
+          {statusEditor}
           <span className="ml-auto text-xs text-muted-foreground">
             {isArchived && lead.archivedAt
               ? formatDateTime(lead.archivedAt)
@@ -153,33 +197,46 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
       )}
       onClick={() => onOpen(lead.id)}
     >
-      <div className="min-w-0 flex-1 basis-44">
-        <p className="truncate text-sm font-medium">
-          {lead.fullName || 'Без имени'}
-        </p>
+      <div
+        className="min-w-0 flex-1 basis-44"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* ФИО, должность, телефон правятся кликом — как у админа */}
+        <TextInlineEditor
+          lead={lead}
+          field="full_name"
+          label="ФИО"
+          display={lead.fullName || 'Без имени'}
+          className="text-sm font-medium"
+          onSaved={onRefresh}
+        />
         <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-          {lead.vacancy ? <span className="truncate">{lead.vacancy}</span> : null}
-          {lead.vacancy && lead.phone ? <span aria-hidden>·</span> : null}
-          {lead.phone ? <span>{lead.phone}</span> : null}
+          <TextInlineEditor
+            lead={lead}
+            field="vacancy"
+            label="Должность"
+            display={lead.vacancy}
+            placeholder="Курьер, водитель…"
+            onSaved={onRefresh}
+          />
+          <span aria-hidden>·</span>
+          <TextInlineEditor
+            lead={lead}
+            field="phone"
+            label="Телефон"
+            display={lead.phone}
+            placeholder="+7…"
+            onSaved={onRefresh}
+          />
           {telegramLink}
         </div>
       </div>
 
-      {lead.city ? (
-        <Badge
-          variant="outline"
-          className="gap-1 border-transparent bg-muted text-muted-foreground"
-        >
-          <MapPin className="size-3" />
-          {lead.city}
-        </Badge>
-      ) : null}
+      <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+        <CityInlineEditor lead={lead} onSaved={onRefresh} />
+      </span>
 
-      <LeadStatusBadge
-        status={lead.status}
-        needsUpdate={needs}
-        previousStatus={lead.previousStatus}
-      />
+      {statusEditor}
 
       {isArchived && lead.archivedAt ? (
         <Tooltip>

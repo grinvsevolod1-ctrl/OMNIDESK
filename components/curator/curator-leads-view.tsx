@@ -117,6 +117,8 @@ export function CuratorLeadsView({
 
   // Стабильные колбэки для мемоизированных строк.
   const openLead = useCallback((id: string) => setSelectedId(id), [])
+  /** void-обёртка для onRefresh мемоизированных строк (inline-правки). */
+  const refreshRows = useCallback(() => void refresh(), [refresh])
   const toggleArchive = useCallback(
     (id: string, archive: boolean) => {
       startTransition(async () => {
@@ -385,6 +387,7 @@ export function CuratorLeadsView({
               pending={pending}
               onOpen={openLead}
               onToggleArchive={toggleArchive}
+              onRefresh={refreshRows}
             />
           ))}
         </ul>
@@ -400,6 +403,7 @@ export function CuratorLeadsView({
                 pending={pending}
                 onOpen={openLead}
                 onToggleArchive={toggleArchive}
+                onRefresh={refreshRows}
               />
             ))}
           </ul>
