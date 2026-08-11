@@ -56,7 +56,6 @@ export function LeadCardPanel({
   const [vacancy, setVacancy] = useState('')
   const [curatorId, setCuratorId] = useState<string | null>(null)
   const [transferredAt, setTransferredAt] = useState<string | null>(null)
-  const [loaded, setLoaded] = useState(false)
 
   const load = useCallback(async () => {
     const card = await getLeadCardAction(conversationId)
@@ -85,17 +84,15 @@ export function LeadCardPanel({
       setCuratorId(null)
       setTransferredAt(null)
     }
-    setLoaded(true)
   }, [conversationId, defaults])
 
   // Reset when the conversation changes — state adjustment during render
   // (the React-recommended alternative to a setState-in-effect). EVERY field
-  // is reset here: previously only cardId/loaded were cleared, which leaked
+  // is reset here: previously only cardId was cleared, which leaked
   // the previous lead's data into the next dialog until a page reload.
   const [prevConversationId, setPrevConversationId] = useState(conversationId)
   if (prevConversationId !== conversationId) {
     setPrevConversationId(conversationId)
-    setLoaded(false)
     setOpen(false)
     setCardId(null)
     setFreeComment('')
@@ -394,7 +391,7 @@ export function LeadCardPanel({
                     />
                   </div>
 
-                  {/* Статус менеджера по кадрам — менеджер видит текущий статус и историю */}
+                  {/* Статус менеджера по кадрам — менеджер видит текущий статус и истори�� */}
                   {detail?.card?.status || detail?.statusHistory?.length ? (
                     <div className="flex flex-col gap-2 border-t border-border pt-3.5">
                       <p className="text-sm font-semibold">Статус у менеджера по кадрам</p>
@@ -427,7 +424,7 @@ export function LeadCardPanel({
                     </div>
                   ) : null}
 
-                  {/* Комментарии: менеджер пишет свои и в��дит комментарии менеджера по кадрам */}
+                  {/* Комментарии: менеджер пишет свои и видит комментарии менеджера по кадрам */}
                   <div className="flex flex-col gap-2 border-t border-border pt-3.5">
                     <p className="text-sm font-semibold">Комментарии</p>
                     <Textarea

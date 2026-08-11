@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import { Loader2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
@@ -73,11 +73,22 @@ export function ManagerLeadDetailPanel({
     })
   }
 
+  // Esc закрывает карточку (кастомный оверлей — без встроенной обработки).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      e.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose])
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <button
         type="button"
-        className="absolute inset-0 bg-black/30 supports-backdrop-filter:backdrop-blur-[2px]"
+        className="absolute inset-0 bg-black/30 animate-in fade-in duration-200 supports-backdrop-filter:backdrop-blur-[2px]"
         aria-label="Закрыть"
         onClick={onClose}
       />
@@ -86,7 +97,8 @@ export function ManagerLeadDetailPanel({
         aria-modal="true"
         className={cn(
           'relative z-10 flex h-full w-full flex-col bg-popover shadow-2xl ring-1 ring-foreground/10',
-          'animate-in slide-in-from-bottom-4 duration-200 sm:slide-in-from-right-4',
+          // Полный проезд от края + ease-out — единая анимация карточек.
+          'animate-in duration-300 ease-out max-sm:slide-in-from-bottom sm:slide-in-from-right',
           'max-sm:mt-auto max-sm:h-[min(94dvh,100%)] max-sm:rounded-t-2xl',
           'sm:w-[min(32rem,100vw)]',
         )}

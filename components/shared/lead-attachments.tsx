@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useState, useTransition } from 'react'
+import { createPortal } from 'react-dom'
 import { CircleDot, Loader2, Paperclip, Play, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -253,10 +254,13 @@ export function LeadAttachments({
         </ul>
       )}
 
-      {/* Полноэкранный просмотр */}
-      {viewer ? (
+      {/* Полноэкранный просмотр. Портал в body обязателен: карточки лида
+          анимируются transform-ом, а transform у предка ломает position:fixed
+          у потомков — без портала просмотр «съезжал» внутрь панели. */}
+      {viewer
+        ? createPortal(
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 animate-in fade-in duration-200"
           role="dialog"
           aria-modal="true"
           aria-label="Просмотр вложения"
@@ -267,7 +271,7 @@ export function LeadAttachments({
             aria-label="Закрыть просмотр"
             onClick={() => setViewer(null)}
           />
-          <div className="relative z-10 max-h-full max-w-3xl">
+          <div className="relative z-10 max-h-full max-w-3xl animate-in zoom-in-95 fade-in duration-200">
             <Button
               variant="secondary"
               size="icon-sm"
@@ -305,8 +309,10 @@ export function LeadAttachments({
               {formatDateTime(viewer.createdAt)}
             </p>
           </div>
-        </div>
-      ) : null}
+        </div>,
+            document.body,
+          )
+        : null}
     </div>
   )
 }

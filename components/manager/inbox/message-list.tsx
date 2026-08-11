@@ -65,15 +65,18 @@ export function MessageList({
 }) {
   // Infinite scroll up: when the top sentinel becomes visible near the top of
   // the feed, older messages load automatically — no button press needed.
-  // The callback lives in a ref so the observer isn't re-created per render.
+  // Latest callback/flag live in refs (synced in an effect, per the
+  // react-hooks/refs rule) so the observer isn't re-created per render.
   const canLoadOlder = Boolean(
     activeId && thread.length >= 30 && !noOlder[activeId],
   )
   const topSentinelRef = useRef<HTMLDivElement | null>(null)
   const loadOlderRef = useRef(onLoadOlder)
-  loadOlderRef.current = onLoadOlder
   const loadingOlderRef = useRef(loadingOlder)
-  loadingOlderRef.current = loadingOlder
+  useEffect(() => {
+    loadOlderRef.current = onLoadOlder
+    loadingOlderRef.current = loadingOlder
+  }, [onLoadOlder, loadingOlder])
   useEffect(() => {
     if (!canLoadOlder) return
     const sentinel = topSentinelRef.current
