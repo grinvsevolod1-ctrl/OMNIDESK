@@ -7,16 +7,6 @@ import {
   useState,
   useTransition,
 } from 'react'
-import {
-  ArrowDownWideNarrow,
-  ArrowUpNarrowWide,
-  FileSpreadsheet,
-  ListFilter,
-  Loader2,
-  Search,
-  Users,
-  X,
-} from 'lucide-react'
 import { toast } from 'sonner'
 import {
   getLeadCardStatsAdminAction,
@@ -25,81 +15,31 @@ import {
 } from '@/app/actions/lead-cards'
 import { exportLeadsExcelAction } from '@/app/actions/leads-export'
 import { AdminLeadRow } from '@/components/admin/leads/admin-lead-row'
+import { LeadsFilterBar } from '@/components/admin/leads/leads-filter-bar'
 import { LeadsPagination } from '@/components/admin/leads/leads-pagination'
+import { LeadsPeriodFilter } from '@/components/admin/leads/leads-period-filter'
 import { LeadsPeriodStats } from '@/components/admin/leads/leads-period-stats'
-import { LeadsTrashDialog } from '@/components/admin/leads-trash-dialog'
-import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+  type PeriodPreset,
+  presetRange,
+  shiftDay,
+} from '@/components/admin/leads/period-range'
+import { downloadBase64Xlsx } from '@/components/admin/leads/xlsx-download'
+import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
+import { Card } from '@/components/ui/card'
 import type { CuratorWithLoad, LeadCard } from '@/lib/data/lead-cards'
 import type { LeadCardStats } from '@/lib/data/lead-stats'
-import { LEAD_STATUSES, LEAD_STATUS_LABELS, LEAD_STATUS_TONE } from '@/lib/lead-status'
 import { mskDayKey } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
-/** Скачивание готового .xlsx из base64 (server action не умеет стримить файл). */
-function downloadBase64Xlsx(base64: string, fileName: string) {
-  const bin = atob(base64)
-  const bytes = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  const blob = new Blob([bytes], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = fileName
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
 const PAGE_SIZE = 20
-
-type PeriodPreset = 'all' | 'today' | '7d' | '30d' | 'day' | 'range'
-
-function shiftDay(day: string, deltaDays: number): string {
-  const d = new Date(`${day}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + deltaDays)
-  return d.toISOString().slice(0, 10)
-}
-
-/** Resolve a preset into an inclusive MSK from/to pair (nulls = no limit). */
-function presetRange(
-  preset: PeriodPreset,
-  day: string,
-  from: string,
-  to: string,
-): { from: string | null; to: string | null } {
-  const today = mskDayKey(new Date())
-  switch (preset) {
-    case 'all':
-      return { from: null, to: null }
-    case 'today':
-      return { from: today, to: today }
-    case '7d':
-      return { from: shiftDay(today, -6), to: today }
-    case '30d':
-      return { from: shiftDay(today, -29), to: today }
-    case 'day':
-      return { from: day, to: day }
-    case 'range':
-      return { from, to }
-  }
-}
 
 /**
  * Admin overview of ALL transferred leads. Контейнер: состояние фильтров,
- * realtime-пуллинг и загрузка; строки таблицы (AdminLeadRow), статистика
- * (LeadsPeriodStats) и пагинация (LeadsPagination) — мемоизированные
- * подкомпоненты, чтобы 5-секундный пуллинг не перерисовывал весь список.
+ * realtime-пуллинг и загрузка; фильтр периода (LeadsPeriodFilter), панель
+ * фильтров (LeadsFilterBar), строки таблицы (AdminLeadRow), статистика
+ * (LeadsPeriodStats) и пагинация (LeadsPagination) — подкомпоненты, чтобы
+ * 5-секундный пуллинг не перерисовывал весь список.
  */
 export function AllLeadsSection({
   initialLeads,
@@ -340,7 +280,7 @@ export function AllLeadsSection({
   }, [])
 
   /** Выгрузка текущей выборки (все страницы, без пагинации) в .xlsx. */
-  function exportExcel() {
+  const exportExcel = useCallback(() => {
     const range = presetRange(preset, day, from, to)
     startExport(async () => {
       const res = await exportLeadsExcelAction({
@@ -359,7 +299,7 @@ export function AllLeadsSection({
         toast.error(res.message ?? 'Не удалось выгрузить')
       }
     })
-  }
+  }, [curatorId, status, search, orphanedOnly, preset, day, from, to, sort, startExport])
 
   const searchExpanded = searchFocused || search.length > 0
 
@@ -392,237 +332,64 @@ export function AllLeadsSection({
         ) : null}
       </div>
 
-      {/* Period presets: statistics by dates (today / period / single day) */}
-      <div className="flex flex-wrap items-center gap-2">
-        {/* На узких экранах пресеты уходят в горизонтальный скролл */}
-        <div className="scrollbar-thin -mx-1 max-w-full overflow-x-auto px-1 sm:mx-0 sm:px-0">
-          <div className="flex w-max items-center gap-1 rounded-xl border border-border bg-muted/30 p-1">
-            {(
-              [
-                { key: 'all', label: 'Всё время' },
-                { key: 'today', label: 'Сегодня' },
-                { key: '7d', label: '7 дней' },
-                { key: '30d', label: '30 дней' },
-                { key: 'day', label: 'День' },
-                { key: 'range', label: 'Период' },
-              ] as { key: PeriodPreset; label: string }[]
-            ).map((p) => (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => {
-                  setPreset(p.key)
-                  reload({ preset: p.key })
-                }}
-                className={cn(
-                  'shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition-colors',
-                  preset === p.key
-                    ? 'bg-background font-medium shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
+      {/* Пресеты периода: статистика по датам (сегодня / период / день) */}
+      <LeadsPeriodFilter
+        preset={preset}
+        day={day}
+        from={from}
+        to={to}
+        today={today}
+        onPreset={(p) => {
+          setPreset(p)
+          reload({ preset: p })
+        }}
+        onDay={(v) => {
+          setDay(v)
+          reload({ day: v })
+        }}
+        onFrom={(v) => {
+          setFrom(v)
+          reload({ from: v })
+        }}
+        onTo={(v) => {
+          setTo(v)
+          reload({ to: v })
+        }}
+      />
 
-        {preset === 'day' ? (
-          <Input
-            type="date"
-            value={day}
-            max={today}
-            onChange={(e) => {
-              const v = e.target.value || today
-              setDay(v)
-              reload({ day: v })
-            }}
-            className="h-9 w-40"
-            aria-label="Выбрать день"
-          />
-        ) : null}
-
-        {preset === 'range' ? (
-          <div className="flex w-full items-center gap-1.5 sm:w-auto">
-            <Input
-              type="date"
-              value={from}
-              max={to}
-              onChange={(e) => {
-                const v = e.target.value || from
-                setFrom(v)
-                reload({ from: v })
-              }}
-              className="h-9 min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label="Начало период����"
-            />
-            <span className="shrink-0 text-sm text-muted-foreground">—</span>
-            <Input
-              type="date"
-              value={to}
-              max={today}
-              onChange={(e) => {
-                const v = e.target.value || to
-                setTo(v)
-                reload({ to: v })
-              }}
-              className="h-9 min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label="Конец периода"
-            />
-          </div>
-        ) : null}
-      </div>
-
-      {/* Stats for the selected period */}
+      {/* Статистика за выбранный период */}
       {stats && preset !== 'all' ? (
         <LeadsPeriodStats stats={stats} today={today} />
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          value={curatorId}
-          onValueChange={(v) => {
-            const next = (v as string) ?? ''
-            setCuratorId(next)
-            reload({ curatorId: next })
-          }}
-          disabled={orphanedOnly}
-        >
-          <SelectTrigger
-            className={cn(
-              'h-10 gap-2 font-medium transition-all duration-300',
-              searchExpanded ? 'max-w-52' : 'max-w-72',
-            )}
-            aria-label="Фильтр по менеджеру по кадрам"
-          >
-            <Users className="size-4 shrink-0 text-muted-foreground" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="w-auto min-w-56">
-            <SelectItem value="">Все менеджеры по кадрам (по умолчанию)</SelectItem>
-            {curators.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                <span className="flex min-w-0 items-baseline gap-1.5">
-                  <span className="truncate">{c.name}</span>
-                  {c.cities?.length || c.city ? (
-                    <span className="max-w-40 truncate text-xs text-muted-foreground">
-                      {c.cities?.length ? c.cities.join(', ') : c.city}
-                    </span>
-                  ) : null}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select
-          value={status}
-          onValueChange={(v) => {
-            const next = (v as string) ?? ''
-            setStatus(next)
-            reload({ status: next })
-          }}
-        >
-          <SelectTrigger
-            className="h-10 gap-2 font-medium"
-            aria-label="Фильтр по статусу"
-          >
-            <ListFilter className="size-4 shrink-0 text-muted-foreground" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="w-auto min-w-44">
-            <SelectItem value="">Все статусы (по умолчанию)</SelectItem>
-            <SelectItem value="none">Без статуса</SelectItem>
-            {LEAD_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                <span className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'size-1.5 shrink-0 rounded-full',
-                      LEAD_STATUS_TONE[s].dot,
-                    )}
-                  />
-                  {LEAD_STATUS_LABELS[s]}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Единый поиск: дата ДД.ММ.ГГГГ / ФИО / телефон / @username / город /
-            регион. Компактный по умолчанию — плавно раскрывается на фокусе
-            (или пока есть текст), а соседние элементы ужимаются. */}
-        <div
-          className={cn(
-            'relative min-w-0 transition-all duration-300 ease-out',
-            searchExpanded ? 'flex-1 basis-64' : 'flex-none basis-44',
-          )}
-        >
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          {/* Поиск в реальном времени: debounce 350мс, Enter не нужен. */}
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
-            placeholder={
-              searchExpanded
-                ? 'Дата, ФИО, телефон, @username, город, регион…'
-                : 'Поиск'
-            }
-            className="h-9 pl-8 pr-8"
-            aria-label="Поиск по лидам"
-          />
-          {search ? (
-            <button
-              type="button"
-              onClick={() => setSearch('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-              aria-label="Очистить поиск"
-            >
-              <X className="size-3.5" />
-            </button>
-          ) : null}
-        </div>
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            const next = sort === 'newest' ? 'oldest' : 'newest'
-            setSort(next)
-            reload({ sort: next })
-          }}
-          aria-label="Переключить сортировку"
-          title={sort === 'newest' ? 'Сначала новые' : 'Сначала старые'}
-        >
-          {sort === 'newest' ? (
-            <ArrowDownWideNarrow className="size-3.5" />
-          ) : (
-            <ArrowUpNarrowWide className="size-3.5" />
-          )}
-          {/* Пока поиск раскрыт — только иконки, чтобы всё влезло в строку */}
-          {!searchExpanded ? (sort === 'newest' ? 'Новые' : 'Старые') : null}
-        </Button>
-
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={exporting}
-          onClick={exportExcel}
-          aria-label="Выгрузить в Excel"
-          title="Выгрузить текущую выборку в Excel"
-        >
-          {exporting ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <FileSpreadsheet className="size-3.5" />
-          )}
-          {!searchExpanded ? 'Excel' : null}
-        </Button>
-
-        <LeadsTrashDialog onChanged={refreshRow} />
-      </div>
+      <LeadsFilterBar
+        curatorId={curatorId}
+        status={status}
+        search={search}
+        sort={sort}
+        orphanedOnly={orphanedOnly}
+        exporting={exporting}
+        searchExpanded={searchExpanded}
+        curators={curators}
+        onCuratorChange={(v) => {
+          setCuratorId(v)
+          reload({ curatorId: v })
+        }}
+        onStatusChange={(v) => {
+          setStatus(v)
+          reload({ status: v })
+        }}
+        onSearchChange={setSearch}
+        onSearchFocus={() => setSearchFocused(true)}
+        onSearchBlur={() => setSearchFocused(false)}
+        onToggleSort={() => {
+          const next = sort === 'newest' ? 'oldest' : 'newest'
+          setSort(next)
+          reload({ sort: next })
+        }}
+        onExport={exportExcel}
+        onTrashChanged={refreshRow}
+      />
 
       <Card className="overflow-hidden">
         {leads.length === 0 ? (
