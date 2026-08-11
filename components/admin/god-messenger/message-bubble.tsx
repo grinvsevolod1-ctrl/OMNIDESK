@@ -279,8 +279,10 @@ function MediaContent({ message, mine }: { message: Message; mine: boolean }) {
           />
         </a>
       )
-    case 'video':
     case 'video_note':
+      // Телеграм-стиль кружок: круглый, клик = play/pause, прогресс-обод.
+      return <VideoNotePlayer src={url} size={176} className="mb-1" />
+    case 'video':
       return (
         <video
           src={url}

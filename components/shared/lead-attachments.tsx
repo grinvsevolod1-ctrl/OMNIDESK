@@ -11,6 +11,7 @@ import {
   type LeadAttachmentView,
 } from '@/app/actions/lead-cards'
 import { Button } from '@/components/ui/button'
+import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import { compressImageFile } from '@/lib/compress-image'
 import type { ConversationVideoNote } from '@/lib/data/lead-attachments'
 import { APP_TIME_ZONE } from '@/lib/time'
@@ -55,6 +56,12 @@ export function LeadAttachments({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [pending, startTransition] = useTransition()
   const [viewer, setViewer] = useState<LeadAttachmentView | null>(null)
+  /**
+   * Режим «просмотр перед удалением»: клик по корзине не удаляет сразу, а
+   * открывает полноэкранный просмотр с панелью подтверждения — можно ещё раз
+   * посмотреть кружок/видео/фото и только потом подтвердить удаление.
+   */
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   function onFilesPicked(list: FileList | null) {
     if (!list || list.length === 0) return
@@ -125,11 +132,25 @@ export function LeadAttachments({
       if (res.ok && res.attachments) {
         toast.success(res.message)
         onChanged(res.attachments)
-        if (viewer?.id === att.id) setViewer(null)
+        if (viewer?.id === att.id) {
+          setViewer(null)
+          setConfirmingDelete(false)
+        }
       } else {
         toast.error(res.message)
       }
     })
+  }
+
+  /** Корзина в сетке: открыть просмотр в режиме подтверждения удаления. */
+  function requestDelete(att: LeadAttachmentView) {
+    setViewer(att)
+    setConfirmingDelete(true)
+  }
+
+  function closeViewer() {
+    setViewer(null)
+    setConfirmingDelete(false)
   }
 
   return (
@@ -237,9 +258,9 @@ export function LeadAttachments({
                   <button
                     type="button"
                     className="absolute -right-1.5 -top-1.5 z-10 hidden size-6 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-sm group-hover:flex"
-                    onClick={() => remove(att)}
+                    onClick={() => requestDelete(att)}
                     disabled={pending}
-                    aria-label="Удалить вложение"
+                    aria-label="Просмотреть и удалить вложение"
                   >
                     <Trash2 className="size-3" />
                   </button>
@@ -269,14 +290,14 @@ export function LeadAttachments({
             type="button"
             className="absolute inset-0"
             aria-label="Закрыть просмотр"
-            onClick={() => setViewer(null)}
+            onClick={closeViewer}
           />
-          <div className="relative z-10 max-h-full max-w-3xl animate-in zoom-in-95 fade-in duration-200">
+          <div className="relative z-10 flex max-h-full max-w-3xl flex-col items-center animate-in zoom-in-95 fade-in duration-200">
             <Button
               variant="secondary"
               size="icon-sm"
               className="absolute -top-10 right-0"
-              onClick={() => setViewer(null)}
+              onClick={closeViewer}
               aria-label="Закрыть"
             >
               <X className="size-4" />
@@ -286,20 +307,19 @@ export function LeadAttachments({
               <img
                 src={viewer.url || '/placeholder.svg'}
                 alt={viewer.fileName ?? 'Фото'}
-                className="max-h-[80dvh] max-w-full rounded-lg object-contain"
+                className="max-h-[70dvh] max-w-full rounded-lg object-contain"
               />
+            ) : viewer.kind === 'video_note' ? (
+              // Кружок — телеграм-стиль плеер: клик = пауза, живой
+              // прогресс-обод и оставшееся время внутри кружка.
+              <VideoNotePlayer src={viewer.url} size={320} autoPlay />
             ) : (
               <video
                 src={viewer.url}
                 controls
                 autoPlay
                 playsInline
-                className={cn(
-                  'max-h-[80dvh] max-w-full object-contain',
-                  viewer.kind === 'video_note'
-                    ? 'aspect-square rounded-full'
-                    : 'rounded-lg',
-                )}
+                className="max-h-[70dvh] max-w-full rounded-lg object-contain"
               />
             )}
             <p className="mt-2 text-center text-xs text-white/80">
@@ -308,6 +328,45 @@ export function LeadAttachments({
               {' · '}
               {formatDateTime(viewer.createdAt)}
             </p>
+            {confirmingDelete && viewer.canDelete ? (
+              // Панель «просмотрите и подтвердите»: удаление только после
+              // повторного клика — случайно снести кружок больше нельзя.
+              <div className="mt-3 flex items-center gap-2 rounded-xl bg-black/60 px-3 py-2 backdrop-blur-sm">
+                <p className="text-xs text-white/90">Удалить это вложение?</p>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={pending}
+                  onClick={() => remove(viewer)}
+                >
+                  {pending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-3.5" />
+                  )}
+                  Удалить
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={pending}
+                  onClick={() => setConfirmingDelete(false)}
+                >
+                  Оставить
+                </Button>
+              </div>
+            ) : viewer.canDelete ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-3 gap-1.5 text-white/70 hover:bg-white/10 hover:text-white"
+                onClick={() => setConfirmingDelete(true)}
+              >
+                <Trash2 className="size-3.5" />
+                Удалить
+              </Button>
+            ) : null}
           </div>
         </div>,
             document.body,

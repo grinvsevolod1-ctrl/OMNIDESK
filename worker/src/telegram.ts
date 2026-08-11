@@ -22,8 +22,6 @@ import {
   TG_HEALTH_PING_TIMEOUT_MS,
   TG_SEND_JITTER_MS,
   TG_SEND_MIN_INTERVAL_MS,
-  inputPeerFromRecord,
-  peerRecordFromEntity,
 } from './telegram-config.js'
 import type { TgSessionCtx } from './telegram-session-ctx.js'
 import { runKickSweep } from './telegram-exclusive.js'
@@ -38,6 +36,17 @@ import {
   sendVoiceTo,
   type StickerDescriptor,
 } from './telegram-media-io.js'
+import { createTargetResolver } from './telegram-peers.js'
+import {
+  sendMessageTo,
+  markReadIn,
+  setTypingIn,
+  reactToMessageIn,
+  deleteMessageIn,
+  editMessageIn,
+  forwardMessageIn,
+  type TgMessagingDeps,
+} from './telegram-messaging.js'
 
 // The feature modules this monolith was split into re-export their public
 // surface here so existing importers (e.g. registry.ts) keep resolving them
@@ -140,11 +149,24 @@ export class TelegramSession {
    * the next checkpoint, exactly like direct `this.client` checks used to.
    */
   private readonly ctx: TgSessionCtx
+  /**
+   * Peer resolution lives in telegram-peers.ts; the resolver keeps its own
+   * "one getDialogs sweep per minute" rate-limit state in closure. Built in
+   * the constructor (not a field initializer) so channelId is already set.
+   */
+  private readonly resolveTarget: (
+    target: string,
+  ) => Promise<Api.TypeInputPeer | string>
 
   constructor(channelId: string, managerId: string) {
     this.channelId = channelId
     this.managerId = managerId
     this.session = new StringSession('')
+    this.resolveTarget = createTargetResolver({
+      channelId,
+      getClient: () => this.client,
+      syncDialogs: () => this.syncDialogs(),
+    })
     this.ctx = {
       channelId,
       managerId,
@@ -1022,25 +1044,26 @@ export class TelegramSession {
    * time even if the worker is down. Returns the new Telegram message id so the
    * caller can persist it (needed to later delete / forward / react to it).
    */
+  /**
+   * The messaging dependency bundle handed to the split-out outgoing-ops
+   * module (telegram-messaging.ts). Throttling and flood cooldown stay owned
+   * by the class; the module only invokes them.
+   */
+  private get messagingDeps(): TgMessagingDeps {
+    return {
+      getClient: () => this.client,
+      resolveTarget: (target) => this.resolveTarget(target),
+      throttleSend: () => this.throttleSend(),
+      tripFloodCooldown: (err) => this.tripFloodCooldown(err),
+    }
+  }
+
   async sendMessage(
     target: string,
     body: string,
     opts?: { replyToMsgId?: number; scheduleAt?: number },
   ): Promise<{ providerMessageId: string | null }> {
-    if (!this.client) throw new Error('Session not started')
-    await this.throttleSend()
-    try {
-      const entity = await this.resolveTarget(target)
-      const sent = await this.client.sendMessage(entity, {
-        message: body,
-        ...(opts?.replyToMsgId ? { replyTo: opts.replyToMsgId } : {}),
-        ...(opts?.scheduleAt ? { schedule: opts.scheduleAt } : {}),
-      })
-      return { providerMessageId: sent?.id != null ? String(sent.id) : null }
-    } catch (err) {
-      this.tripFloodCooldown(err)
-      throw err
-    }
+    return sendMessageTo(this.messagingDeps, target, body, opts)
   }
 
   /**
@@ -1048,9 +1071,7 @@ export class TelegramSession {
    * contact sees that the operator read their messages. Best-effort.
    */
   async markRead(target: string): Promise<void> {
-    if (!this.client) throw new Error('Session not started')
-    const entity = await this.resolveTarget(target)
-    await this.client.markAsRead(entity)
+    return markReadIn(this.messagingDeps, target)
   }
 
   /**
@@ -1059,34 +1080,16 @@ export class TelegramSession {
    * typing. Best-effort — never throws into the job runner.
    */
   async setTyping(target: string): Promise<void> {
-    if (!this.client) throw new Error('Session not started')
-    const entity = await this.resolveTarget(target)
-    await this.client.invoke(
-      new Api.messages.SetTyping({
-        peer: entity,
-        action: new Api.SendMessageTypingAction(),
-      }),
-    )
+    return setTypingIn(this.messagingDeps, target, true)
   }
 
   /**
    * SenderSession adapter for the autopilot's optional typing presence.
-   * The autopilot duck-types `sendTyping?(target, on)` — this was silently
-   * never called before because only `setTyping` existed, so auto-replies
-   * arrived with no "печатает…" indicator. `on=false` sends an explicit
-   * cancel action instead of waiting for Telegram's ~6s auto-expiry.
+   * The autopilot duck-types `sendTyping?(target, on)`. `on=false` sends an
+   * explicit cancel action instead of waiting for Telegram's ~6s auto-expiry.
    */
   async sendTyping(target: string, on: boolean): Promise<void> {
-    if (!this.client) throw new Error('Session not started')
-    const entity = await this.resolveTarget(target)
-    await this.client.invoke(
-      new Api.messages.SetTyping({
-        peer: entity,
-        action: on
-          ? new Api.SendMessageTypingAction()
-          : new Api.SendMessageCancelAction(),
-      }),
-    )
+    return setTypingIn(this.messagingDeps, target, on)
   }
 
   /**
@@ -1098,17 +1101,7 @@ export class TelegramSession {
     msgId: number,
     emoji: string,
   ): Promise<void> {
-    if (!this.client) throw new Error('Session not started')
-    const entity = await this.resolveTarget(target)
-    await this.client.invoke(
-      new Api.messages.SendReaction({
-        peer: entity,
-        msgId,
-        reaction: emoji
-          ? [new Api.ReactionEmoji({ emoticon: emoji })]
-          : [new Api.ReactionEmpty()],
-      }),
-    )
+    return reactToMessageIn(this.messagingDeps, target, msgId, emoji)
   }
 
   /**
@@ -1120,9 +1113,7 @@ export class TelegramSession {
     msgId: number,
     revoke = true,
   ): Promise<void> {
-    if (!this.client) throw new Error('Session not started')
-    const entity = await this.resolveTarget(target)
-    await this.client.deleteMessages(entity, [msgId], { revoke })
+    return deleteMessageIn(this.messagingDeps, target, msgId, revoke)
   }
 
   /**
@@ -1134,9 +1125,7 @@ export class TelegramSession {
     msgId: number,
     body: string,
   ): Promise<void> {
-    if (!this.client) throw new Error('Session not started')
-    const entity = await this.resolveTarget(target)
-    await this.client.editMessage(entity, { message: msgId, text: body })
+    return editMessageIn(this.messagingDeps, target, msgId, body)
   }
 
   /**
@@ -1148,105 +1137,10 @@ export class TelegramSession {
     msgId: number,
     toTarget: string,
   ): Promise<{ providerMessageId: string | null }> {
-    if (!this.client) throw new Error('Session not started')
-    // Forwards are outgoing sends like any other: they must respect the same
-    // per-account pacing and flood gate. This method used to bypass both —
-    // the one send path that could still burst at machine speed and keep
-    // hammering through an active FLOOD_WAIT window.
-    await this.throttleSend()
-    try {
-      const fromEntity = await this.resolveTarget(fromTarget)
-      const toEntity = await this.resolveTarget(toTarget)
-      const result = await this.client.forwardMessages(toEntity, {
-        messages: [msgId],
-        fromPeer: fromEntity,
-      })
-      const first = Array.isArray(result) ? result[0] : undefined
-      return { providerMessageId: first?.id != null ? String(first.id) : null }
-    } catch (err) {
-      this.tripFloodCooldown(err)
-      throw err
-    }
+    return forwardMessageIn(this.messagingDeps, fromTarget, msgId, toTarget)
   }
 
-  /** Tracks whether we've already refreshed the entity cache this session, so a
-   * cache miss only triggers ONE expensive getDialogs sweep, not one per send. */
-  private dialogsRefreshedAt = 0
 
-  /**
-   * Turn a stored contact_handle back into something GramJS can send to.
-   *
-   * For a numeric peer id MTProto requires the peer's access_hash, which lives
-   * in the session's local entity cache. After a worker restart that cache can
-   * be incomplete (the saved string session doesn't carry every entity), so a
-   * plain getInputEntity throws "Could not find the input entity for ...". When
-   * that happens we refresh the dialog list (which repopulates the cache with
-   * access_hashes) and retry, then fall back to getEntity as a last resort.
-   */
-  private async resolveTarget(
-    target: string,
-  ): Promise<Api.TypeInputPeer | string> {
-    if (target.startsWith('@')) return target
-    const client = this.client!
-    const peerId = returnBigInt(target)
-
-    // 1) Durable peer cache: rebuild the input peer from a persisted
-    // access_hash. This survives restarts and is independent of GramJS's
-    // in-memory entity cache (the thing that throws "input entity not found").
-    try {
-      const stored = await repo.getTelegramPeer(this.channelId, target)
-      if (stored) {
-        const peer = inputPeerFromRecord(stored)
-        if (peer) return peer
-      }
-    } catch (err) {
-      logger.warn(
-        { channelId: this.channelId, target, err: errMessage(err) },
-        'Telegram peer cache lookup failed',
-      )
-    }
-
-    // 2) In-memory entity cache.
-    try {
-      return await client.getInputEntity(peerId)
-    } catch (err) {
-      logger.warn(
-        { channelId: this.channelId, target, err: errMessage(err) },
-        'Telegram entity cache miss; refreshing dialogs to resolve peer',
-      )
-      // 3) Repopulate the entity cache (access_hashes) from the dialog list.
-      // Rate-limited to once per 60s so a burst of sends to unknown peers can't
-      // spam getDialogs. The sync also persists peers to the durable cache.
-      if (Date.now() - this.dialogsRefreshedAt > 60_000) {
-        this.dialogsRefreshedAt = Date.now()
-        try {
-          await this.syncDialogs()
-        } catch (e) {
-          logger.warn(
-            { channelId: this.channelId, err: errMessage(e) },
-            'Telegram dialog refresh during resolve failed',
-          )
-        }
-      }
-      try {
-        return await client.getInputEntity(peerId)
-      } catch {
-        // 4) Last resort: resolve the full entity (also caches it), persist its
-        // access_hash for next time, and derive the input peer from it.
-        const entity = (await client.getEntity(peerId)) as
-          | Api.User
-          | Api.Chat
-          | Api.Channel
-        const rec = peerRecordFromEntity(entity)
-        if (rec) {
-          await repo
-            .saveTelegramPeer(this.channelId, target, rec)
-            .catch(() => {})
-        }
-        return client.getInputEntity(entity)
-      }
-    }
-  }
 
   /**
    * Re-download the media bytes for a previously ingested message. `ref` is the

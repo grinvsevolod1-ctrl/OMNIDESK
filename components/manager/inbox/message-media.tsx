@@ -13,6 +13,7 @@ import { Download, ExternalLink, FileText, Info, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { TgsSticker } from '@/components/manager/inbox/tgs-sticker'
+import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import type { Message } from '@/lib/types'
 
 /** Placeholder labels we synthesise at ingest for media without a caption. */
@@ -168,17 +169,10 @@ function MediaLightbox({
         className="flex min-h-0 flex-1 items-center justify-center p-4 animate-in zoom-in-95 fade-in duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        {isVideo ? (
-          <video
-            src={url}
-            controls
-            autoPlay
-            className={
-              effType === 'video_note'
-                ? 'aspect-square max-h-full max-w-full rounded-full object-cover'
-                : 'max-h-full max-w-full rounded-lg'
-            }
-          />
+        {effType === 'video_note' ? (
+          <VideoNotePlayer src={url} size={384} autoPlay />
+        ) : isVideo ? (
+          <video src={url} controls autoPlay className="max-h-full max-w-full rounded-lg" />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -295,24 +289,24 @@ export function MessageMedia({ message }: { message: Message }) {
   }
 
   if (type === 'video_note') {
+    // Телеграм-стиль кружок: play/pause по клику, круговой прогресс-обод,
+    // оставшееся время внутри. Скачивание — маленькой кнопкой под кружком.
     return (
-      <>
+      <div className="flex flex-col gap-1">
+        <VideoNotePlayer
+          src={url}
+          size={192}
+          onError={() => setFailed(true)}
+        />
         <button
           type="button"
-          onClick={() => setLightbox(true)}
-          className="block cursor-zoom-in rounded-full"
-          aria-label="Открыть видео"
+          onClick={() => void downloadMedia(url, mediaFilename(message))}
+          className="flex items-center gap-1 self-center text-xs opacity-70 hover:opacity-100"
         >
-          <video
-            src={url}
-            className="pointer-events-none size-48 rounded-full object-cover"
-            onError={() => setFailed(true)}
-          />
+          <Download className="size-3.5" />
+          Скачать
         </button>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
-        ) : null}
-      </>
+      </div>
     )
   }
 
