@@ -10,6 +10,7 @@ import {
 } from '@/app/actions/lead-cards'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { LeadAttachments } from '@/components/shared/lead-attachments'
+import { LeadHistoryEvent } from '@/components/shared/lead-history-event'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -185,13 +186,7 @@ export function ManagerLeadDetailPanel({
                         className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
                       >
                         <span>{formatDateTime(h.createdAt)}</span>
-                        {h.reason === 'transfer_reset' ? (
-                          <span className="rounded bg-muted px-1 py-0.5 text-[10px]">
-                            сброс при передаче
-                          </span>
-                        ) : h.status ? (
-                          <LeadStatusBadge status={h.status} />
-                        ) : null}
+                        <LeadHistoryEvent entry={h} />
                         {h.curatorName ? <span>— {h.curatorName}</span> : null}
                       </li>
                     ))}

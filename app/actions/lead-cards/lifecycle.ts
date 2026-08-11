@@ -26,19 +26,36 @@ export async function listMyArchivedLeadsAction() {
   return listArchivedLeadsForCurator(session.sub)
 }
 
-/** Curator: archive a final lead / bring it back from the archive. */
+/**
+ * Архив финального лида / возврат из архива. Доступно менеджеру по кадрам
+ * (только свои лиды, с проверкой дисциплины) и админу (любой лид).
+ */
 export async function setLeadArchivedAction(input: {
   leadCardId: string
   archived: boolean
 }): Promise<LeadCardActionResult> {
-  const session = await requireCurator()
+  const session = await getSession()
+  if (!session) return { ok: false, message: 'Не авторизован' }
+  if (session.role !== 'admin' && session.role !== 'curator') {
+    return { ok: false, message: 'Нет доступа' }
+  }
   try {
-    // Archiving is workspace maintenance — the daily gate still applies.
-    await assertCuratorNotLocked(session.sub)
+    if (session.role === 'curator') {
+      // Archiving is workspace maintenance — the daily gate still applies.
+      await assertCuratorNotLocked(session.sub)
+    }
     await setLeadArchived({
       leadCardId: input.leadCardId,
-      curatorId: session.sub,
+      // Админ действует без проверки владельца; имя — снапшотом в журнал.
+      // Корневой админ живёт вне таблицы managers (sub = 'admin') — FK NULL.
+      curatorId: session.role === 'curator' ? session.sub : null,
       archived: input.archived,
+      actorId:
+        session.role === 'admin' && session.sub !== 'admin'
+          ? session.sub
+          : null,
+      actorName:
+        session.role === 'admin' ? (session.name ?? 'Администратор') : null,
     })
     revalidatePath('/curator')
     revalidatePath('/admin/curators')

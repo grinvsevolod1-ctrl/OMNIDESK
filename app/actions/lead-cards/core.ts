@@ -211,9 +211,13 @@ export async function addLeadCommentAction(input: {
     if (session.role === 'curator') {
       await assertCuratorNotLocked(session.sub)
     }
+    // Админ живёт вне таблицы managers (sub = 'admin') — FK хранит NULL,
+    // имя уходит снапшотом, как в корзине и журнале статусов.
+    const isRootAdmin = session.role === 'admin' && session.sub === 'admin'
     await addLeadComment({
       leadCardId: input.leadCardId,
-      authorId: session.sub,
+      authorId: isRootAdmin ? null : session.sub,
+      authorName: isRootAdmin ? (session.name ?? 'Администратор') : null,
       body: input.body,
     })
     revalidatePath('/curator')

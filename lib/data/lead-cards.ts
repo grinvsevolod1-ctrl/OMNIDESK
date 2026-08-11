@@ -179,26 +179,40 @@ export async function listArchivedLeadsForCurator(
  * Archive a final lead (refused/left) or unarchive it back to the active
  * workspace. Archiving requires the lead to be in a final status — active
  * leads stay under the daily gate.
+ *
+ * `curatorId = null` — админ: владелец не проверяется. Каждое событие пишется
+ * в журнал статусов ('archived' / 'unarchived'), чтобы в истории карточки было
+ * видно, кто и когда перенёс лид в архив или вернул его.
  */
 export async function setLeadArchived(input: {
   leadCardId: string
-  curatorId: string
+  /** null — действие админа (без проверки владельца). */
+  curatorId: string | null
   archived: boolean
+  /** id актора для журнала, если он есть в managers (иначе NULL + снапшот). */
+  actorId?: string | null
+  /** Снапшот имени актора для журнала (обязателен для админа). */
+  actorName?: string | null
 }): Promise<LeadCard> {
+  const ownerCond = input.curatorId === null ? '' : 'AND curator_id = $2'
+  const params =
+    input.curatorId === null
+      ? [input.leadCardId]
+      : [input.leadCardId, input.curatorId]
   const rows = await query<{ id: string }>(
     input.archived
       ? `UPDATE lead_cards
             SET archived_at = now(), updated_at = now()
-          WHERE id = $1 AND curator_id = $2
+          WHERE id = $1 ${ownerCond}
             AND status IN ('refused', 'left')
             AND archived_at IS NULL
           RETURNING id`
       : `UPDATE lead_cards
             SET archived_at = NULL, updated_at = now()
-          WHERE id = $1 AND curator_id = $2
+          WHERE id = $1 ${ownerCond}
             AND archived_at IS NOT NULL
           RETURNING id`,
-    [input.leadCardId, input.curatorId],
+    params,
   )
   if (!rows[0]) {
     throw new Error(
@@ -207,6 +221,14 @@ export async function setLeadArchived(input: {
         : 'Лид не найден в архиве.',
     )
   }
+  // Журнал события — best-effort (recordStatusHistory глотает ошибки вне tx).
+  await recordStatusHistory({
+    leadCardId: rows[0].id,
+    curatorId: input.curatorId ?? input.actorId ?? null,
+    status: null,
+    reason: input.archived ? 'archived' : 'unarchived',
+    actorName: input.actorName ?? null,
+  })
   const card = await getLeadCardById(rows[0].id)
   if (!card) throw new Error('Archive update failed')
   return card
@@ -690,7 +712,10 @@ export async function adminSetLeadStatus(input: {
 /** Free-form comment without changing status (optional helper). */
 export async function addLeadComment(input: {
   leadCardId: string
-  authorId: string
+  /** null — админ: он живёт вне таблицы managers (FK хранит NULL). */
+  authorId: string | null
+  /** Снапшот имени автора; для authorId=null (админ) обязателен. */
+  authorName?: string | null
   body: string
 }): Promise<import('./lead-cards-core').LeadCardComment> {
   const body = input.body.trim()
@@ -699,9 +724,9 @@ export async function addLeadComment(input: {
   const id = randomUUID()
   const rows = await query<CommentRow>(
     `INSERT INTO lead_card_comments (id, lead_card_id, author_id, author_name, body, status)
-     VALUES ($1, $2, $3, (SELECT name FROM managers WHERE id = $3), $4, NULL)
+     VALUES ($1, $2, $3, COALESCE($5, (SELECT name FROM managers WHERE id = $3)), $4, NULL)
      RETURNING id, lead_card_id, author_id, author_name, body, status, created_at`,
-    [id, input.leadCardId, input.authorId, body],
+    [id, input.leadCardId, input.authorId, body, input.authorName ?? null],
   )
   return toComment(rows[0])
 }

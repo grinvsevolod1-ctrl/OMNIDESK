@@ -15,6 +15,7 @@ import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   addLeadCommentAction,
+  adminSetLeadStatusAction,
   updateLeadStatusAction,
 } from '@/app/actions/lead-cards'
 import { Button } from '@/components/ui/button'
@@ -30,15 +31,21 @@ import {
 } from '@/lib/lead-status'
 import { cn } from '@/lib/utils'
 
-/** Кнопки статусов + комментарий + сохранение. Локальное состояние ввода. */
+/**
+ * Кнопки статусов + комментарий + сохранение. Локальное состояние ввода.
+ * variant='admin' сохраняет через adminSetLeadStatusAction — та же карточка
+ * работает и у менеджера по кадрам, и у админа.
+ */
 export const LeadStatusForm = memo(function LeadStatusForm({
   leadCardId,
   currentStatus,
   onSaved,
+  variant = 'curator',
 }: {
   leadCardId: string
   currentStatus: LeadStatus | null
   onSaved: () => void
+  variant?: 'curator' | 'admin'
 }) {
   const [pickedStatus, setPickedStatus] = useState<LeadStatus | null>(null)
   const [comment, setComment] = useState('')
@@ -55,7 +62,9 @@ export const LeadStatusForm = memo(function LeadStatusForm({
       return
     }
     startTransition(async () => {
-      const res = await updateLeadStatusAction({
+      const action =
+        variant === 'admin' ? adminSetLeadStatusAction : updateLeadStatusAction
+      const res = await action({
         leadCardId,
         status,
         comment,
