@@ -452,7 +452,7 @@ export function AllLeadsSection({
                 reload({ from: v })
               }}
               className="h-9 min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label="Начало периода"
+              aria-label="Начало период��"
             />
             <span className="shrink-0 text-sm text-muted-foreground">—</span>
             <Input
@@ -488,15 +488,16 @@ export function AllLeadsSection({
         >
           <SelectTrigger
             className={cn(
-              'h-9 transition-all duration-300',
-              searchExpanded ? 'max-w-44' : 'max-w-64',
+              'h-10 gap-2 font-medium transition-all duration-300',
+              searchExpanded ? 'max-w-52' : 'max-w-72',
             )}
             aria-label="Фильтр по менеджеру по кадрам"
           >
+            <Users className="size-4 shrink-0 text-muted-foreground" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="w-auto min-w-56">
-            <SelectItem value="">Все менеджеры по кадрам</SelectItem>
+            <SelectItem value="">Все менеджеры по кадрам (по умолчанию)</SelectItem>
             {curators.map((c) => (
               <SelectItem key={c.id} value={c.id}>
                 <span className="flex min-w-0 items-baseline gap-1.5">

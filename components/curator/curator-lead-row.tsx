@@ -135,8 +135,10 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
         onClick={() => onOpen(lead.id)}
       >
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0" onClick={(e) => e.stopPropagation()}>
-            {/* ФИО, должность, телефон правятся кликом — как у админа */}
+          <div className="min-w-0">
+            {/* ФИО, должность, телефон правятся кликом — как у админа.
+                stopPropagation живёт на самих контролах (см. lead-inline-edit),
+                поэтому клик по пустому месту карточки открывает полную карточку. */}
             <TextInlineEditor
               lead={lead}
               field="full_name"
@@ -167,10 +169,7 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
           </div>
           {archiveButton}
         </div>
-        <div
-          className="flex flex-wrap items-center gap-1.5 text-xs"
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <CityInlineEditor lead={lead} onSaved={onRefresh} />
           {telegramLink}
         </div>
@@ -197,11 +196,10 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
       )}
       onClick={() => onOpen(lead.id)}
     >
-      <div
-        className="min-w-0 flex-1 basis-44"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* ФИО, должность, телефон правятся кликом — как у админа */}
+      <div className="min-w-0 flex-1 basis-44">
+        {/* ФИО, должность, телефон правятся кликом — как у админа.
+            stopPropagation живёт на самих контролах (см. lead-inline-edit),
+            клик по пустому месту строки открывает полную карточку. */}
         <TextInlineEditor
           lead={lead}
           field="full_name"

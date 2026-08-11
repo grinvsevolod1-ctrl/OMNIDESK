@@ -99,6 +99,7 @@ export function StatusInlineEditor({
               type="button"
               className="inline-flex cursor-pointer"
               aria-label="Изменить статус"
+              onClick={(e) => e.stopPropagation()}
             >
               {tone && lead.status ? (
                 <Badge
@@ -254,7 +255,12 @@ export function CityInlineEditor({
     >
       <PopoverTrigger
         render={
-          <button type="button" className="inline-flex" aria-label="Изменить город">
+          <button
+            type="button"
+            className="inline-flex"
+            aria-label="Изменить город"
+            onClick={(e) => e.stopPropagation()}
+          >
             <Badge
               variant="outline"
               className="gap-1 border-transparent bg-muted text-muted-foreground transition-colors hover:text-foreground"
@@ -384,6 +390,7 @@ export function TextInlineEditor({
               className,
             )}
             aria-label={`Изменить: ${label}`}
+            onClick={(e) => e.stopPropagation()}
           >
             <span className="truncate">{display || '—'}</span>
             <Pencil className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-50" />
@@ -461,7 +468,10 @@ export function DeleteLeadButton({
         size="icon-sm"
         aria-label="Удалить лид"
         className="text-muted-foreground hover:text-destructive"
-        onClick={() => setOpen(true)}
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen(true)
+        }}
       >
         <Trash2 className="size-4" />
       </Button>
