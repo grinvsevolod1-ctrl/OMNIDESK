@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useEffectEvent } from 'react'
 import type { Conversation } from '@/lib/types'
 
 /**
@@ -28,12 +28,13 @@ export function useInboxShortcuts({
   activeId: string | null
   setActiveId: (id: string | null) => void
 }) {
-  // Refs so the single global listener never needs re-attaching as the list
-  // or selection changes (attach/detach churn on every poll otherwise).
-  const stateRef = useRef({ filtered, activeId, setActiveId })
-  stateRef.current = { filtered, activeId, setActiveId }
+  // Effect Event: the single global listener never needs re-attaching as the
+  // list or selection changes (attach/detach churn on every poll otherwise),
+  // yet the handler always sees the latest filtered order and selection.
+  const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    // Never fight the browser or OS over modified keys we don't own.
+    if (e.ctrlKey || e.metaKey) return
 
-  useEffect(() => {
     const isEditable = (el: EventTarget | null): boolean => {
       if (!(el instanceof HTMLElement)) return false
       if (el.isContentEditable) return true
@@ -41,34 +42,31 @@ export function useInboxShortcuts({
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
     }
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      // Never fight the browser or OS over modified keys we don't own.
-      if (e.ctrlKey || e.metaKey) return
+    const plainJk =
+      !e.altKey && (e.key === 'j' || e.key === 'k') && !isEditable(e.target)
+    const altArrows =
+      e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')
+    if (!plainJk && !altArrows) return
 
-      const plainJk =
-        !e.altKey && (e.key === 'j' || e.key === 'k') && !isEditable(e.target)
-      const altArrows =
-        e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')
-      if (!plainJk && !altArrows) return
+    if (filtered.length === 0) return
 
-      const { filtered, activeId, setActiveId } = stateRef.current
-      if (filtered.length === 0) return
+    const forward = e.key === 'j' || e.key === 'ArrowDown'
+    const idx = activeId ? filtered.findIndex((c) => c.id === activeId) : -1
+    // From "nothing selected", both directions enter the list at the top —
+    // matching what the eye expects after filtering.
+    const next =
+      idx === -1
+        ? 0
+        : Math.min(Math.max(idx + (forward ? 1 : -1), 0), filtered.length - 1)
+    if (filtered[next].id === activeId) return
 
-      const forward = e.key === 'j' || e.key === 'ArrowDown'
-      const idx = activeId ? filtered.findIndex((c) => c.id === activeId) : -1
-      // From "nothing selected", both directions enter the list at the top —
-      // matching what the eye expects after filtering.
-      const next =
-        idx === -1
-          ? 0
-          : Math.min(Math.max(idx + (forward ? 1 : -1), 0), filtered.length - 1)
-      if (filtered[next].id === activeId) return
+    e.preventDefault()
+    setActiveId(filtered[next].id)
+  })
 
-      e.preventDefault()
-      setActiveId(filtered[next].id)
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => onKeyDown(e)
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
   }, [])
 }
