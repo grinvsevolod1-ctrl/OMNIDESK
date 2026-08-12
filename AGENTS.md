@@ -45,7 +45,10 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   (sync-ads, retry-dead-letters, followup, curator-status, console-schedules,
   ai-health, retention), backup-db, db-vacuum, auto-deploy.
 - **Vitest** — юнит-тесты рядом с кодом (`lib/**/*.test.ts` и
-  `worker/src/**/*.test.ts`), сейчас ~255.
+  `worker/src/**/*.test.ts`), сейчас ~273. Интеграционные —
+  `tests/integration/*.test.ts` (`pnpm test:integration`): требуют
+  `DATABASE_URL` (без него скипаются), проверяют гонку livechat-диалогов
+  (миграция 128), IDOR-скоупинг сообщений/медиа и revocation сессий.
 - **Виджет лайв-чата** — `widget-src/livechat.js`, собирается esbuild'ом
   (`scripts/build-widget.mjs`, minify) в `public/livechat.js`. НЕ редактируй
   `public/livechat.js` руками. `pnpm build` собирает виджет автоматически.
@@ -74,6 +77,11 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    продавца, аналитики, уроков и дожима. НЕ фильтруй их по `is_simulated`.
    «Изоляция» — про невидимость интерфейса, а НЕ про резку данных.
    (Частая ошибка — не повторяй её.)
+4. **Гейт FAIL-CLOSED.** Без `SECRET_PANEL_PASSWORD` консоль отдаёт голый 404
+   (страница и все god-API) и разлочить её нельзя вообще; ошибка «неверный
+   пароль» неотличима от «пароль не настроен». Recovery только через env:
+   задать `SECRET_PANEL_PASSWORD` на VPS и перезапустить процесс — никакого
+   in-band восстановления по дизайну.
 
 ## 5. Карта директорий
 
@@ -160,8 +168,21 @@ lib/
   outbound-dispatch.ts   роутер исходящей доставки: один lookup channel_type →
                          нужный диспетчер. НЕ перебирай все диспетчеры подряд.
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
-  auth.ts, db.ts         сессии/роли; query() и withTransaction
-  rate-limit.ts          rate limiting публичных роутов
+  auth.ts, db.ts         сессии/роли; query() и withTransaction. Админ:
+                         ADMIN_PASSWORD_HASH (bcrypt) предпочтительнее
+                         plaintext; admin-session.ts — версия сессии из
+                         credential-материала (ротация пароля/nonce отзывает
+                         все admin-JWT)
+  client-ip.ts           ЕДИНСТВЕННЫЙ экстрактор клиентского IP (TRUST_PROXY,
+                         CF-Connecting-IP / X-Real-IP / последний hop XFF,
+                         синтаксическая валидация). Не дублируй логику.
+  rate-limit.ts          rate limiting публичных роутов. In-memory корректен
+                         для ОДНОГО процесса; pm2 cluster детектится и в
+                         production без Redis — fail-fast
+                         (RATE_LIMIT_REQUIRE_REDIS=true для внешних балансеров)
+  media-store.ts         ярусы хранения медиа: S3 (MEDIA_S3_*) → диск
+                         (MEDIA_STORE_DIR) → bytea; локатор s3://… или
+                         абсолютный путь, диспатч по префиксу (media-s3.ts)
 worker/src/              воркер каналов
   telegram.ts            жизненный цикл соединения; флоу вынесены:
                          telegram-phone-login.ts (sendCode/SignIn/2FA),
@@ -299,7 +320,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   per-chat watermarks (миграция 105). При обновлении зависимости проверь,
   не реализовали ли `catchUp()`.
 - Сапрессии `react-hooks/set-state-in-effect` (~18 файлов) — НЕ техдолг, а
-  осознанные паттерны (browser-API на маунте, debounce, derived-state с
+  осознанные паттерны (browser-API н�� маунте, debounce, derived-state с
   замером DOM). Не «чини» их ради галочки.
 - Сложную новую логику покрывай юнит-тестом рядом с кодом.
 

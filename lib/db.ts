@@ -86,6 +86,18 @@ export function getPool(): Pool {
 }
 
 /**
+ * Drain and dispose the shared pool. Production code never calls this (the
+ * pool lives for the process); it exists so integration tests can release
+ * their connections and let the test runner exit cleanly.
+ */
+export async function closePool(): Promise<void> {
+  const pool = globalForDb.__pgPool
+  if (!pool) return
+  globalForDb.__pgPool = undefined
+  await pool.end()
+}
+
+/**
  * Live pool utilisation snapshot for health checks / metrics logging.
  * - total: open connections, - idle: free connections,
  * - waiting: callers queued for a connection (a persistently high value means
