@@ -10,12 +10,8 @@ import {
   classifyError,
   errMessage,
   extractErrorCode,
-  extractFloodWaitSeconds,
 } from './telegram-errors.js'
-import {
-  TG_SEND_JITTER_MS,
-  TG_SEND_MIN_INTERVAL_MS,
-} from './telegram-config.js'
+import { TelegramSendThrottle } from './telegram-throttle.js'
 import { TelegramHealthMonitor } from './telegram-health.js'
 import { TelegramPhoneLogin } from './telegram-phone-login.js'
 import { TelegramQrLogin } from './telegram-qr-login.js'
@@ -89,15 +85,11 @@ export class TelegramSession {
   /** Correlation id for the current login attempt; ties together every log
    * line from "code requested" through code/password submission. */
   private attemptId = ''
-  /** Timestamp of the last outgoing send, for per-account rate limiting. */
-  private lastSentAt = 0
   /**
-   * Deadline (epoch ms) until which ALL sends are refused after a significant
-   * FLOOD_WAIT. Every send attempted during an active flood window extends the
-   * ban server-side — so once Telegram says "wait N seconds", the whole
-   * channel cools down instead of letting the next queued message re-trip it.
+   * Send pacing + FLOOD_WAIT cooldown state machine (telegram-throttle.ts).
+   * Owns lastSentAt / floodCooldownUntil; the session only delegates.
    */
-  private floodCooldownUntil = 0
+  private readonly sendThrottle: TelegramSendThrottle
   /**
    * Soft pause. When true the client stays connected (account alive) but inbound
    * messages and dialog history are NOT written to the inbox. Set via
@@ -155,6 +147,10 @@ export class TelegramSession {
     this.channelId = channelId
     this.managerId = managerId
     this.session = new StringSession('')
+    this.sendThrottle = new TelegramSendThrottle(
+      channelId,
+      () => this.client !== null,
+    )
     this.health = new TelegramHealthMonitor({
       channelId,
       getClient: () => this.client,
@@ -500,66 +496,14 @@ export class TelegramSession {
     return syncDialogs(this.ctx, opts)
   }
 
-  /**
-   * Per-account send pacing: keep a minimum, slightly random spacing between
-   * sends so the account never bursts at machine speed. Shared by text sends
-   * and stickers.
-   *
-   * Atomic via a promise chain: queued sends and direct callers (autopilot
-   * replies bypass the job queue) can hit this concurrently, and the previous
-   * read-sleep-write version let both read the same lastSentAt and pass
-   * together — a two-message burst, exactly what the throttle exists to
-   * prevent. Chaining serializes the gap computation itself.
-   */
-  private throttleTail: Promise<void> = Promise.resolve()
-
+  /** Send pacing + FLOOD_WAIT cooldown (see telegram-throttle.ts). */
   private throttleSend(): Promise<void> {
-    const next = this.throttleTail.then(async () => {
-      // Flood gate first: while a FLOOD_WAIT window is active every further
-      // attempt would extend the ban, so refuse outright. The error text keeps
-      // the FLOOD_WAIT_<secs> shape so telegramSendFailureReason renders the
-      // proper human explanation on the failed message row.
-      const coolMs = this.floodCooldownUntil - Date.now()
-      if (coolMs > 0) {
-        throw new Error(`FLOOD_WAIT_${Math.ceil(coolMs / 1000)} (local cooldown)`)
-      }
-      const since = Date.now() - this.lastSentAt
-      const minGap =
-        TG_SEND_MIN_INTERVAL_MS + Math.floor(Math.random() * TG_SEND_JITTER_MS)
-      if (since < minGap) {
-        await new Promise((r) => setTimeout(r, minGap - since))
-      }
-      this.lastSentAt = Date.now()
-    })
-    // Keep the chain alive even if a caller's continuation throws later.
-    this.throttleTail = next.catch(() => {})
-    return next
+    return this.sendThrottle.throttle()
   }
 
-  /**
-   * Inspect a send failure and, when Telegram answered FLOOD_WAIT with a
-   * meaningful duration, put the whole channel into cooldown: sends are gated
-   * locally (see throttleSend) and the panel shows `rate_limited` until the
-   * window passes, when the status flips back to online automatically.
-   * Short waits (< 30s) are left to the normal per-send pacing.
-   */
+  /** Delegate to the throttle module (see telegram-throttle.ts). */
   private tripFloodCooldown(err: unknown): void {
-    const secs = extractFloodWaitSeconds(err)
-    if (!secs || secs < 30) return
-    this.floodCooldownUntil = Date.now() + secs * 1000
-    logger.warn(
-      { channelId: this.channelId, floodWaitSecs: secs },
-      'channel entering flood cooldown',
-    )
-    void repo.setSession(this.channelId, 'rate_limited').catch(() => {})
-    const timer = setTimeout(() => {
-      // Only restore if nothing else changed the state meanwhile and the
-      // client is still alive (a stop/logout must not be overwritten).
-      if (this.client && Date.now() >= this.floodCooldownUntil) {
-        void repo.setSession(this.channelId, 'online').catch(() => {})
-      }
-    }, secs * 1000)
-    timer.unref?.()
+    this.sendThrottle.tripFloodCooldown(err)
   }
 
   /**

@@ -301,10 +301,17 @@ export async function recordLivechatInbound(input: {
       console.error('recordLivechatInbound: visitor seq unavailable:', err)
     }
     const firstMeta = { ...cleanMeta, firstSeen: now, lastSeen: now }
+    // Race-safe creation: two parallel FIRST messages from the same visitor
+    // must not create two conversations. The partial unique index
+    // conversations_livechat_visitor_uniq (migration 128) enforces this;
+    // ON CONFLICT DO NOTHING makes the loser return zero rows, after which we
+    // re-read the winner's conversation and fall through to the update path.
     const created = await query<{ id: string }>(
       `INSERT INTO conversations
          (channel_id, manager_id, channel_type, contact_name, contact_handle, last_message, last_message_at, unread, meta, visitor_no)
        VALUES ($1, $2, 'livechat', $3, $4, $5, now(), 1, $6::jsonb, $7)
+       ON CONFLICT (channel_id, contact_handle) WHERE channel_type = 'livechat'
+       DO NOTHING
        RETURNING id`,
       [
         input.channelId,
@@ -316,7 +323,34 @@ export async function recordLivechatInbound(input: {
         visitorNo,
       ],
     )
-    conversationId = created[0].id
+    if (created[0]) {
+      conversationId = created[0].id
+    } else {
+      // Lost the race: another request created the conversation between our
+      // SELECT and INSERT. Reuse it — sticky manager binding included.
+      const winner = await query<{ id: string; manager_id: string }>(
+        `SELECT id, manager_id FROM conversations
+           WHERE channel_id = $1 AND contact_handle = $2
+           ORDER BY last_message_at DESC LIMIT 1`,
+        [input.channelId, input.contactHandle],
+      )
+      if (!winner[0]) {
+        // Should be impossible (conflict implies the row exists); surface it
+        // rather than silently dropping a customer message.
+        throw new Error('livechat conversation upsert race: winner row missing')
+      }
+      conversationId = winner[0].id
+      managerId = winner[0].manager_id
+      await query(
+        `UPDATE conversations
+           SET last_message = $2,
+               last_message_at = now(),
+               unread = unread + 1,
+               meta = COALESCE(meta, '{}'::jsonb) || $3::jsonb
+         WHERE id = $1`,
+        [conversationId, input.body, JSON.stringify({ ...cleanMeta, lastSeen: now })],
+      )
+    }
   }
 
   const msg = await query<{ id: string; created_at: string | Date }>(

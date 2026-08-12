@@ -80,9 +80,9 @@ export async function storeMessageMediaBytes(
 
   let filePath: string | null = null
   try {
-    filePath = await saveMediaFile(bytes)
+    filePath = await saveMediaFile(bytes, mime)
   } catch {
-    filePath = null // disk unavailable — bytea fallback below
+    filePath = null // every storage tier unavailable — bytea fallback below
   }
 
   let blob: { id: string } | null = null
@@ -187,8 +187,8 @@ export async function getStoredEditMediaBytes(
  * how many blobs were moved (0 = nothing legacy left, sweep can idle).
  */
 export async function offloadLegacyMediaBlobs(batch = 25): Promise<number> {
-  const rows = await query<{ id: string; bytes: Buffer }>(
-    `SELECT id, bytes FROM media_blobs
+  const rows = await query<{ id: string; bytes: Buffer; mime: string | null }>(
+    `SELECT id, bytes, mime FROM media_blobs
       WHERE bytes IS NOT NULL AND file_path IS NULL
       ORDER BY created_at
       LIMIT $1`,
@@ -197,7 +197,7 @@ export async function offloadLegacyMediaBlobs(batch = 25): Promise<number> {
   let moved = 0
   for (const row of rows) {
     try {
-      const filePath = await saveMediaFile(Buffer.from(row.bytes))
+      const filePath = await saveMediaFile(Buffer.from(row.bytes), row.mime)
       await query(
         `UPDATE media_blobs SET file_path = $2, bytes = NULL WHERE id = $1`,
         [row.id, filePath],

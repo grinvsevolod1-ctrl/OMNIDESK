@@ -92,11 +92,11 @@ export async function addLeadFileAttachment(input: {
   mime: string
   fileName: string | null
 }): Promise<LeadAttachment> {
-  // Диск — основной носитель; при сбое диска байты падают в bytea,
-  // тот же контракт, что у storeMessageMediaBytes.
+  // S3/диск — основной носитель (см. lib/media-store.ts); при сбое всех
+  // ярусов байты падают в bytea — тот же контракт, что у storeMessageMediaBytes.
   let filePath: string | null = null
   try {
-    filePath = await saveMediaFile(input.bytes)
+    filePath = await saveMediaFile(input.bytes, input.mime)
   } catch {
     filePath = null
   }

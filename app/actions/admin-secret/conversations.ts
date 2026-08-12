@@ -375,11 +375,11 @@ export async function secretSendMediaMessageAction(
   const messageId = randomUUID()
   const body = caption || mediaBodyLabel(mediaType, file.name)
 
-  // Bytes go to the local VPS filesystem (scripts/107); bytea only as a
-  // fallback when the disk write fails, so uploads keep working either way.
+  // Bytes go to S3 / the local VPS filesystem (see lib/media-store.ts); bytea
+  // only as a fallback when every tier fails, so uploads keep working either way.
   let uploadFilePath: string | null = null
   try {
-    uploadFilePath = await saveMediaFile(bytes)
+    uploadFilePath = await saveMediaFile(bytes, mime)
   } catch {
     uploadFilePath = null
   }

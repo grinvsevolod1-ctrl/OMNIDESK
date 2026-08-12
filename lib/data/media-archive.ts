@@ -53,12 +53,13 @@ export async function storeMessageMediaBytes(
   if (existing.length === 0) return null
   if (existing[0].media_blob_id) return existing[0].media_blob_id
 
-  // Bytes go to the local VPS filesystem (scripts/107); only the absolute
-  // path lands in Postgres. On disk failure fall back to bytea so the
-  // archive guarantee still holds.
+  // Bytes go to object storage / the local VPS filesystem (see
+  // lib/media-store.ts for the tier ladder); only the locator lands in
+  // Postgres. When every tier fails we fall back to bytea so the archive
+  // guarantee still holds.
   let filePath: string | null = null
   try {
-    filePath = await saveMediaFile(bytes)
+    filePath = await saveMediaFile(bytes, mime)
   } catch {
     filePath = null
   }

@@ -208,10 +208,25 @@ function serveAndArchive(
     return new Response(body, { status: 200, headers })
   }
 
+  // Bound the number of CONCURRENT archive buffers: each one may hold up to
+  // MEDIA_MAX_STORE_BYTES in RAM, so N parallel downloads without a cap could
+  // multiply into hundreds of MB. Archiving is best-effort — when all slots
+  // are busy we simply skip it (the file is served untouched and will be
+  // archived on a later request), never queue and never block serving.
+  if (archiveSlotsInUse >= MAX_CONCURRENT_ARCHIVES) {
+    return new Response(body, { status: 200, headers })
+  }
+  archiveSlotsInUse++
   const [clientStream, archiveStream] = body.tee()
-  void archiveBounded(messageId, archiveStream, mime, name)
+  void archiveBounded(messageId, archiveStream, mime, name).finally(() => {
+    archiveSlotsInUse--
+  })
   return new Response(clientStream, { status: 200, headers })
 }
+
+/** See serveAndArchive: cap on simultaneous in-memory archive buffers. */
+const MAX_CONCURRENT_ARCHIVES = 4
+let archiveSlotsInUse = 0
 
 /**
  * Drain a tee'd media stream into memory ONLY up to MEDIA_MAX_STORE_BYTES, then

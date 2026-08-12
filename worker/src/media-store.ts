@@ -1,17 +1,27 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import {
+  deleteMediaObject,
+  isMediaS3Configured,
+  isS3Locator,
+  readMediaObject,
+  saveMediaObject,
+} from './media-s3'
 
 /**
- * Local-filesystem media store (worker side).
+ * Tiered media store (worker side). Mirror of lib/media-store.ts — both
+ * processes share the same env, so either can read what the other archived.
  *
- * Media bytes live as plain files on the VPS instead of bytea inside Postgres
- * (scripts/107) — no third-party storage involved. The DB row keeps an
- * ABSOLUTE file path, so the panel process (same host, possibly different
- * cwd) can serve any file regardless of which process archived it.
+ * Storage ladder (best scaling first, most local last):
+ *   1. S3-compatible object storage — when MEDIA_S3_* is configured. The only
+ *      tier that scales horizontally; locator form `s3://bucket/key`.
+ *   2. Local VPS filesystem — MEDIA_STORE_DIR/<2-char shard>/<uuid>, absolute
+ *      POSIX path as the locator. Two-level sharding keeps directories small.
+ *   3. Postgres bytea — the caller's fallback when saveMediaFile throws.
  *
- * Layout: MEDIA_STORE_DIR/<first 2 chars of uuid>/<uuid> — two-level sharding
- * keeps directories small even with hundreds of thousands of files.
+ * readMediaFile dispatches on the locator prefix, so rows written by any tier
+ * in any era keep working forever — no migration required to enable S3.
  */
 
 const MEDIA_STORE_DIR = path.resolve(
@@ -19,12 +29,22 @@ const MEDIA_STORE_DIR = path.resolve(
 )
 
 /**
- * Write a media buffer to the local store. Returns the ABSOLUTE path that the
- * caller persists in media_blobs.file_path. Throws on failure — callers treat
- * media persistence as best-effort and are expected to catch (and may fall
- * back to bytea so the archive guarantee survives a full/broken disk).
+ * Write a media buffer to the store. Returns the locator persisted in
+ * media_blobs.file_path (`s3://…` or an absolute path). Prefers S3; on S3
+ * failure falls back to local disk. Throws only when EVERY tier failed —
+ * callers then fall back to bytea so the archive guarantee survives.
  */
-export async function saveMediaFile(bytes: Buffer): Promise<string> {
+export async function saveMediaFile(
+  bytes: Buffer,
+  mime: string | null = null,
+): Promise<string> {
+  if (isMediaS3Configured()) {
+    try {
+      return await saveMediaObject(bytes, mime)
+    } catch (err) {
+      console.error('media-store: S3 write failed, falling back to disk:', err)
+    }
+  }
   const id = randomUUID()
   const dir = path.join(MEDIA_STORE_DIR, id.slice(0, 2))
   await fs.mkdir(dir, { recursive: true })
@@ -37,8 +57,9 @@ export async function saveMediaFile(bytes: Buffer): Promise<string> {
   return filePath
 }
 
-/** Read a stored media file. Returns null when the file is gone/unreadable. */
+/** Read stored media by locator. Returns null when gone/unreadable. */
 export async function readMediaFile(filePath: string): Promise<Buffer | null> {
+  if (isS3Locator(filePath)) return readMediaObject(filePath)
   try {
     return await fs.readFile(filePath)
   } catch {
@@ -48,6 +69,7 @@ export async function readMediaFile(filePath: string): Promise<Buffer | null> {
 
 /** Best-effort delete (used to roll back after a failed DB insert). */
 export async function deleteMediaFile(filePath: string): Promise<void> {
+  if (isS3Locator(filePath)) return deleteMediaObject(filePath)
   try {
     await fs.unlink(filePath)
   } catch {
