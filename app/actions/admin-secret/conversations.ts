@@ -286,7 +286,9 @@ export async function secretMessengerDeleteMessageAction(input: {
     )
     if (!del[0]) return
 
-    // Preview = newest NON-deleted message; unread never goes negative.
+    // Preview = newest NON-deleted message. Unread — точный пересчёт из
+    // состояния сообщений (см. 125_message_read_at.sql): удаление уже
+    // прочитанного входящего больше не занижает счётчик, как слепой декремент.
     await db.query(
       `UPDATE conversations c
           SET last_message = COALESCE(
@@ -295,9 +297,15 @@ export async function secretMessengerDeleteMessageAction(input: {
                   ORDER BY m.created_at DESC LIMIT 1),
                 ''
               ),
-              unread = GREATEST(unread - CASE WHEN $2 = 'in' THEN 1 ELSE 0 END, 0)
+              unread = (
+                SELECT COUNT(*)::int FROM messages m
+                 WHERE m.conversation_id = $1
+                   AND m.direction = 'in'
+                   AND m.read_at IS NULL
+                   AND m.deleted_at IS NULL
+              )
         WHERE c.id = $1`,
-      [input.conversationId, del[0].direction],
+      [input.conversationId],
     )
   })
 

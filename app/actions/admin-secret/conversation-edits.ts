@@ -62,10 +62,36 @@ export async function secretSetUnreadAction(
 ): Promise<ActionResult> {
   await requireAdmin()
   if (!id) return { ok: false, message: 'Не указан диалог' }
-  await query(
-    `UPDATE conversations SET unread = $2 WHERE id = $1`,
-    [id, read ? 0 : 1],
-  )
+  // Счётчик и read_at на сообщениях должны меняться согласованно
+  // (см. 125_message_read_at.sql), иначе следующий точный пересчёт
+  // (например, после god-удаления) откатит этот флаг.
+  await withTransaction(async (db) => {
+    await db.query(`UPDATE conversations SET unread = $2 WHERE id = $1`, [
+      id,
+      read ? 0 : 1,
+    ])
+    if (read) {
+      await db.query(
+        `UPDATE messages
+            SET read_at = now()
+          WHERE conversation_id = $1 AND direction = 'in' AND read_at IS NULL`,
+        [id],
+      )
+    } else {
+      // «Непрочитано» = последний входящий снова без read_at.
+      await db.query(
+        `UPDATE messages
+            SET read_at = NULL
+          WHERE id = (
+            SELECT id FROM messages
+             WHERE conversation_id = $1 AND direction = 'in'
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1
+          )`,
+        [id],
+      )
+    }
+  })
   revalidatePath(ADMIN_PATH)
   return { ok: true, message: read ? 'Отмечено прочитанным' : 'Отмечено непрочитанным' }
 }
