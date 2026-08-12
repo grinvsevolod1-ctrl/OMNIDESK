@@ -61,6 +61,11 @@ WhatsApp, VK, MAX). Руководитель («админ») управляет
 ```
 app/                     Next.js App Router
   actions/               server actions (ai-console.ts, ai-assist.ts, ...)
+                         admin-accounts.ts — БАРЕЛЬ, реэкспортирует
+                         admin-accounts-telegram.ts (телефон/QR-логин, код, 2FA),
+                         admin-accounts-bots.ts (VK/MAX-подключение),
+                         admin-accounts-maintenance.ts (статус, прокси, удаление),
+                         admin-accounts-shared.ts (общие хелперы, НЕ 'use server')
   admin/                 страницы админки
   api/                   роуты, включая api/cron/* (follow-up, dead-letters)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (см. раздел 3)
@@ -75,7 +80,13 @@ components/admin/        UI админки
   finance/               финансы (UI): expenses-panel.tsx — контейнер, вся
                          логика в expenses/use-expenses.ts, строки и части
                          таблицы в expenses/ (expense-row, table-parts)
-  os-shell/              ОС-шелл god-панели (командный интерфейс поверх админки)
+  os-shell/              ОС-шелл god-панели (командный интерфейс поверх админки):
+                         os-shell.tsx — презентационный контейнер, вся логика в
+                         use-os-shell.ts (стрим, подтверждения, голос, история),
+                         command-bar, history-dialog, feed, data-views
+  create-account-card.tsx карточка «Подключить аккаунт»: контейнер; логика в
+  create-account/        use-create-account.ts (форма + многошаговый TG-логин
+                         с поллингом), telegram-login-dialog.tsx (QR/код/2FA)
   secret-*               UI god-панели (ИЗОЛИРОВАНО)
   god-messenger/         god-мессенджер: диалоги от лица аккаунтов (ИЗОЛИРОВАНО)
 components/curator/      UI куратора
@@ -98,7 +109,9 @@ lib/
                          поверх панели, инструменты tools-*.ts, intents, schedule-runner
   servers-console/       разговорный ассистент вкладки «Серверы» (флот, установка, SSH)
   console-core/          общее ядро разговорных консолей (admin-console + servers-console)
-  ai/                    manager-brain.ts (мозг продавца), deal-heat.ts (температура сделок)
+  ai/                    manager-brain.ts (мозг продавца), deal-heat.ts
+                         (температура сделок), assemble-brain-input.ts —
+                         ЕДИНСТВЕННАЯ сборка входа мозга (см. раздел 6)
   data/                  слой БД. ai-assist.ts — БАРЕЛЬ, реэкспортирует доменные
                          модули (существующие импорты `@/lib/data/ai-assist`
                          менять не нужно):
@@ -108,6 +121,13 @@ lib/
                            ai-assist-history.ts     история диалога + память
                            ai-assist-enrollment.ts  подключение ИИ к диалогам
                            ai-assist-knowledge.ts   база знаний + RAG (retrieveKnowledge)
+                         lead-cards.ts — тоже БАРЕЛЬ:
+                           lead-cards-queries.ts    выборки/статистика лид-карточек
+                           lead-cards-archive.ts    архив и восстановление
+                           lead-cards-upsert.ts     создание/обновление из диалога
+                           lead-cards-lifecycle.ts  статусы, передача, комментарии
+                         brain-loaders.ts — data-слой BrainInputLoaders для
+                         assembleBrainInput (next-рантаймы).
                          Прочее: ai-directives.ts (правила), ai-followup.ts,
                          ai-analytics.ts, hosting.ts (серверы/приложения),
                          console-shell.ts (ОС-шелл)
@@ -116,7 +136,10 @@ lib/
   finance/               финансы: рекламные кабинеты, пополнения, статистика расходов
   http/                  request.ts — валидация входящих JSON-запросов (zod)
   hooks/                 клиентские React-хуки (use-channel-status,
-                         use-debounced-value и т.п.)
+                         use-debounced-value, use-shared-poll — общий поллер:
+                         один interval на канал, без наложения запросов,
+                         скрытые вкладки не опрашивают; используй его вместо
+                         собственных setInterval-поллеров)
   types/                 общие TS-типы, разнесённые по доменам с барелем
                          index.ts (accounts, channels, proxies, jobs, leads,
                          messages, conversations, hosting). Импорт: @/lib/types
@@ -125,6 +148,12 @@ lib/
                          НЕ вызывай три диспетчера подряд «на всякий случай».
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
 worker/src/              воркер каналов (telegram.ts, autopilot.ts, jobs.ts, ...)
+                         telegram.ts — ядро сессии (логин/QR/send/sync);
+                         вынесено: telegram-health.ts (зомби-детектор, Ping RPC),
+                         telegram-recovery.ts (redelivery после реконнекта с
+                         дедуп-гардом), telegram-errors.ts, telegram-config.ts.
+                         brain-loaders.ts — worker-сторона BrainInputLoaders
+                         (директивы приходят из 30s TTL-кэша конфига).
   hosting/               автономный DevOps-агент: agent.ts (промпт+цикл), ssh.ts,
                          pipeline.ts, agent-safety.ts (блокировка опасных команд)
 scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.mjs
@@ -167,13 +196,20 @@ scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.m
   приоритет над env-дефолтами).
 - **Приоритет входных данных в промпте:** персона → **директивы (правила от
   админа, высший приоритет)** → база знаний → уроки → агрессивность.
+- **Сборка входа мозга** («lessons + corrections + history + memory +
+  knowledge + directives») живёт в ОДНОМ месте — `lib/ai/assembleBrainInput`
+  (`lib/ai/assemble-brain-input.ts`). Все три рантайма (лайв-чат
+  `lib/autopilot/runtime.ts`, воркер `worker/src/autopilot.ts`, дожим
+  `lib/followup/runtime.ts`) вызывают её через свои `BrainInputLoaders`
+  (`lib/data/brain-loaders.ts` для next, `worker/src/brain-loaders.ts` для
+  воркера). Меняешь лимиты, состав или выбор RAG-запроса — меняй ТОЛЬКО там,
+  НЕ создавай локальные копии сборки. Для батчей (дожим) сначала
+  `loadSharedBrainContext` один раз, потом `assembleBrainInput` с `{ shared }`
+  на каждый диалог. RAG-запрос — последнее сообщение клиента; пустая строка
+  никогда не эмбеддится (платный вызов ради мусора).
 - **Директивы** (`lib/data/ai-directives.ts`, таблица `ai_directives`) вливаются
-  во ВСЕ каналы: лайв-чат (`app/actions/ai-assist.ts`), автопилот
-  (`lib/autopilot/runtime.ts`), воркер (`worker/src`), дожим (`lib/followup`).
-  Меняя сборку входа мозга, проверь ВСЕ эти места. (Известный техдолг: эта
-  сборка «lessons + corrections + history + memory + knowledge + directives»
-  продублирована в трёх рантаймах — при возможности вынеси общий
-  `assembleBrainInput` в `lib/ai/` вместо четвёртой копии.)
+  во ВСЕ каналы автоматически через эту сборку; в воркере они дополнительно
+  идут через 30-секундный TTL-кэш конфига.
 - **Single-flight-гард ИИ-ответов** (`lib/autopilot/runtime.ts` и
   `worker/src/autopilot.ts`): claim в `aiLeadInFlight` берётся **синхронно,
   сразу после `has()`, без единого `await` между ними** — иначе гонка и двойной
@@ -243,20 +279,26 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
   watermarks (миграция 105). При обновлении зависимости `telegram` проверь,
   не реализовали ли `catchUp()` — тогда воркараунд можно упростить.
 
-## 10. Известный техдолг (кандидаты на декомпозицию)
+## 10. Известный техдолг
 
-Файлы, ещё не прошедшие конвенцию декомпозиции. Не рефактори их «мимоходом» —
-только осознанной задачей, дословным переносом, с `pnpm check` после:
+Большая волна декомпозиции завершена: telegram.ts (health/recovery вынесены),
+lead-cards, admin-accounts, os-shell, create-account-card, ai-assist,
+autopilot-manager, expenses-panel разобраны по конвенции; `assembleBrainInput`
+вынесен в `lib/ai/`; поллинг лидов переведён на `use-shared-poll`.
+
+Что осталось (не рефактори «мимоходом» — только осознанной задачей,
+дословным переносом, с `pnpm check` после):
 
 | Файл | Строк | Заметка |
 |---|---|---|
-| `worker/src/telegram.ts` | ~1255 | stateful GramJS-клиент; резать на login/sync/recovery/health, ОСТОРОЖНО — нет интеграционных тестов |
-| `lib/data/lead-cards.ts` | ~795 | слой данных лид-карточек |
-| `app/actions/admin-accounts.ts` | ~767 | server actions аккаунтов |
-| `components/admin/os-shell/os-shell.tsx` | ~730 | ОС-шелл god-панели |
-| `components/admin/create-account-card.tsx` | ~723 | форма создания аккаунта |
-| Сборка входа мозга ×3 | — | вынести `assembleBrainInput` в `lib/ai/` (см. раздел 6) |
-| Поллинг лидов `setInterval` | — | `use-leads-data.ts` и `manager-leads-view.tsx` тикают каждые 5с независимо; перевести на разделяемый поллер по образцу `use-channel-status.ts` |
+| `worker/src/telegram.ts` | ~1050 | ядро сессии всё ещё крупное; следующие кандидаты на вынос — login-флоу и dialog sync, ОСТОРОЖНО — нет интеграционных тестов |
+| `worker/src/repo.ts`, `repo-ai.ts` | ~755 каждый | репозитории воркера; резать по доменам |
+| `unread` при god-удалении | — | декремент неточен (нельзя узнать, было ли сообщение прочитано); точное решение = колонка `read_at` в `messages` (миграция) |
+
+Сапрессии `react-hooks/set-state-in-effect` (~18 файлов) — НЕ техдолг: это
+осознанные паттерны (синхронизация с browser-API на маунте, debounce через
+setTimeout, derived-state при смене маршрута с замером DOM), где правило даёт
+ложное срабатывание. Не «чини» их заменой на useSyncExternalStore ради галочки.
 
 ## 11. Частые задачи — с чего начать
 
@@ -264,6 +306,10 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
 |---|---|
 | Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
+| Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (см. раздел 6) |
+| Подключение аккаунтов (server actions) | барель `app/actions/admin-accounts.ts` → telegram/bots/maintenance |
+| Лид-карточки (слой данных) | барель `lib/data/lead-cards.ts` → queries/archive/upsert/lifecycle |
+| Фоновый поллинг в UI | `lib/hooks/use-shared-poll.ts` — не пиши собственный setInterval |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент в co-pilot |
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
 | Раздел «Все лиды» (админ) | контейнер `all-leads-section.tsx` + хук `components/admin/leads/use-leads-data.ts` |
