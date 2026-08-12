@@ -275,7 +275,11 @@ async function fireAiLead(params: {
   // Single-flight per conversation: if a reply is already being generated for
   // this thread, treat this inbound as handled (the in-flight generation will
   // answer) instead of starting a second one that would double-reply.
+  // The claim MUST be taken synchronously (no await between has() and add()),
+  // otherwise two concurrent inbounds can both pass the check and the contact
+  // receives two answers — the exact race this guard exists to prevent.
   if (aiLeadInFlight.has(conversationId)) return true
+  aiLeadInFlight.add(conversationId)
 
   try {
     if (!(await repo.isConversationAiLed(conversationId))) {
@@ -314,8 +318,6 @@ async function fireAiLead(params: {
       })
       return false
     }
-
-    aiLeadInFlight.add(conversationId)
 
     void repo.logAi({
       level: 'debug',
@@ -430,7 +432,7 @@ async function fireAiLead(params: {
         source: 'ai-lead',
         event: 'handover.during_gen',
         message:
-          'Пока ИИ готовил ответ, в диалог вошёл человек — отправка отменена.',
+          'Пока ИИ готовил ответ, в ди��лог вошёл человек — отправка отменена.',
         conversationId,
         channelType,
       })

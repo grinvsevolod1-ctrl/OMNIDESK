@@ -149,6 +149,14 @@ export async function runFollowupSweep(
   let sent = 0
   let skipped = 0
 
+  // Conversation-independent inputs (lessons, corrections, directives) are the
+  // same for every candidate — load them ONCE per sweep, not once per dialog.
+  const [lessons, corrections, directives] = await Promise.all([
+    listBrainLessons(12),
+    listManualCorrectionRules(60),
+    directiveTexts(),
+  ])
+
   for (const cand of candidates) {
     try {
       // Re-check AI-lead right before composing: a human may have taken over.
@@ -157,15 +165,20 @@ export async function runFollowupSweep(
         continue
       }
 
-      const [lessons, corrections, history, memory, knowledge, directives] =
-        await Promise.all([
-          listBrainLessons(12),
-          listManualCorrectionRules(60),
-          getConversationHistoryForAi(cand.conversationId, 16),
-          getConversationAiMemory(cand.conversationId),
-          retrieveKnowledge('', 4),
-          directiveTexts(),
-        ])
+      const [history, memory] = await Promise.all([
+        getConversationHistoryForAi(cand.conversationId, 16),
+        getConversationAiMemory(cand.conversationId),
+      ])
+
+      // RAG keyed on the client's last message (an empty query would embed an
+      // empty string — a paid gateway call returning irrelevant results).
+      const lastClientMessage = [...history]
+        .reverse()
+        .find((m) => m.role === 'client')
+        ?.body?.trim()
+      const knowledge = lastClientMessage
+        ? await retrieveKnowledge(lastClientMessage, 4)
+        : ''
 
       const touchNo = cand.touchesInStreak + 1
       // Transient, highest-priority instruction for THIS generation only: write

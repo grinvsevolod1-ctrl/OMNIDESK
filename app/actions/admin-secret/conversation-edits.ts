@@ -8,6 +8,7 @@ import {
 } from '@/lib/auth'
 import {
   query,
+  withTransaction,
 } from '@/lib/db'
 import {
   ADMIN_PATH,
@@ -100,43 +101,48 @@ export async function secretDeleteMessageAction(input: {
   if (!input.messageId || !input.conversationId)
     return { ok: false, message: 'Не указано сообщение' }
 
-  const deleted = await query<{ direction: 'in' | 'out' }>(
-    'DELETE FROM messages WHERE id = $1 RETURNING direction',
-    [input.messageId],
-  )
+  // Atomic: the delete and every counter/preview re-sync land together or not
+  // at all, so a mid-flight failure can never leave the conversation row
+  // disagreeing with the actual messages.
+  await withTransaction(async (db) => {
+    const deleted = await db.query<{ direction: 'in' | 'out' }>(
+      'DELETE FROM messages WHERE id = $1 RETURNING direction',
+      [input.messageId],
+    )
 
-  // Re-sync the conversation's last-message preview from whatever remains, and
-  // keep the unread counter honest when an unread inbound message was removed
-  // (clamped at zero — we can't know if it was already read).
-  await query(
-    `UPDATE conversations c
-        SET last_message = COALESCE(m.body, ''),
-            last_message_at = COALESCE(m.created_at, c.last_message_at)
-       FROM (
-         SELECT body, created_at
-           FROM messages
-          WHERE conversation_id = $1
-          ORDER BY created_at DESC
-          LIMIT 1
-       ) m
-      WHERE c.id = $1`,
-    [input.conversationId],
-  )
-  // If no rows remain the subquery is empty and the UPDATE ... FROM is a no-op;
-  // clear the preview explicitly in that case.
-  await query(
-    `UPDATE conversations
-        SET last_message = ''
-      WHERE id = $1
-        AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id = $1)`,
-    [input.conversationId],
-  )
-  if (deleted[0]?.direction === 'in') {
-    await query(
-      `UPDATE conversations SET unread = GREATEST(unread - 1, 0) WHERE id = $1`,
+    // Re-sync the conversation's last-message preview from whatever remains,
+    // and keep the unread counter honest when an unread inbound message was
+    // removed (clamped at zero — we can't know if it was already read).
+    await db.query(
+      `UPDATE conversations c
+          SET last_message = COALESCE(m.body, ''),
+              last_message_at = COALESCE(m.created_at, c.last_message_at)
+         FROM (
+           SELECT body, created_at
+             FROM messages
+            WHERE conversation_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+         ) m
+        WHERE c.id = $1`,
       [input.conversationId],
     )
-  }
+    // If no rows remain the subquery is empty and the UPDATE ... FROM is a
+    // no-op; clear the preview explicitly in that case.
+    await db.query(
+      `UPDATE conversations
+          SET last_message = ''
+        WHERE id = $1
+          AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id = $1)`,
+      [input.conversationId],
+    )
+    if (deleted[0]?.direction === 'in') {
+      await db.query(
+        `UPDATE conversations SET unread = GREATEST(unread - 1, 0) WHERE id = $1`,
+        [input.conversationId],
+      )
+    }
+  })
 
   revalidatePath(ADMIN_PATH)
   return { ok: true, message: 'Сообщение удалено' }

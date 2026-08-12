@@ -25,9 +25,7 @@ import {
 } from '../ai/manager-brain'
 import { directiveTexts } from '../data/ai-directives'
 import { logAi } from '../data/ai-log'
-import { deliverMaxMessage } from '../max-dispatch'
-import { deliverVkMessage } from '../vk-dispatch'
-import { deliverWhatsappMessage } from '../whatsapp-dispatch'
+import { deliverOutboundByChannel } from '../outbound-dispatch'
 import { isOffHoursFor } from '../offhours'
 import {
   getActiveAutopilot,
@@ -178,7 +176,11 @@ async function runLivechatAiLead(input: {
 
   // Single-flight per conversation: if a reply is already being generated for
   // this thread, treat this inbound as handled so we never double-answer.
+  // The claim MUST be taken synchronously (no await between has() and add()),
+  // otherwise two concurrent inbounds can both pass the check and the visitor
+  // receives two answers — the exact race this guard exists to prevent.
   if (aiLeadInFlight.has(input.conversationId)) return true
+  aiLeadInFlight.add(input.conversationId)
 
   try {
     if (!isBrainConfigured()) {
@@ -217,8 +219,6 @@ async function runLivechatAiLead(input: {
       })
       return false
     }
-
-    aiLeadInFlight.add(input.conversationId)
 
     void logAi({
       level: 'debug',
@@ -427,9 +427,7 @@ async function sendAiReply(
     byAi: true,
   })
   if (msg) {
-    await deliverMaxMessage(conversationId, msg.id, body)
-    await deliverVkMessage(conversationId, msg.id, body)
-    await deliverWhatsappMessage(conversationId, msg.id, body)
+    await deliverOutboundByChannel(conversationId, msg.id, body)
   }
 }
 
@@ -452,11 +450,8 @@ async function sendAutoReply(
   // does). Canned autopilot is automated, so mark it accordingly.
   const msg = await addMessage({ conversationId, managerId, body, author, byAi: true })
   // Webhook-based channels have no SSE widget — the reply must be pushed to the
-  // provider. Both dispatchers no-op for conversations they don't own, so it's
-  // safe to call them unconditionally.
+  // provider. Routed by channel type in one lookup (livechat needs no push).
   if (msg) {
-    await deliverMaxMessage(conversationId, msg.id, body)
-    await deliverVkMessage(conversationId, msg.id, body)
-    await deliverWhatsappMessage(conversationId, msg.id, body)
+    await deliverOutboundByChannel(conversationId, msg.id, body)
   }
 }
