@@ -10,7 +10,6 @@ import {
   TrendingDown,
   Vault,
   Wallet,
-  type LucideIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -38,9 +37,8 @@ import {
 } from '@/app/actions/finance'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent, TabsList } from '@/components/ui/tabs'
 import { EmptyState } from '@/components/page-parts'
-import { cn } from '@/lib/utils'
 import {
   type UsdRates,
   type FinanceAdAccount,
@@ -83,75 +81,12 @@ import { ExpensesPanel } from '@/components/admin/finance/expenses-panel'
 import { AdsPanel } from '@/components/admin/finance/ads-panel'
 import { GlobalDashboard } from '@/components/admin/finance/global-dashboard'
 import { OverviewPanel } from '@/components/admin/finance/overview-panel'
+import { SourceTabCard } from '@/components/admin/finance/source-tab-card'
 
 /* ================================================================== */
 /* Meta, formatters and aggregation live in ./finance/finance-utils    */
-/* (extracted so every panel shares one source of truth).              */
-/* ================================================================== */
-
-/* ================================================================== */
-/* Source sub-tab card                                                 */
-/* ================================================================== */
-
-/**
- * Крупная масштабируемая «карта-вкладка» источника вместо сжатых чипов.
- * Иконка + название + живая метрика (лиды / кабинеты / расход / секреты).
- * Построена поверх shadcn TabsTrigger, поэтому переключение и доступность
- * работают штатно, а сетка в TabsList тянется на всю ширину.
- */
-function SourceTabCard({
-  value,
-  active,
-  icon: Icon,
-  label,
-  stat,
-}: {
-  value: string
-  active: boolean
-  icon: LucideIcon
-  label: string
-  stat: string
-}) {
-  return (
-    <TabsTrigger
-      value={value}
-      className={cn(
-        'flex h-auto flex-col items-start gap-2 rounded-xl border p-3 text-left transition-colors sm:p-4',
-        'data-active:border-primary data-active:bg-primary/5 data-active:shadow-none',
-        active
-          ? 'border-primary bg-primary/5'
-          : 'border-border bg-card hover:bg-muted/50',
-      )}
-    >
-      <span
-        className={cn(
-          'flex size-9 items-center justify-center rounded-lg',
-          active
-            ? 'bg-primary text-primary-foreground'
-            : 'bg-muted text-muted-foreground',
-        )}
-      >
-        <Icon className="size-4.5" />
-      </span>
-      <span className="flex flex-col">
-        <span
-          className={cn(
-            'text-sm font-semibold',
-            active ? 'text-foreground' : 'text-foreground/90',
-          )}
-        >
-          {label}
-        </span>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {stat}
-        </span>
-      </span>
-    </TabsTrigger>
-  )
-}
-
-/* ================================================================== */
-/* Main                                                                */
+/* (extracted so every panel shares one source of truth). The source   */
+/* sub-tab card lives in ./finance/source-tab-card.                    */
 /* ================================================================== */
 
 export function FinanceAdmin({

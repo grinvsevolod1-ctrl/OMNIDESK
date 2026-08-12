@@ -1,40 +1,20 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
-import dynamic from 'next/dynamic'
+/**
+ * Source-groups overview — container. Owns the group/period selection state
+ * and the SWR report fetch; presentation lives in ./source-groups/
+ * (group-report.tsx, manage-groups-dialog.tsx, shared.ts), following the
+ * container+parts convention used across the admin UI.
+ */
+
+import { useState } from 'react'
 import useSWR from 'swr'
-import { useRouter } from 'next/navigation'
-import { Check, Layers, Loader2, Plus, Trash2, Users } from 'lucide-react'
-import { channelIcon } from '@/components/channel-icons'
+import { Layers, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import {
-  createSourceGroupAction,
-  deleteSourceGroupAction,
-  getGroupAnalyticsAction,
-  updateSourceGroupAction,
-} from '@/app/actions/groups'
-// Rendered only once group analytics are fetched client-side, so defer the
-// heavy canvas chart out of the admin overview's initial bundle. ssr:false —
-// nothing to render before the client fetch resolves.
-const ActivityChart = dynamic(
-  () =>
-    import('@/components/analytics/activity-chart').then((m) => m.ActivityChart),
-  {
-    ssr: false,
-    loading: () => <div className="h-64 animate-pulse rounded-lg bg-muted/40" />,
-  },
-)
-import { PageHeader, StatCard } from '@/components/page-parts'
+import { getGroupAnalyticsAction } from '@/app/actions/groups'
+import { PageHeader } from '@/components/page-parts'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -44,53 +24,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { ChannelType } from '@/lib/types'
-import { useChannelTypeLabels } from '@/components/dictionaries-provider'
+import type { SourceGroup } from '@/lib/data'
 import { cn } from '@/lib/utils'
-import type { GroupAnalytics, SourceGroup } from '@/lib/data'
-
-type ChannelOption = {
-  id: string
-  type: ChannelType
-  name: string
-  detail: string
-}
-
-type Preset = 'today' | '7d' | '30d' | 'custom'
-
-const TYPE_DOT: Record<ChannelType, string> = {
-  telegram: 'bg-sky-500',
-  whatsapp: 'bg-emerald-500',
-  livechat: 'bg-violet-500',
-  max: 'bg-amber-500',
-  vk: 'bg-blue-500',
-}
-
-function startOfDay(d: Date): Date {
-  const x = new Date(d)
-  x.setHours(0, 0, 0, 0)
-  return x
-}
-
-function ymd(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
-function rangeFromPreset(preset: Exclude<Preset, 'custom'>): {
-  from: Date
-  to: Date
-} {
-  const todayStart = startOfDay(new Date())
-  const tomorrow = new Date(todayStart)
-  tomorrow.setDate(todayStart.getDate() + 1)
-  if (preset === 'today') return { from: todayStart, to: tomorrow }
-  const from = new Date(todayStart)
-  from.setDate(todayStart.getDate() - (preset === '7d' ? 6 : 29))
-  return { from, to: tomorrow }
-}
+import { Report } from './source-groups/group-report'
+import { ManageGroupsDialog } from './source-groups/manage-groups-dialog'
+import {
+  rangeFromPreset,
+  startOfDay,
+  ymd,
+  type ChannelOption,
+  type Preset,
+} from './source-groups/shared'
 
 export function SourceGroupsOverview({
   groups,
@@ -182,9 +126,7 @@ export function SourceGroupsOverview({
       <PageHeader
         title="Обзор"
         description="Сгруппируйте каналы по источникам и смотрите, сколько людей написали и куда именно."
-        action={
-          <ManageGroupsDialog groups={groups} channels={channels} />
-        }
+        action={<ManageGroupsDialog groups={groups} channels={channels} />}
       />
 
       {groups.length === 0 ? (
@@ -315,371 +257,5 @@ export function SourceGroupsOverview({
         </>
       )}
     </div>
-  )
-}
-
-function Report({ analytics }: { analytics: GroupAnalytics }) {
-  const TYPE_LABEL = useChannelTypeLabels()
-  // Блоки по типам мессенджеров больше не захардкожены под Telegram/WhatsApp/
-  // Онлайн-чат: строим их из фактических данных и сортируем по убыванию лидов.
-  // «Всего написали» закреплён первым, дальше — три самых активных канала.
-  const CHANNEL_TYPES: ChannelType[] = [
-    'telegram',
-    'whatsapp',
-    'livechat',
-    'max',
-    'vk',
-  ]
-  const topTypes = CHANNEL_TYPES.map((type) => ({
-    type,
-    people: analytics.byType[type].people,
-    messages: analytics.byType[type].messages,
-  }))
-    .sort((a, b) => b.people - a.people)
-    .slice(0, 3)
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard
-          label="Всего написали"
-          value={analytics.totalPeople}
-          icon={Users}
-          hint={`${analytics.totalMessages} сообщений`}
-        />
-        {topTypes.map((t) => (
-          <StatCard
-            key={t.type}
-            label={TYPE_LABEL[t.type]}
-            value={t.people}
-            icon={channelIcon(t.type)}
-            hint={`${t.messages} сообщений`}
-          />
-        ))}
-      </div>
-
-      <ActivityChart byDay={analytics.byDay} byHour={analytics.byHour} />
-
-      <ChannelTable analytics={analytics} />
-    </div>
-  )
-}
-
-function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
-  const TYPE_LABEL = useChannelTypeLabels()
-  // byChannel уже отсортирован сервером по убыванию людей. Доля считается от
-  // самого активного канала, чтобы нарисовать сравнительную полоску.
-  const peak = Math.max(1, ...analytics.byChannel.map((c) => c.people))
-
-  return (
-    <Card className="p-5">
-      <h2 className="font-medium">Куда писали</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Разбивка обращений по каждому каналу источника — от самого активного.
-      </p>
-      {analytics.byChannel.length === 0 ? (
-        <p className="mt-6 text-sm text-muted-foreground">
-          В источнике нет каналов.
-        </p>
-      ) : (
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {analytics.byChannel.map((c) => {
-            const Icon = channelIcon(c.type)
-            const pct = Math.round((c.people / peak) * 100)
-            return (
-              <div
-                key={c.channelId}
-                className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <span
-                      className={cn(
-                        'flex size-8 shrink-0 items-center justify-center rounded-lg text-primary-foreground',
-                        TYPE_DOT[c.type],
-                      )}
-                    >
-                      <Icon className="size-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{c.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {TYPE_LABEL[c.type]}
-                      </p>
-                    </div>
-                  </div>
-                  <p className="shrink-0 text-2xl font-semibold tabular-nums">
-                    {c.people}
-                  </p>
-                </div>
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                  <div
-                    className={cn('h-full rounded-full', TYPE_DOT[c.type])}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-                <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                  <span>{c.people} чел.</span>
-                  <span>{c.messages} сообщений</span>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </Card>
-  )
-}
-
-/* ----------------------- Group management dialog ----------------------- */
-
-function ManageGroupsDialog({
-  groups,
-  channels,
-  triggerLabel = 'Управление источниками',
-}: {
-  groups: SourceGroup[]
-  channels: ChannelOption[]
-  triggerLabel?: string
-}) {
-  const TYPE_LABEL = useChannelTypeLabels()
-  const router = useRouter()
-  const [open, setOpen] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [name, setName] = useState('')
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [pending, startTransition] = useTransition()
-
-  // Which group currently owns each channel (to show a hint on the toggle).
-  const ownerByChannel = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const g of groups) for (const c of g.channels) m.set(c.id, g.name)
-    return m
-  }, [groups])
-
-  function resetForm() {
-    setEditingId(null)
-    setName('')
-    setSelected(new Set())
-  }
-
-  function startEdit(g: SourceGroup) {
-    setEditingId(g.id)
-    setName(g.name)
-    setSelected(new Set(g.channels.map((c) => c.id)))
-  }
-
-  function toggle(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  function submit() {
-    const ids = [...selected]
-    startTransition(async () => {
-      const res = editingId
-        ? await updateSourceGroupAction(editingId, name, ids)
-        : await createSourceGroupAction(name, ids)
-      if (res.ok) {
-        toast.success(res.message)
-        resetForm()
-        router.refresh()
-      } else {
-        toast.error(res.message)
-      }
-    })
-  }
-
-  function remove(id: string) {
-    // Источник теперь единая сущность: удаление снесёт и его финансы (кабинеты,
-    // расходы, хранилище) в «Учёте», а не только привязку каналов. Предупреждаем.
-    const ok = window.confirm(
-      'Удалить источник целиком?\n\nВместе с ним из «Учёта» удалятся все рекламные кабинеты, расходы и данные хранилища этого источника. Это действие необратимо.',
-    )
-    if (!ok) return
-    startTransition(async () => {
-      const res = await deleteSourceGroupAction(id)
-      if (res.ok) {
-        toast.success(res.message)
-        if (editingId === id) resetForm()
-        router.refresh()
-      } else {
-        toast.error(res.message)
-      }
-    })
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        setOpen(v)
-        if (!v) resetForm()
-      }}
-    >
-      <DialogTrigger
-        render={
-          <Button variant="outline" className="gap-1.5">
-            <Layers className="size-4" />
-            {triggerLabel}
-          </Button>
-        }
-      />
-      <DialogContent className="flex max-h-[90vh] w-[min(720px,96vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(720px,96vw)]">
-        <DialogHeader className="border-b border-border px-5 py-4">
-          <DialogTitle>Источники</DialogTitle>
-          <DialogDescription>
-            Объедините каналы одного сайта в источник. Группировка влияет только
-            на отчёт в обзоре и не затрагивает входящие.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {/* Existing groups */}
-          {groups.length > 0 ? (
-            <ul className="mb-5 flex flex-col gap-2">
-              {groups.map((g) => (
-                <li
-                  key={g.id}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border p-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{g.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {g.channels.length > 0
-                        ? g.channels
-                            .map((c) => `${TYPE_LABEL[c.type]}: ${c.name}`)
-                            .join(' · ')
-                        : 'Нет каналов'}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => startEdit(g)}
-                    >
-                      Изменить
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => remove(g.id)}
-                      disabled={pending}
-                      aria-label="Удалить источник"
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-
-          {/* Create / edit form */}
-          <div className="rounded-lg border border-border p-4">
-            <p className="mb-3 text-sm font-medium">
-              {editingId ? 'Редактирование источника' : 'Новый источник'}
-            </p>
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="group-name" className="text-xs">
-                  Название
-                </Label>
-                <Input
-                  id="group-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Например: Сайт acme.com"
-                />
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label className="text-xs">Каналы источника</Label>
-                {channels.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    Сначала подключите каналы (Telegram, WhatsApp, онлайн-чат).
-                  </p>
-                ) : (
-                  <div className="flex max-h-[260px] flex-col gap-1.5 overflow-y-auto">
-                    {channels.map((c) => {
-                      const on = selected.has(c.id)
-                      const owner = ownerByChannel.get(c.id)
-                      const takenByOther =
-                        owner &&
-                        (!editingId || !selected.has(c.id)) &&
-                        owner !== groups.find((g) => g.id === editingId)?.name
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => toggle(c.id)}
-                          className={cn(
-                            'flex items-center justify-between gap-3 rounded-md border p-2.5 text-left transition-colors',
-                            on
-                              ? 'border-primary bg-primary/5'
-                              : 'border-border hover:bg-muted/50',
-                          )}
-                        >
-                          <span className="flex min-w-0 items-center gap-2.5">
-                            <span
-                              className={cn(
-                                'size-2.5 shrink-0 rounded-full',
-                                TYPE_DOT[c.type],
-                              )}
-                              aria-hidden
-                            />
-                            <span className="min-w-0">
-                              <span className="block truncate text-sm font-medium">
-                                {c.name}
-                              </span>
-                              <span className="block truncate text-xs text-muted-foreground">
-                                {TYPE_LABEL[c.type]}
-                                {c.detail ? ` · ${c.detail}` : ''}
-                                {takenByOther ? ` · сейчас в «${owner}»` : ''}
-                              </span>
-                            </span>
-                          </span>
-                          <span
-                            className={cn(
-                              'flex size-5 shrink-0 items-center justify-center rounded-full border',
-                              on
-                                ? 'border-primary bg-primary text-primary-foreground'
-                                : 'border-border',
-                            )}
-                          >
-                            {on ? <Check className="size-3.5" /> : null}
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center justify-end gap-2">
-                {editingId ? (
-                  <Button variant="outline" onClick={resetForm} disabled={pending}>
-                    Отмена
-                  </Button>
-                ) : null}
-                <Button onClick={submit} disabled={pending || !name.trim()}>
-                  {pending ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : editingId ? null : (
-                    <Plus className="size-4" />
-                  )}
-                  {editingId ? 'Сохранить' : 'Создать источник'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }
