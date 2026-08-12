@@ -21,8 +21,9 @@ import type { SessionUser } from './types'
  * If credentials are unset, admin login is disabled (no insecure defaults).
  *
  * ADMIN_PASSWORD_HASH is the hardened option: a leaked .env / backup then
- * exposes only a bcrypt hash, not the password itself. Generate one with:
- *   node -e "console.log(require('bcryptjs').hashSync(process.argv[1], 12))" 'your-password'
+ * exposes only a bcrypt hash, not the password itself. Generate one from the
+ * project root (bcryptjs is already a dependency, nothing to install):
+ *   pnpm generate-admin-hash 'your-strong-password'
  * When both are set, the hash wins and the plaintext var is ignored.
  */
 export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
@@ -38,7 +39,7 @@ function warnPlaintextOnce(): void {
   console.warn(
     '[auth] ADMIN_PASSWORD is set as PLAINTEXT in the environment. Prefer ' +
       'ADMIN_PASSWORD_HASH (bcrypt) so a leaked env file does not expose the ' +
-      'password. Generate: node -e "console.log(require(\'bcryptjs\').hashSync(process.argv[1], 12))" \'pw\'',
+      "password. Generate: pnpm generate-admin-hash 'your-strong-password'",
   )
 }
 
