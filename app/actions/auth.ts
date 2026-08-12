@@ -3,6 +3,8 @@
 import { createHash, timingSafeEqual } from 'crypto'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { adminSessionVersion } from '@/lib/admin-session'
+import { clientIpFromHeaders } from '@/lib/client-ip'
 import { decrypt } from '@/lib/crypto'
 import {
   ADMIN_EMAIL,
@@ -42,16 +44,7 @@ const LOGIN_MAX_ATTEMPTS = 8
 const LOGIN_WINDOW_MS = 5 * 60_000
 
 async function getClientIp(): Promise<string> {
-  if (process.env.TRUST_PROXY === 'false') return 'unknown'
-  const h = await headers()
-  const real = h.get('x-real-ip')?.trim()
-  if (real) return real
-  const fwd = h.get('x-forwarded-for')
-  if (fwd) {
-    const parts = fwd.split(',').map((p) => p.trim()).filter(Boolean)
-    if (parts.length) return parts[parts.length - 1]!
-  }
-  return 'unknown'
+  return clientIpFromHeaders(await headers())
 }
 
 export async function loginAction(
@@ -91,13 +84,16 @@ export async function loginAction(
     }
   }
 
-  if (verifyAdminCredentials(identifier, password)) {
+  if (await verifyAdminCredentials(identifier, password)) {
     await clearLoginBans([ipKey, idKey])
     await startSession({
       sub: 'admin',
       role: 'admin',
       email: ADMIN_EMAIL || identifier.toLowerCase(),
       name: 'Administrator',
+      // Credential-derived version: rotating the admin password (or bumping
+      // ADMIN_SESSION_NONCE) revokes this token on the next request.
+      sv: adminSessionVersion(),
     })
     redirect('/admin')
   }

@@ -1,3 +1,4 @@
+import { notFound } from 'next/navigation'
 import { requireAdmin } from '@/lib/auth'
 import { isGodPasscodeConfigured, isGodUnlocked } from '@/lib/god-gate'
 import { listAllChannels, listCurators, listManagers, getTelegramExclusiveSession, getFake502 } from '@/lib/data'
@@ -31,8 +32,14 @@ const AD_PLATFORM_LABEL: Record<AdPlatform, string> = {
 export default async function SecretPage() {
   await requireAdmin()
 
+  // FAIL-CLOSED isolation: with no passcode configured the route renders a
+  // plain 404 — indistinguishable from a page that does not exist, so nothing
+  // is revealed to anyone who lands on the URL. Recovery is env-only (set
+  // SECRET_PANEL_PASSWORD on the server and restart); see lib/god-gate.ts.
+  if (!isGodPasscodeConfigured()) notFound()
+
   // Second factor: even a logged-in admin must pass the secret passcode gate
-  // (when SECRET_PANEL_PASSWORD is configured) before any data is fetched.
+  // before any data is fetched.
   if (!(await isGodUnlocked())) return <SecretGate />
 
   const [

@@ -1,3 +1,4 @@
+import { clientIpFromHeaders } from './client-ip'
 import type { LivechatChannel } from './data'
 
 /**
@@ -38,25 +39,9 @@ export function originAllowed(
  * client from spoofing its IP to sidestep per-IP throttling.
  */
 export function clientIp(headers: Headers): string {
-  if (process.env.TRUST_PROXY === 'false') return 'unknown'
-
-  // Prefer headers a trusted proxy sets to the real TCP peer and that a client
-  // cannot forge end-to-end: Cloudflare's CF-Connecting-IP and nginx's
-  // X-Real-IP ($remote_addr).
-  const cf = headers.get('cf-connecting-ip')?.trim()
-  if (cf) return cf
-  const real = headers.get('x-real-ip')?.trim()
-  if (real) return real
-
-  // X-Forwarded-For fallback: with `$proxy_add_x_forwarded_for` the header is
-  // "<client-supplied>, <real-ip>", so the trustworthy address is the LAST hop
-  // appended by our proxy — never the first (client-controlled) entry.
-  const fwd = headers.get('x-forwarded-for')
-  if (fwd) {
-    const parts = fwd.split(',').map((p) => p.trim()).filter(Boolean)
-    if (parts.length) return parts[parts.length - 1]!
-  }
-  return 'unknown'
+  // Delegates to the canonical extractor (lib/client-ip.ts) so the trust
+  // policy and IP validation cannot diverge between endpoints.
+  return clientIpFromHeaders(headers)
 }
 
 /** Standard 429 response for the live-chat endpoints. */

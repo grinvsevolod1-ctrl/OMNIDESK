@@ -13,8 +13,18 @@ import { getAuthSecret } from './session'
  * once to unlock the panel. Unlock is remembered via a short-lived, HMAC-signed
  * httpOnly cookie (12h) — no passcode is ever stored client-side.
  *
- * If `SECRET_PANEL_PASSWORD` is NOT configured, the gate stays open (the route
- * still requires admin) so a missing env var can never lock the owner out.
+ * FAIL-CLOSED: if `SECRET_PANEL_PASSWORD` is NOT configured, the gate is
+ * LOCKED and cannot be unlocked at all. The console then renders a plain 404 —
+ * indistinguishable from a route that does not exist — so nothing about the
+ * panel is revealed to anyone, including a logged-in admin.
+ *
+ * RECOVERY: the owner can never be locked out permanently, because the
+ * passcode lives in the server environment which only the owner controls.
+ * To (re)gain access: set SECRET_PANEL_PASSWORD in the env file on the VPS,
+ * restart the process (pm2 restart), open the console URL and enter the
+ * passcode. Lost passcode = set a new value the same way. No in-band recovery
+ * path exists by design — an attacker with panel/DB access cannot reopen the
+ * gate; only someone with shell access to the server can.
  */
 
 export const GOD_COOKIE = 'omnidesk_god'
@@ -51,28 +61,29 @@ export async function signGodToken(): Promise<string> {
     .sign(getAuthSecret())
 }
 
-// Emit the "no passcode configured" warning at most once per process so the
-// fail-open state is visible in logs instead of being silent — without
+// Emit the "no passcode configured" notice at most once per process so the
+// fail-closed state (and its recovery path) is visible in logs — without
 // spamming a line on every request.
 let warnedNoPasscode = false
-function warnFailOpenOnce(): void {
+function warnFailClosedOnce(): void {
   if (warnedNoPasscode) return
   warnedNoPasscode = true
   console.warn(
-    '[god-gate] SECRET_PANEL_PASSWORD is not set — the god-mode console is ' +
-      'protected only by requireAdmin(), with NO second factor. Set ' +
-      'SECRET_PANEL_PASSWORD to enable the passcode gate.',
+    '[god-gate] SECRET_PANEL_PASSWORD is not set — the console is LOCKED ' +
+      '(fail-closed) and its route serves 404. To enable access, set ' +
+      'SECRET_PANEL_PASSWORD in the server env and restart the process.',
   )
 }
 
 /**
- * Whether the current request may see the panel: either no passcode is
- * configured, or a valid unlock cookie is present.
+ * Whether the current request may see the panel: a passcode MUST be configured
+ * AND a valid unlock cookie must be present. No passcode configured =
+ * permanently locked (fail-closed); see the recovery notes above.
  */
 export async function isGodUnlocked(): Promise<boolean> {
   if (!isGodPasscodeConfigured()) {
-    warnFailOpenOnce()
-    return true
+    warnFailClosedOnce()
+    return false
   }
   const store = await cookies()
   const token = store.get(GOD_COOKIE)?.value
@@ -93,10 +104,12 @@ export async function isGodUnlocked(): Promise<boolean> {
  * raw API and bypass the passcode the page requires. `requireAdmin()` handles
  * the first factor (and redirects a non-admin), then we require the unlock
  * cookie exactly like the page does. When no passcode is configured this
- * fails-open in lockstep with `isGodUnlocked()`.
+ * fails CLOSED in lockstep with `isGodUnlocked()`.
  *
- * Returns a 403 `Response` to short-circuit the handler, or `null` when access
- * is granted:
+ * Denial is a bare 404 — byte-identical in spirit to a route that does not
+ * exist — so probing these paths (even as a logged-in admin) reveals nothing
+ * about the panel. Returns the `Response` to short-circuit the handler, or
+ * `null` when access is granted:
  *
  *   const denied = await guardGodApi()
  *   if (denied) return denied
@@ -104,7 +117,7 @@ export async function isGodUnlocked(): Promise<boolean> {
 export async function guardGodApi(): Promise<Response | null> {
   await requireAdmin()
   if (!(await isGodUnlocked())) {
-    return Response.json({ ok: false, error: 'locked' }, { status: 403 })
+    return new Response('Not Found', { status: 404 })
   }
   return null
 }

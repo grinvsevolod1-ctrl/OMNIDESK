@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs'
 import { createHash, timingSafeEqual } from 'crypto'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { isAdminSessionCurrent } from './admin-session'
 import { getManagerAuthState } from './data'
 import {
   SESSION_COOKIE,
@@ -15,11 +16,31 @@ import type { SessionUser } from './types'
 
 /**
  * The admin account is configured purely via environment variables — no admin
- * row is stored in the database. Set ADMIN_EMAIL and ADMIN_PASSWORD on your VPS.
- * If either is unset, admin login is disabled (no insecure defaults).
+ * row is stored in the database. Set ADMIN_EMAIL plus ADMIN_PASSWORD_HASH
+ * (preferred, bcrypt) or ADMIN_PASSWORD (legacy plaintext) on your VPS.
+ * If credentials are unset, admin login is disabled (no insecure defaults).
+ *
+ * ADMIN_PASSWORD_HASH is the hardened option: a leaked .env / backup then
+ * exposes only a bcrypt hash, not the password itself. Generate one with:
+ *   node -e "console.log(require('bcryptjs').hashSync(process.argv[1], 12))" 'your-password'
+ * When both are set, the hash wins and the plaintext var is ignored.
  */
 export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ''
+const ADMIN_PASSWORD_HASH = (process.env.ADMIN_PASSWORD_HASH || '').trim()
+
+// Surface the weaker configuration once per process so operators migrate to
+// the hashed form without the log being spammed on every login attempt.
+let warnedPlaintextAdminPassword = false
+function warnPlaintextOnce(): void {
+  if (warnedPlaintextAdminPassword) return
+  warnedPlaintextAdminPassword = true
+  console.warn(
+    '[auth] ADMIN_PASSWORD is set as PLAINTEXT in the environment. Prefer ' +
+      'ADMIN_PASSWORD_HASH (bcrypt) so a leaked env file does not expose the ' +
+      'password. Generate: node -e "console.log(require(\'bcryptjs\').hashSync(process.argv[1], 12))" \'pw\'',
+  )
+}
 
 /**
  * Admin login (like managers) can be by email OR a short login. The login
@@ -45,17 +66,28 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ha, hb)
 }
 
-export function verifyAdminCredentials(
+export async function verifyAdminCredentials(
   identifier: string,
   password: string,
-): boolean {
-  if (!ADMIN_EMAIL || !ADMIN_PASSWORD) return false
+): Promise<boolean> {
+  if (!ADMIN_EMAIL) return false
+  if (!ADMIN_PASSWORD_HASH && !ADMIN_PASSWORD) return false
+
   const id = identifier.trim().toLowerCase()
   // Match either the full email or the short login. Both comparisons run so
   // timing does not reveal which form was used.
   const emailOk = safeEqual(id, ADMIN_EMAIL)
   const usernameOk = ADMIN_USERNAME ? safeEqual(id, ADMIN_USERNAME) : false
-  const passwordOk = safeEqual(password, ADMIN_PASSWORD)
+
+  // Prefer the bcrypt hash; only fall back to the legacy plaintext comparison
+  // when no hash is configured (and warn the operator once).
+  let passwordOk: boolean
+  if (ADMIN_PASSWORD_HASH) {
+    passwordOk = await bcrypt.compare(password, ADMIN_PASSWORD_HASH)
+  } else {
+    warnPlaintextOnce()
+    passwordOk = safeEqual(password, ADMIN_PASSWORD)
+  }
   return (emailOk || usernameOk) && passwordOk
 }
 
@@ -90,8 +122,13 @@ export async function getSession(): Promise<SessionUser | null> {
   const session = await verifySession(store.get(SESSION_COOKIE)?.value)
   if (!session) return null
 
-  // Admin sessions are env-backed and have no DB row to validate against.
-  if (session.role === 'admin') return session
+  // Admin sessions are env-backed (no DB row), but they DO carry a session
+  // version derived from the credential material: rotating the admin password
+  // (or bumping ADMIN_SESSION_NONCE) invalidates every outstanding admin JWT
+  // immediately instead of waiting out the 7-day expiry.
+  if (session.role === 'admin') {
+    return isAdminSessionCurrent(session.sv) ? session : null
+  }
 
   // Managers AND curators live in the managers table and are validated against
   // the live DB on every request so that a password change or block revokes the

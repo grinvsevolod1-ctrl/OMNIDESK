@@ -1,6 +1,7 @@
 'use server'
 
 import { cookies, headers } from 'next/headers'
+import { clientIpFromHeaders } from '@/lib/client-ip'
 import {
   isMessengerPasswordConfigured,
   MESSENGER_COOKIE,
@@ -24,15 +25,9 @@ export interface MessengerUnlockResult {
 export async function messengerUnlockAction(
   passcode: string,
 ): Promise<MessengerUnlockResult> {
-  const hdrs = await headers()
-  // Trust the proxy-set header first; from x-forwarded-for take the LAST hop
-  // (appended by our own reverse proxy) — the first entry is client-claimed
-  // and trivially spoofable, which would let an attacker rotate rate-limit keys.
-  const fwd = hdrs.get('x-forwarded-for')
-  const ip =
-    hdrs.get('x-real-ip')?.trim() ||
-    fwd?.split(',').at(-1)?.trim() ||
-    'unknown'
+  // Canonical extractor: honours TRUST_PROXY, validates the IP syntactically
+  // and only trusts proxy-appended hops (see lib/client-ip.ts).
+  const ip = clientIpFromHeaders(await headers())
 
   const rl = await rateLimit(`messenger-unlock:${ip}`, 8, 5 * 60_000)
   if (!rl.allowed)

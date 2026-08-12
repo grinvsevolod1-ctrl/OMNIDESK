@@ -26,14 +26,33 @@ interface Bucket {
 const buckets = new Map<string, Bucket>()
 let lastSweep = Date.now()
 
+/**
+ * Cap on tracked keys. A distributed flood with unique keys must not be able
+ * to leak memory — but it must not be able to RESET everyone's counters
+ * either. (An earlier version called `buckets.clear()` at the cap, which let
+ * an attacker flush login-throttle state for every client by flooding unique
+ * keys. Eviction now targets soonest-to-expire entries instead.)
+ */
+const MAX_BUCKETS = 100_000
+
 /** Drop every expired bucket. Cheap and amortized — runs at most once a minute. */
 function sweep(now: number): void {
   for (const [key, bucket] of buckets) {
     if (bucket.resetAt <= now) buckets.delete(key)
   }
-  // Hard cap: if something pathological blows the map up, reset it wholesale
-  // rather than leak memory. Counters resetting early is harmless.
-  if (buckets.size > 100_000) buckets.clear()
+  if (buckets.size <= MAX_BUCKETS) return
+
+  // Still over cap after dropping expired entries: evict the buckets closest
+  // to their natural expiry (they carry the least remaining signal), keeping
+  // fresh windows — e.g. an in-progress login ban — intact. One O(n log n)
+  // pass down to 90% of cap, amortized behind the once-a-minute sweep.
+  const byExpiry = [...buckets.entries()].sort(
+    (a, b) => a[1].resetAt - b[1].resetAt,
+  )
+  const target = Math.floor(MAX_BUCKETS * 0.9)
+  for (let i = 0; i < byExpiry.length && buckets.size > target; i++) {
+    buckets.delete(byExpiry[i]![0])
+  }
 }
 
 export interface RateResult {
@@ -86,6 +105,46 @@ const REDIS_TOKEN =
 /** True when a shared Redis store is configured via env. */
 function redisConfigured(): boolean {
   return REDIS_URL !== '' && REDIS_TOKEN !== ''
+}
+
+/* ------------------------ Multi-process correctness ----------------------- */
+
+/**
+ * The in-memory store is only correct for a SINGLE process: with N instances
+ * each counts independently and every limit silently multiplies by N —
+ * including login brute-force protection. That is a security regression, not
+ * just an accuracy issue, so it must never happen quietly.
+ *
+ * Detection: pm2 cluster mode sets NODE_APP_INSTANCE on every worker.
+ * Deployments can also assert the requirement explicitly with
+ * RATE_LIMIT_REQUIRE_REDIS=true (recommended for any load-balanced setup pm2
+ * can't see, e.g. two VPSes behind one nginx).
+ *
+ * Policy: production + multi-process + no Redis = FAIL FAST at first use, so
+ * the misconfiguration is caught at deploy time rather than discovered during
+ * an attack. Dev/preview logs loudly instead of refusing to boot.
+ */
+let multiProcessChecked = false
+function assertMultiProcessSafety(): void {
+  if (multiProcessChecked || redisConfigured()) return
+  multiProcessChecked = true
+
+  const inPm2Cluster = process.env.NODE_APP_INSTANCE !== undefined
+  const explicitlyRequired = process.env.RATE_LIMIT_REQUIRE_REDIS === 'true'
+  if (!inPm2Cluster && !explicitlyRequired) return
+
+  const message =
+    '[rate-limit] Multiple app instances detected ' +
+    (inPm2Cluster ? '(pm2 cluster mode)' : '(RATE_LIMIT_REQUIRE_REDIS=true)') +
+    ' but no shared Redis store is configured. In-memory rate limiting is ' +
+    'INCORRECT across instances: every limit (including login brute-force ' +
+    'protection) multiplies by the instance count. Set UPSTASH_REDIS_REST_URL ' +
+    '+ UPSTASH_REDIS_REST_TOKEN (or KV_REST_API_*), or run a single instance.'
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(message)
+  }
+  console.error(message)
 }
 
 /**
@@ -143,6 +202,7 @@ export async function rateLimit(
   limit: number,
   windowMs: number,
 ): Promise<RateResult> {
+  assertMultiProcessSafety()
   if (redisConfigured()) {
     const viaRedis = await redisRateLimit(key, limit, windowMs)
     if (viaRedis) return viaRedis

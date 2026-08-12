@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { isAdminSessionCurrent } from './lib/admin-session'
 import { getManagerAuthState } from './lib/data/managers'
 import { SESSION_COOKIE, verifySession } from './lib/session'
 import type { SessionUser } from './lib/types'
@@ -35,6 +36,9 @@ function buildCsp(nonce: string): string {
 }
 
 async function sessionIsValid(session: SessionUser): Promise<boolean> {
+  // Admin JWTs carry a credential-derived session version: rotating the admin
+  // password / ADMIN_SESSION_NONCE revokes outstanding tokens right here.
+  if (session.role === 'admin') return isAdminSessionCurrent(session.sv)
   if (session.role !== 'manager' && session.role !== 'curator') return true
   try {
     const state = await getManagerAuthState(session.sub)
