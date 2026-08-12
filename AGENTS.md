@@ -66,18 +66,24 @@ app/                     Next.js App Router
                          admin-accounts-bots.ts (VK/MAX-подключение),
                          admin-accounts-maintenance.ts (статус, прокси, удаление),
                          admin-accounts-shared.ts (общие хелперы, НЕ 'use server')
-                         finance.ts — БАРЕЛЬ: finance-workspace.ts (кабинеты,
-                         месяцы), finance-ads.ts (расходы/пополнения),
-                         finance-vault.ts (сейф), finance-shared.ts (хелперы)
-                         account.ts — БАРЕЛЬ: account-profile.ts (профиль,
-                         аватар), account-messaging.ts (отправка, реакции,
-                         правки), account-media.ts (медиа, голос, кружки)
+                         finance.ts — БАРЕЛЬ: finance-workspace.ts (ресурсы,
+                         секции, записи, задачи), finance-ads.ts (рекламные
+                         кабинеты, пополнения, статистика), finance-vault.ts
+                         (сейф), finance-shared.ts (общие хелперы)
+                         account.ts — БАРЕЛЬ: account-profile.ts (обед, смена
+                         пароля), account-messaging.ts (отправка, прочтение,
+                         отложенные), account-media.ts (голос, стикеры, медиа)
   admin/                 страницы админки
   api/                   роуты, включая api/cron/* (follow-up, dead-letters)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (см. раздел 3)
 components/admin/        UI админки
-  ai-console.tsx         чат Admin AI (копилот)
+  ai-console.tsx         чат Admin AI (копилот): презентационный контейнер;
+  ai-console/            вся логика в use-ai-console.ts (стрим, подтверждения,
+                         голос, пресеты, панели)
   ai-*-tab.tsx           вкладки: settings, training, corrections, enrollment, logs
+  widget-editor-tabs.tsx БАРЕЛЬ; вкладки редактора виджета лежат в
+  widget-editor/         appearance/content/messengers/hours/behavior-tab.tsx
+                         + shared.tsx (общие контролы)
   all-leads-section.tsx  раздел «Все лиды»: презентационный контейнер
   leads/                 подкомпоненты + логика «Все лиды»: use-leads-data.ts
                          (хук: фильтры/пагинация/пуллинг/экспорт/передача),
@@ -154,10 +160,19 @@ lib/
                          НЕ вызывай три диспетчера подряд «на всякий случай».
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
 worker/src/              воркер каналов (telegram.ts, autopilot.ts, jobs.ts, ...)
-                         telegram.ts — ядро сессии (логин/QR/send/sync);
-                         вынесено: telegram-health.ts (зомби-детектор, Ping RPC),
-                         telegram-recovery.ts (redelivery после реконнекта с
-                         дедуп-гардом), telegram-errors.ts, telegram-config.ts.
+                         telegram.ts — ядро сессии (логин по телефону/send/sync);
+                         вынесено: telegram-qr-login.ts (QR-логин: токены,
+                         скан-листенер, DC-миграция), telegram-health.ts
+                         (зомби-детектор, Ping RPC), telegram-recovery.ts
+                         (redelivery после реконнекта с дедуп-гардом),
+                         telegram-errors.ts, telegram-config.ts.
+                         repo.ts — БАРЕЛЬ: repo-jobs.ts (джобы/dead-letters),
+                         repo-channels.ts (каналы/сессии), repo-proxies.ts,
+                         repo-telegram-cache.ts (кэш entity), repo-messages.ts.
+                         repo-ai.ts — БАРЕЛЬ: repo-ai-config.ts (конфиг мозга,
+                         30s TTL-кэш), repo-ai-context.ts (история/память/RAG),
+                         repo-ai-autopilot.ts (правила, запуски),
+                         repo-ai-logs.ts (логи ответов).
                          brain-loaders.ts — worker-сторона BrainInputLoaders
                          (директивы приходят из 30s TTL-кэша конфига).
   hosting/               автономный DevOps-агент: agent.ts (промпт+цикл), ssh.ts,
