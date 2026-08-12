@@ -203,7 +203,7 @@ scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.m
   `lib/followup/runtime.ts`) вызывают её через свои `BrainInputLoaders`
   (`lib/data/brain-loaders.ts` для next, `worker/src/brain-loaders.ts` для
   воркера). Меняешь лимиты, состав или выбор RAG-запроса — меняй ТОЛЬКО там,
-  НЕ создавай локальные копии сборки. Для батчей (дожим) сначала
+  НЕ создавай локальные копии сборки. Д��я батчей (дожим) сначала
   `loadSharedBrainContext` один раз, потом `assembleBrainInput` с `{ shared }`
   на каждый диалог. RAG-запрос — последнее сообщение клиента; пустая строка
   никогда не эмбеддится (платный вызов ради мусора).
@@ -281,19 +281,20 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
 
 ## 10. Известный техдолг
 
-Большая волна декомпозиции завершена: telegram.ts (health/recovery вынесены),
+Волны декомпозиции завершены: telegram.ts (health/recovery/QR-логин вынесены),
+repo.ts и repo-ai.ts (доменные модули с барелями), finance/account actions,
+widget-editor-tabs (вкладки по файлам), ai-console (use-ai-console),
 lead-cards, admin-accounts, os-shell, create-account-card, ai-assist,
-autopilot-manager, expenses-panel разобраны по конвенции; `assembleBrainInput`
-вынесен в `lib/ai/`; поллинг лидов переведён на `use-shared-poll`.
+autopilot-manager, expenses-panel; `assembleBrainInput` вынесен в `lib/ai/`;
+поллинг лидов переведён на `use-shared-poll`; unread пересчитывается точно
+через `messages.read_at` (миграция 125).
 
 Что осталось (не рефактори «мимоходом» — только осознанной задачей,
 дословным переносом, с `pnpm check` после):
 
 | Файл | Строк | Заметка |
 |---|---|---|
-| `worker/src/telegram.ts` | ~1050 | ядро сессии всё ещё крупное; следующие кандидаты на вынос — login-флоу и dialog sync, ОСТОРОЖНО — нет интеграционных тестов |
-| `worker/src/repo.ts`, `repo-ai.ts` | ~755 каждый | репозитории воркера; резать по доменам |
-| `unread` при god-удалении | — | декремент неточен (нельзя узнать, было ли сообщение прочитано); точное решение = колонка `read_at` в `messages` (миграция) |
+| `worker/src/telegram.ts` | ~985 | ядро сессии; последний кандидат на вынос — phone/code login-флоу и dialog sync, ОСТОРОЖНО — нет интеграционных тестов |
 
 Сапрессии `react-hooks/set-state-in-effect` (~18 файлов) — НЕ техдолг: это
 осознанные паттерны (синхронизация с browser-API на маунте, debounce через
@@ -312,6 +313,10 @@ setTimeout, derived-state при смене маршрута с замером D
 | Фоновый поллинг в UI | `lib/hooks/use-shared-poll.ts` — не пиши собственный setInterval |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент в co-pilot |
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
+| БД-слой воркера | барели `worker/src/repo.ts` (jobs/channels/proxies/tg-cache) и `repo-ai.ts` (config/context/autopilot/logs) |
+| Прочтение сообщений / unread | `messages.read_at` (миграция 125): штамп в `markConversationRead` и при ответе; пересчёт — COUNT непрочитанных входящих |
+| Финансы (server actions) | барель `app/actions/finance.ts` → workspace/ads/vault |
+| Редактор виджета | `components/admin/widget-editor/` (вкладка = файл, общее в shared.tsx) |
 | Раздел «Все лиды» (админ) | контейнер `all-leads-section.tsx` + хук `components/admin/leads/use-leads-data.ts` |
 | Карточка лида (куратор) | `lead-detail-panel.tsx` + подкомпоненты `components/curator/lead-detail/*` |
 | Инбокс менеджера | `inbox-view.tsx` (верстка) + хук `components/manager/inbox/use-inbox.ts` |
