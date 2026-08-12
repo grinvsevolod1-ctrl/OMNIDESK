@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState, useTransition } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Loader2, MapPin, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useInlineSave } from '@/components/admin/lead-inline-edit/use-inline-save'
 import {
   adminSetLeadStatusAction,
   searchCityAction,
@@ -62,7 +63,7 @@ export function StatusInlineEditor({
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<string>(lead.status ?? '')
   const [comment, setComment] = useState('')
-  const [pending, startTransition] = useTransition()
+  const { pending, run } = useInlineSave()
 
   const tone = lead.status ? LEAD_STATUS_TONE[lead.status] : null
 
@@ -71,22 +72,14 @@ export function StatusInlineEditor({
       toast.error('Выберите статус')
       return
     }
-    startTransition(async () => {
-      const action =
-        variant === 'curator' ? updateLeadStatusAction : adminSetLeadStatusAction
-      const res = await action({
-        leadCardId: lead.id,
-        status,
-        comment,
-      })
-      if (res.ok) {
-        toast.success(res.message)
+    const action =
+      variant === 'curator' ? updateLeadStatusAction : adminSetLeadStatusAction
+    run(() => action({ leadCardId: lead.id, status, comment }), {
+      onOk: () => {
         setOpen(false)
         setComment('')
         onSaved()
-      } else {
-        toast.error(res.message)
-      }
+      },
     })
   }
 
@@ -194,7 +187,7 @@ export function CityInlineEditor({
   const [options, setOptions] = useState<
     { city: string; region: string | null; isRegion?: boolean }[]
   >([])
-  const [pending, startTransition] = useTransition()
+  const { pending, run } = useInlineSave()
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -229,20 +222,17 @@ export function CityInlineEditor({
       toast.error('Укажите город')
       return
     }
-    startTransition(async () => {
-      const res = await updateLeadFieldAction({
-        leadCardId: lead.id,
-        field: 'city',
-        value: v,
-      })
-      if (res.ok) {
-        toast.success('Город обновлён')
-        setOpen(false)
-        onSaved()
-      } else {
-        toast.error(res.message)
-      }
-    })
+    run(
+      () =>
+        updateLeadFieldAction({ leadCardId: lead.id, field: 'city', value: v }),
+      {
+        successMessage: 'Город обновлён',
+        onOk: () => {
+          setOpen(false)
+          onSaved()
+        },
+      },
+    )
   }
 
   return (
@@ -354,22 +344,15 @@ export function TextInlineEditor({
 }) {
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState(display)
-  const [pending, startTransition] = useTransition()
+  const { pending, run } = useInlineSave()
 
   function save() {
-    startTransition(async () => {
-      const res = await updateLeadFieldAction({
-        leadCardId: lead.id,
-        field,
-        value,
-      })
-      if (res.ok) {
-        toast.success('Сохранено')
+    run(() => updateLeadFieldAction({ leadCardId: lead.id, field, value }), {
+      successMessage: 'Сохранено',
+      onOk: () => {
         setOpen(false)
         onSaved()
-      } else {
-        toast.error(res.message)
-      }
+      },
     })
   }
 
@@ -442,22 +425,15 @@ export function DeleteLeadButton({
 }) {
   const [open, setOpen] = useState(false)
   const [reason, setReason] = useState('')
-  const [pending, startTransition] = useTransition()
+  const { pending, run } = useInlineSave()
 
   function remove() {
-    startTransition(async () => {
-      const res = await softDeleteLeadAction({
-        leadCardId: lead.id,
-        reason,
-      })
-      if (res.ok) {
-        toast.success(res.message)
+    run(() => softDeleteLeadAction({ leadCardId: lead.id, reason }), {
+      onOk: () => {
         setOpen(false)
         setReason('')
         onDeleted()
-      } else {
-        toast.error(res.message)
-      }
+      },
     })
   }
 

@@ -1,6 +1,5 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
 import dynamic from 'next/dynamic'
 import {
   ArrowLeft,
@@ -11,7 +10,6 @@ import {
   Vault,
   Wallet,
 } from 'lucide-react'
-import { toast } from 'sonner'
 import {
   addAdStatAction,
   addAdTopupAction,
@@ -33,7 +31,6 @@ import {
   updateEntryAction,
   updateResourceAction,
   updateVaultItemAction,
-  type FinanceResult,
 } from '@/app/actions/finance'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -77,6 +74,7 @@ import {
   StatDialog,
   TopupDialog,
 } from '@/components/admin/finance/finance-dialogs'
+import { useFinanceAdmin } from '@/components/admin/finance/use-finance-admin'
 import { ExpensesPanel } from '@/components/admin/finance/expenses-panel'
 import { AdsPanel } from '@/components/admin/finance/ads-panel'
 import { GlobalDashboard } from '@/components/admin/finance/global-dashboard'
@@ -412,7 +410,7 @@ export function FinanceAdmin({
             onDelete={(item) =>
               setConfirm({
                 title: 'Удалить запись?',
-                description: `«${item.title}» и все её секреты будут удалены безвозвратно.`,
+                description: `«${item.title}» и все её секреты ��удут удалены безвозвратно.`,
                 onConfirm: () =>
                   run(() => deleteVaultItemAction(item.id), () =>
                     setConfirm(null),

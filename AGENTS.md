@@ -132,6 +132,12 @@ components/admin/        UI админки
   settings/              настройки админа: system-health-section (метрики из
                          lib/data/health-metrics), audit-log-section (журнал
                          действий из lib/data/audit)
+  finance-admin.tsx + finance/use-finance-admin.ts  финансы: контейнер +
+                         хук состояния (view/диалоги/фильтрация по ресурсу)
+  lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлайн-
+                         редакторы лида; общий transition+toast флоу — в хуке
+components/shared/       кросс-ролевые компоненты; use-xlsx-export.ts — общий
+                         флоу Excel-выгрузки (admin/manager/curator leads)
   secret-*, god-messenger/   UI god-панели (ИЗОЛИРОВАНО)
 components/curator/      UI менеджера по кадрам
   curator-leads-view.tsx «Мои лиды»: вкладки активные/архив, фильтры,
@@ -204,6 +210,11 @@ lib/
                          use-debounced-value
   types/                 общие TS-типы по доменам, барель index.ts.
                          Импорт: @/lib/types
+  time.ts                ЕДИНСТВЕННОЕ место форматирования дат (MSK):
+                         formatMskDateTime / -Full / -Numeric, formatMskDate,
+                         mskDayKey. НЕ определяй локальные formatDate в
+                         компонентах — импортируй отсюда. Исключение:
+                         finance-utils.tsx (даты-строки YYYY-MM-DD без TZ)
   outbound-dispatch.ts   роутер исходящей доставки: один lookup channel_type →
                          нужный диспетчер. НЕ перебирай все диспетчеры подряд.
   vk.ts                  БАРЕЛЬ VK Bot API → vk-core.ts (callApi, retry,
