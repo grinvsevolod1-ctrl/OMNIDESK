@@ -50,18 +50,51 @@ export function AiConsole({
   initialLessonCount,
   configured,
 }: Props) {
-  const c = useAiConsole(initialSettings, initialLessons, initialLessonCount)
+  const {
+    settings,
+    setSettings,
+    lessons,
+    setLessons,
+    lessonCount,
+    setLessonCount,
+    messages,
+    input,
+    setInput,
+    loading,
+    undone,
+    voiceMode,
+    ttsSupported,
+    activePanel,
+    activePanelMsgId,
+    inputRef,
+    bottomRef,
+    hasChat,
+    suggestions,
+    send,
+    stop,
+    newChat,
+    undo,
+    confirmPending,
+    dismissPending,
+    dismissPresetConfirm,
+    applyPreset,
+    openPanelDirect,
+    closePanel,
+    toggleVoiceMode,
+    onKeyDown,
+    voice,
+  } = useAiConsole(initialSettings, initialLessons, initialLessonCount)
 
   return (
     <div className="flex flex-col gap-4">
       {/* Status is context, not a landing-screen summary: only show it once a
           conversation is underway. The empty screen stays a single question. */}
-      {c.hasChat ? (
+      {hasChat ? (
         <StatusStrip
-          settings={c.settings}
-          lessonCount={c.lessonCount}
-          hasChat={c.hasChat}
-          onNewChat={c.newChat}
+          settings={settings}
+          lessonCount={lessonCount}
+          hasChat={hasChat}
+          onNewChat={newChat}
         />
       ) : null}
 
@@ -75,17 +108,17 @@ export function AiConsole({
       ) : null}
 
       {/* Conversation thread (or the empty-state hero). */}
-      {c.hasChat ? (
+      {hasChat ? (
         <div className="flex flex-col gap-4">
-          {c.messages.map((m) => (
+          {messages.map((m) => (
             <div key={m.id} className="flex flex-col gap-3">
               <MessageBubble message={m} />
               {m.pending ? (
                 <PendingCard
                   detail={m.pending.detail}
                   label={m.pending.label}
-                  onConfirm={() => c.confirmPending(m.id, m.pending!)}
-                  onDismiss={() => c.dismissPending(m.id)}
+                  onConfirm={() => confirmPending(m.id, m.pending!)}
+                  onDismiss={() => dismissPending(m.id)}
                 />
               ) : null}
               {m.presetConfirm ? (
@@ -94,42 +127,42 @@ export function AiConsole({
                   label={`Включить «${m.presetConfirm.name}»`}
                   onConfirm={() => {
                     const preset = m.presetConfirm!
-                    c.dismissPresetConfirm(m.id)
-                    void c.applyPreset(preset, true)
+                    dismissPresetConfirm(m.id)
+                    void applyPreset(preset, true)
                   }}
-                  onDismiss={() => c.dismissPresetConfirm(m.id)}
+                  onDismiss={() => dismissPresetConfirm(m.id)}
                 />
               ) : null}
               {m.actions && m.actions.length > 0 ? (
                 <ActionReceipts
                   actions={m.actions}
                   messageId={m.id}
-                  undone={c.undone}
-                  onUndo={c.undo}
+                  undone={undone}
+                  onUndo={undo}
                 />
               ) : null}
               {m.report ? <ReportDownload report={m.report} /> : null}
-              {m.openPanel && c.activePanelMsgId === m.id && c.activePanel ? (
+              {m.openPanel && activePanelMsgId === m.id && activePanel ? (
                 <InlinePanel
-                  intent={c.activePanel}
-                  settings={c.settings}
-                  onSettingsChange={c.setSettings}
-                  lessons={c.lessons}
+                  intent={activePanel}
+                  settings={settings}
+                  onSettingsChange={setSettings}
+                  lessons={lessons}
                   onLessonsChange={(next) => {
-                    c.setLessons(next)
-                    c.setLessonCount(next.length)
+                    setLessons(next)
+                    setLessonCount(next.length)
                   }}
-                  onClose={c.closePanel}
+                  onClose={closePanel}
                 />
               ) : null}
             </div>
           ))}
-          {c.suggestions.length > 0 ? (
-            <Suggestions items={c.suggestions} onPick={c.send} />
+          {suggestions.length > 0 ? (
+            <Suggestions items={suggestions} onPick={send} />
           ) : null}
           {/* scroll-mb clears the sticky composer: aligning this anchor to the
               viewport bottom would otherwise park the newest lines behind it. */}
-          <div ref={c.bottomRef} className="scroll-mb-40" />
+          <div ref={bottomRef} className="scroll-mb-40" />
         </div>
       ) : (
         <EmptyHero />
@@ -139,21 +172,21 @@ export function AiConsole({
           bottom once a conversation is going; on the empty screen it sits right
           under the question as the single focal element. */}
       <ConsoleComposer
-        inputRef={c.inputRef}
-        input={c.input}
-        onInputChange={c.setInput}
-        onKeyDown={c.onKeyDown}
-        loading={c.loading}
-        hasChat={c.hasChat}
-        voice={c.voice}
-        voiceMode={c.voiceMode}
-        ttsSupported={c.ttsSupported}
-        onToggleVoiceMode={c.toggleVoiceMode}
-        onStop={c.stop}
-        onSend={c.send}
+        inputRef={inputRef}
+        input={input}
+        onInputChange={setInput}
+        onKeyDown={onKeyDown}
+        loading={loading}
+        hasChat={hasChat}
+        voice={voice}
+        voiceMode={voiceMode}
+        ttsSupported={ttsSupported}
+        onToggleVoiceMode={toggleVoiceMode}
+        onStop={stop}
+        onSend={send}
         quickPanels={QUICK_PANELS}
-        activePanel={c.activePanel}
-        onOpenPanel={c.openPanelDirect}
+        activePanel={activePanel}
+        onOpenPanel={openPanelDirect}
       />
     </div>
   )
