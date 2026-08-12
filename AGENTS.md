@@ -74,7 +74,9 @@ app/                     Next.js App Router
                          пароля), account-messaging.ts (отправка, прочтение,
                          отложенные), account-media.ts (голос, стикеры, медиа)
   admin/                 страницы админки
-  api/                   роуты, включая api/cron/* (follow-up, dead-letters)
+  api/                   роуты, включая api/cron/* (follow-up, dead-letters,
+                         ai-health — алерт при всплеске ошибок мозга,
+                         retention — ночная чистка append-only таблиц)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (см. раздел 3)
 components/admin/        UI админки
   ai-console.tsx         чат Admin AI (копилот): презентационный контейнер;
@@ -179,6 +181,9 @@ worker/src/              воркер каналов (telegram.ts, autopilot.ts,
                          repo-ai-logs.ts (логи ответов).
                          brain-loaders.ts — worker-сторона BrainInputLoaders
                          (директивы приходят из 30s TTL-кэша конфига).
+                         Тесты: telegram-phone-login.test.ts — мок GramJS-клиента,
+                         переходы логина (resume/code/2FA/рестарт-потеря контекста);
+                         vitest включает worker/src/**/*.test.ts.
   hosting/               автономный DevOps-агент: agent.ts (промпт+цикл), ssh.ts,
                          pipeline.ts, agent-safety.ts (блокировка опасных команд)
 scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.mjs
@@ -338,6 +343,9 @@ setTimeout, derived-state при смене маршрута с замером D
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
 | БД-слой воркера | барели `worker/src/repo.ts` (jobs/channels/proxies/tg-cache) и `repo-ai.ts` (config/context/autopilot/logs) |
 | Прочтение сообщений / unread | `messages.read_at` (миграция 125): штамп в `markConversationRead` и при ответе; пересчёт — COUNT непрочитанных входящих |
+| Идемпотентность отправки | миграция 126: уникальный частичный индекс на `channel_jobs((payload->>'messageId'))` для queued/running send_message; `enqueueJob` при конфликте возвращает живой джоб — двойная доставка невозможна на уровне БД |
+| Алертинг мозга | `/api/cron/ai-health` (PM2, каждые 10 мин): доля ошибок за час из `ai_logs`; при пробое порога — маркер health.alert + опц. Telegram (`TELEGRAM_ALERT_BOT_TOKEN`/`CHAT_ID`), кулдаун 6ч |
+| Ретеншн данных | `/api/cron/retention` (PM2, 04:10, после бэкапа): ai_generation_metrics 365д, admin_audit_log 180д, hosting_deploy_logs 30д, завершённые channel_jobs 7д |
 | Финансы (server actions) | барель `app/actions/finance.ts` → workspace/ads/vault |
 | Редактор виджета | `components/admin/widget-editor/` (вкладка = файл, общее в shared.tsx) |
 | Раздел «Все лиды» (админ) | контейнер `all-leads-section.tsx` + хук `components/admin/leads/use-leads-data.ts` |
