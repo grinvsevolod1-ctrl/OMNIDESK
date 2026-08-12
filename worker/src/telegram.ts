@@ -6,11 +6,15 @@ import { env, assertTelegramConfigured } from './env.js'
 import { logger, type Logger } from './logger.js'
 import { gramProxy } from './proxy.js'
 import * as repo from './repo.js'
+import { errMessage } from './telegram-errors.js'
 import {
-  classifyError,
-  errMessage,
-  extractErrorCode,
-} from './telegram-errors.js'
+  bringSessionOnline,
+  failLogin,
+  logoutSession,
+  stopSession,
+  teardownZombieConnection,
+  type TgLifecycleDeps,
+} from './telegram-lifecycle.js'
 import { TelegramSendThrottle } from './telegram-throttle.js'
 import { TelegramHealthMonitor } from './telegram-health.js'
 import { TelegramPhoneLogin } from './telegram-phone-login.js'
@@ -163,6 +167,11 @@ export class TelegramSession {
       armLoginTimer: () => this.armLoginTimer(),
       afterLogin: () => this.afterLogin(),
       fail: (e) => this.fail(e),
+      resetForNewAuth: () => this.resetForNewAuth(),
+      clearLoginTimer: () => this.clearLoginTimer(),
+      setAttemptId: (id) => {
+        this.attemptId = id
+      },
     })
     this.phoneLogin = new TelegramPhoneLogin({
       channelId,
@@ -234,7 +243,7 @@ export class TelegramSession {
         await repo
           .setSession(this.channelId, 'error', {
             lastError:
-              'Время входа истекло: код не был введён. Запросите код повторно.',
+              'Время входа истекло: код не был введён. Зап��осите код повторно.',
           })
           .catch(() => {})
       })()
@@ -307,49 +316,27 @@ export class TelegramSession {
   }
 
   /**
-   * One-button QR login (auth.exportLoginToken). No phone, no SMS: the panel
-   * shows a QR, the account owner scans it from Telegram → Settings → Devices →
-   * Link Desktop Device. Only a 2FA cloud password (if set) remains — that
-   * reuses the existing password_pending flow.
-   *
-   * Token lifecycle: Telegram QR tokens expire in ~30s, so we re-export on a
-   * timer while pending. A scan arrives as UpdateLoginToken; re-exporting then
-   * returns LoginTokenSuccess (done) or LoginTokenMigrateTo (finish the import
-   * on the user's home DC).
+   * One-button QR login (see telegram-qr-login.ts for the full flow: token
+   * lifecycle, scan listener, DC migration, 2FA hand-off).
    */
   async startQr(
     attemptId?: string,
   ): Promise<{ sessionStatus: repo.SessionStatus }> {
-    this.attemptId = attemptId || randomUUID()
-    this.clearLoginTimer()
-    this.qr.clear()
-    const log = this.authLogger()
-    log.info({ stage: 'qr:start' }, 'TG QR login: attempt started')
+    return this.qr.begin(attemptId)
+  }
 
-    await repo.setSession(this.channelId, 'starting')
-    // QR login always begins a NEW authorization — ignore any saved session.
+  /**
+   * Reset to a brand-new authorization: blank string session, fresh client,
+   * connected. Used by QR login, which never resumes a saved session.
+   */
+  private async resetForNewAuth(): Promise<void> {
     this.session = new StringSession('')
-
     if (this.client) {
       await this.client.disconnect().catch(() => {})
       this.client = null
     }
     this.client = await this.buildClient()
-    try {
-      await this.client.connect()
-    } catch (e) {
-      log.error({ stage: 'qr:connect', err: errMessage(e) }, 'TG QR login: connect failed')
-      return this.fail(e)
-    }
-
-    this.qr.attachScanListener()
-
-    const status = await this.qr.exportToken()
-    if (status !== 'qr_pending') return { sessionStatus: status }
-    await repo.setSession(this.channelId, 'qr_pending')
-    this.armLoginTimer()
-    log.info({ stage: 'qr:pending' }, 'TG QR login: waiting for scan')
-    return { sessionStatus: 'qr_pending' }
+    await this.client.connect()
   }
 
   async submitCode(
@@ -384,24 +371,35 @@ export class TelegramSession {
   }
 
   /**
-   * Zombie-connection teardown, invoked by the health monitor after two
-   * consecutive failed pings: mark degraded and drop the client so revival
-   * rebuilds a fresh connection instead of reusing the dead transport.
+   * The dependency bundle the lifecycle-transition module operates on
+   * (see telegram-lifecycle.ts). Built lazily so accessors always observe
+   * live state, mirroring the other split-out modules' contracts.
    */
-  private async onZombieConnection(): Promise<void> {
-    this.health.stop()
-    this.stopExclusiveTimer()
-    try {
-      await this.client?.disconnect()
-    } catch {
-      /* transport already dead */
+  private get lifecycleDeps(): TgLifecycleDeps {
+    return {
+      channelId: this.channelId,
+      ctx: this.ctx,
+      getClient: () => this.client,
+      setClient: (client) => {
+        this.client = client
+      },
+      authLogger: () => this.authLogger(),
+      persist: () => this.persist(),
+      clearLoginTimer: () => this.clearLoginTimer(),
+      clearQr: () => this.qr.clear(),
+      startExclusiveTimer: () => this.startExclusiveTimer(),
+      stopExclusiveTimer: () => this.stopExclusiveTimer(),
+      startHealth: () => this.health.start(),
+      stopHealth: () => this.health.stop(),
+      enforceExclusiveSessions: () => this.enforceExclusiveSessions(),
+      syncDialogs: (opts) => this.syncDialogs(opts),
+      recoverUndeliveredOutbound: () => this.recoverUndeliveredOutbound(),
     }
-    this.client = null
-    await repo
-      .setSession(this.channelId, 'error', {
-        lastError: 'Соединение с Telegram перестало отвечать (health ping)',
-      })
-      .catch(() => {})
+  }
+
+  /** Zombie teardown (see telegram-lifecycle.ts). */
+  private async onZombieConnection(): Promise<void> {
+    return teardownZombieConnection(this.lifecycleDeps)
   }
 
   /**
@@ -434,51 +432,9 @@ export class TelegramSession {
     await runKickSweep(this.client, this.channelId)
   }
 
-  /** After a successful login: persist session, set detail, attach listeners. */
+  /** Post-login bring-up (see telegram-lifecycle.ts). */
   private async afterLogin(): Promise<void> {
-    if (!this.client) return
-    this.clearLoginTimer()
-    await this.persist()
-    try {
-      const me = (await this.client.getMe()) as Api.User
-      const handle = me.username
-        ? `@${me.username}`
-        : me.phone
-          ? `+${me.phone}`
-          : 'telegram'
-      const name = [me.firstName, me.lastName].filter(Boolean).join(' ')
-      await repo.setChannelDetail(this.channelId, name || handle)
-    } catch {
-      /* non-fatal */
-    }
-    attachTelegramHandlers(this.ctx)
-    await repo.setSession(this.channelId, 'online', { markConnected: true })
-    logger.info({ channelId: this.channelId }, 'Telegram session online')
-    // Enforce exclusive-session control: immediately terminate any OTHER active
-    // authorizations on this account, then keep enforcing on a periodic sweep so
-    // anyone who logs in later is kicked automatically. Runs in the background so
-    // going "online" isn't blocked by the account.getAuthorizations round-trip.
-    void this.enforceExclusiveSessions()
-    this.startExclusiveTimer()
-    // Zombie detection: probe the connection on a fixed cadence so a dead
-    // transport is noticed within minutes, not on the next failed send.
-    this.health.start()
-    // Gap recovery note: GramJS's client.catchUp() is an unimplemented stub
-    // (function body is literally `// TODO`), so updates.getDifference cannot
-    // be leaned on here. The offline gap is instead recovered by the dialog
-    // sync below: per-chat watermarks (scripts/105) make it fetch ONLY the
-    // messages missed while offline, not the whole history.
-    // Import existing chats so the inbox isn't empty after connecting. Runs in
-    // the background so going "online" isn't blocked by the history fetch. This
-    // path also backfills recent per-chat message history so opened threads show
-    // real conversation, not just messages that arrive after connecting. With
-    // per-chat watermarks (scripts/105) a reconnect only fetches the offline
-    // delta, not the whole history again.
-    void this.syncDialogs({ backfill: true })
-    // Delivery recovery: resend outbound messages that were written while this
-    // account was disconnected and never reached Telegram. Background, so going
-    // online isn't blocked by resends.
-    void this.recoverUndeliveredOutbound()
+    return bringSessionOnline(this.lifecycleDeps)
   }
 
   /** Post-reconnect delivery recovery (see telegram-recovery.ts). */
@@ -668,52 +624,21 @@ export class TelegramSession {
     }
   }
 
+  /** Graceful stop: keep the authorization, go offline (telegram-lifecycle.ts). */
   async stop(): Promise<void> {
-    this.stopExclusiveTimer()
-    this.health.stop()
-    this.clearLoginTimer()
-    this.qr.clear()
-    try {
-      await this.client?.disconnect()
-    } finally {
-      this.client = null
-      await repo.setSession(this.channelId, 'offline')
-    }
+    return stopSession(this.lifecycleDeps)
   }
 
+  /** Full logout: revoke authorization, wipe secrets (telegram-lifecycle.ts). */
   async logout(): Promise<void> {
-    this.stopExclusiveTimer()
-    this.health.stop()
-    this.clearLoginTimer()
-    this.qr.clear()
-    try {
-      await this.client?.invoke(new Api.auth.LogOut())
-    } catch {
-      /* ignore */
-    }
-    try {
-      await this.client?.disconnect()
-    } catch {
-      /* ignore */
-    }
-    this.client = null
-    await repo.clearSecrets(this.channelId)
-    await repo.setSession(this.channelId, 'logged_out')
+    return logoutSession(this.lifecycleDeps)
   }
 
   private async fail(e: unknown): Promise<{ sessionStatus: repo.SessionStatus }> {
-    const msg = errMessage(e)
-    this.authLogger().error(
-      {
-        stage: 'failure',
-        category: classifyError(msg),
-        errorCode: extractErrorCode(e),
-        err: msg,
-      },
-      'TG login: failed',
+    return failLogin(
+      { channelId: this.channelId, authLogger: () => this.authLogger() },
+      e,
     )
-    await repo.setSession(this.channelId, 'error', { lastError: msg })
-    return { sessionStatus: 'error' }
   }
 
   private async notStarted(): Promise<{ sessionStatus: repo.SessionStatus }> {

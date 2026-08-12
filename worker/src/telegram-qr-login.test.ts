@@ -103,6 +103,9 @@ function makeHarness(client: FakeClient | null = makeFakeClient()) {
     armLoginTimer: vi.fn(),
     afterLogin: vi.fn(async () => {}),
     fail: vi.fn(async () => ({ sessionStatus: 'error' as const })),
+    resetForNewAuth: vi.fn(async () => {}),
+    clearLoginTimer: vi.fn(),
+    setAttemptId: vi.fn(),
   }
   return { qr: new TelegramQrLogin(deps), deps, client }
 }

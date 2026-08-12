@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { Api } from 'telegram'
 import type { TelegramClient } from 'telegram'
 import type { Logger } from 'pino'
@@ -22,6 +23,14 @@ export interface QrLoginDeps {
   afterLogin: () => Promise<void>
   /** Shared login failure path: classify, persist error status. */
   fail: (e: unknown) => Promise<{ sessionStatus: repo.SessionStatus }>
+  /**
+   * begin()-only hooks: QR login always starts a NEW authorization, so the
+   * session must reset its string session and rebuild the client. Ownership
+   * of both stays in TelegramSession; the flow only asks for them.
+   */
+  resetForNewAuth: () => Promise<void>
+  clearLoginTimer: () => void
+  setAttemptId: (id: string) => void
 }
 
 /**
@@ -48,6 +57,50 @@ export class TelegramQrLogin {
   /** The current tg://login deep link for the panel, if a QR is pending. */
   current(): { url: string; expiresAt: number } | null {
     return this.qrLogin
+  }
+
+  /**
+   * One-button QR login entry point (auth.exportLoginToken). No phone, no SMS:
+   * the panel shows a QR, the account owner scans it from Telegram → Settings →
+   * Devices → Link Desktop Device. Only a 2FA cloud password (if set) remains —
+   * that reuses the existing password_pending flow.
+   *
+   * Token lifecycle: Telegram QR tokens expire in ~30s, so we re-export on a
+   * timer while pending. A scan arrives as UpdateLoginToken; re-exporting then
+   * returns LoginTokenSuccess (done) or LoginTokenMigrateTo (finish the import
+   * on the user's home DC).
+   */
+  async begin(
+    attemptId?: string,
+  ): Promise<{ sessionStatus: repo.SessionStatus }> {
+    this.deps.setAttemptId(attemptId || randomUUID())
+    this.deps.clearLoginTimer()
+    this.clear()
+    const log = this.deps.authLogger()
+    log.info({ stage: 'qr:start' }, 'TG QR login: attempt started')
+
+    await repo.setSession(this.deps.channelId, 'starting')
+    // QR login always begins a NEW authorization — ignore any saved session.
+    // The session resets its StringSession and rebuilds the client; this flow
+    // never owns either.
+    try {
+      await this.deps.resetForNewAuth()
+    } catch (e) {
+      log.error(
+        { stage: 'qr:connect', err: errMessage(e) },
+        'TG QR login: connect failed',
+      )
+      return this.deps.fail(e)
+    }
+
+    this.attachScanListener()
+
+    const status = await this.exportToken()
+    if (status !== 'qr_pending') return { sessionStatus: status }
+    await repo.setSession(this.deps.channelId, 'qr_pending')
+    this.deps.armLoginTimer()
+    log.info({ stage: 'qr:pending' }, 'TG QR login: waiting for scan')
+    return { sessionStatus: 'qr_pending' }
   }
 
   /**
