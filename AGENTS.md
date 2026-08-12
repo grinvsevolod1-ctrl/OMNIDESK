@@ -72,6 +72,9 @@ components/admin/        UI админки
                          (хук: фильтры/пагинация/пуллинг/экспорт/передача),
                          leads-filter-bar, leads-period-filter, period-range,
                          xlsx-download, admin-lead-row
+  finance/               финансы (UI): expenses-panel.tsx — контейнер, вся
+                         логика в expenses/use-expenses.ts, строки и части
+                         таблицы в expenses/ (expense-row, table-parts)
   os-shell/              ОС-шелл god-панели (командный интерфейс поверх админки)
   secret-*               UI god-панели (ИЗОЛИРОВАНО)
   god-messenger/         god-мессенджер: диалоги от лица аккаунтов (ИЗОЛИРОВАНО)
@@ -84,6 +87,11 @@ components/manager/      UI менеджера
   inbox-view.tsx         инбокс: презентационный компонент
   inbox/use-inbox.ts     хук инбокса: выбор диалога, черновики, действия,
                          фильтры, realtime, derived-счётчики, гидрация треда
+  autopilot-manager.tsx  автопилот: презентационный контейнер
+  autopilot/             логика и части автопилота: use-autopilot.ts (хук:
+                         CRUD правил, optimistic-обновления, reorder),
+                         draft.ts (DraftState + константы), rule-editor,
+                         rule-card
 lib/
   ai-console/            Admin AI: run-assistant.ts (инструменты+промпт), assistant.ts (типы)
   admin-console/         ОС-шелл-копилот всей админки (кроме god-панели): командная строка
@@ -91,9 +99,18 @@ lib/
   servers-console/       разговорный ассистент вкладки «Серверы» (флот, установка, SSH)
   console-core/          общее ядро разговорных консолей (admin-console + servers-console)
   ai/                    manager-brain.ts (мозг продавца), deal-heat.ts (температура сделок)
-  data/                  слой БД: ai-assist.ts (настройки/знания/уроки/диалоги),
-                         ai-directives.ts (правила), ai-followup.ts, ai-analytics.ts,
-                         hosting.ts (серверы/приложения), console-shell.ts (ОС-шелл)
+  data/                  слой БД. ai-assist.ts — БАРЕЛЬ, реэкспортирует доменные
+                         модули (существующие импорты `@/lib/data/ai-assist`
+                         менять не нужно):
+                           ai-assist-settings.ts    настройки (singleton-строка)
+                           ai-assist-metrics.ts     счётчики использования/стоимости
+                           ai-assist-lessons.ts     уроки мозга
+                           ai-assist-history.ts     история диалога + память
+                           ai-assist-enrollment.ts  подключение ИИ к диалогам
+                           ai-assist-knowledge.ts   база знаний + RAG (retrieveKnowledge)
+                         Прочее: ai-directives.ts (правила), ai-followup.ts,
+                         ai-analytics.ts, hosting.ts (серверы/приложения),
+                         console-shell.ts (ОС-шелл)
   autopilot/             маршрутизация правил и запуск ответов (runtime.ts, match.ts)
   followup/              runtime.ts — авто-дожим молчунов
   finance/               финансы: рекламные кабинеты, пополнения, статистика расходов
@@ -103,6 +120,9 @@ lib/
   types/                 общие TS-типы, разнесённые по доменам с барелем
                          index.ts (accounts, channels, proxies, jobs, leads,
                          messages, conversations, hosting). Импорт: @/lib/types
+  outbound-dispatch.ts   роутер исходящей доставки: один lookup channel_type →
+                         нужный диспетчер (MAX/VK/WhatsApp; livechat — no-op).
+                         НЕ вызывай три диспетчера подряд «на всякий случай».
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
 worker/src/              воркер каналов (telegram.ts, autopilot.ts, jobs.ts, ...)
   hosting/               автономный DevOps-агент: agent.ts (промпт+цикл), ssh.ts,
@@ -150,10 +170,24 @@ scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.m
 - **Директивы** (`lib/data/ai-directives.ts`, таблица `ai_directives`) вливаются
   во ВСЕ каналы: лайв-чат (`app/actions/ai-assist.ts`), автопилот
   (`lib/autopilot/runtime.ts`), воркер (`worker/src`), дожим (`lib/followup`).
-  Меняя сборку входа мозга, проверь ВСЕ эти места.
+  Меняя сборку входа мозга, проверь ВСЕ эти места. (Известный техдолг: эта
+  сборка «lessons + corrections + history + memory + knowledge + directives»
+  продублирована в трёх рантаймах — при возможности вынеси общий
+  `assembleBrainInput` в `lib/ai/` вместо четвёртой копии.)
+- **Single-flight-гард ИИ-ответов** (`lib/autopilot/runtime.ts` и
+  `worker/src/autopilot.ts`): claim в `aiLeadInFlight` берётся **синхронно,
+  сразу после `has()`, без единого `await` между ними** — иначе гонка и двойной
+  ответ клиенту. `finally` снимает claim. Не «оптимизируй» это обратно.
+- **Исходящая доставка:** всегда через `lib/outbound-dispatch.ts`
+  (`deliverOutboundByChannel`) — один запрос channel_type вместо перебора всех
+  диспетчеров.
 - **Follow-up** (`lib/followup/runtime.ts`): дожимает молчунов, ВЫКЛ по умолчанию,
   тихие часы + лимит касаний + дедуп, гоняется cron-роутом
   `app/api/cron/followup/route.ts` (+ `scripts/cron-followup.mjs`, PM2).
+  Конвенции цикла: данные, не зависящие от диалога (уроки, коррекции,
+  директивы), грузятся ОДИН раз до цикла по кандидатам; `retrieveKnowledge`
+  вызывается только с непустым запросом (последнее сообщение клиента) —
+  embedding пустой строки — это платный вызов ради мусора.
 - **Deal-heat** (`lib/ai/deal-heat.ts`): детерминированный скоринг «горячести»
   сделки 0–100 по реальным сигналам, без вызова модели.
 
@@ -167,6 +201,10 @@ scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.m
   `migrate.mjs` находит файлы по префиксу-номеру.
 - Настройки ИИ — singleton-строка в `ai_assist_settings` (id=true).
 - Читай/пиши данные ТОЛЬКО через `lib/data/*`, параметризованными запросами.
+- **Многошаговые мутации — только в `withTransaction`** (`lib/db.ts`): если
+  вторая команда зависит от первой (delete + пересчёт счётчиков/превью),
+  оборачивай в транзакцию, чтобы сбой посередине не оставил рассинхрон
+  (пример: `app/actions/admin-secret/conversation-edits.ts`).
 
 ## 8. Команды проверки (запускай перед завершением)
 
@@ -192,10 +230,11 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
   директива или урок, управляемые из чата, а не константа в коде.
 - **Не удаляй и не обходи** тест изоляции `lib/ai/isolation.test.ts`.
 - Меняй только то, что нужно; сложную логику покрывай юнит-тестом рядом.
-- **Конвенция декомпозиции монолитов** (сложилась при рефакторинге лидов/инбокса):
-  вся клиентская логика тяжёлого компонента выносится в хук `use-*.ts` рядом,
-  сам компонент остаётся презентационным; верстка режется на подкомпоненты в
-  подпапке; крупные модули типов/данных дробятся по доменам с барелем `index.ts`,
+- **Конвенция декомпозиции монолитов** (сложилась при рефакторинге лидов/инбокса,
+  продолжена на автопилоте и финансах): вся клиентская логика тяжёлого
+  компонента выносится в хук `use-*.ts` рядом, сам компонент остаётся
+  презентационным; верстка режется на подкомпоненты в подпапке; крупные модули
+  типов/данных дробятся по доменам с барелем (пример: `lib/data/ai-assist.ts`),
   чтобы существующие импорты не менялись. Рефакторинг = «переставить, не менять
   поведение»: JSX и логика переносятся дословно, проверяется `pnpm check`.
 - **Воркараунд GramJS:** `client.catchUp()` в библиотеке `telegram` — пустая
@@ -204,17 +243,34 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
   watermarks (миграция 105). При обновлении зависимости `telegram` проверь,
   не реализовали ли `catchUp()` — тогда воркараунд можно упростить.
 
-## 10. Частые задачи — с чего начать
+## 10. Известный техдолг (кандидаты на декомпозицию)
+
+Файлы, ещё не прошедшие конвенцию декомпозиции. Не рефактори их «мимоходом» —
+только осознанной задачей, дословным переносом, с `pnpm check` после:
+
+| Файл | Строк | Заметка |
+|---|---|---|
+| `worker/src/telegram.ts` | ~1255 | stateful GramJS-клиент; резать на login/sync/recovery/health, ОСТОРОЖНО — нет интеграционных тестов |
+| `lib/data/lead-cards.ts` | ~795 | слой данных лид-карточек |
+| `app/actions/admin-accounts.ts` | ~767 | server actions аккаунтов |
+| `components/admin/os-shell/os-shell.tsx` | ~730 | ОС-шелл god-панели |
+| `components/admin/create-account-card.tsx` | ~723 | форма создания аккаунта |
+| Сборка входа мозга ×3 | — | вынести `assembleBrainInput` в `lib/ai/` (см. раздел 6) |
+| Поллинг лидов `setInterval` | — | `use-leads-data.ts` и `manager-leads-view.tsx` тикают каждые 5с независимо; перевести на разделяемый поллер по образцу `use-channel-status.ts` |
+
+## 11. Частые задачи — с чего начать
 
 | Задача | Где смотреть |
 |---|---|
 | Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
-| Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist.ts` → инструмент в co-pilot |
-| Новый канал / воркер | `worker/src/*`, `lib/autopilot/*` |
+| Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент в co-pilot |
+| Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
 | Раздел «Все лиды» (админ) | контейнер `all-leads-section.tsx` + хук `components/admin/leads/use-leads-data.ts` |
 | Карточка лида (куратор) | `lead-detail-panel.tsx` + подкомпоненты `components/curator/lead-detail/*` |
 | Инбокс менеджера | `inbox-view.tsx` (верстка) + хук `components/manager/inbox/use-inbox.ts` |
+| Автопилот (UI менеджера) | `autopilot-manager.tsx` + `components/manager/autopilot/*` |
+| Расходы (финансы, админ) | `expenses-panel.tsx` + `components/admin/finance/expenses/*` |
 | Общие TS-типы | `lib/types/*` (доменные модули), импорт через `@/lib/types` |
 | Аналитика/отчёты | `lib/data/ai-analytics.ts`, `lib/ai/deal-heat.ts` |
 | Дожим молчунов | `lib/followup/runtime.ts`, `lib/data/ai-followup.ts` |
