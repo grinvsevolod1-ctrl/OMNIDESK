@@ -9,6 +9,7 @@ import {
   transferConversation,
   type TransferTarget,
 } from '@/lib/data'
+import { writeAudit } from '@/lib/data/audit'
 import { createTelemostMeeting, isTelemostConfigured } from '@/lib/telemost'
 import { sendMessageAction } from '@/app/actions/account'
 
@@ -60,6 +61,15 @@ export async function transferConversationAction(
   // Reassigning a conversation moves it between managers in the performance and
   // group rollups, so drop the analytics cache to reflect it right away.
   invalidateAnalytics()
+  await writeAudit({
+    actorRole: 'manager',
+    actorId: session.sub,
+    actorLabel: session.name,
+    action: 'conversation.transfer',
+    entityType: 'conversation',
+    entityId: conversationId,
+    details: { toManagerId, hasNote: Boolean(note?.trim()) },
+  })
   revalidatePath('/app/inbox')
   revalidatePath('/app')
   return { ok: true, message: 'Диалог передан менеджеру.' }

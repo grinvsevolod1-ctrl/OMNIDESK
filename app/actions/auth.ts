@@ -19,6 +19,7 @@ import {
   getManagerByIdentifier,
   recordLoginBan,
 } from '@/lib/data'
+import { writeAudit } from '@/lib/data/audit'
 import { rateLimit } from '@/lib/rate-limit'
 
 export interface LoginState {
@@ -86,6 +87,12 @@ export async function loginAction(
 
   if (await verifyAdminCredentials(identifier, password)) {
     await clearLoginBans([ipKey, idKey])
+    await writeAudit({
+      actorRole: 'admin',
+      actorLabel: 'Administrator',
+      action: 'auth.login',
+      details: { ip },
+    })
     await startSession({
       sub: 'admin',
       role: 'admin',
@@ -114,6 +121,13 @@ export async function loginAction(
   await clearLoginBans([ipKey, idKey])
 
   const role = account.role === 'curator' ? 'curator' : 'manager'
+  await writeAudit({
+    actorRole: role,
+    actorId: account.id,
+    actorLabel: account.name,
+    action: 'auth.login',
+    details: { ip, temp: !mainOk && tempOk },
+  })
   await startSession({
     sub: account.id,
     role,

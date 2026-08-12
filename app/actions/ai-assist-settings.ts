@@ -28,6 +28,7 @@ import {
   listDirectives,
   type AiDirective,
 } from '@/lib/data/ai-directives'
+import { writeAudit } from '@/lib/data/audit'
 import { AI_PATH, type AiDiagnostics } from './ai-assist-shared'
 
 /**
@@ -78,6 +79,15 @@ export async function aiUpdateSettingsAction(patch: {
     clamped.aggressiveness = Math.max(0, Math.min(3, Math.round(clamped.aggressiveness)))
   }
   const next = await updateAiAssistSettings(clamped)
+  await writeAudit({
+    actorRole: 'admin',
+    actorLabel: 'Administrator',
+    action: 'ai.settings.update',
+    entityType: 'ai_settings',
+    // Persona/tone can be long free text — record which fields changed, not
+    // their full bodies, to keep audit rows small and secret-free.
+    details: { fields: Object.keys(clamped) },
+  })
   revalidatePath(AI_PATH)
   return next
 }

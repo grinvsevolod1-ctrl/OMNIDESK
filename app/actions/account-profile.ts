@@ -15,6 +15,7 @@ import {
   tryGoOnLunch,
   updateManagerPassword,
 } from '@/lib/data'
+import { writeAudit } from '@/lib/data/audit'
 import type { SimpleResult } from './account-shared'
 
 /**
@@ -101,6 +102,14 @@ export async function changeOwnPasswordAction(
   if (!ok) return { ok: false, message: 'Текущий пароль неверен.' }
 
   await updateManagerPassword(manager.id, await hashPassword(next))
+  await writeAudit({
+    actorRole: 'manager',
+    actorId: manager.id,
+    actorLabel: manager.name,
+    action: 'account.password_change',
+    entityType: 'manager',
+    entityId: manager.id,
+  })
 
   // updateManagerPassword bumps session_version, which would invalidate THIS
   // manager's own cookie. Re-issue the session with the fresh version so the

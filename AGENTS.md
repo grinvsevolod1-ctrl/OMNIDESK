@@ -103,14 +103,12 @@ app/                     Next.js App Router
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
-  curator/                 страницы мен��джера по кадрам
+  curator/               страницы менеджера по кадрам
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
                          console-schedules, ai-health — алерт при всплеске
-                         ошибок мозга, retention — ночная чистка),
-                         api/security-check — публичный, безопасные булевы
-                         для entry-гейта (никаких версий/пула/ошибок наружу)
+                         ошибок мозга, retention — ночная чистка)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (раздел 4)
 components/admin/        UI админки
   ai-console.tsx + ai-console/   чат копилота: контейнер + use-ai-console.ts;
@@ -147,8 +145,6 @@ components/manager/      UI менеджера
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
                          навигация с «жидкой» подсветкой — dashboard-nav.tsx
-  security-gate.tsx      entry-преролл проверки безопасности (данные из
-                         api/security-check; раз за сессию, sessionStorage)
   analytics/             activity-chart.tsx (по дням, пан/зум) +
                          activity-hour-chart.tsx (почасовой) + chart-math.ts
 lib/
@@ -301,7 +297,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
 
 ## 8. База данных и миграции
 
-- Схема — `scripts/NNN_*.sql`, нумерация до `128`. Исторические п��опуски
+- Схема — `scripts/NNN_*.sql`, нумерация до `128`. Исторические пропуски
   (001→003, 026→030, 035→037) — НЕ ошибка, не переиспользуй номера.
 - Новая миграция: следующий свободный номер, применение `pnpm db:migrate`
   (статус `pnpm db:status`). На проде применяет `deploy.sh` ДО свапа кода.

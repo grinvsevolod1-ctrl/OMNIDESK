@@ -22,6 +22,7 @@ import {
   suggestCities,
 } from '@/lib/data/cities'
 import { resolveCityOrRegion } from '@/lib/data/regions'
+import { writeAudit } from '@/lib/data/audit'
 import { isAdminIdentity } from '@/lib/data/shared'
 
 export interface ActionResult {
@@ -120,6 +121,14 @@ export async function createManagerAction(
   // A new manager appears in getManagerPerformance rollups; drop the analytics
   // cache so the dashboard lists them without waiting out the TTL.
   invalidateAnalytics()
+  await writeAudit({
+    actorRole: 'admin',
+    actorLabel: 'Administrator',
+    action: 'manager.create',
+    entityType: 'manager',
+    entityId: created.id,
+    details: { name, email },
+  })
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   return {
@@ -257,6 +266,14 @@ export async function setManagerStatusAction(
     return { ok: false, message: 'Администратора нельзя блокировать.' }
   }
   await updateManagerStatus(id, status)
+  await writeAudit({
+    actorRole: 'admin',
+    actorLabel: 'Administrator',
+    action: status === 'blocked' ? 'manager.block' : 'manager.unblock',
+    entityType: 'manager',
+    entityId: id,
+    details: { name: manager.name, role: manager.role },
+  })
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   const label = manager.role === 'curator' ? 'Менеджер по кадрам' : 'Менеджер'
@@ -278,6 +295,14 @@ export async function resetManagerPasswordAction(
   const password = genPassword()
   const passwordHash = await hashPassword(password)
   await updateManagerPassword(id, passwordHash)
+  await writeAudit({
+    actorRole: 'admin',
+    actorLabel: 'Administrator',
+    action: 'manager.password_reset',
+    entityType: 'manager',
+    entityId: id,
+    details: { name: manager.name },
+  })
   return {
     ok: true,
     message: `Новый пароль сгенерирован для ${manager.name}.`,
@@ -354,6 +379,14 @@ export async function deleteManagerAction(id: string): Promise<ActionResult> {
   }
   await deleteManager(id)
   invalidateAnalytics()
+  await writeAudit({
+    actorRole: 'admin',
+    actorLabel: 'Administrator',
+    action: 'manager.delete',
+    entityType: 'manager',
+    entityId: id,
+    details: { name: manager.name, role: manager.role },
+  })
   revalidatePath('/admin/managers')
   revalidatePath('/admin')
   const label = manager.role === 'curator' ? 'Менеджер по кадрам' : 'Менеджер'
