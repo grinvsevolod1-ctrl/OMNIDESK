@@ -428,7 +428,7 @@ async function fireAiLead(params: {
         source: 'ai-lead',
         event: 'handover.during_gen',
         message:
-          'Пока ИИ готовил ответ, в диа��ог вошёл человек — отправка отменена.',
+          'Пока ИИ готовил ответ, в диалог вошёл человек — отправка отменена.',
         conversationId,
         channelType,
       })
