@@ -19,6 +19,7 @@ import {
   TG_SEND_MIN_INTERVAL_MS,
 } from './telegram-config.js'
 import { TelegramHealthMonitor } from './telegram-health.js'
+import { TelegramQrLogin } from './telegram-qr-login.js'
 import { recoverUndeliveredOutbound } from './telegram-recovery.js'
 import type { TgSessionCtx } from './telegram-session-ctx.js'
 import { runKickSweep } from './telegram-exclusive.js'
@@ -198,7 +199,7 @@ export class TelegramSession {
           { stage: 'login-timeout', timeoutMs: LOGIN_ABANDON_TIMEOUT_MS },
           'TG login: no code/password entered in time — disconnecting pending login',
         )
-        this.clearQr()
+        this.qr.clear()
         try {
           await this.client?.disconnect()
         } catch {
@@ -278,7 +279,7 @@ export class TelegramSession {
     // A fresh start (including a code re-request) supersedes any previous
     // pending-login abandonment timer and any pending QR.
     this.clearLoginTimer()
-    this.clearQr()
+    this.qr.clear()
     const log = this.authLogger()
     // Verbose-but-non-critical lines: visible when auth diagnostics are on
     // (AUTH_DEBUG=1 / LOG_LEVEL=debug / non-prod), otherwise demoted to debug.
@@ -436,7 +437,7 @@ export class TelegramSession {
   /** Submit the SMS/app login code. May transition to password_pending (2FA). */
   /** Current QR deep link for the panel to render, if a QR login is pending. */
   getQr(): { url: string; expiresAt: number } | null {
-    return this.qrLogin
+    return this.qr.current()
   }
 
   /**
@@ -455,7 +456,7 @@ export class TelegramSession {
   ): Promise<{ sessionStatus: repo.SessionStatus }> {
     this.attemptId = attemptId || randomUUID()
     this.clearLoginTimer()
-    this.clearQr()
+    this.qr.clear()
     const log = this.authLogger()
     log.info({ stage: 'qr:start' }, 'TG QR login: attempt started')
 
@@ -475,152 +476,14 @@ export class TelegramSession {
       return this.fail(e)
     }
 
-    // A scan shows up as UpdateLoginToken — finalize immediately instead of
-    // waiting for the next refresh tick. Kept as a named callback so clearQr
-    // can detach it after login: otherwise every QR attempt leaves a dead
-    // handler running on the client for the session's whole lifetime.
-    this.qrUpdateHandler = (update: Api.TypeUpdate) => {
-      if (update instanceof Api.UpdateLoginToken) {
-        void this.finalizeQr()
-      }
-    }
-    this.client.addEventHandler(this.qrUpdateHandler)
+    this.qr.attachScanListener()
 
-    const status = await this.exportQrToken()
+    const status = await this.qr.exportToken()
     if (status !== 'qr_pending') return { sessionStatus: status }
     await repo.setSession(this.channelId, 'qr_pending')
     this.armLoginTimer()
     log.info({ stage: 'qr:pending' }, 'TG QR login: waiting for scan')
     return { sessionStatus: 'qr_pending' }
-  }
-
-  /**
-   * Export (or re-export) the QR token. Returns the resulting session status:
-   * 'qr_pending' with a fresh deep link, or 'online' when Telegram already
-   * considers the token consumed (scan raced the refresh).
-   */
-  private async exportQrToken(): Promise<repo.SessionStatus> {
-    if (!this.client) return 'error'
-    const log = this.authLogger()
-    const res = await this.client.invoke(
-      new Api.auth.ExportLoginToken({
-        apiId: env.telegramApiId,
-        apiHash: env.telegramApiHash,
-        exceptIds: [],
-      }),
-    )
-    if (res instanceof Api.auth.LoginToken) {
-      const b64 = Buffer.from(res.token).toString('base64url')
-      this.qrLogin = {
-        url: `tg://login?token=${b64}`,
-        expiresAt: res.expires * 1000,
-      }
-      // Refresh ~5s before expiry so the panel never renders a dead QR.
-      if (this.qrTimer) clearTimeout(this.qrTimer)
-      const refreshInMs = Math.max(5_000, res.expires * 1000 - Date.now() - 5_000)
-      this.qrTimer = setTimeout(() => {
-        void this.exportQrToken().catch((e) =>
-          log.warn({ stage: 'qr:refresh', err: errMessage(e) }, 'TG QR login: token refresh failed'),
-        )
-      }, refreshInMs)
-      this.qrTimer.unref?.()
-      return 'qr_pending'
-    }
-    // LoginTokenSuccess / LoginTokenMigrateTo both mean "the scan happened".
-    return this.completeQr(res)
-  }
-
-  /** A scan arrived — re-export to collect the result and finish the login. */
-  private async finalizeQr(): Promise<void> {
-    if (this.qrFinalizing || !this.client) return
-    this.qrFinalizing = true
-    const log = this.authLogger()
-    try {
-      const res = await this.client.invoke(
-        new Api.auth.ExportLoginToken({
-          apiId: env.telegramApiId,
-          apiHash: env.telegramApiHash,
-          exceptIds: [],
-        }),
-      )
-      if (res instanceof Api.auth.LoginToken) return // not consumed yet
-      await this.completeQr(res)
-    } catch (e) {
-      if (errMessage(e).includes('SESSION_PASSWORD_NEEDED')) {
-        this.clearQr()
-        await repo.setSession(this.channelId, 'password_pending')
-        this.armLoginTimer()
-        log.info({ stage: 'qr:2fa' }, 'TG QR login: scan OK, 2FA cloud password required')
-        return
-      }
-      log.error({ stage: 'qr:finalize', err: errMessage(e) }, 'TG QR login: finalize failed')
-      await this.fail(e)
-    } finally {
-      this.qrFinalizing = false
-    }
-  }
-
-  /** Handle a consumed QR token: import on the right DC, then go online. */
-  private async completeQr(
-    res: Api.auth.TypeLoginToken,
-  ): Promise<repo.SessionStatus> {
-    if (!this.client) return 'error'
-    const log = this.authLogger()
-    try {
-      if (res instanceof Api.auth.LoginTokenMigrateTo) {
-        // The account lives on another DC: reconnect there and import the token.
-        // _switchDC is a private GramJS API (no public equivalent exists for
-        // this flow) — verify it's still there so a library upgrade degrades
-        // into a clear error instead of a TypeError mid-login.
-        log.info({ stage: 'qr:migrate', dcId: res.dcId }, 'TG QR login: migrating to home DC')
-        if (typeof this.client._switchDC !== 'function') {
-          throw new Error(
-            'GramJS _switchDC is unavailable (library upgrade?) — QR login cannot migrate DC',
-          )
-        }
-        await this.client._switchDC(res.dcId)
-        const imported = await this.client.invoke(
-          new Api.auth.ImportLoginToken({ token: res.token }),
-        )
-        if (imported instanceof Api.auth.LoginTokenSuccess === false) {
-          throw new Error('QR import did not return LoginTokenSuccess')
-        }
-      }
-      this.clearQr()
-      await this.afterLogin()
-      log.info({ stage: 'qr:ok' }, 'TG QR login: authorized')
-      return 'online'
-    } catch (e) {
-      if (errMessage(e).includes('SESSION_PASSWORD_NEEDED')) {
-        this.clearQr()
-        await repo.setSession(this.channelId, 'password_pending')
-        this.armLoginTimer()
-        log.info({ stage: 'qr:2fa' }, 'TG QR login: scan OK, 2FA cloud password required')
-        return 'password_pending'
-      }
-      log.error({ stage: 'qr:complete', err: errMessage(e) }, 'TG QR login: completion failed')
-      await this.fail(e)
-      return 'error'
-    }
-  }
-
-  /** Drop the in-memory QR, its refresh timer and the login-token listener. */
-  private clearQr(): void {
-    this.qrLogin = null
-    if (this.qrTimer) {
-      clearTimeout(this.qrTimer)
-      this.qrTimer = null
-    }
-    if (this.qrUpdateHandler) {
-      // Detach the scan listener — after login it would sit on the client for
-      // the whole session lifetime, running on every incoming update.
-      try {
-        this.client?.removeEventHandler(this.qrUpdateHandler, undefined as never)
-      } catch {
-        /* best-effort */
-      }
-      this.qrUpdateHandler = null
-    }
   }
 
   async submitCode(
@@ -1069,7 +932,7 @@ export class TelegramSession {
     this.stopExclusiveTimer()
     this.health.stop()
     this.clearLoginTimer()
-    this.clearQr()
+    this.qr.clear()
     try {
       await this.client?.disconnect()
     } finally {
@@ -1082,7 +945,7 @@ export class TelegramSession {
     this.stopExclusiveTimer()
     this.health.stop()
     this.clearLoginTimer()
-    this.clearQr()
+    this.qr.clear()
     try {
       await this.client?.invoke(new Api.auth.LogOut())
     } catch {
