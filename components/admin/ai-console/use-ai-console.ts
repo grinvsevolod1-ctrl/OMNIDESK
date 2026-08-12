@@ -26,6 +26,7 @@ import {
 } from '@/app/actions/ai-console'
 import { aiSettingsAction, aiListLessonsAction } from '@/app/actions/ai-assist'
 import { useSpeechInput } from '@/components/admin/ai-console/use-speech-input'
+import { streamAssistantReply } from '@/components/admin/ai-console/stream-assistant'
 import { type ChatMessage } from '@/components/admin/ai-console/chat-types'
 
 let idSeq = 0
@@ -193,68 +194,23 @@ export function useAiConsole(
 
       ;(async () => {
         try {
-          const resp = await fetch('/api/admin/ai-console/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ history: historyTurns }),
-            signal: controller.signal,
-          })
-          if (!resp.ok || !resp.body) throw new Error('stream failed')
-
-          const reader = resp.body.getReader()
-          const decoder = new TextDecoder()
-          let buffer = ''
-          let streamed = ''
-          let meta: Omit<AssistantResult, 'reply'> | null = null
-
-          for (;;) {
-            const { value, done } = await reader.read()
-            if (done) break
-            if (reqRef.current !== token) {
-              await reader.cancel()
-              return
-            }
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() ?? ''
-            for (const line of lines) {
-              const trimmed = line.trim()
-              if (!trimmed.startsWith('data:')) continue
-              const payload = trimmed.slice(5).trim()
-              if (!payload || payload === '[DONE]') continue
-              try {
-                const evt = JSON.parse(payload) as
-                  | { t: 'delta'; v: string }
-                  | { t: 'meta'; v: Omit<AssistantResult, 'reply'> }
-                  | { t: 'error' }
-                if (evt.t === 'delta') {
-                  streamed += evt.v
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === asstId ? { ...m, content: streamed } : m,
-                    ),
-                  )
-                } else if (evt.t === 'meta') {
-                  meta = evt.v
-                } else if (evt.t === 'error') {
-                  throw new Error('generation error')
-                }
-              } catch {
-                /* ignore malformed line */
-              }
-            }
-          }
-
-          if (reqRef.current !== token) return
-          await applyResult({
-            reply: streamed.trim() || 'Готово.',
-            actions: meta?.actions ?? [],
-            openPanel: meta?.openPanel ?? null,
-            settingsChanged: meta?.settingsChanged ?? false,
-            pending: meta?.pending ?? null,
-            report: meta?.report ?? null,
-            source: meta?.source ?? 'ai',
-          })
+          // SSE transport lives in stream-assistant.ts; `null` means a newer
+          // request took over mid-stream and this one must go silent.
+          const res = await streamAssistantReply(
+            historyTurns,
+            controller.signal,
+            {
+              onText: (text) =>
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === asstId ? { ...m, content: text } : m,
+                  ),
+                ),
+              isCurrent: () => reqRef.current === token,
+            },
+          )
+          if (res === null) return
+          await applyResult(res)
         } catch (err) {
           if (
             reqRef.current !== token ||

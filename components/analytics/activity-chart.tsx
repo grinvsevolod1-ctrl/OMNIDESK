@@ -1,20 +1,31 @@
 'use client'
 
+/**
+ * Interactive per-day stacked area chart (pan/zoom/hover). The intraday hour
+ * line lives in activity-hour-chart.tsx and the pure path/axis math in
+ * chart-math.ts; ActivityHour is re-exported for existing importers.
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import {
+  PeopleByHourChart,
+  type ActivityHour,
+} from './activity-hour-chart'
+import {
+  areaBetween,
+  axisTicks,
+  clamp,
+  dayTick,
+  niceCeil,
+  smoothPath,
+} from './chart-math'
+
+export type { ActivityHour } from './activity-hour-chart'
 
 export type ActivityDay = {
   date: string
-  telegram: number
-  whatsapp: number
-  livechat: number
-  max: number
-  vk: number
-}
-
-export type ActivityHour = {
-  hour: number
   telegram: number
   whatsapp: number
   livechat: number
@@ -51,131 +62,6 @@ export function ActivityChart({
     <PeopleByHourChart byHour={byHour} title={hourTitle} />
   ) : (
     <PeopleByDayChart byDay={byDay} title={title} />
-  )
-}
-
-function PeopleByHourChart({
-  byHour,
-  title,
-}: {
-  byHour: ActivityHour[]
-  title: string
-}) {
-  const totals = byHour.map(
-    (h) => h.telegram + h.whatsapp + h.livechat + h.max + h.vk,
-  )
-  const sum = totals.reduce((n, v) => n + v, 0)
-  const max = Math.max(1, ...totals)
-  const top = niceCeil(max)
-  const ticks = axisTicks(top)
-  const peakHour = totals.indexOf(Math.max(...totals))
-
-  const W = 960
-  const H = 240
-  const padL = 28
-  const padR = 12
-  const padT = 16
-  const padB = 24
-  const plotW = W - padL - padR
-  const plotH = H - padT - padB
-  const x = (i: number) => padL + (plotW * i) / 23
-  const y = (v: number) => padT + plotH * (1 - v / top)
-
-  const pts = totals.map((v, i) => [x(i), y(v)] as const)
-  const linePath = smoothPath(pts)
-  const areaPath = `${linePath} L ${x(23)} ${padT + plotH} L ${x(0)} ${padT + plotH} Z`
-
-  return (
-    <Card className="p-5">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h2 className="font-medium">{title}</h2>
-          <p className="text-xs text-muted-foreground">
-            Почасовая динамика · всего {sum} чел.
-          </p>
-        </div>
-        {sum > 0 ? (
-          <span className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">
-            Пик: {String(peakHour).padStart(2, '0')}:00 · {totals[peakHour]}
-          </span>
-        ) : null}
-      </div>
-
-      {sum === 0 ? (
-        <div className="mt-6 flex h-40 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
-          Сегодня обращений ещё не было.
-        </div>
-      ) : (
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          className="mt-5 h-60 w-full"
-          preserveAspectRatio="none"
-          role="img"
-          aria-label="Почасовой график обращений за день"
-        >
-          <defs>
-            <linearGradient id="lc-hour-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.35" />
-              <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-
-          {ticks.map((t) => (
-            <g key={t}>
-              <line
-                x1={padL}
-                x2={W - padR}
-                y1={y(t)}
-                y2={y(t)}
-                stroke="var(--border)"
-                strokeWidth="1"
-                opacity="0.6"
-              />
-              <text
-                x={padL - 6}
-                y={y(t) + 3}
-                textAnchor="end"
-                className="fill-muted-foreground"
-                fontSize="10"
-              >
-                {t}
-              </text>
-            </g>
-          ))}
-
-          {[0, 3, 6, 9, 12, 15, 18, 21].map((h) => (
-            <text
-              key={h}
-              x={x(h)}
-              y={H - 6}
-              textAnchor="middle"
-              className="fill-muted-foreground"
-              fontSize="10"
-            >
-              {String(h).padStart(2, '0')}
-            </text>
-          ))}
-
-          <path d={areaPath} fill="url(#lc-hour-fill)" />
-          <path
-            d={linePath}
-            fill="none"
-            stroke="#0ea5e9"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <circle
-            cx={x(peakHour)}
-            cy={y(totals[peakHour])}
-            r="4"
-            fill="#0ea5e9"
-            stroke="var(--background)"
-            strokeWidth="2"
-          />
-        </svg>
-      )}
-    </Card>
   )
 }
 
@@ -534,58 +420,4 @@ function LegendDot({ className, label }: { className: string; label: string }) {
   )
 }
 
-function dayTick(isoDate: string): string {
-  const d = new Date(isoDate + 'T00:00:00')
-  return `${d.toLocaleDateString('ru-RU', { weekday: 'short' })} ${d.getDate()}`
-}
-
-/** Build a smooth cubic-Bézier path through points using Catmull-Rom. */
-function smoothPath(points: readonly (readonly [number, number])[]): string {
-  if (points.length === 0) return ''
-  if (points.length === 1) return `M ${points[0][0]} ${points[0][1]}`
-  let d = `M ${points[0][0]} ${points[0][1]}`
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[i === 0 ? 0 : i - 1]
-    const p1 = points[i]
-    const p2 = points[i + 1]
-    const p3 = points[i + 2 < points.length ? i + 2 : i + 1]
-    const c1x = p1[0] + (p2[0] - p0[0]) / 6
-    const c1y = p1[1] + (p2[1] - p0[1]) / 6
-    const c2x = p2[0] - (p3[0] - p1[0]) / 6
-    const c2y = p2[1] - (p3[1] - p1[1]) / 6
-    d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2[0]} ${p2[1]}`
-  }
-  return d
-}
-
-/** Smooth filled band between a lower and an upper boundary (both point arrays). */
-function areaBetween(
-  lower: readonly (readonly [number, number])[],
-  upper: readonly (readonly [number, number])[],
-): string {
-  if (!upper.length) return ''
-  const topCurve = smoothPath(upper)
-  const bottomCurve = smoothPath([...lower].reverse()).replace(/^M/, 'L')
-  return `${topCurve} ${bottomCurve} Z`
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v))
-}
-
-/** Round a max value up to a clean axis ceiling (1, 2, 5, 10, 20, 50…). */
-function niceCeil(n: number): number {
-  if (n <= 1) return 1
-  const pow = Math.pow(10, Math.floor(Math.log10(n)))
-  const frac = n / pow
-  const nice = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10
-  return nice * pow
-}
-
-/** Up to 5 evenly spaced whole-number ticks from 0 to top (descending). */
-function axisTicks(top: number): number[] {
-  const steps = Math.min(top, 4)
-  const out: number[] = []
-  for (let i = steps; i >= 0; i--) out.push(Math.round((top / steps) * i))
-  return [...new Set(out)]
-}
+/* Path/axis math moved to chart-math.ts */

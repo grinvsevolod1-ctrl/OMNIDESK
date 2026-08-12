@@ -35,6 +35,7 @@ import {
 } from './bubbles'
 import { CredentialCard } from './credential-card'
 import { DeployCard, InlinePanel } from './deploy-card'
+import { streamServersAssistantReply } from './stream-servers-assistant'
 
 /** Quick prompts shown as chips once a conversation is underway. */
 const QUICK_PROMPTS = INTENT_CATALOGUE.map((m) => ({
@@ -163,68 +164,22 @@ export function ServersConsole({
 
       ;(async () => {
         try {
-          const resp = await fetch('/api/admin/servers-console/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ history: historyTurns }),
-            signal: controller.signal,
-          })
-          if (!resp.ok || !resp.body) throw new Error('stream failed')
-
-          const reader = resp.body.getReader()
-          const decoder = new TextDecoder()
-          let buffer = ''
-          let streamed = ''
-          let meta: Omit<AssistantResult, 'reply'> | null = null
-
-          for (;;) {
-            const { value, done } = await reader.read()
-            if (done) break
-            if (reqRef.current !== token) {
-              await reader.cancel()
-              return
-            }
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() ?? ''
-            for (const line of lines) {
-              const trimmed = line.trim()
-              if (!trimmed.startsWith('data:')) continue
-              const payload = trimmed.slice(5).trim()
-              if (!payload || payload === '[DONE]') continue
-              try {
-                const evt = JSON.parse(payload) as
-                  | { t: 'delta'; v: string }
-                  | { t: 'meta'; v: Omit<AssistantResult, 'reply'> }
-                  | { t: 'error' }
-                if (evt.t === 'delta') {
-                  streamed += evt.v
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === asstId ? { ...m, content: streamed } : m,
-                    ),
-                  )
-                } else if (evt.t === 'meta') {
-                  meta = evt.v
-                } else if (evt.t === 'error') {
-                  throw new Error('generation error')
-                }
-              } catch {
-                /* ignore malformed line */
-              }
-            }
-          }
-
-          if (reqRef.current !== token) return
-          await applyResult({
-            reply: streamed.trim() || 'Готово.',
-            actions: meta?.actions ?? [],
-            openPanel: meta?.openPanel ?? null,
-            credentialRequest: meta?.credentialRequest ?? null,
-            launchedDeploy: meta?.launchedDeploy ?? null,
-            dataChanged: meta?.dataChanged ?? false,
-            source: meta?.source ?? 'ai',
-          })
+          const res = await streamServersAssistantReply(
+            historyTurns,
+            controller.signal,
+            {
+              isCurrent: () => reqRef.current === token,
+              onText: (text) =>
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === asstId ? { ...m, content: text } : m,
+                  ),
+                ),
+            },
+          )
+          // null — запрос устарел, ответом владеет более новый запрос.
+          if (res === null || reqRef.current !== token) return
+          await applyResult(res)
         } catch (err) {
           if (
             reqRef.current !== token ||
