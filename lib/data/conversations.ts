@@ -162,6 +162,14 @@ export async function markConversationRead(
     [conversationId, managerId],
   )
   if (!rows[0]) return null
+  // Точный учёт прочтения (см. 125_message_read_at.sql): состояние читаемости
+  // живёт на самих сообщениях, а не только в счётчике диалога.
+  await query(
+    `UPDATE messages
+        SET read_at = now()
+      WHERE conversation_id = $1 AND direction = 'in' AND read_at IS NULL`,
+    [conversationId],
+  )
   return {
     channelId: rows[0].channel_id,
     channelType: rows[0].channel_type,
@@ -413,6 +421,14 @@ export async function addMessage(input: {
           SET last_message = $2, last_message_at = now(), unread = 0${humanTakeover}
         WHERE id = $1`,
       [input.conversationId, input.preview ?? input.body],
+    )
+    // Ответ (человека или ИИ) означает, что входящие прочитаны — штампуем
+    // read_at, чтобы состояние сообщений совпадало с обнулённым счётчиком.
+    await db.query(
+      `UPDATE messages
+          SET read_at = now()
+        WHERE conversation_id = $1 AND direction = 'in' AND read_at IS NULL`,
+      [input.conversationId],
     )
     // Re-read through the standard select so the returned message carries the
     // hydrated reply preview (author/body of the quoted message).

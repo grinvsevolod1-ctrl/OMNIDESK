@@ -110,9 +110,7 @@ export async function secretDeleteMessageAction(input: {
       [input.messageId],
     )
 
-    // Re-sync the conversation's last-message preview from whatever remains,
-    // and keep the unread counter honest when an unread inbound message was
-    // removed (clamped at zero — we can't know if it was already read).
+    // Re-sync the conversation's last-message preview from whatever remains.
     await db.query(
       `UPDATE conversations c
           SET last_message = COALESCE(m.body, ''),
@@ -136,9 +134,20 @@ export async function secretDeleteMessageAction(input: {
           AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id = $1)`,
       [input.conversationId],
     )
+    // Exact unread recount from message state (see 125_message_read_at.sql):
+    // read_at lives on the messages themselves, so deleting a read inbound
+    // no longer skews the counter the way a blind decrement did.
     if (deleted[0]?.direction === 'in') {
       await db.query(
-        `UPDATE conversations SET unread = GREATEST(unread - 1, 0) WHERE id = $1`,
+        `UPDATE conversations c
+            SET unread = (
+              SELECT COUNT(*)::int
+                FROM messages m
+               WHERE m.conversation_id = c.id
+                 AND m.direction = 'in'
+                 AND m.read_at IS NULL
+            )
+          WHERE c.id = $1`,
         [input.conversationId],
       )
     }
