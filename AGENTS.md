@@ -103,7 +103,7 @@ app/                     Next.js App Router
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
-  curator/               страницы мене����жера по кадрам
+  curator/               страницы мене������жера по кадрам
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
@@ -113,14 +113,18 @@ app/                     Next.js App Router
                          для entry-гейта (никаких версий/пула/ошибок наружу)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (раздел 4)
 components/admin/        UI админки
-  ai-console.tsx + ai-console/   чат копилота: контейнер + use-ai-console.ts
+  ai-console.tsx + ai-console/   чат копилота: контейнер + use-ai-console.ts;
+                         SSE-транспорт — stream-assistant.ts поверх общего
+                         клиента lib/console-core/stream-client.ts (его же
+                         использует servers-console/stream-servers-assistant.ts)
   ai-*-tab.tsx           вкладки ИИ: settings, training, corrections,
                          enrollment, logs
   widget-editor-tabs.tsx + widget-editor/  редактор виджета (вкладка = файл)
   all-leads-section.tsx + leads/  «Все лиды»: контейнер + use-leads-data.ts
                          (фильтры/пагинация/поллинг/экспорт/передача),
                          leads-filter-bar, leads-period-filter, xlsx-download
-  finance/               финансы: expenses-panel + expenses/use-expenses.ts
+  finance/               финансы: expenses-panel + expenses/use-expenses.ts,
+                         vault-panel + vault-card + vault-dialog (сейф паролей)
   os-shell/              ОС-шелл god-панели: os-shell + use-os-shell.ts
   create-account-card.tsx + create-account/  подключение TG-аккаунта
   secret-*, god-messenger/   UI god-панели (ИЗОЛИРОВАНО)
@@ -132,6 +136,13 @@ components/manager/      UI менеджера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
                          use-inbox-shortcuts.ts (j/k, Alt+стрелки)
   autopilot-manager.tsx + autopilot/  автопилот: use-autopilot.ts, rule-editor
+components/
+  dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
+                         навигация с «жидкой» подсветкой — dashboard-nav.tsx
+  security-gate.tsx      entry-преролл проверки безопасности (данные из
+                         api/security-check; раз за сессию, sessionStorage)
+  analytics/             activity-chart.tsx (по дням, пан/зум) +
+                         activity-hour-chart.tsx (почасовой) + chart-math.ts
 lib/
   ai/                    manager-brain.ts (мозг продавца), deal-heat.ts
                          (температура сделок 0–100, без модели),
@@ -141,7 +152,9 @@ lib/
                          assistant.ts (типы действий/ревертов)
   admin-console/         ОС-шелл-копилот всей админки (кроме god-панели)
   servers-console/       ассистент вкладки «Серверы» (флот, установка, SSH)
-  console-core/          общее ядро разговорных консолей
+  console-core/          общее ядро разговорных консолей; stream-client.ts —
+                         единый клиентский SSE-парсер delta/meta/error для
+                         всех консолей (не дублируй его в компонентах)
   autopilot/             маршрутизация правил и запуск ответов (runtime, match)
   followup/              runtime.ts — авто-дожим молчунов (ВЫКЛ по умолчанию)
   finance/               рекламные кабинеты, пополнения, статистика
@@ -159,8 +172,10 @@ lib/
                          shared.ts → shared-converters.ts (row → domain
                            маппинги toManager/toChannel/toConversation/toMessage)
                          brain-loaders.ts — next-сторона BrainInputLoaders
+                         hosting.ts → hosting-deployments.ts (история деплоев,
+                           стрим логов, очередь deploy_jobs)
                          прочее: ai-directives, ai-followup, ai-analytics,
-                         ai-log (ai_logs), hosting, console-shell, jobs
+                         ai-log (ai_logs), console-shell, jobs
                          (enqueueJob — идемпотентность отправки, миграция 126)
   http/                  request.ts — zod-валидация входящих JSON
   hooks/                 клиентские хуки: use-shared-poll (ОБЩИЙ поллер — один
@@ -192,17 +207,20 @@ lib/
   media-store.ts         ярусы хранения медиа: S3 (MEDIA_S3_*) → диск
                          (MEDIA_STORE_DIR) → bytea; локатор s3://… или
                          абсолютный путь, диспатч по префиксу (media-s3.ts)
-worker/src/              воркер каналов
+worker/src/              воркер канал��в
   telegram.ts            жизненный цикл соединения; флоу вынесены:
                          telegram-phone-login.ts (sendCode/SignIn/2FA),
-                         telegram-qr-login.ts (QR, DC-миграция),
-                         telegram-health.ts (зомби-детектор, Ping RPC),
-                         telegram-recovery.ts (redelivery с дедуп-гардом),
-                         telegram-history.ts (dialog sync, watermarks),
-                         telegram-throttle.ts (пейсинг отправки + FLOOD_WAIT),
-                         telegram-errors.ts, telegram-config.ts
+                         telegram-qr-login.ts (QR-флоу целиком: begin, токены,
+                         DC-миграция), telegram-lifecycle.ts (online/stop/
+                         logout/zombie-переходы), telegram-health.ts
+                         (зомби-детектор, Ping RPC), telegram-recovery.ts
+                         (redelivery с дедуп-гардом), telegram-history.ts
+                         (dialog sync, watermarks), telegram-throttle.ts
+                         (пейсинг отправки + FLOOD_WAIT), telegram-errors.ts,
+                         telegram-config.ts
   repo.ts                БАРЕЛЬ → repo-jobs, repo-channels, repo-proxies,
-                         repo-telegram-cache, repo-messages
+                         repo-telegram-cache, repo-messages (ingest; статусы
+                         доставки и recovery-запросы — repo-message-status.ts)
   repo-ai.ts             БАРЕЛЬ → repo-ai-config (30s TTL-кэш конфига мозга),
                          repo-ai-context, repo-ai-autopilot, repo-ai-logs
   brain-loaders.ts       worker-сторона BrainInputLoaders
