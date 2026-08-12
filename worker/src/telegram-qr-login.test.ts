@@ -66,11 +66,24 @@ import * as repo from './repo.js'
 
 function makeFakeClient() {
   return {
-    invoke: vi.fn(async (): Promise<unknown> => ({})),
+    // The request parameter matters: mock.calls derives its tuple type from
+    // this signature, and the DC-migration test inspects calls[1][0].
+    invoke: vi.fn(async (_req: unknown): Promise<unknown> => ({})),
     addEventHandler: vi.fn(),
     removeEventHandler: vi.fn(),
     _switchDC: vi.fn(async () => {}),
   }
+}
+
+/**
+ * The runtime class is our arg-less mock, but TypeScript sees the real GramJS
+ * constructor which demands an `authorization` payload — bypass it via cast.
+ */
+function loginSuccess(): InstanceType<typeof Api.auth.LoginTokenSuccess> {
+  const Ctor = Api.auth.LoginTokenSuccess as unknown as new () => InstanceType<
+    typeof Api.auth.LoginTokenSuccess
+  >
+  return new Ctor()
 }
 type FakeClient = ReturnType<typeof makeFakeClient>
 
@@ -123,7 +136,7 @@ describe('TelegramQrLogin.exportToken', () => {
 
   it('completes login when Telegram reports the token already consumed', async () => {
     const { qr, deps, client } = makeHarness()
-    client!.invoke.mockResolvedValue(new Api.auth.LoginTokenSuccess())
+    client!.invoke.mockResolvedValue(loginSuccess())
 
     const status = await qr.exportToken()
 
@@ -147,7 +160,7 @@ describe('TelegramQrLogin DC migration', () => {
       .mockResolvedValueOnce(
         new Api.auth.LoginTokenMigrateTo({ dcId: 4, token: Buffer.from('t') }),
       )
-      .mockResolvedValueOnce(new Api.auth.LoginTokenSuccess())
+      .mockResolvedValueOnce(loginSuccess())
 
     const status = await qr.exportToken()
 
@@ -199,7 +212,7 @@ describe('TelegramQrLogin scan listener', () => {
   it('finalizes the login when UpdateLoginToken arrives', async () => {
     const { qr, deps, client } = makeHarness()
     // finalize() re-exports: consumed token → complete → online.
-    client!.invoke.mockResolvedValue(new Api.auth.LoginTokenSuccess())
+    client!.invoke.mockResolvedValue(loginSuccess())
 
     qr.attachScanListener()
     expect(client!.addEventHandler).toHaveBeenCalledOnce()
