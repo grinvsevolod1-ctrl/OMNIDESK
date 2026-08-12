@@ -43,6 +43,7 @@ import {
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
 } from '@/lib/lead-status'
+import { useLeadEvents } from '@/lib/hooks/use-lead-events'
 import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import { mskDayKey } from '@/lib/time'
 import { cn } from '@/lib/utils'
@@ -146,14 +147,14 @@ export function ManagerLeadsView({
     [range.from, range.to, status],
   )
 
-  // Фоновый пуллинг каждые 5с: список и статистика обновляются сами,
-  // новые лиды подсвечиваются. Без спиннеров.
+  // Push + редкий poll-фолбэк: SSE-событие `lead` (миграция 127) мгновенно
+  // пинает поллер через pokeSharedPoll, интервал растянут до 60с — страховка
+  // на потерянный NOTIFY / отвалившийся SSE. Новые лиды подсвечиваются.
   const pollArgsRef = useRef({ range, status, offset })
   useEffect(() => {
     pollArgsRef.current = { range, status, offset }
   }, [range, status, offset])
-  // Фоновый пуллинг через общий поллер: один таймер, без наложения запросов,
-  // скрытые вкладки не опрашивают сервер.
+  useLeadEvents('manager-leads')
   useSharedPoll('manager-leads', async () => {
     const a = pollArgsRef.current
     const [list, st] = await Promise.all([
@@ -187,7 +188,7 @@ export function ManagerLeadsView({
         })
       }, 6000)
     }
-  })
+  }, 60_000)
 
   // Refetch whenever the resolved period or the status filter changes.
   // The very first render already has server-fetched data for the default

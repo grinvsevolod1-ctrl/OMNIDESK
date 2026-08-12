@@ -46,6 +46,18 @@ async function runTick(ch: Channel): Promise<void> {
 }
 
 /**
+ * Run a channel's tick immediately, outside its interval — the push half of
+ * the poll/push hybrid: an SSE event (new lead, resync) pokes the existing
+ * poller instead of duplicating its fetch logic. All guarantees hold: no
+ * stacked requests (in-flight tick absorbs the poke), hidden tabs stay
+ * silent, unknown keys are a no-op (the view simply isn't mounted).
+ */
+export function pokeSharedPoll(key: string): void {
+  const ch = channels.get(key)
+  if (ch) void runTick(ch)
+}
+
+/**
  * Poll `tick` every `intervalMs` on the shared channel `key`. Subscribers of
  * the same key share one interval; it starts with the first subscriber and
  * stops with the last.

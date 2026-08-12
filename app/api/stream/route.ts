@@ -26,6 +26,7 @@ export async function GET(request: Request): Promise<Response> {
     return new Response('Unauthorized', { status: 401 })
   }
   const managerId = session.sub
+  const isAdmin = session.role === 'admin'
   const lastEventId = request.headers.get('last-event-id')
 
   const encoder = new TextEncoder()
@@ -118,6 +119,20 @@ export async function GET(request: Request): Promise<Response> {
         // which the client already understands as "re-fetch everything".
         if (event.type === 'resync') {
           send('update', { type: 'conversation', managerId, event: 'resync' })
+          return
+        }
+        // Lead-card events (migration 127) are scoped differently from the
+        // rest: a card belongs to a manager AND (optionally) a curator, and
+        // admins see every lead. Handle before the manager-only filter below.
+        // No `id` — leads are refetched in full, never replayed from a gap.
+        if (event.type === 'lead') {
+          if (
+            isAdmin ||
+            event.managerId === managerId ||
+            event.curatorId === managerId
+          ) {
+            send('lead', { type: 'lead' })
+          }
           return
         }
         // Only deliver events scoped to this manager.

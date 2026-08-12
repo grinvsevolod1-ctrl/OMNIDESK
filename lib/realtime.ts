@@ -24,7 +24,14 @@ export interface RealtimeEvent {
    * while the connection was down is lost forever, so subscribers must
    * re-fetch their data instead of trusting the gap was empty.
    */
-  type: 'message' | 'conversation' | 'channel' | 'typing' | 'presence' | 'resync'
+  type:
+    | 'message'
+    | 'conversation'
+    | 'channel'
+    | 'typing'
+    | 'presence'
+    | 'lead'
+    | 'resync'
   /**
    * For message events: 'insert' (new message) or 'update' (a message changed
    * in place — reaction toggled or soft-deleted). Absent for legacy/other
@@ -50,6 +57,12 @@ export interface RealtimeEvent {
   presence?: 'open' | 'minimized' | 'away' | 'left'
   authorName?: string
   managerId?: string
+  /**
+   * Lead-card events ('lead', migration 127): the curator who owns the card.
+   * Both managerId and curatorId may be set; the SSE route delivers the event
+   * to whichever of the two is connected (and to admins, who see all leads).
+   */
+  curatorId?: string | null
   channelId?: string
   channelType?: string
   conversationId?: string

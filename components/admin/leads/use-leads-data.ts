@@ -9,6 +9,7 @@ import {
 } from '@/app/actions/lead-cards'
 import { exportLeadsExcelAction } from '@/app/actions/leads-export'
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value'
+import { useLeadEvents } from '@/lib/hooks/use-lead-events'
 import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import type { LeadCard } from '@/lib/data/lead-cards'
 import type { LeadCardStats } from '@/lib/data/lead-stats'
@@ -198,9 +199,12 @@ export function useLeadsData({
     [refresh],
   )
 
-  // Фоновый пуллинг каждые 5с через общий поллер (один таймер на раздел,
-  // защита от наложения запросов, пропуск скрытых вкладок). Список обновляется
-  // сам, новые лиды подсвечиваются. Без startTransition — никаких спиннеров.
+  // Push + редкий poll-фолбэк: SSE-событие `lead` (миграция 127) мгновенно
+  // пинает этот поллер через pokeSharedPoll, а сам интервал растянут до 60с —
+  // страховка на случай потерянного NOTIFY или отвалившегося SSE. Общий
+  // поллер сохраняет все гарантии (один таймер, без наложений, скрытые
+  // вкладки молчат). Без startTransition — никаких спиннеров.
+  useLeadEvents('admin-leads')
   useSharedPoll('admin-leads', async () => {
     const f = stateRef.current
     const range = presetRange(f.preset, f.day, f.from, f.to)
@@ -236,7 +240,7 @@ export function useLeadsData({
         })
       }, 6000)
     }
-  })
+  }, 60_000)
 
   /** Выгрузка текущей выборки (все страницы, без пагинации) в .xlsx. */
   const exportExcel = useCallback(() => {
