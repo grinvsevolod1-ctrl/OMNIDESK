@@ -5,10 +5,13 @@
  * с фильтрами таблицы (или вся база при пустых фильтрах), батчами по 500 —
  * рассчитано на 1500+ лидов без нагрузки на память.
  */
-import { requireAdmin } from '@/lib/auth'
+import { requireAdmin, requireCurator } from '@/lib/auth'
 import {
   listAllTransferredLeads,
+  listArchivedLeadsForCurator,
+  listLeadCardsForCurator,
   type AllLeadsFilter,
+  type LeadCard,
 } from '@/lib/data/lead-cards'
 import { isLeadStatus, LEAD_STATUS_LABELS } from '@/lib/lead-status'
 
@@ -124,6 +127,73 @@ export async function exportLeadsExcelAction(filter: {
       base64: Buffer.from(buf).toString('base64'),
       fileName: `лиды-${day}.xlsx`,
       rows,
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof Error ? e.message : 'Ошибка выгрузки',
+    }
+  }
+}
+
+/**
+ * Выгрузка «Моих лидов» менеджера по кадрам — та же книга, что у админа,
+ * но только собственные лиды (активные или архив) и без колонки «Менеджер
+ * по кадрам» (она всегда = самому сотруднику). Объём небольшой (сотни),
+ * поэтому без батчей — одним списком.
+ */
+export async function exportMyLeadsExcelAction(input: {
+  archived?: boolean
+}): Promise<ExportLeadsResult> {
+  const session = await requireCurator()
+  try {
+    const leads: LeadCard[] = input.archived
+      ? await listArchivedLeadsForCurator(session.sub)
+      : await listLeadCardsForCurator(session.sub)
+
+    const ExcelJS = (await import('exceljs')).default
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet('Мои лиды', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    })
+    ws.columns = [
+      { header: 'Дата передачи', key: 'date', width: 17 },
+      { header: 'ФИО', key: 'name', width: 28 },
+      { header: 'Телефон', key: 'phone', width: 17 },
+      { header: 'Telegram', key: 'tg', width: 20 },
+      { header: 'Город', key: 'city', width: 18 },
+      { header: 'Должность', key: 'vacancy', width: 16 },
+      { header: 'Статус', key: 'status', width: 18 },
+      { header: 'Менеджер', key: 'manager', width: 22 },
+      { header: 'Адрес', key: 'address', width: 30 },
+    ]
+    ws.getRow(1).font = { bold: true }
+
+    for (const l of leads.slice(0, MAX_ROWS)) {
+      ws.addRow({
+        date: fmtDate(l.transferredAt),
+        name: l.fullName,
+        phone: l.phone,
+        tg: l.telegramUsername ? `@${l.telegramUsername}` : '',
+        city: l.city,
+        vacancy: l.vacancy,
+        status: l.status ? LEAD_STATUS_LABELS[l.status] : 'Без статуса',
+        manager: l.managerName ?? '',
+        address: l.address,
+      })
+    }
+
+    const buf = await wb.xlsx.writeBuffer()
+    const day = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Moscow',
+    })
+      .format(new Date())
+      .replace(/\./g, '-')
+    return {
+      ok: true,
+      base64: Buffer.from(buf).toString('base64'),
+      fileName: `мои-лиды${input.archived ? '-архив' : ''}-${day}.xlsx`,
+      rows: Math.min(leads.length, MAX_ROWS),
     }
   } catch (e) {
     return {

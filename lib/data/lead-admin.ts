@@ -94,7 +94,9 @@ export async function listAllTransferredLeads(
     )
   }
 
-  // Единый поиск: одно поле — дата / ФИО / телефон / @username / город / регион.
+  // Единый поиск: одно поле — дата / ФИО / телефон / @username / город /
+  // регион / имя сотрудника (менеджер или менеджер по кадрам). Сотрудники —
+  // через EXISTS, а не JOIN: условие делится с count-запросом, где джойнов нет.
   if (filter.search?.trim()) {
     const { day, text } = parseLeadSearch(filter.search)
     if (day) {
@@ -116,6 +118,11 @@ export async function listAllTransferredLeads(
                JOIN regions rg ON rg.id = ci.region_id
               WHERE ci.name_norm = lower(lc.city)
                 AND lower(rg.name) LIKE lower(${p})
+             )
+          OR EXISTS (
+               SELECT 1 FROM managers mm
+              WHERE mm.id IN (lc.manager_id, lc.curator_id)
+                AND lower(mm.name) LIKE lower(${p})
              ))`,
       )
     }

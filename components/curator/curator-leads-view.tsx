@@ -14,15 +14,19 @@ import {
   Archive,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
+  FileSpreadsheet,
   LayoutGrid,
   List,
   ListFilter,
+  Loader2,
   Search,
   User,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { setLeadArchivedAction } from '@/app/actions/lead-cards'
+import { exportMyLeadsExcelAction } from '@/app/actions/leads-export'
+import { downloadBase64Xlsx } from '@/components/admin/leads/xlsx-download'
 import { CuratorLeadRow } from '@/components/curator/curator-lead-row'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { StatusReminder } from '@/components/curator/status-reminder'
@@ -59,6 +63,7 @@ export function CuratorLeadsView({
   const [leads, setLeads] = useState(initialLeads)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
+  const [exporting, startExport] = useTransition()
   // Minute tick so the 10:00 MSK deadline kicks in live, without a reload.
   const [tick, setTick] = useState(0)
 
@@ -138,6 +143,22 @@ export function CuratorLeadsView({
     [refresh],
   )
 
+  // Выгрузка текущей вкладки (активные/архив) в Excel — как у админа:
+  // server action собирает .xlsx и возвращает base64, клиент скачивает.
+  const exportExcel = useCallback(() => {
+    startExport(async () => {
+      const res = await exportMyLeadsExcelAction({
+        archived: tab === 'archive',
+      })
+      if (res.ok && res.base64 && res.fileName) {
+        downloadBase64Xlsx(res.base64, res.fileName)
+        toast.success(`Выгружено лидов: ${res.rows ?? 0}`)
+      } else {
+        toast.error(res.message ?? 'Ошибка выгрузки')
+      }
+    })
+  }, [tab])
+
   // Клиентская фильтрация: лидов у одного сотрудника немного (сотни),
   // сервер не нужен — фильтр и поиск мгновенные.
   const filtered = useMemo(() => {
@@ -212,8 +233,8 @@ export function CuratorLeadsView({
 
       {/* Панель фильтров — в стиле админской таблицы */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* Вкладки Активные / Архив */}
-        <div className="flex items-center gap-1 rounded-xl border border-border bg-muted/30 p-1">
+        {/* Вкладки Активные / Архив — h-9, как все контролы строки */}
+        <div className="flex h-9 items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
           <button
             type="button"
             onClick={() => {
@@ -221,7 +242,7 @@ export function CuratorLeadsView({
               setVisible(PAGE)
             }}
             className={cn(
-              'rounded-lg px-3 py-1.5 text-sm transition-colors',
+              'flex h-7 items-center rounded-md px-3 text-sm transition-colors',
               tab === 'active'
                 ? 'bg-background font-medium shadow-sm'
                 : 'text-muted-foreground hover:text-foreground',
@@ -236,13 +257,13 @@ export function CuratorLeadsView({
               setVisible(PAGE)
             }}
             className={cn(
-              'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors',
+              'flex h-7 items-center gap-1.5 rounded-md px-3 text-sm transition-colors',
               tab === 'archive'
                 ? 'bg-background font-medium shadow-sm'
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            <Archive className="size-3.5" />
+            <Archive className="size-4 shrink-0" />
             Архив
           </button>
         </div>
@@ -253,7 +274,7 @@ export function CuratorLeadsView({
         >
           <SelectTrigger
             className={cn(
-              'h-10 gap-2 font-medium transition-all duration-300',
+              'h-9 gap-2 font-medium transition-all duration-300',
               searchExpanded && 'max-w-40',
             )}
             aria-label="Фильтр по статусу"
@@ -287,7 +308,7 @@ export function CuratorLeadsView({
             searchExpanded ? 'flex-1 basis-64' : 'flex-none basis-44',
           )}
         >
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -304,7 +325,7 @@ export function CuratorLeadsView({
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
               aria-label="Очистить поиск"
             >
-              <X className="size-3.5" />
+              <X className="size-4" />
             </button>
           ) : null}
         </div>
@@ -312,33 +333,52 @@ export function CuratorLeadsView({
         <Button
           variant="outline"
           size="sm"
+          className="h-9"
           onClick={() => setSort((s) => (s === 'newest' ? 'oldest' : 'newest'))}
           aria-label="Переключить сортировку"
           title={sort === 'newest' ? 'Сначала новые' : 'Сначала старые'}
         >
           {sort === 'newest' ? (
-            <ArrowDownWideNarrow className="size-3.5" />
+            <ArrowDownWideNarrow className="size-4 shrink-0" />
           ) : (
-            <ArrowUpNarrowWide className="size-3.5" />
+            <ArrowUpNarrowWide className="size-4 shrink-0" />
           )}
           {!searchExpanded ? (sort === 'newest' ? 'Новые' : 'Старые') : null}
         </Button>
 
-        {/* Переключатель вида: список / карточки */}
-        <div className="flex items-center rounded-lg border border-border p-0.5">
+        {/* Выгрузка текущей вкладки в Excel — как у админа */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9"
+          disabled={exporting}
+          onClick={exportExcel}
+          aria-label="Выгрузить в Excel"
+          title="Выгрузить текущую вкладку в Excel"
+        >
+          {exporting ? (
+            <Loader2 className="size-4 shrink-0 animate-spin" />
+          ) : (
+            <FileSpreadsheet className="size-4 shrink-0" />
+          )}
+          {!searchExpanded ? 'Excel' : null}
+        </Button>
+
+        {/* Переключатель вида: список / карточки — h-9, как все контролы */}
+        <div className="flex h-9 items-center rounded-lg border border-border p-1">
           <button
             type="button"
             onClick={() => switchView('list')}
             aria-label="Вид: список"
             aria-pressed={view === 'list'}
             className={cn(
-              'flex size-7 items-center justify-center rounded-md transition-colors',
+              'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
               view === 'list'
                 ? 'bg-muted text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            <List className="size-4" />
+            <List className="size-4 shrink-0" />
           </button>
           <button
             type="button"
@@ -346,13 +386,13 @@ export function CuratorLeadsView({
             aria-label="Вид: карточки"
             aria-pressed={view === 'grid'}
             className={cn(
-              'flex size-7 items-center justify-center rounded-md transition-colors',
+              'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
               view === 'grid'
                 ? 'bg-muted text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            <LayoutGrid className="size-4" />
+            <LayoutGrid className="size-4 shrink-0" />
           </button>
         </div>
       </div>

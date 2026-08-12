@@ -57,8 +57,13 @@ export function LeadsTrashDialog({ onChanged }: { onChanged: () => void }) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
-          <Button variant="outline" size="sm" aria-label="Корзина лидов">
-            <Trash2 className="size-3.5" />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9"
+            aria-label="Корзина лидов"
+          >
+            <Trash2 className="size-4 shrink-0" />
             Корзина
           </Button>
         }

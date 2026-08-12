@@ -77,7 +77,7 @@ export function LeadsFilterBar({
       >
         <SelectTrigger
           className={cn(
-            'h-10 gap-2 font-medium transition-all duration-300',
+            'h-9 gap-2 font-medium transition-all duration-300',
             searchExpanded ? 'max-w-52' : 'max-w-72',
           )}
           aria-label="Фильтр по менеджеру по кадрам"
@@ -107,7 +107,7 @@ export function LeadsFilterBar({
         onValueChange={(v) => onStatusChange((v as string) ?? '')}
       >
         <SelectTrigger
-          className="h-10 gap-2 font-medium"
+          className="h-9 gap-2 font-medium"
           aria-label="Фильтр по статусу"
         >
           <ListFilter className="size-4 shrink-0 text-muted-foreground" />
@@ -141,7 +141,7 @@ export function LeadsFilterBar({
           searchExpanded ? 'flex-1 basis-64' : 'flex-none basis-44',
         )}
       >
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         {/* Поиск в реальном времени: debounce 350мс, Enter не нужен. */}
         <Input
           value={search}
@@ -150,7 +150,7 @@ export function LeadsFilterBar({
           onBlur={onSearchBlur}
           placeholder={
             searchExpanded
-              ? 'Дата, ФИО, телефон, @username, город, регион…'
+              ? 'Дата, ФИО, телефон, @username, город, сотрудник…'
               : 'Поиск'
           }
           className="h-9 pl-8 pr-8"
@@ -163,7 +163,7 @@ export function LeadsFilterBar({
             className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
             aria-label="Очистить поиск"
           >
-            <X className="size-3.5" />
+            <X className="size-4" />
           </button>
         ) : null}
       </div>
@@ -171,14 +171,15 @@ export function LeadsFilterBar({
       <Button
         variant="outline"
         size="sm"
+        className="h-9"
         onClick={onToggleSort}
         aria-label="Переключить сортировку"
         title={sort === 'newest' ? 'Сначала новые' : 'Сначала старые'}
       >
         {sort === 'newest' ? (
-          <ArrowDownWideNarrow className="size-3.5" />
+          <ArrowDownWideNarrow className="size-4 shrink-0" />
         ) : (
-          <ArrowUpNarrowWide className="size-3.5" />
+          <ArrowUpNarrowWide className="size-4 shrink-0" />
         )}
         {/* Пока поиск раскрыт — только иконки, чтобы всё влезло в строку */}
         {!searchExpanded ? (sort === 'newest' ? 'Новые' : 'Старые') : null}
@@ -187,15 +188,16 @@ export function LeadsFilterBar({
       <Button
         variant="outline"
         size="sm"
+        className="h-9"
         disabled={exporting}
         onClick={onExport}
         aria-label="Выгрузить в Excel"
         title="Выгрузить текущую выборку в Excel"
       >
         {exporting ? (
-          <Loader2 className="size-3.5 animate-spin" />
+          <Loader2 className="size-4 shrink-0 animate-spin" />
         ) : (
-          <FileSpreadsheet className="size-3.5" />
+          <FileSpreadsheet className="size-4 shrink-0" />
         )}
         {!searchExpanded ? 'Excel' : null}
       </Button>
