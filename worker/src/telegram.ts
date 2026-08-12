@@ -123,17 +123,11 @@ export class TelegramSession {
    */
   private loginTimer: ReturnType<typeof setTimeout> | null = null
   /**
-   * Live QR-login state (tg://login deep link + expiry). Held in worker memory
-   * only — like the session string before login, it must never touch the DB in
-   * plaintext. The panel fetches it via the worker's internal HTTP API.
+   * QR-login state machine (see telegram-qr-login.ts). Holds the live deep
+   * link in worker memory only; hands 2FA and completion back to this class
+   * via callbacks so login state never leaves the session.
    */
-  private qrLogin: { url: string; expiresAt: number } | null = null
-  /** Re-export timer: Telegram QR tokens live ~30s, so refresh while pending. */
-  private qrTimer: ReturnType<typeof setTimeout> | null = null
-  /** Guards against concurrent finalize attempts (update + poll racing). */
-  private qrFinalizing = false
-  /** The UpdateLoginToken listener, kept so clearQr can detach it. */
-  private qrUpdateHandler: ((update: Api.TypeUpdate) => void) | null = null
+  private readonly qr: TelegramQrLogin
   /**
    * The narrow view of this session the split-out feature modules operate on.
    * Accessors re-read live state so a disconnect or pause mid-sweep is seen at
@@ -157,6 +151,14 @@ export class TelegramSession {
       channelId,
       getClient: () => this.client,
       onZombie: () => this.onZombieConnection(),
+    })
+    this.qr = new TelegramQrLogin({
+      channelId,
+      getClient: () => this.client,
+      authLogger: () => this.authLogger(),
+      armLoginTimer: () => this.armLoginTimer(),
+      afterLogin: () => this.afterLogin(),
+      fail: (e) => this.fail(e),
     })
     this.resolveTarget = createTargetResolver({
       channelId,
