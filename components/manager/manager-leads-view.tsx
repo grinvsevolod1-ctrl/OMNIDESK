@@ -11,7 +11,9 @@ import {
 import {
   ArrowRightLeft,
   CalendarDays,
+  FileSpreadsheet,
   ListFilter,
+  Loader2,
   UserPlus,
   Users,
 } from 'lucide-react'
@@ -20,6 +22,8 @@ import {
   getMyLeadCardStatsAction,
   listMyLeadCardsAction,
 } from '@/app/actions/lead-cards'
+import { exportManagerLeadsExcelAction } from '@/app/actions/leads-export'
+import { downloadBase64Xlsx } from '@/components/admin/leads/xlsx-download'
 import { ManagerLeadDetailPanel } from '@/components/manager/manager-lead-detail-panel'
 import { ManagerLeadRow } from '@/components/manager/manager-lead-row'
 import { StatCard } from '@/components/page-parts'
@@ -106,6 +110,7 @@ export function ManagerLeadsView({
   const [offset, setOffset] = useState(0)
   const [stats, setStats] = useState(initialStats)
   const [pending, startTransition] = useTransition()
+  const [exporting, startExport] = useTransition()
 
   // Realtime: подсветка лидов, появившихся при фоновом пуллинге.
   const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set())
@@ -146,6 +151,27 @@ export function ManagerLeadsView({
     },
     [range.from, range.to, status],
   )
+
+  // Выгрузка текущей выборки (период + статус) в Excel — как у админа и
+  // менеджера по кадрам: server action собирает .xlsx, клиент скачивает.
+  const exportExcel = useCallback(() => {
+    startExport(async () => {
+      const res = await exportManagerLeadsExcelAction({
+        from: range.from,
+        to: range.to,
+        status: (status ||
+          null) as Parameters<
+          typeof exportManagerLeadsExcelAction
+        >[0]['status'],
+      })
+      if (res.ok && res.base64 && res.fileName) {
+        downloadBase64Xlsx(res.base64, res.fileName)
+        toast.success(`Выгружено лидов: ${res.rows ?? 0}`)
+      } else {
+        toast.error(res.message ?? 'Ошибка выгрузки')
+      }
+    })
+  }, [range.from, range.to, status])
 
   // Push + редкий poll-фолбэк: SSE-событие `lead` (миграция 127) мгновенно
   // пинает поллер через pokeSharedPoll, интервал растянут до 60с — страховка
@@ -277,7 +303,7 @@ export function ManagerLeadsView({
           onValueChange={(v) => setStatus((v as string) ?? '')}
         >
           <SelectTrigger
-            className="h-10 gap-2 font-medium"
+            className="h-9 gap-2 font-medium"
             aria-label="Фильтр по статусу"
           >
             <ListFilter className="size-4 shrink-0 text-muted-foreground" />
@@ -307,6 +333,24 @@ export function ManagerLeadsView({
             ))}
           </SelectContent>
         </Select>
+
+        {/* Выгрузка текущей выборки (период + статус) в Excel */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9"
+          disabled={exporting}
+          onClick={exportExcel}
+          aria-label="Выгрузить в Excel"
+          title="Выгрузить текущую выборку в Excel"
+        >
+          {exporting ? (
+            <Loader2 className="size-4 shrink-0 animate-spin" />
+          ) : (
+            <FileSpreadsheet className="size-4 shrink-0" />
+          )}
+          Excel
+        </Button>
       </div>
 
       {/* Stats for the selected period */}

@@ -141,6 +141,79 @@ export async function exportLeadsExcelAction(filter: {
 }
 
 /**
+ * Выгрузка «Моих лидов» обычного менеджера — та же книга, что у остальных
+ * ролей, но только собственные лиды с учётом текущих фильтров (период +
+ * статус) и без колонки «Менеджер» (она всегда = самому себе). Вместо неё —
+ * «Менеджер по кадрам», кому передан лид.
+ */
+export async function exportManagerLeadsExcelAction(input: {
+  from?: string | null
+  to?: string | null
+  status?: ManagerLeadFilterStatus
+}): Promise<ExportLeadsResult> {
+  const session = await requireManager()
+  try {
+    const { leads } = await listLeadCardsForManager(session.sub, {
+      from: input.from ?? null,
+      to: input.to ?? null,
+      status: input.status ?? null,
+      limit: MAX_ROWS,
+      offset: 0,
+    })
+
+    const ExcelJS = (await import('exceljs')).default
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet('Мои лиды', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    })
+    ws.columns = [
+      { header: 'Дата создания', key: 'date', width: 17 },
+      { header: 'ФИО', key: 'name', width: 28 },
+      { header: 'Телефон', key: 'phone', width: 17 },
+      { header: 'Telegram', key: 'tg', width: 20 },
+      { header: 'Город', key: 'city', width: 18 },
+      { header: 'Должность', key: 'vacancy', width: 16 },
+      { header: 'Статус', key: 'status', width: 18 },
+      { header: 'Менеджер по кадрам', key: 'curator', width: 24 },
+      { header: 'Адрес', key: 'address', width: 30 },
+    ]
+    ws.getRow(1).font = { bold: true }
+
+    for (const l of leads) {
+      ws.addRow({
+        date: fmtDate(l.createdAt),
+        name: l.fullName,
+        phone: l.phone,
+        tg: l.telegramUsername ? `@${l.telegramUsername}` : '',
+        city: l.city,
+        vacancy: l.vacancy,
+        status: l.status ? LEAD_STATUS_LABELS[l.status] : 'Без статуса',
+        curator: l.curatorName ?? '',
+        address: l.address,
+      })
+    }
+
+    const buf = await wb.xlsx.writeBuffer()
+    const day = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Moscow',
+    })
+      .format(new Date())
+      .replace(/\./g, '-')
+    return {
+      ok: true,
+      base64: Buffer.from(buf).toString('base64'),
+      fileName: `мои-лиды-${day}.xlsx`,
+      rows: leads.length,
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof Error ? e.message : 'Ошибка выгрузки',
+    }
+  }
+}
+
+/**
  * Выгрузка «Моих лидов» менеджера по кадрам — та же книга, что у админа,
  * но только собственные лиды (активные или архив) и без колонки «Менеджер
  * по кадрам» (она всегда = самому сотруднику). Объём небольшой (сотни),
