@@ -88,8 +88,10 @@ app/                     Next.js App Router
                          account.ts → account-profile, account-messaging,
                            account-media
                          leads-export.ts — Excel-выгрузки: exportLeadsExcelAction
-                           (админ, все лиды) и exportMyLeadsExcelAction
-                           (менеджер по кадрам, только свои)
+                           (админ, все лиды), exportMyLeadsExcelAction
+                           (менеджер по кадрам, свои) и
+                           exportManagerLeadsExcelAction (менеджер, свои
+                           с фильтрами периода/статуса)
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
@@ -149,7 +151,9 @@ lib/
   http/                  request.ts — zod-валидация входящих JSON
   hooks/                 клиентские хуки: use-shared-poll (ОБЩИЙ поллер — один
                          interval на канал, скрытые вкладки молчат; используй
-                         его вместо своих setInterval), use-channel-status,
+                         его вместо своих setInterval; pokeSharedPoll — пуш-пинок
+                         поллера извне), use-lead-events (SSE-события 'lead' →
+                         пинок поллера лидов, миграция 127), use-channel-status,
                          use-debounced-value
   types/                 общие TS-типы по доменам, барель index.ts.
                          Импорт: @/lib/types
@@ -236,7 +240,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
 
 ## 8. База данных и миграции
 
-- Схема — `scripts/NNN_*.sql`, нумерация до `126`. Исторические пропуски
+- Схема — `scripts/NNN_*.sql`, нумерация до `127`. Исторические пропуски
   (001→003, 026→030, 035→037) — НЕ ошибка, не переиспользуй номера.
 - Новая миграция: следующий свободный номер, применение `pnpm db:migrate`
   (статус `pnpm db:status`). На проде применяет `deploy.sh` ДО свапа кода.
@@ -251,6 +255,11 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
 - **Алертинг мозга:** `/api/cron/ai-health` (каждые 10 мин): доля ошибок за
   час из `ai_logs`; при ≥30% на ≥5 попытках — маркер health.alert + опц.
   Telegram (`TELEGRAM_ALERT_BOT_TOKEN`/`TELEGRAM_ALERT_CHAT_ID`), кулдаун 6ч.
+- **Realtime лидов** (миграция 127): триггер на `lead_cards` → pg_notify
+  'realtime' (событие `lead` с manager_id/curator_id) → `/api/stream`
+  доставляет по роли (админ — все) → клиент пинает shared-поллер через
+  `pokeSharedPoll`. Поллинг вьюх лидов — редкий фолбэк (60с), не основной
+  механизм. Инбокс живёт на своих событиях message/conversation.
 
 ## 9. Команды проверки (запускай перед завершением)
 
