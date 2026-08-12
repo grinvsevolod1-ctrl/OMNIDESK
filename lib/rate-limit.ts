@@ -115,8 +115,11 @@ function redisConfigured(): boolean {
  * including login brute-force protection. That is a security regression, not
  * just an accuracy issue, so it must never happen quietly.
  *
- * Detection: pm2 cluster mode sets NODE_APP_INSTANCE on every worker.
- * Deployments can also assert the requirement explicitly with
+ * Detection: pm2 cluster mode runs the app as Node `cluster` workers, so
+ * `cluster.isWorker` is true there and ONLY there. (NODE_APP_INSTANCE is NOT
+ * a valid signal — pm2 sets it even for a single fork-mode process, which
+ * would false-positive every standard single-instance deploy and block
+ * logins.) Deployments can also assert the requirement explicitly with
  * RATE_LIMIT_REQUIRE_REDIS=true (recommended for any load-balanced setup pm2
  * can't see, e.g. two VPSes behind one nginx).
  *
@@ -129,7 +132,17 @@ function assertMultiProcessSafety(): void {
   if (multiProcessChecked || redisConfigured()) return
   multiProcessChecked = true
 
-  const inPm2Cluster = process.env.NODE_APP_INSTANCE !== undefined
+  // `cluster.isWorker` is true only when the process was forked by the Node
+  // cluster module — exactly what pm2 cluster mode does. Guarded with a
+  // try/require so runtimes without node:cluster never crash here.
+  let inPm2Cluster = false
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeCluster = require('node:cluster') as { isWorker?: boolean }
+    inPm2Cluster = nodeCluster.isWorker === true
+  } catch {
+    inPm2Cluster = false
+  }
   const explicitlyRequired = process.env.RATE_LIMIT_REQUIRE_REDIS === 'true'
   if (!inPm2Cluster && !explicitlyRequired) return
 
