@@ -66,6 +66,12 @@ app/                     Next.js App Router
                          admin-accounts-bots.ts (VK/MAX-подключение),
                          admin-accounts-maintenance.ts (статус, прокси, удаление),
                          admin-accounts-shared.ts (общие хелперы, НЕ 'use server')
+                         finance.ts — БАРЕЛЬ: finance-workspace.ts (кабинеты,
+                         месяцы), finance-ads.ts (расходы/пополнения),
+                         finance-vault.ts (сейф), finance-shared.ts (хелперы)
+                         account.ts — БАРЕЛЬ: account-profile.ts (профиль,
+                         аватар), account-messaging.ts (отправка, реакции,
+                         правки), account-media.ts (медиа, голос, кружки)
   admin/                 страницы админки
   api/                   роуты, включая api/cron/* (follow-up, dead-letters)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (см. раздел 3)
