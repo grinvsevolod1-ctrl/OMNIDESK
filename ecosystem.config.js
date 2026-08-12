@@ -220,6 +220,22 @@ module.exports = {
       },
     },
     {
+      // Nightly data-retention sweep for append-only tables nothing else
+      // bounds: ai_generation_metrics (365d), admin_audit_log (180d),
+      // hosting_deploy_logs (30d), finished channel_jobs (7d — the worker
+      // also purges at boot, but a healthy worker can run for weeks).
+      // 04:10 — after the backup, so the dump still contains the purged rows.
+      name: 'omnidesk-cron-retention',
+      script: 'scripts/cron-retention.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '10 4 * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
       // Nightly Postgres backup with 7-day rotation (scripts/backup-db.mjs).
       // Dumps with pg_dump -Fc into ~/omnidesk-backups (override with
       // BACKUP_DIR / BACKUP_KEEP_DAYS in the shared .env). 03:30 — after the
