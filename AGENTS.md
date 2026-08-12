@@ -36,7 +36,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `126`.
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `127`.
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: GramJS (Telegram), боты
@@ -45,7 +45,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   (sync-ads, retry-dead-letters, followup, curator-status, console-schedules,
   ai-health, retention), backup-db, db-vacuum, auto-deploy.
 - **Vitest** — юнит-тесты рядом с кодом (`lib/**/*.test.ts` и
-  `worker/src/**/*.test.ts`), сейчас ~239.
+  `worker/src/**/*.test.ts`), сейчас ~255.
 - **Виджет лайв-чата** — `widget-src/livechat.js`, собирается esbuild'ом
   (`scripts/build-widget.mjs`, minify) в `public/livechat.js`. НЕ редактируй
   `public/livechat.js` руками. `pnpm build` собирает виджет автоматически.
@@ -178,8 +178,9 @@ worker/src/              воркер каналов
   autopilot.ts, jobs.ts  запуск ИИ-ответов, обработка джобов
   hosting/               автономный DevOps-агент: agent.ts, ssh.ts,
                          pipeline.ts, agent-safety.ts (блок опасных команд)
-  telegram-phone-login.test.ts  тест-харнесс: мок GramJS-клиента, переходы
-                         логина (resume/code/2FA/рестарт-потеря контекста)
+  telegram-*.test.ts     тест-харнесс на моках GramJS: phone-login (resume/
+                         code/2FA/рестарт), qr-login (токен, DC-миграция,
+                         2FA hand-off), recovery (дедуп, OFFLINE-маркер)
 widget-src/livechat.js   ИСХОДНИК виджета (public/livechat.js — генерат)
 scripts/                 SQL-миграции NNN_*.sql, migrate.mjs, cron-*.mjs,
                          build-widget.mjs, backup-db.mjs
@@ -316,7 +317,9 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 | Лид-карточки (данные) | барель `lib/data/lead-cards.ts`; фильтры/поиск админа — `lib/data/lead-admin.ts` |
 | «Все лиды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
 | «Мои лиды» (менеджер по кадрам) | `components/curator/curator-leads-view.tsx` |
-| Excel-выгрузки лидов | `app/actions/leads-export.ts` (админ + куратор), клиент — `components/admin/leads/xlsx-download.ts` |
+| «Мои лиды» (менеджер) | `components/manager/manager-leads-view.tsx` |
+| Excel-выгрузки лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), клиент — `components/admin/leads/xlsx-download.ts` |
+| Realtime лидов (push) | миграция 127 + `app/api/stream/route.ts` + `lib/hooks/use-lead-events.ts` |
 | Карточка лида (куратор) | `lead-detail-panel.tsx` + `components/curator/lead-detail/*` |
 | Инбокс менеджера | `inbox-view.tsx` + `components/manager/inbox/use-inbox.ts` (+ шорткаты `use-inbox-shortcuts.ts`) |
 | Автопилот (UI) | `autopilot-manager.tsx` + `components/manager/autopilot/*` |
