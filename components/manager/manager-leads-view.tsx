@@ -43,6 +43,7 @@ import {
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
 } from '@/lib/lead-status'
+import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import { mskDayKey } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
@@ -151,55 +152,42 @@ export function ManagerLeadsView({
   useEffect(() => {
     pollArgsRef.current = { range, status, offset }
   }, [range, status, offset])
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      if (document.visibilityState === 'hidden') return
-      const a = pollArgsRef.current
-      try {
-        const [list, st] = await Promise.all([
-          listMyLeadCardsAction({
-            from: a.range.from,
-            to: a.range.to,
-            status: a.status || null,
-            limit: PAGE_SIZE,
-            offset: a.offset,
-          }),
-          getMyLeadCardStatsAction({ from: a.range.from, to: a.range.to }),
-        ])
-        if (cancelled) return
-        const arrived = list.leads
-          .map((l) => l.id)
-          .filter((id) => !knownIdsRef.current.has(id))
-        setLeads(list.leads)
-        setTotal(list.total)
-        setStats(st)
-        for (const id of arrived) knownIdsRef.current.add(id)
-        if (arrived.length > 0) {
-          setFreshIds((prev) => {
-            const next = new Set(prev)
-            for (const id of arrived) next.add(id)
-            return next
-          })
-          setTimeout(() => {
-            if (cancelled) return
-            setFreshIds((prev) => {
-              const next = new Set(prev)
-              for (const id of arrived) next.delete(id)
-              return next
-            })
-          }, 6000)
-        }
-      } catch {
-        // Фоновая ошибка — молча, следующий тик повторит.
-      }
+  // Фоновый пуллинг через общий поллер: один таймер, без наложения запросов,
+  // скрытые вкладки не опрашивают сервер.
+  useSharedPoll('manager-leads', async () => {
+    const a = pollArgsRef.current
+    const [list, st] = await Promise.all([
+      listMyLeadCardsAction({
+        from: a.range.from,
+        to: a.range.to,
+        status: a.status || null,
+        limit: PAGE_SIZE,
+        offset: a.offset,
+      }),
+      getMyLeadCardStatsAction({ from: a.range.from, to: a.range.to }),
+    ])
+    const arrived = list.leads
+      .map((l) => l.id)
+      .filter((id) => !knownIdsRef.current.has(id))
+    setLeads(list.leads)
+    setTotal(list.total)
+    setStats(st)
+    for (const id of arrived) knownIdsRef.current.add(id)
+    if (arrived.length > 0) {
+      setFreshIds((prev) => {
+        const next = new Set(prev)
+        for (const id of arrived) next.add(id)
+        return next
+      })
+      setTimeout(() => {
+        setFreshIds((prev) => {
+          const next = new Set(prev)
+          for (const id of arrived) next.delete(id)
+          return next
+        })
+      }, 6000)
     }
-    const interval = setInterval(tick, 5000)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [])
+  })
 
   // Refetch whenever the resolved period or the status filter changes.
   // The very first render already has server-fetched data for the default

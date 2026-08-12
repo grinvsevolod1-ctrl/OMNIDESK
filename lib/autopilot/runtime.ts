@@ -4,16 +4,13 @@ import { addMessage, getLivechatWorkingHoursByChannelId } from '../data'
 import { applyActiveExperiment } from '../data/ai-experiments'
 import {
   getAiAssistSettings,
-  getConversationAiMemory,
-  getConversationHistoryForAi,
   isConversationAiLed,
-  listBrainLessons,
-  listManualCorrectionRules,
   markAiHandoffToHuman,
   recordAiGenerationMetric,
-  retrieveKnowledge,
   saveConversationAiMemory,
 } from '../data/ai-assist'
+import { assembleBrainInput } from '../ai/assemble-brain-input'
+import { dataBrainLoaders } from '../data/brain-loaders'
 import {
   assessLeadReady,
   type BrainLog,
@@ -23,7 +20,6 @@ import {
   generateManagerReply,
   isBrainConfigured,
 } from '../ai/manager-brain'
-import { directiveTexts } from '../data/ai-directives'
 import { logAi } from '../data/ai-log'
 import { deliverOutboundByChannel } from '../outbound-dispatch'
 import { isOffHoursFor } from '../offhours'
@@ -229,17 +225,12 @@ async function runLivechatAiLead(input: {
       channelType: 'livechat',
     })
 
-    const [lessons, corrections, history, memory, knowledge, directives] =
-      await Promise.all([
-        listBrainLessons(12),
-        listManualCorrectionRules(60),
-        getConversationHistoryForAi(input.conversationId, 16),
-        getConversationAiMemory(input.conversationId),
-        // RAG: retrieve facts relevant to what the client just asked.
-        retrieveKnowledge(input.text, 4),
-        // The chat-driven mandate — admin's plain-language rules, obeyed verbatim.
-        directiveTexts(),
-      ])
+    // Single source of truth for the brain's input context (limits, RAG query
+    // choice) — shared with the worker and follow-up runtimes.
+    const { lessons, corrections, history, memory, knowledge, directives } =
+      await assembleBrainInput(input.conversationId, dataBrainLoaders, {
+        queryText: input.text,
+      })
 
     // Escalation guard: if the client is angry, demands a human, or the dialog
     // is clearly stuck, hand off to a person instead of auto-replying. Uses the
@@ -282,7 +273,7 @@ async function runLivechatAiLead(input: {
         directives: [...exp.extraDirectives, ...directives],
         lessons,
         corrections,
-        memory: memory.summary,
+        memory,
         knowledge,
         aggressiveness: exp.settings.aggressiveness,
         history,
@@ -343,7 +334,7 @@ async function runLivechatAiLead(input: {
         ]
         const summary = await extractClientMemory(
           nextHistory,
-          memory.summary,
+          memory,
           log,
           { model: settings.model },
         )

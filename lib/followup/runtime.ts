@@ -2,14 +2,13 @@ import 'server-only'
 import { addMessage } from '../data'
 import {
   getAiAssistSettings,
-  getConversationAiMemory,
-  getConversationHistoryForAi,
   isConversationAiLed,
-  listBrainLessons,
-  listManualCorrectionRules,
-  retrieveKnowledge,
 } from '../data/ai-assist'
-import { directiveTexts } from '../data/ai-directives'
+import {
+  assembleBrainInput,
+  loadSharedBrainContext,
+} from '../ai/assemble-brain-input'
+import { dataBrainLoaders } from '../data/brain-loaders'
 import { applyActiveExperiment } from '../data/ai-experiments'
 import {
   findFollowupCandidates,
@@ -151,11 +150,7 @@ export async function runFollowupSweep(
 
   // Conversation-independent inputs (lessons, corrections, directives) are the
   // same for every candidate — load them ONCE per sweep, not once per dialog.
-  const [lessons, corrections, directives] = await Promise.all([
-    listBrainLessons(12),
-    listManualCorrectionRules(60),
-    directiveTexts(),
-  ])
+  const shared = await loadSharedBrainContext(dataBrainLoaders)
 
   for (const cand of candidates) {
     try {
@@ -165,20 +160,12 @@ export async function runFollowupSweep(
         continue
       }
 
-      const [history, memory] = await Promise.all([
-        getConversationHistoryForAi(cand.conversationId, 16),
-        getConversationAiMemory(cand.conversationId),
-      ])
-
-      // RAG keyed on the client's last message (an empty query would embed an
-      // empty string — a paid gateway call returning irrelevant results).
-      const lastClientMessage = [...history]
-        .reverse()
-        .find((m) => m.role === 'client')
-        ?.body?.trim()
-      const knowledge = lastClientMessage
-        ? await retrieveKnowledge(lastClientMessage, 4)
-        : ''
+      // Per-dialog context via the shared assembler (RAG keyed on the client's
+      // last message from history — an empty query is never embedded).
+      const { lessons, corrections, directives, history, memory, knowledge } =
+        await assembleBrainInput(cand.conversationId, dataBrainLoaders, {
+          shared,
+        })
 
       const touchNo = cand.touchesInStreak + 1
       // Transient, highest-priority instruction for THIS generation only: write
@@ -211,7 +198,7 @@ export async function runFollowupSweep(
           directives: [followupDirective, ...exp.extraDirectives, ...directives],
           lessons,
           corrections,
-          memory: memory.summary,
+          memory,
           knowledge,
           aggressiveness: exp.settings.aggressiveness,
           history,

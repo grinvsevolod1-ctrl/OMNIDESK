@@ -43,6 +43,8 @@ import {
 } from '../../lib/ai/manager-brain.js'
 import { logger } from './logger.js'
 import * as repo from './repo.js'
+import { assembleBrainInput } from '../../lib/ai/assemble-brain-input.js'
+import { workerBrainLoaders } from './brain-loaders.js'
 
 /** Per-channel anti-ban caps for autopilot auto-sends (messengers only). */
 const RATE_CAP_PER_HOUR = 20
@@ -328,20 +330,14 @@ async function fireAiLead(params: {
       channelType,
     })
 
-    const [lessons, corrections, history, memory] = await Promise.all([
-      repo.listAiLessons(12),
-      repo.listManualCorrectionRules(60),
-      repo.getConversationHistoryForAi(conversationId, 16),
-      repo.getConversationAiMemory(conversationId),
-    ])
-
-    // RAG: retrieve facts relevant to the client's latest message. Derived from
-    // history so it works regardless of how the inbound text was passed in.
-    const lastClientMsg =
-      [...history].reverse().find((m) => m.role === 'client')?.body ?? ''
-    const knowledge = lastClientMsg
-      ? await repo.retrieveKnowledge(lastClientMsg, 4)
-      : ''
+    // Single source of truth for the brain's input context (limits, RAG query
+    // choice) — shared with the livechat and follow-up runtimes. Directives
+    // ride in via the config's 30s TTL cache instead of a fresh query.
+    const { lessons, corrections, history, memory, knowledge, directives } =
+      await assembleBrainInput(
+        conversationId,
+        workerBrainLoaders(config.directives),
+      )
 
     // Escalation guard: angry client / demands a human / stuck dialog → hand off
     // to a person via the handoff path (status → «Передан человеку») instead of
@@ -381,10 +377,10 @@ async function fireAiLead(params: {
         persona: exp.settings.persona,
         tone: exp.settings.tone,
         playbook: config.playbook,
-        directives: [...exp.extraDirectives, ...config.directives],
+        directives: [...exp.extraDirectives, ...directives],
         lessons,
         corrections,
-        memory: memory.summary,
+        memory,
         knowledge,
         aggressiveness: exp.settings.aggressiveness,
         history,
@@ -432,7 +428,7 @@ async function fireAiLead(params: {
         source: 'ai-lead',
         event: 'handover.during_gen',
         message:
-          'Пока ИИ готовил ответ, в диалог вошёл человек — отправка отменена.',
+          'Пока ИИ готовил ответ, в диа��ог вошёл человек — отправка отменена.',
         conversationId,
         channelType,
       })
@@ -473,7 +469,7 @@ async function fireAiLead(params: {
         ]
         const summary = await extractClientMemory(
           nextHistory,
-          memory.summary,
+          memory,
           log,
           { model: config.model },
         )

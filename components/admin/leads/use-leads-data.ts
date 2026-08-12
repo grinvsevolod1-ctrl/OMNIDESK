@@ -9,6 +9,7 @@ import {
 } from '@/app/actions/lead-cards'
 import { exportLeadsExcelAction } from '@/app/actions/leads-export'
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value'
+import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import type { LeadCard } from '@/lib/data/lead-cards'
 import type { LeadCardStats } from '@/lib/data/lead-stats'
 import { type PeriodPreset, presetRange, shiftDay } from './period-range'
@@ -197,59 +198,45 @@ export function useLeadsData({
     [refresh],
   )
 
-  // Фоновый пуллинг каждые 5с: список обновляется сам, новые лиды
-  // подсвечиваются. Без startTransition — никаких спиннеров при фоне.
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      if (document.visibilityState === 'hidden') return
-      const f = stateRef.current
-      const range = presetRange(f.preset, f.day, f.from, f.to)
-      try {
-        const res = await listAllLeadsAdminAction({
-          curatorId: f.curatorId || null,
-          status: f.status || null,
-          search: f.search || null,
-          sort: f.sort,
-          from: range.from,
-          to: range.to,
-          orphanedOnly: f.orphanedOnly,
-          limit: LEADS_PAGE_SIZE,
-          offset: f.offset,
+  // Фоновый пуллинг каждые 5с через общий поллер (один таймер на раздел,
+  // защита от наложения запросов, пропуск скрытых вкладок). Список обновляется
+  // сам, новые лиды подсвечиваются. Без startTransition — никаких спиннеров.
+  useSharedPoll('admin-leads', async () => {
+    const f = stateRef.current
+    const range = presetRange(f.preset, f.day, f.from, f.to)
+    const res = await listAllLeadsAdminAction({
+      curatorId: f.curatorId || null,
+      status: f.status || null,
+      search: f.search || null,
+      sort: f.sort,
+      from: range.from,
+      to: range.to,
+      orphanedOnly: f.orphanedOnly,
+      limit: LEADS_PAGE_SIZE,
+      offset: f.offset,
+    })
+    const arrived = res.leads
+      .map((l) => l.id)
+      .filter((id) => !knownIdsRef.current.has(id))
+    setLeads(res.leads)
+    setTotal(res.total)
+    for (const id of arrived) knownIdsRef.current.add(id)
+    if (arrived.length > 0) {
+      setFreshIds((prev) => {
+        const nextSet = new Set(prev)
+        for (const id of arrived) nextSet.add(id)
+        return nextSet
+      })
+      // Подсветка гаснет через 6 секунд.
+      setTimeout(() => {
+        setFreshIds((prev) => {
+          const nextSet = new Set(prev)
+          for (const id of arrived) nextSet.delete(id)
+          return nextSet
         })
-        if (cancelled) return
-        const arrived = res.leads
-          .map((l) => l.id)
-          .filter((id) => !knownIdsRef.current.has(id))
-        setLeads(res.leads)
-        setTotal(res.total)
-        for (const id of arrived) knownIdsRef.current.add(id)
-        if (arrived.length > 0) {
-          setFreshIds((prev) => {
-            const nextSet = new Set(prev)
-            for (const id of arrived) nextSet.add(id)
-            return nextSet
-          })
-          // Подсветка гаснет через 6 секунд.
-          setTimeout(() => {
-            if (cancelled) return
-            setFreshIds((prev) => {
-              const nextSet = new Set(prev)
-              for (const id of arrived) nextSet.delete(id)
-              return nextSet
-            })
-          }, 6000)
-        }
-      } catch {
-        // Фоновая ошибка — молча, следующий тик повторит.
-      }
+      }, 6000)
     }
-    const interval = setInterval(tick, 5000)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [])
+  })
 
   /** Выгрузка текущей выборки (все страницы, без пагинации) в .xlsx. */
   const exportExcel = useCallback(() => {
