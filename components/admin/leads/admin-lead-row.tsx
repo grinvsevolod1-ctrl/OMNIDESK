@@ -25,18 +25,8 @@ import {
 } from '@/components/ui/tooltip'
 import type { CuratorWithLoad, LeadCard } from '@/lib/data/lead-cards'
 import { leadNeedsDailyStatus } from '@/lib/lead-status'
-import { APP_TIME_ZONE } from '@/lib/time'
+import { formatMskDateTime as formatDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 /**
  * Одна строка лида в админ-таблице. Обёрнута в memo: фоновый пуллинг каждые

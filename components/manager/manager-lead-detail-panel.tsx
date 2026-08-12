@@ -15,19 +15,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { leadStatusLabel } from '@/lib/lead-status'
-import { APP_TIME_ZONE } from '@/lib/time'
+import { formatMskDateTimeFull as formatDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 /**
  * Карточка лида глазами менеджера: статус и история от менеджера по кадрам,
@@ -205,7 +194,7 @@ export function ManagerLeadDetailPanel({
               />
             </div>
 
-            {/* Комментарии: менеджер видит комментарии менеджера по кадрам и пишет свои */}
+            {/* Комментарии: менеджер вид��т комментарии менеджера по кадрам и пишет свои */}
             <div className="flex flex-col gap-3 px-4 py-4 sm:px-5">
               <p className="text-sm font-semibold">Комментарии</p>
               <div className="flex flex-col gap-2">

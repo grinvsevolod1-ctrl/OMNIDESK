@@ -5,18 +5,8 @@ import { MapPin, MessageSquare } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import type { ManagerLeadListItem } from '@/lib/data/lead-stats'
 import { LEAD_STATUS_TONE, leadStatusLabel } from '@/lib/lead-status'
-import { APP_TIME_ZONE } from '@/lib/time'
+import { formatMskDateTime as formatDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 /**
  * Строка лида в списке менеджера. memo: фоновый пуллинг каждые 5с обновляет

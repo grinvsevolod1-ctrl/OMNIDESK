@@ -38,20 +38,9 @@ import {
   leadNeedsDailyStatus,
   type LeadStatus,
 } from '@/lib/lead-status'
-import { APP_TIME_ZONE } from '@/lib/time'
+import { formatMskDateTimeFull as formatDateTime } from '@/lib/time'
 import type { Manager } from '@/lib/types'
 import { cn } from '@/lib/utils'
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 function StatusBadge({
   status,

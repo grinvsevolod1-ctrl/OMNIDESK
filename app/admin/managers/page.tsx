@@ -5,17 +5,8 @@ import { EmptyState, PageHeader } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { listChannels, listManagers } from '@/lib/data'
-import { APP_TIME_ZONE } from '@/lib/time'
+import { formatMskDate as formatDate } from '@/lib/time'
 import type { Manager } from '@/lib/types'
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('ru-RU', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 function pluralChannels(n: number): string {
   const mod10 = n % 10

@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { formatMskDateTimeNumeric } from '@/lib/time'
 import { downloadText } from '@/lib/vault-utils'
 import { useLeadStatusMeta } from '@/components/dictionaries-provider'
 import type { ContactChannelGroup, ContactRecord } from '@/lib/types'
@@ -28,16 +29,6 @@ const CHANNEL_ACCENT: Record<string, string> = {
   max: 'border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   livechat:
     'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 function csvCell(value: string): string {
@@ -229,7 +220,7 @@ export function ContactsAdmin({ groups }: { groups: ContactChannelGroup[] }) {
                           </Badge>
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
-                          {formatDate(c.lastMessageAt)}
+                          {formatMskDateTimeNumeric(c.lastMessageAt)}
                         </td>
                       </tr>
                     ))}

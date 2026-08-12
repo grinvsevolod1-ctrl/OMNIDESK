@@ -26,7 +26,7 @@ import {
 import { toast } from 'sonner'
 import { setLeadArchivedAction } from '@/app/actions/lead-cards'
 import { exportMyLeadsExcelAction } from '@/app/actions/leads-export'
-import { downloadBase64Xlsx } from '@/components/admin/leads/xlsx-download'
+import { useXlsxExport } from '@/components/shared/use-xlsx-export'
 import { CuratorLeadRow } from '@/components/curator/curator-lead-row'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { StatusReminder } from '@/components/curator/status-reminder'
@@ -63,7 +63,7 @@ export function CuratorLeadsView({
   const [leads, setLeads] = useState(initialLeads)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
-  const [exporting, startExport] = useTransition()
+  const { exporting, runExport } = useXlsxExport()
   // Minute tick so the 10:00 MSK deadline kicks in live, without a reload.
   const [tick, setTick] = useState(0)
 
@@ -143,21 +143,11 @@ export function CuratorLeadsView({
     [refresh],
   )
 
-  // Выгрузка текущей вкладки (активные/архив) в Excel — как у админа:
-  // server action собирает .xlsx и возвращает base64, клиент скачивает.
+  // Выгрузка текущей вкладки (активные/архив) в Excel — общий флоу
+  // useXlsxExport (тот же, что у админа и менеджера).
   const exportExcel = useCallback(() => {
-    startExport(async () => {
-      const res = await exportMyLeadsExcelAction({
-        archived: tab === 'archive',
-      })
-      if (res.ok && res.base64 && res.fileName) {
-        downloadBase64Xlsx(res.base64, res.fileName)
-        toast.success(`Выгружено лидов: ${res.rows ?? 0}`)
-      } else {
-        toast.error(res.message ?? 'Ошибка выгрузки')
-      }
-    })
-  }, [tab])
+    runExport(() => exportMyLeadsExcelAction({ archived: tab === 'archive' }))
+  }, [tab, runExport])
 
   // Клиентская фильтрация: лидов у одного сотрудника немного (сотни),
   // сервер не нужен — фильтр и поиск мгновенные.

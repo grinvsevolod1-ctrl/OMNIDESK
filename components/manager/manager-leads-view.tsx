@@ -23,7 +23,12 @@ import {
   listMyLeadCardsAction,
 } from '@/app/actions/lead-cards'
 import { exportManagerLeadsExcelAction } from '@/app/actions/leads-export'
-import { downloadBase64Xlsx } from '@/components/admin/leads/xlsx-download'
+import {
+  type PeriodPreset as AdminPeriodPreset,
+  presetRange,
+  shiftDay,
+} from '@/components/admin/leads/period-range'
+import { useXlsxExport } from '@/components/shared/use-xlsx-export'
 import { ManagerLeadDetailPanel } from '@/components/manager/manager-lead-detail-panel'
 import { ManagerLeadRow } from '@/components/manager/manager-lead-row'
 import { StatCard } from '@/components/page-parts'
@@ -54,35 +59,8 @@ import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 50
 
-type PeriodPreset = 'today' | '7d' | '30d' | 'day' | 'range'
-
-function shiftDay(day: string, deltaDays: number): string {
-  const d = new Date(`${day}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + deltaDays)
-  return d.toISOString().slice(0, 10)
-}
-
-/** Resolve a preset into an inclusive MSK from/to pair. */
-function presetRange(
-  preset: PeriodPreset,
-  day: string,
-  from: string,
-  to: string,
-): { from: string; to: string } {
-  const today = mskDayKey(new Date())
-  switch (preset) {
-    case 'today':
-      return { from: today, to: today }
-    case '7d':
-      return { from: shiftDay(today, -6), to: today }
-    case '30d':
-      return { from: shiftDay(today, -29), to: today }
-    case 'day':
-      return { from: day, to: day }
-    case 'range':
-      return { from, to }
-  }
-}
+/** Пресеты менеджера — без «all»: выборка всегда ограничена периодом. */
+type PeriodPreset = Exclude<AdminPeriodPreset, 'all'>
 
 /**
  * Manager «Мои лиды»: only this manager's lead cards with stats for today /
@@ -110,7 +88,7 @@ export function ManagerLeadsView({
   const [offset, setOffset] = useState(0)
   const [stats, setStats] = useState(initialStats)
   const [pending, startTransition] = useTransition()
-  const [exporting, startExport] = useTransition()
+  const { exporting, runExport } = useXlsxExport()
 
   // Realtime: подсветка лидов, появившихся при фоновом пуллинге.
   const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set())
@@ -118,10 +96,12 @@ export function ManagerLeadsView({
     new Set(initialLeads.map((l) => l.id)),
   )
 
-  const range = useMemo(
-    () => presetRange(preset, day, from, to),
-    [preset, day, from, to],
-  )
+  const range = useMemo(() => {
+    // presetRange допускает null только для пресета 'all', которого у
+    // менеджера нет — подстрахуемся «сегодня», чтобы типы остались строгими.
+    const r = presetRange(preset, day, from, to)
+    return { from: r.from ?? today, to: r.to ?? today }
+  }, [preset, day, from, to, today])
 
   const reload = useCallback(
     (nextOffset = 0) => {
@@ -152,26 +132,20 @@ export function ManagerLeadsView({
     [range.from, range.to, status],
   )
 
-  // Выгрузка текущей выборки (период + статус) в Excel — как у админа и
-  // менеджера по кадрам: server action собирает .xlsx, клиент скачивает.
+  // Выгрузка текущей выборки (период + статус) в Excel — общий флоу
+  // useXlsxExport (тот же, что у админа и менеджера по кадрам).
   const exportExcel = useCallback(() => {
-    startExport(async () => {
-      const res = await exportManagerLeadsExcelAction({
+    runExport(() =>
+      exportManagerLeadsExcelAction({
         from: range.from,
         to: range.to,
         status: (status ||
           null) as Parameters<
           typeof exportManagerLeadsExcelAction
         >[0]['status'],
-      })
-      if (res.ok && res.base64 && res.fileName) {
-        downloadBase64Xlsx(res.base64, res.fileName)
-        toast.success(`Выгружено лидов: ${res.rows ?? 0}`)
-      } else {
-        toast.error(res.message ?? 'Ошибка выгрузки')
-      }
-    })
-  }, [range.from, range.to, status])
+      }),
+    )
+  }, [range.from, range.to, status, runExport])
 
   // Push + редкий poll-фолбэк: SSE-событие `lead` (миграция 127) мгновенно
   // пинает поллер через pokeSharedPoll, интервал растянут до 60с — страховка

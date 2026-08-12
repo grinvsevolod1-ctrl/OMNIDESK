@@ -11,17 +11,8 @@ import type {
   CuratorDiscipline,
   CuratorDisciplineHistory,
 } from '@/lib/data/lead-cards'
-import { APP_TIME_ZONE } from '@/lib/time'
+import { formatMskDate as formatDate } from '@/lib/time'
 import type { Manager } from '@/lib/types'
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('ru-RU', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 function StatusPill({ status }: { status: Manager['status'] }) {
   return (

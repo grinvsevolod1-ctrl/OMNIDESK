@@ -14,21 +14,11 @@ import { Button } from '@/components/ui/button'
 import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import { compressImageFile } from '@/lib/compress-image'
 import type { ConversationVideoNote } from '@/lib/data/lead-attachments'
-import { APP_TIME_ZONE } from '@/lib/time'
+import { formatMskDateTime as formatDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 const MAX_FILES = 10
 const MAX_BYTES = 50 * 1024 * 1024
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
-  })
-}
 
 const ROLE_LABEL: Record<string, string> = {
   manager: 'менеджер',

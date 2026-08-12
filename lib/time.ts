@@ -42,6 +42,40 @@ export function formatMskDateTime(value: string | number | Date): string {
   })
 }
 
+/** "5 июн. 2025 г., 14:30" (short date + year + time) in MSK. */
+export function formatMskDateTimeFull(value: string | number | Date): string {
+  return new Date(value).toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: APP_TIME_ZONE,
+  })
+}
+
+/** "5 июн. 2025 г." (short date + year, no time) in MSK. */
+export function formatMskDate(value: string | number | Date): string {
+  return new Date(value).toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: APP_TIME_ZONE,
+  })
+}
+
+/** "05.06.2025, 14:30" (all-numeric, sortable-looking) in MSK. */
+export function formatMskDateTimeNumeric(value: string | number | Date): string {
+  return new Date(value).toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: APP_TIME_ZONE,
+  })
+}
+
 /**
  * Sortable "YYYY-MM-DD" key for the instant as seen in MSK. Use it to compare
  * whether two instants fall on the same Moscow calendar day.

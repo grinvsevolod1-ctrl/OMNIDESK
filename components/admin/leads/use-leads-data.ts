@@ -13,8 +13,8 @@ import { useLeadEvents } from '@/lib/hooks/use-lead-events'
 import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import type { LeadCard } from '@/lib/data/lead-cards'
 import type { LeadCardStats } from '@/lib/data/lead-stats'
+import { useXlsxExport } from '@/components/shared/use-xlsx-export'
 import { type PeriodPreset, presetRange, shiftDay } from './period-range'
-import { downloadBase64Xlsx } from './xlsx-download'
 
 export const LEADS_PAGE_SIZE = 20
 
@@ -51,7 +51,7 @@ export function useLeadsData({
   const [offset, setOffset] = useState(0)
   const [stats, setStats] = useState<LeadCardStats | null>(null)
   const [pending, startTransition] = useTransition()
-  const [exporting, startExport] = useTransition()
+  const { exporting, runExport } = useXlsxExport()
 
   const [filters, setFilters] = useState<LeadsFilters>({
     curatorId: '',
@@ -242,12 +242,13 @@ export function useLeadsData({
     }
   }, 60_000)
 
-  /** Выгрузка текущей выборки (все страницы, без пагинации) в .xlsx. */
+  /** Выгрузка текущей выборки (все страницы, без пагинации) в .xlsx —
+   * общий флоу useXlsxExport (тот же, что у менеджера и менеджера по кадрам). */
   const exportExcel = useCallback(() => {
     const f = stateRef.current
     const range = presetRange(f.preset, f.day, f.from, f.to)
-    startExport(async () => {
-      const res = await exportLeadsExcelAction({
+    runExport(() =>
+      exportLeadsExcelAction({
         curatorId: f.curatorId || null,
         status: f.status || null,
         search: f.search || null,
@@ -255,15 +256,9 @@ export function useLeadsData({
         from: range.from,
         to: range.to,
         sort: f.sort,
-      })
-      if (res.ok && res.base64 && res.fileName) {
-        downloadBase64Xlsx(res.base64, res.fileName)
-        toast.success(`Выгружено лидов: ${res.rows}`)
-      } else {
-        toast.error(res.message ?? 'Не удалось выгрузить')
-      }
-    })
-  }, [])
+      }),
+    )
+  }, [runExport])
 
   const searchExpanded = searchFocused || filters.search.length > 0
 
