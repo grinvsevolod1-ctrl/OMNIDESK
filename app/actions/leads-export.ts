@@ -5,7 +5,7 @@
  * с фильтрами таблицы (или вся база при пустых фильтрах), батчами по 500 —
  * рассчитано на 1500+ лидов без нагрузки на память.
  */
-import { requireAdmin, requireCurator } from '@/lib/auth'
+import { requireAdmin, requireCurator, requireManager } from '@/lib/auth'
 import {
   listAllTransferredLeads,
   listArchivedLeadsForCurator,
@@ -13,6 +13,10 @@ import {
   type AllLeadsFilter,
   type LeadCard,
 } from '@/lib/data/lead-cards'
+import {
+  listLeadCardsForManager,
+  type ManagerLeadFilterStatus,
+} from '@/lib/data/lead-stats'
 import { isLeadStatus, LEAD_STATUS_LABELS } from '@/lib/lead-status'
 
 const BATCH = 500
