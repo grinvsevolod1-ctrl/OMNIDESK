@@ -160,11 +160,15 @@ lib/
                          НЕ вызывай три диспетчера подряд «на всякий случай».
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
 worker/src/              воркер каналов (telegram.ts, autopilot.ts, jobs.ts, ...)
-                         telegram.ts — ядро сессии (логин по телефону/send/sync);
-                         вынесено: telegram-qr-login.ts (QR-логин: токены,
-                         скан-листенер, DC-миграция), telegram-health.ts
-                         (зомби-детектор, Ping RPC), telegram-recovery.ts
-                         (redelivery после реконнекта с дедуп-гардом),
+                         telegram.ts — жизненный цикл соединения (клиент,
+                         string session, таймеры); флоу входа вынесены:
+                         telegram-phone-login.ts (sendCode/SignIn/2FA — phone
+                         и phoneCodeHash не покидают модуль),
+                         telegram-qr-login.ts (QR: токены, скан-листенер,
+                         DC-миграция); также telegram-health.ts (зомби-детектор,
+                         Ping RPC), telegram-recovery.ts (redelivery после
+                         реконнекта с дедуп-гардом), telegram-history.ts
+                         (dialog sync, per-chat watermarks),
                          telegram-errors.ts, telegram-config.ts.
                          repo.ts — БАРЕЛЬ: repo-jobs.ts (джобы/dead-letters),
                          repo-channels.ts (каналы/сессии), repo-proxies.ts,
@@ -302,20 +306,18 @@ pnpm check              # всё сразу: lint + typecheck + typecheck:worker
 
 ## 10. Известный техдолг
 
-Волны декомпозиции завершены: telegram.ts (health/recovery/QR-логин вынесены),
-repo.ts и repo-ai.ts (доменные модули с барелями), finance/account actions,
-widget-editor-tabs (вкладки по файлам), ai-console (use-ai-console),
-lead-cards, admin-accounts, os-shell, create-account-card, ai-assist,
-autopilot-manager, expenses-panel; `assembleBrainInput` вынесен в `lib/ai/`;
-поллинг лидов переведён на `use-shared-poll`; unread пересчитывается точно
-через `messages.read_at` (миграция 125).
+Волны декомпозиции ЗАВЕРШЕНЫ: telegram.ts (~780 строк — вынесены health,
+recovery, QR-логин и phone/code login-флоу; dialog sync давно живёт в
+telegram-history.ts), repo.ts и repo-ai.ts (доменные модули с барелями),
+finance/account actions, widget-editor-tabs (вкладки по файлам), ai-console
+(use-ai-console), lead-cards, admin-accounts, os-shell, create-account-card,
+ai-assist, autopilot-manager, expenses-panel; `assembleBrainInput` вынесен в
+`lib/ai/`; поллинг лидов переведён на `use-shared-poll`; unread
+пересчитывается точно через `messages.read_at` (миграция 125).
 
-Что осталось (не рефактори «мимоходом» — только осознанной задачей,
-дословным переносом, с `pnpm check` после):
-
-| Файл | Строк | Заметка |
-|---|---|---|
-| `worker/src/telegram.ts` | ~985 | ядро сессии; последний кандидат на вынос — phone/code login-флоу и dialog sync, ОСТОРОЖНО — нет интеграционных тестов |
+Отдельного списка «что осталось» больше нет. Новые кандидаты появляются,
+когда файл перерастает ~700 строк ИЛИ смешивает несвязанные домены — тогда
+рефактори осознанной задачей, дословным переносом, с `pnpm check` после.
 
 Сапрессии `react-hooks/set-state-in-effect` (~18 файлов) — НЕ техдолг: это
 осознанные паттерны (синхронизация с browser-API на маунте, debounce через
