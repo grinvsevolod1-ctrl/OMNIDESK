@@ -210,7 +210,9 @@ describe('TelegramPhoneLogin.submitCode', () => {
     expect(res.sessionStatus).toBe('online')
     expect(deps.afterLogin).toHaveBeenCalledOnce()
     // The SignIn invoke must carry the phone and hash from the start() step.
-    const arg = client.invoke.mock.calls[0][0] as { args: Record<string, unknown> }
+    const arg = (client.invoke.mock.calls as unknown[][])[0][0] as {
+      args: Record<string, unknown>
+    }
     expect(arg.args.phoneNumber).toBe('+79990001122')
     expect(arg.args.phoneCodeHash).toBe('pch-1')
     expect(arg.args.phoneCode).toBe('12345')
