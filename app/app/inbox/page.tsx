@@ -58,30 +58,37 @@ function isDegradedPastGrace(c: {
 
 export default async function InboxPage() {
   const session = await requireManager()
-  const [conversations, channels, quickReplies, transferTargets] =
-    await Promise.all([
-      listConversations(session.sub),
-      listChannels(session.sub),
-      listQuickReplies(session.sub),
-      // Colleagues this manager can hand a conversation off to. Best-effort:
-      // never let a transfer-target lookup take down the inbox.
-      listTransferTargets(session.sub).catch(() => []),
-    ])
-
-  // Whether the Yandex Telemost video-meeting button should appear in the
-  // composer (only when the admin has configured and enabled it).
-  const telemostEnabled = await isTelemostConfigured()
-
-  // Global AI master switch: when on, the AI leads every conversation by default
-  // (managers pause individual threads to take over). Drives the inbox's blocked
-  // composer + "AI is leading" affordance. Best-effort: default off if the
-  // ai_assist tables (migration 054) aren't applied yet.
-  let aiMasterEnabled = false
-  try {
-    aiMasterEnabled = (await getAiAssistSettings()).enabled
-  } catch (err) {
-    console.error('inbox: AI settings unavailable:', err)
-  }
+  // Everything the inbox shell needs, in ONE parallel wave — each extra
+  // sequential await here is a full DB round-trip added to time-to-first-render
+  // of the busiest page in the app.
+  const [
+    conversations,
+    channels,
+    quickReplies,
+    transferTargets,
+    // Whether the Yandex Telemost video-meeting button should appear in the
+    // composer (only when the admin has configured and enabled it).
+    telemostEnabled,
+    // Global AI master switch: when on, the AI leads every conversation by
+    // default (managers pause individual threads to take over). Drives the
+    // inbox's blocked composer + "AI is leading" affordance. Best-effort:
+    // default off if the ai_assist tables (migration 054) aren't applied yet.
+    aiMasterEnabled,
+  ] = await Promise.all([
+    listConversations(session.sub),
+    listChannels(session.sub),
+    listQuickReplies(session.sub),
+    // Colleagues this manager can hand a conversation off to. Best-effort:
+    // never let a transfer-target lookup take down the inbox.
+    listTransferTargets(session.sub).catch(() => []),
+    isTelemostConfigured(),
+    getAiAssistSettings()
+      .then((s) => s.enabled)
+      .catch((err) => {
+        console.error('inbox: AI settings unavailable:', err)
+        return false
+      }),
+  ])
 
   // Personal accounts whose session has been degraded past the grace period —
   // surfaced as a banner in the inbox (see isDegradedPastGrace for the rules).
@@ -104,20 +111,20 @@ export default async function InboxPage() {
   const preloadIds = conversations
     .slice(0, INBOX_PRELOAD_THREADS)
     .map((c) => c.id)
-  const batched = await listMessagesForConversations(preloadIds, session.sub)
+  // Transcripts and the autopilot toolbar status are independent — fetch them
+  // in parallel. Autopilot is best-effort with safe defaults: if migration 030
+  // (autopilot tables) hasn't been applied yet, a missing-table error must NOT
+  // take down the entire inbox.
+  const [batched, autopilot] = await Promise.all([
+    listMessagesForConversations(preloadIds, session.sub),
+    getAutopilotStatusAction().catch((err) => {
+      console.error('inbox: autopilot status unavailable:', err)
+      return { enabled: false, enabledCount: 0 }
+    }),
+  ])
   const messagesByConversation: Record<string, Message[]> = {}
   for (const id of preloadIds) {
     messagesByConversation[id] = batched[id] ?? []
-  }
-
-  // Autopilot status for the inbox toolbar toggle. Wrapped in try/catch with
-  // safe defaults: if migration 030 (autopilot tables) hasn't been applied yet,
-  // a missing-table error must NOT take down the entire inbox.
-  let autopilot = { enabled: false, enabledCount: 0 }
-  try {
-    autopilot = await getAutopilotStatusAction()
-  } catch (err) {
-    console.error('inbox: autopilot status unavailable:', err)
   }
 
   return (

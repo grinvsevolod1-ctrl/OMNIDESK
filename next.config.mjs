@@ -27,9 +27,20 @@ function gitCommitBuildId() {
   }
 }
 
-// Widget loaders + service workers must never be cached aggressively, or
-// browsers/CDNs keep serving an old (possibly broken) copy after a fix ships.
+// Service workers must never be cached aggressively, or browsers keep serving
+// an old (possibly broken) copy after a fix ships.
 const noCache = { key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' }
+// Widget loader: the script ships to every visitor of every customer site,
+// often on slow mobile connections. `max-age=0, must-revalidate` made every
+// page navigation pay a blocking revalidation round-trip before the widget
+// could boot. Serve from cache instantly instead and refresh in the
+// background: a fix still propagates within minutes (max-age) + one
+// background revalidation — unlike a plain long max-age, which could pin a
+// broken copy for a year.
+const widgetCache = {
+  key: 'Cache-Control',
+  value: 'public, max-age=300, stale-while-revalidate=86400',
+}
 // The visitor service worker needs to control the whole origin (scope '/').
 // This header authorises that broader scope.
 const swAllowRoot = { key: 'Service-Worker-Allowed', value: '/' }
@@ -117,12 +128,12 @@ const nextConfig = {
       },
       {
         source: '/livechat.js',
-        headers: [noCache],
+        headers: [widgetCache],
       },
       {
         // Neutral alias (rewritten to /livechat.js).
         source: '/widget.js',
-        headers: [noCache],
+        headers: [widgetCache],
       },
       {
         // Visitor service worker (Web Push + installability).
