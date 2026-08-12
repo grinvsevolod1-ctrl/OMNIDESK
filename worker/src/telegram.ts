@@ -243,7 +243,7 @@ export class TelegramSession {
         await repo
           .setSession(this.channelId, 'error', {
             lastError:
-              'Время входа истекло: код не был введён. Зап��осите код повторно.',
+              'Время входа истекло: код не был введён. Запросите код повторно.',
           })
           .catch(() => {})
       })()

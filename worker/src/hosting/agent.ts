@@ -303,7 +303,7 @@ async function runAgentLoop(ctx: {
       turn = await chatWithTools(messages, toolDefs())
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      await log('stderr', `Модель нед��ступна: ${msg}`)
+      await log('stderr', `Модель недоступна: ${msg}`)
       recordTokens()
       return { success: false, summary: `Модель недоступна: ${msg}`, url: null, serverNotes: null }
     }

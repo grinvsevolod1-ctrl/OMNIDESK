@@ -27,6 +27,11 @@ export function useGodScroll({
   const endRef = useRef<HTMLDivElement | null>(null)
   const scrollBoxRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
+  // Flags our own pinToBottom scrolls so they can't be mistaken for user
+  // intent in onScrollBox (see the anti-fight notes in use-thread-scroll.ts:
+  // position-only re-stick + ResizeObserver re-pin = an escape-proof loop
+  // that drags the user back down while they try to scroll up).
+  const programmatic = useRef(false)
   // True while a freshly opened thread hasn't been positioned yet — the first
   // messages render must JUMP to the bottom instantly (no smooth animation
   // crawling down from the top of the history).
@@ -44,16 +49,51 @@ export function useGodScroll({
   }, [])
 
   const onScrollBox = useCallback(() => {
+    if (programmatic.current) {
+      programmatic.current = false
+      return
+    }
     const el = scrollBoxRef.current
     if (!el) return
-    stickToBottom.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 120
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (fromBottom < 40) stickToBottom.current = true
+    else if (fromBottom > 120) stickToBottom.current = false
+    // 40..120px: dead zone — intent unchanged while the user is leaving.
   }, [])
 
   const pinToBottom = useCallback(() => {
     const el = scrollBoxRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el) return
+    programmatic.current = true
+    el.scrollTop = el.scrollHeight
   }, [])
+
+  // Upward wheel/touch gesture releases the pin INSTANTLY, before any resize
+  // or SSE append can pull the view back down.
+  useEffect(() => {
+    const el = scrollBoxRef.current
+    if (!el || !selectedId) return
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) stickToBottom.current = false
+    }
+    let touchY = 0
+    const onTouchStart = (e: TouchEvent) => {
+      touchY = e.touches[0]?.clientY ?? 0
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY ?? 0
+      if (y > touchY + 4) stickToBottom.current = false
+      touchY = y
+    }
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+    }
+  }, [selectedId])
 
   useEffect(() => {
     if (messages.length === 0) return

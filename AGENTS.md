@@ -36,7 +36,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `127`.
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `128`.
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: GramJS (Telegram), боты
@@ -103,7 +103,7 @@ app/                     Next.js App Router
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
-  curator/               страницы мене������жера по кадрам
+  curator/                 страницы мен��джера по кадрам
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
@@ -134,7 +134,15 @@ components/curator/      UI менеджера по кадрам
   lead-detail-panel.tsx + lead-detail/  боковая карточка лида
 components/manager/      UI менеджера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
-                         use-inbox-shortcuts.ts (j/k, Alt+стрелки)
+                         use-inbox-shortcuts.ts (j/k, Alt+стрелки),
+                         use-thread-scroll.ts — автоскролл треда по НАМЕРЕНИЮ
+                         пользователя: жест вверх (wheel/touch) мгновенно
+                         снимает прилипание, программные скроллы флагуются и
+                         не меняют intent, re-stick только у самого низа
+                         (<40px) с мёртвой зоной 40–120px. НЕ возвращай
+                         position-only логику — она даёт цикл «утаскивает
+                         вниз при скролле вверх» (тот же паттерн в
+                         god-messenger/use-god-scroll.ts)
   autopilot-manager.tsx + autopilot/  автопилот: use-autopilot.ts, rule-editor
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
@@ -207,7 +215,7 @@ lib/
   media-store.ts         ярусы хранения медиа: S3 (MEDIA_S3_*) → диск
                          (MEDIA_STORE_DIR) → bytea; локатор s3://… или
                          абсолютный путь, диспатч по префиксу (media-s3.ts)
-worker/src/              воркер канал��в
+worker/src/              воркер каналов
   telegram.ts            жизненный цикл соединения; флоу вынесены:
                          telegram-phone-login.ts (sendCode/SignIn/2FA),
                          telegram-qr-login.ts (QR-флоу целиком: begin, токены,
@@ -293,7 +301,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
 
 ## 8. База данных и миграции
 
-- Схема — `scripts/NNN_*.sql`, нумерация до `127`. Исторические пропуски
+- Схема — `scripts/NNN_*.sql`, нумерация до `128`. Исторические п��опуски
   (001→003, 026→030, 035→037) — НЕ ошибка, не переиспользуй номера.
 - Новая миграция: следующий свободный номер, применение `pnpm db:migrate`
   (статус `pnpm db:status`). На проде применяет `deploy.sh` ДО свапа кода.
@@ -351,7 +359,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   per-chat watermarks (миграция 105). При обновлении зависимости проверь,
   не реализовали ли `catchUp()`.
 - Сапрессии `react-hooks/set-state-in-effect` (~18 файлов) — НЕ техдолг, а
-  осознанные паттерны (browser-API н�� маунте, debounce, derived-state с
+  осознанные паттерны (browser-API на маунте, debounce, derived-state с
   замером DOM). Не «чини» их ради галочки.
 - Сложную новую логику покрывай юнит-тестом рядом с кодом.
 
