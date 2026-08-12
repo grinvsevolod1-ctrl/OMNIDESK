@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
 import { UpdateWatcher } from '@/components/update-watcher'
 import { ErrorReporter } from '@/components/error-reporter'
+import { SecurityGate } from '@/components/security-gate'
 import './globals.css'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -53,7 +54,7 @@ export default function RootLayout({
       className={`dark ${geistSans.variable} ${geistMono.variable}`}
     >
       <body className="bg-background text-foreground font-sans antialiased">
-        {children}
+        <SecurityGate>{children}</SecurityGate>
         <Toaster />
         <UpdateWatcher />
         <ErrorReporter />

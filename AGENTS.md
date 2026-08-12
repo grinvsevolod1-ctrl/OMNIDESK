@@ -103,12 +103,14 @@ app/                     Next.js App Router
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
-  curator/               страницы мене��жера по кадрам
+  curator/               страницы мене����жера по кадрам
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
                          console-schedules, ai-health — алерт при всплеске
-                         ошибок мозга, retention — ночная чистка)
+                         ошибок мозга, retention — ночная чистка),
+                         api/security-check — публичный, безопасные булевы
+                         для entry-гейта (никаких версий/пула/ошибок наружу)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (раздел 4)
 components/admin/        UI админки
   ai-console.tsx + ai-console/   чат копилота: контейнер + use-ai-console.ts
