@@ -13,16 +13,13 @@ import {
   errMessage,
   extractErrorCode,
   extractFloodWaitSeconds,
-  isConnectionSendFailure,
-  OFFLINE_SEND_REASON,
-  telegramSendFailureReason,
 } from './telegram-errors.js'
 import {
-  TG_HEALTH_PING_MS,
-  TG_HEALTH_PING_TIMEOUT_MS,
   TG_SEND_JITTER_MS,
   TG_SEND_MIN_INTERVAL_MS,
 } from './telegram-config.js'
+import { TelegramHealthMonitor } from './telegram-health.js'
+import { recoverUndeliveredOutbound } from './telegram-recovery.js'
 import type { TgSessionCtx } from './telegram-session-ctx.js'
 import { runKickSweep } from './telegram-exclusive.js'
 import { syncDialogs } from './telegram-history.js'
@@ -112,17 +109,11 @@ export class TelegramSession {
    */
   private exclusiveTimer: ReturnType<typeof setInterval> | null = null
   /**
-   * Session health ping. A zombie connection (TCP alive, MTProto dead —
-   * typical after a proxy hiccup) used to be discovered only when the next
-   * send failed; this timer probes with a lightweight Ping RPC so the session
-   * flips to 'error' within ~2 ticks and auto-revival reconnects it. Set on
-   * login, cleared on stop/logout.
+   * Zombie-connection detector (see telegram-health.ts). Started on login,
+   * stopped on stop/logout; hands teardown back via onZombieConnection so
+   * login state never leaves this class.
    */
-  private healthTimer: ReturnType<typeof setInterval> | null = null
-  /** Consecutive failed health pings; 2 in a row = declare the session dead. */
-  private healthFailures = 0
-  /** Prevents overlapping ping probes when the connection hangs. */
-  private healthProbeActive = false
+  private readonly health: TelegramHealthMonitor
   /**
    * Abandoned-login guard. Every wizard that requests a code but never enters
    * it used to leave the MTProto client connected to the DC forever — a leaked
@@ -162,6 +153,11 @@ export class TelegramSession {
     this.channelId = channelId
     this.managerId = managerId
     this.session = new StringSession('')
+    this.health = new TelegramHealthMonitor({
+      channelId,
+      getClient: () => this.client,
+      onZombie: () => this.onZombieConnection(),
+    })
     this.resolveTarget = createTargetResolver({
       channelId,
       getClient: () => this.client,
@@ -730,82 +726,25 @@ export class TelegramSession {
     }
   }
 
-  /** (Re)start the periodic MTProto health ping. */
-  private startHealthTimer(): void {
-    if (this.healthTimer || TG_HEALTH_PING_MS <= 0) return
-    this.healthFailures = 0
-    this.healthTimer = setInterval(() => {
-      void this.healthPing()
-    }, TG_HEALTH_PING_MS)
-    // Housekeeping only — never keep the event loop alive for it.
-    this.healthTimer.unref?.()
-  }
-
-  /** Stop the periodic MTProto health ping. */
-  private stopHealthTimer(): void {
-    if (this.healthTimer) {
-      clearInterval(this.healthTimer)
-      this.healthTimer = null
-    }
-    this.healthFailures = 0
-    this.healthProbeActive = false
-  }
-
   /**
-   * One health probe: Ping is the cheapest possible MTProto RPC (no auth
-   * side-effects, exactly what official clients send continuously). Dead
-   * connections often HANG instead of erroring, so the probe races a timeout.
-   * Two consecutive failures flip the channel to 'error' — from there the
-   * normal auto-revival sweep reconnects with its own backoff.
+   * Zombie-connection teardown, invoked by the health monitor after two
+   * consecutive failed pings: mark degraded and drop the client so revival
+   * rebuilds a fresh connection instead of reusing the dead transport.
    */
-  private async healthPing(): Promise<void> {
-    const client = this.client
-    if (!client || this.healthProbeActive) return
-    this.healthProbeActive = true
+  private async onZombieConnection(): Promise<void> {
+    this.health.stop()
+    this.stopExclusiveTimer()
     try {
-      await Promise.race([
-        client.invoke(
-          new Api.Ping({ pingId: returnBigInt(Date.now().toString()) }),
-        ),
-        new Promise((_, reject) => {
-          const t = setTimeout(
-            () => reject(new Error('health ping timeout')),
-            TG_HEALTH_PING_TIMEOUT_MS,
-          )
-          t.unref?.()
-        }),
-      ])
-      this.healthFailures = 0
-    } catch (err) {
-      this.healthFailures++
-      logger.warn(
-        { channelId: this.channelId, failures: this.healthFailures, err: errMessage(err) },
-        'telegram health ping failed',
-      )
-      if (this.healthFailures >= 2 && this.client) {
-        // Zombie confirmed: mark degraded and drop the client so revival
-        // rebuilds a fresh connection instead of reusing the dead transport.
-        logger.error(
-          { channelId: this.channelId },
-          'telegram session unresponsive — marking for revival',
-        )
-        this.stopHealthTimer()
-        this.stopExclusiveTimer()
-        try {
-          await this.client.disconnect()
-        } catch {
-          /* transport already dead */
-        }
-        this.client = null
-        await repo
-          .setSession(this.channelId, 'error', {
-            lastError: 'Соединение с Telegram перестало отвечать (health ping)',
-          })
-          .catch(() => {})
-      }
-    } finally {
-      this.healthProbeActive = false
+      await this.client?.disconnect()
+    } catch {
+      /* transport already dead */
     }
+    this.client = null
+    await repo
+      .setSession(this.channelId, 'error', {
+        lastError: 'Соединение с Telegram перестало отвечать (health ping)',
+      })
+      .catch(() => {})
   }
 
   /**
@@ -866,7 +805,7 @@ export class TelegramSession {
     this.startExclusiveTimer()
     // Zombie detection: probe the connection on a fixed cadence so a dead
     // transport is noticed within minutes, not on the next failed send.
-    this.startHealthTimer()
+    this.health.start()
     // Gap recovery note: GramJS's client.catchUp() is an unimplemented stub
     // (function body is literally `// TODO`), so updates.getDifference cannot
     // be leaned on here. The offline gap is instead recovered by the dialog
@@ -885,88 +824,14 @@ export class TelegramSession {
     void this.recoverUndeliveredOutbound()
   }
 
-  /**
-   * Post-reconnect delivery recovery. Managers keep typing while an account is
-   * down; those sends fail at the transport level and used to silently never
-   * arrive. This sweep finds outbound rows with no provider id that failed with
-   * the OFFLINE marker (or whose send job was lost), resends them in original
-   * order through the normal pacing throttle, and backfills provider ids /
-   * statuses — so the thread shows the truth: delivered after reconnect, or
-   * a failed tick with the real reason.
-   */
+  /** Post-reconnect delivery recovery (see telegram-recovery.ts). */
   private async recoverUndeliveredOutbound(): Promise<void> {
-    try {
-      const pending = await repo.listRecoverableOutbound(
-        this.channelId,
-        OFFLINE_SEND_REASON,
-      )
-      if (pending.length === 0) return
-      logger.info(
-        { channelId: this.channelId, count: pending.length },
-        'TG delivery recovery: resending messages written while offline',
-      )
-      // Duplicate guard: a send that failed with "TIMEOUT" may still have
-      // reached Telegram (the server can accept the RPC after the socket
-      // died), so blindly resending would deliver the message TWICE. Before
-      // resending, check the chat's recent outbound messages: if a message
-      // with identical text already exists there, backfill its id and mark it
-      // sent instead of sending again. One fetch per contact, cached.
-      const recentOutByHandle = new Map<string, Map<string, string>>()
-      const recentOutbound = async (
-        handle: string,
-      ): Promise<Map<string, string>> => {
-        const cached = recentOutByHandle.get(handle)
-        if (cached) return cached
-        const byBody = new Map<string, string>()
-        try {
-          const entity = await this.resolveTarget(handle)
-          const recent = await this.client?.getMessages(entity, { limit: 20 })
-          for (const m of recent ?? []) {
-            if (m?.out && m.message) byBody.set(m.message, String(m.id))
-          }
-        } catch {
-          /* best-effort: on failure we fall back to a normal resend */
-        }
-        recentOutByHandle.set(handle, byBody)
-        return byBody
-      }
-
-      for (const msg of pending) {
-        if (!this.client) return // disconnected mid-sweep — next login retries
-        try {
-          const already = (await recentOutbound(msg.contactHandle)).get(
-            msg.body,
-          )
-          if (already) {
-            // It DID arrive before the disconnect — record the truth, no dupe.
-            await repo.setMessageProviderId(msg.id, already).catch(() => {})
-            await repo.setMessageStatus(msg.id, 'sent', null).catch(() => {})
-            continue
-          }
-          const result = await this.sendMessage(msg.contactHandle, msg.body)
-          if (result.providerMessageId) {
-            await repo.setMessageProviderId(msg.id, result.providerMessageId)
-          }
-          await repo.setMessageStatus(msg.id, 'sent', null).catch(() => {})
-        } catch (err) {
-          // A real provider rejection now gets its true reason; a transport
-          // error keeps the OFFLINE marker so the NEXT reconnect retries it.
-          const reason = isConnectionSendFailure(err)
-            ? OFFLINE_SEND_REASON
-            : telegramSendFailureReason(err)
-          await repo.setMessageStatus(msg.id, 'failed', reason).catch(() => {})
-          logger.warn(
-            { channelId: this.channelId, messageId: msg.id, err },
-            'TG delivery recovery: resend failed',
-          )
-        }
-      }
-    } catch (err) {
-      logger.warn(
-        { channelId: this.channelId, err },
-        'TG delivery recovery sweep failed (non-fatal)',
-      )
-    }
+    return recoverUndeliveredOutbound({
+      channelId: this.channelId,
+      getClient: () => this.client,
+      resolveTarget: (target) => this.resolveTarget(target),
+      sendMessage: (target, body) => this.sendMessage(target, body),
+    })
   }
 
   /** Import dialogs + optional history backfill (see telegram-history.ts). */
@@ -1200,7 +1065,7 @@ export class TelegramSession {
 
   async stop(): Promise<void> {
     this.stopExclusiveTimer()
-    this.stopHealthTimer()
+    this.health.stop()
     this.clearLoginTimer()
     this.clearQr()
     try {
@@ -1213,7 +1078,7 @@ export class TelegramSession {
 
   async logout(): Promise<void> {
     this.stopExclusiveTimer()
-    this.stopHealthTimer()
+    this.health.stop()
     this.clearLoginTimer()
     this.clearQr()
     try {
