@@ -1,7 +1,7 @@
 'use server'
 
 import { headers } from 'next/headers'
-import { getSession, requireManager } from '@/lib/auth'
+import { getSession } from '@/lib/auth'
 import {
   getVapidPublicKey,
   isPushConfigured,
@@ -84,7 +84,7 @@ export interface TestPushResult extends PushResult {
 export async function sendTestPushAction(
   endpoint?: string,
 ): Promise<TestPushResult> {
-  const session = await requireManager()
+  const session = await requirePushUser()
   if (!isPushConfigured()) {
     return { ok: false, message: 'Push не настроен на сервере.' }
   }
@@ -92,7 +92,7 @@ export async function sendTestPushAction(
   const payload = {
     title: 'Omnidesk',
     body: 'Тестовое уведомление — push работает.',
-    url: '/app/inbox',
+    url: session.role === 'curator' ? '/curator' : '/app/inbox',
     tag: 'omnidesk-test',
   }
 
@@ -136,7 +136,7 @@ export interface PushDiagnostics {
 }
 
 export async function getPushDiagnosticsAction(): Promise<PushDiagnostics> {
-  const session = await requireManager()
+  const session = await requirePushUser()
   const configured = isPushConfigured()
   let devices: SubscriptionInfo[] = []
   if (configured) {

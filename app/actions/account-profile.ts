@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import {
   comparePassword,
+  getSession,
   hashPassword,
   requireManager,
   startSession,
@@ -88,7 +89,12 @@ export async function getLunchStateAction(): Promise<boolean> {
 export async function changeOwnPasswordAction(
   formData: FormData,
 ): Promise<SimpleResult> {
-  const session = await requireManager()
+  // Both sales managers and curators (менеджеры по кадрам) live in the same
+  // accounts table and change their own password through this action.
+  const session = await getSession()
+  if (!session || (session.role !== 'manager' && session.role !== 'curator')) {
+    return { ok: false, message: 'Нет доступа.' }
+  }
   const current = String(formData.get('current') ?? '')
   const next = String(formData.get('next') ?? '')
 
@@ -103,7 +109,7 @@ export async function changeOwnPasswordAction(
 
   await updateManagerPassword(manager.id, await hashPassword(next))
   await writeAudit({
-    actorRole: 'manager',
+    actorRole: session.role,
     actorId: manager.id,
     actorLabel: manager.name,
     action: 'account.password_change',
@@ -112,13 +118,13 @@ export async function changeOwnPasswordAction(
   })
 
   // updateManagerPassword bumps session_version, which would invalidate THIS
-  // manager's own cookie. Re-issue the session with the fresh version so the
+  // user's own cookie. Re-issue the session with the fresh version so the
   // user who just changed their password stays signed in, while every other
   // outstanding session (e.g. on another device) is forced to re-authenticate.
   const fresh = await getManagerAuthState(manager.id)
   await startSession({
     sub: manager.id,
-    role: 'manager',
+    role: session.role,
     email: manager.email,
     name: manager.name,
     sv: fresh?.sessionVersion ?? 0,

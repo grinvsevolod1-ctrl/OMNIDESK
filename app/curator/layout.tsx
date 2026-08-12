@@ -1,9 +1,14 @@
 import type { ReactNode } from 'react'
-import { requireCurator } from '@/lib/auth'
-import { logoutAction } from '@/app/actions/auth'
+import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
+import { SWRProvider } from '@/components/swr-provider'
 import { NotificationGate } from '@/components/manager/notification-gate'
 import { NotificationProvider } from '@/components/manager/notification-provider'
-import { Button } from '@/components/ui/button'
+import { requireCurator } from '@/lib/auth'
+
+const nav: NavItem[] = [
+  { href: '/curator', label: 'Обзор', icon: 'overview' },
+  { href: '/curator/settings', label: 'Настройки', icon: 'settings' },
+]
 
 export default async function CuratorLayout({
   children,
@@ -13,28 +18,16 @@ export default async function CuratorLayout({
   const user = await requireCurator()
 
   return (
-    <NotificationProvider>
-      <div className="min-h-dvh bg-background text-foreground">
-        <header className="border-b border-border">
-          <div className="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">Менеджер по кадрам</p>
-              <p className="truncate text-xs text-muted-foreground">
-                {user.name}
-                {user.email ? ` · ${user.email}` : ''}
-              </p>
-            </div>
-            <form action={logoutAction}>
-              <Button type="submit" variant="outline" size="sm">
-                Выйти
-              </Button>
-            </form>
-          </div>
-        </header>
-        <main>
+    <SWRProvider>
+      <NotificationProvider>
+        <DashboardShell
+          nav={nav}
+          roleLabel="Менеджер по кадрам"
+          user={{ name: user.name, email: user.email }}
+        >
           <NotificationGate>{children}</NotificationGate>
-        </main>
-      </div>
-    </NotificationProvider>
+        </DashboardShell>
+      </NotificationProvider>
+    </SWRProvider>
   )
 }

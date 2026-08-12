@@ -192,12 +192,14 @@ export function CuratorLeadsView({
   // Компактный поиск: раскрывается на фокусе или пока есть текст.
   const searchExpanded = searchFocused || search.length > 0
 
+  // Sidebar shell (DashboardShell) now provides page padding and width —
+  // keep only the local column layout here to avoid double padding.
   return (
-    <div className="relative mx-auto flex w-full max-w-5xl flex-col gap-5 p-4 md:p-8">
+    <div className="relative flex w-full flex-col gap-5">
       <StatusReminder leads={leads} />
 
       <PageHeader
-        title="Мои лиды"
+        title="Обзор"
         description="Лиды, переданные вам менеджерами. Статусы нужно подтверждать каждый день."
       />
 

@@ -105,7 +105,9 @@ app/                     Next.js App Router
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
-  curator/               страницы мене��жера по кадрам
+  curator/               страницы менеджера по кадрам: layout на общем
+                         DashboardShell (сайдбар: Обзор, Настройки),
+                         settings/ — профиль, смена пароля, push
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
@@ -326,7 +328,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   Telegram (`TELEGRAM_ALERT_BOT_TOKEN`/`TELEGRAM_ALERT_CHAT_ID`), кулдаун 6ч.
 - **Realtime лидов** (миграция 127): триггер на `lead_cards` → pg_notify
   'realtime' (событие `lead` с manager_id/curator_id) → `/api/stream`
-  достав��яет по роли (админ — все) → клиент пинает shared-поллер через
+  доставляет по роли (админ — все) → клиент пинает shared-поллер через
   `pokeSharedPoll`. Поллинг вьюх лидов — редкий фолбэк (60с), не основной
   механизм. Инбокс живёт на своих событиях message/conversation.
 
