@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    include: ['lib/**/*.test.ts'],
+    include: ['lib/**/*.test.ts', 'worker/src/**/*.test.ts'],
     exclude: ['**/node_modules/**', 'tests/browser/**', '.next/**'],
     // `server-only` throws if imported outside a React Server Component build.
     // Stub it so we can unit-test server-side modules that guard themselves
