@@ -434,7 +434,6 @@ export class TelegramSession {
     }
   }
 
-  /** Submit the SMS/app login code. May transition to password_pending (2FA). */
   /** Current QR deep link for the panel to render, if a QR login is pending. */
   getQr(): { url: string; expiresAt: number } | null {
     return this.qr.current()
