@@ -48,7 +48,9 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   `worker/src/**/*.test.ts`), сейчас ~273. Интеграционные —
   `tests/integration/*.test.ts` (`pnpm test:integration`): требуют
   `DATABASE_URL` (без него скипаются), проверяют гонку livechat-диалогов
-  (миграция 128), IDOR-скоупинг сообщений/медиа и revocation сессий.
+  (миграция 128), IDOR-скоупинг сообщений/медиа, revocation сессий,
+  передачу диалогов (включая гонку двух одновременных передач) и
+  журнал аудита (миграция 129).
 - **Виджет лайв-чата** — `widget-src/livechat.js`, собирается esbuild'ом
   (`scripts/build-widget.mjs`, minify) в `public/livechat.js`. НЕ редактируй
   `public/livechat.js` руками. `pnpm build` собирает виджет автоматически.
@@ -103,7 +105,7 @@ app/                     Next.js App Router
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
-  curator/               страницы менеджера по кадрам
+  curator/               страницы мене��жера по кадрам
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
@@ -125,6 +127,9 @@ components/admin/        UI админки
                          vault-panel + vault-card + vault-dialog (сейф паролей)
   os-shell/              ОС-шелл god-панели: os-shell + use-os-shell.ts
   create-account-card.tsx + create-account/  подключение TG-аккаунта
+  settings/              настройки админа: system-health-section (метрики из
+                         lib/data/health-metrics), audit-log-section (журнал
+                         действий из lib/data/audit)
   secret-*, god-messenger/   UI god-панели (ИЗОЛИРОВАНО)
 components/curator/      UI менеджера по кадрам
   curator-leads-view.tsx «Мои лиды»: вкладки активные/архив, фильтры,
@@ -178,6 +183,13 @@ lib/
                          brain-loaders.ts — next-сторона BrainInputLoaders
                          hosting.ts → hosting-deployments.ts (история деплоев,
                            стрим логов, очередь deploy_jobs)
+                         audit.ts — общий журнал действий (audit_log, миграция
+                           129): writeAudit НИКОГДА не кидает (fire-and-forget),
+                           god-панель НЕ пишет в аудит (изоляция, раздел 4);
+                           admin-audit.ts — старый лог только для servers-console
+                         health-metrics.ts — метрики для вкладки «Здоровье
+                           системы» в настройках админа (p95 мозга, очереди,
+                           dead letters, свежесть кронов)
                          прочее: ai-directives, ai-followup, ai-analytics,
                          ai-log (ai_logs), console-shell, jobs
                          (enqueueJob — идемпотентность отправки, миграция 126)
@@ -314,7 +326,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   Telegram (`TELEGRAM_ALERT_BOT_TOKEN`/`TELEGRAM_ALERT_CHAT_ID`), кулдаун 6ч.
 - **Realtime лидов** (миграция 127): триггер на `lead_cards` → pg_notify
   'realtime' (событие `lead` с manager_id/curator_id) → `/api/stream`
-  доставляет по роли (админ — все) → клиент пинает shared-поллер через
+  достав��яет по роли (админ — все) → клиент пинает shared-поллер через
   `pokeSharedPoll`. Поллинг вьюх лидов — редкий фолбэк (60с), не основной
   механизм. Инбокс живёт на своих событиях message/conversation.
 
