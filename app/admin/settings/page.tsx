@@ -1,5 +1,8 @@
+import { Suspense } from 'react'
 import { LogOut, Mail, ShieldCheck, User, Layers } from 'lucide-react'
 import { PageHeader } from '@/components/page-parts'
+import { SystemHealthSection } from '@/components/admin/settings/system-health-section'
+import { AuditLogSection } from '@/components/admin/settings/audit-log-section'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -120,6 +123,43 @@ export default async function AdminSettingsPage() {
           </form>
         </Card>
       </section>
+
+      {/* ── System health ── */}
+      <Suspense
+        fallback={
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Здоровье системы
+            </h2>
+            <Card className="p-5">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-20 animate-pulse rounded-lg border border-border bg-muted/40"
+                  />
+                ))}
+              </div>
+            </Card>
+          </section>
+        }
+      >
+        <SystemHealthSection />
+      </Suspense>
+
+      {/* ── Audit log ── */}
+      <Suspense
+        fallback={
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Журнал действий
+            </h2>
+            <Card className="h-48 animate-pulse bg-muted/20" />
+          </section>
+        }
+      >
+        <AuditLogSection />
+      </Suspense>
 
       {/* ── About panel ── */}
       <section className="flex flex-col gap-3">

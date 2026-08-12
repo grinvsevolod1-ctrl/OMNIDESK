@@ -47,6 +47,7 @@ interface Sweep {
 const SWEEPS: Sweep[] = [
   { table: 'ai_generation_metrics', days: 365 },
   { table: 'admin_audit_log', days: 180 },
+  { table: 'audit_log', days: 180 },
   { table: 'hosting_deploy_logs', days: 30 },
   {
     table: 'channel_jobs',

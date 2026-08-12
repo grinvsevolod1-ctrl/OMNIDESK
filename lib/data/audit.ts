@@ -110,9 +110,12 @@ export async function listAudit(opts: {
   ])
 
   return {
-    rows: rowsRes.rows.map((r) => ({
+    rows: rowsRes.map((r) => ({
       id: r.id,
-      createdAt: r.created_at,
+      createdAt:
+        typeof r.created_at === 'string'
+          ? r.created_at
+          : new Date(r.created_at).toISOString(),
       actorRole: r.actor_role,
       actorId: r.actor_id,
       actorLabel: r.actor_label,
@@ -121,6 +124,6 @@ export async function listAudit(opts: {
       entityId: r.entity_id,
       details: r.details ?? {},
     })),
-    total: Number(countRes.rows[0]?.n ?? 0),
+    total: Number(countRes[0]?.n ?? 0),
   }
 }
