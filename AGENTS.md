@@ -203,7 +203,7 @@ scripts/                 SQL-миграции NNN_*.sql + migrate.mjs + cron-*.m
   `lib/followup/runtime.ts`) вызывают её через свои `BrainInputLoaders`
   (`lib/data/brain-loaders.ts` для next, `worker/src/brain-loaders.ts` для
   воркера). Меняешь лимиты, состав или выбор RAG-запроса — меняй ТОЛЬКО там,
-  НЕ создавай локальные копии сборки. Д��я батчей (дожим) сначала
+  НЕ создавай локальные копии сборки. Для батчей (дожим) сначала
   `loadSharedBrainContext` один раз, потом `assembleBrainInput` с `{ shared }`
   на каждый диалог. RAG-запрос — последнее сообщение клиента; пустая строка
   никогда не эмбеддится (платный вызов ради мусора).
