@@ -204,6 +204,22 @@ module.exports = {
       },
     },
     {
+      // AI-manager health watchdog: alerts the owner when the brain's error
+      // rate over the last hour crosses the threshold (see
+      // /api/cron/ai-health). 10-minute tick is safe — alerts carry a
+      // cooldown and below the threshold the route is a no-op. Optional
+      // Telegram delivery via TELEGRAM_ALERT_BOT_TOKEN/TELEGRAM_ALERT_CHAT_ID.
+      name: 'omnidesk-cron-ai-health',
+      script: 'scripts/cron-ai-health.mjs',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '*/10 * * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
       // Nightly Postgres backup with 7-day rotation (scripts/backup-db.mjs).
       // Dumps with pg_dump -Fc into ~/omnidesk-backups (override with
       // BACKUP_DIR / BACKUP_KEEP_DAYS in the shared .env). 03:30 — after the
