@@ -103,7 +103,7 @@ app/                     Next.js App Router
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
-  curator/               страницы менеджера по кадрам
+  curator/               страницы мене��жера по кадрам
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
@@ -152,6 +152,10 @@ lib/
                          lead-admin.ts — «Все лиды» админа: фильтры, единый
                            поиск (дата/ФИО/телефон/@username/город/регион/
                            имя сотрудника — менеджера И менеджера по кадрам)
+                         conversations.ts → conversation-transfer.ts
+                           (передача диалогов, admin bulk reassignment)
+                         shared.ts → shared-converters.ts (row → domain
+                           маппинги toManager/toChannel/toConversation/toMessage)
                          brain-loaders.ts — next-сторона BrainInputLoaders
                          прочее: ai-directives, ai-followup, ai-analytics,
                          ai-log (ai_logs), hosting, console-shell, jobs
@@ -167,6 +171,9 @@ lib/
                          Импорт: @/lib/types
   outbound-dispatch.ts   роутер исходящей доставки: один lookup channel_type →
                          нужный диспетчер. НЕ перебирай все диспетчеры подряд.
+  vk.ts                  БАРЕЛЬ VK Bot API → vk-core.ts (callApi, retry,
+                         прокси, лонгполл-настройки) и vk-media.ts (скачивание
+                         и загрузка вложений). Импорты через @/lib/vk.
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
   auth.ts, db.ts         сессии/роли; query() и withTransaction. Админ:
                          ADMIN_PASSWORD_HASH (bcrypt) предпочтительнее
@@ -190,14 +197,18 @@ worker/src/              воркер каналов
                          telegram-health.ts (зомби-детектор, Ping RPC),
                          telegram-recovery.ts (redelivery с дедуп-гардом),
                          telegram-history.ts (dialog sync, watermarks),
+                         telegram-throttle.ts (пейсинг отправки + FLOOD_WAIT),
                          telegram-errors.ts, telegram-config.ts
   repo.ts                БАРЕЛЬ → repo-jobs, repo-channels, repo-proxies,
                          repo-telegram-cache, repo-messages
   repo-ai.ts             БАРЕЛЬ → repo-ai-config (30s TTL-кэш конфига мозга),
                          repo-ai-context, repo-ai-autopilot, repo-ai-logs
   brain-loaders.ts       worker-сторона BrainInputLoaders
-  autopilot.ts, jobs.ts  запуск ИИ-ответов, обработка джобов
-  hosting/               автономный DevOps-агент: agent.ts, ssh.ts,
+  autopilot.ts, jobs.ts  запуск ИИ-ответов, обработка джобов; вынесены
+                         autopilot-ai-lead.ts (AI-lead пайплайн: single-flight,
+                         дефер, отправка) и autopilot-pacing.ts (typing-пейсинг)
+  hosting/               автономный DevOps-агент: agent.ts (петля инструментов),
+                         agent-prompts.ts (toolDefs + системный промпт), ssh.ts,
                          pipeline.ts, agent-safety.ts (блок опасных команд)
   telegram-*.test.ts     тест-харнесс на моках GramJS: phone-login (resume/
                          code/2FA/рестарт), qr-login (токен, DC-миграция,
