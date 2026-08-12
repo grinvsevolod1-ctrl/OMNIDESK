@@ -24,6 +24,7 @@ import { ThreadHeader } from '@/components/manager/inbox/thread-header'
 import { MessageList } from '@/components/manager/inbox/message-list'
 import { ComposerBanners } from '@/components/manager/inbox/composer-banners'
 import { useInbox } from '@/components/manager/inbox/use-inbox'
+import { useInboxShortcuts } from '@/components/manager/inbox/use-inbox-shortcuts'
 
 /* -------------------------------------------------------------------------- */
 /*  Presentational shell. All state/effects/actions live in useInbox; this    */
@@ -159,6 +160,9 @@ export function InboxView({
     scheduleSend,
     handleSendMediaFile,
   } = inbox
+
+  // j/k and Alt+arrows walk the filtered list without touching the mouse.
+  useInboxShortcuts({ filtered, activeId, setActiveId })
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-card">
