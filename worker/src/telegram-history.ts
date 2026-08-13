@@ -27,7 +27,8 @@ import type { TgSessionCtx } from './telegram-session-ctx.js'
  */
 
 /**
- * Pull existing Telegram chats (private DMs + groups) into the inbox so the
+ * Pull existing Telegram chats (private DMs only — groups and channels are
+ * skipped as noise) into the inbox so the
  * manager sees their real conversation list, not just messages that arrive
  * after connecting. Idempotent: re-running just refreshes previews/unread.
  */
@@ -106,18 +107,13 @@ async function importDialog(
   dialog: Dialog,
   ictx: { backfill: boolean; canBackfill: boolean; seenPeers: Set<string> },
 ): Promise<'skipped' | 'imported' | 'backfilled'> {
-  // Skip Telegram's own service/notifications "channel" feed but keep
-  // private chats (users) and groups; skip broadcast channels.
+  // Только личные чаты (users): группы, супергруппы, беседы и каналы в инбокс
+  // не импортируются вообще — это мусор для продавца (то же правило, что и в
+  // live-обработчике telegram-updates.ts).
   const entity = dialog.entity as Api.User | Api.Chat | Api.Channel | undefined
   if (!entity) return 'skipped'
   const isUser = entity.className === 'User'
-  const isGroup =
-    entity.className === 'Chat' ||
-    (entity.className === 'Channel' &&
-      'megagroup' in entity &&
-      Boolean(entity.megagroup))
-  // Ignore broadcast channels (one-way feeds) and deleted accounts.
-  if (!isUser && !isGroup) return 'skipped'
+  if (!isUser) return 'skipped'
   if (isUser && 'bot' in entity && entity.bot) {
     // keep bots out unless they messaged — most are noise
     if (!dialog.message?.message) return 'skipped'

@@ -156,6 +156,14 @@ async function handlePost(
   if (!message) {
     return text('ok')
   }
+  // Только личные диалоги: групповые беседы (chat) в VK имеют
+  // peer_id >= 2e9. Сообщения из бесед — мусор для продавца, к тому же
+  // ключевание по from_id смешало бы их с личной перепиской того же
+  // человека. Подтверждаем "ok", чтобы VK не ретраил, но не сохраняем.
+  const peerId = Number(message.peer_id)
+  if (Number.isFinite(peerId) && peerId >= 2_000_000_000) {
+    return text('ok')
+  }
   const body = (message.text ?? '').trim()
   // Parse any attachments (photo/doc/voice/audio/sticker/video/…). A message may
   // carry only an attachment with no text, which we still ingest.

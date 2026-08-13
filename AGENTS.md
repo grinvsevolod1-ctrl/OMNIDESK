@@ -120,9 +120,13 @@ app/                     Next.js App Router
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
   curator/               страницы менеджера по кадрам: layout на общем
                          DashboardShell (сайдбар: Обзор, Настройки),
-                         settings/ — профиль, смена пароля, push, 2FA
-                         (общая карточка shared/twofa-settings, как у
-                         менеджера в app/settings)
+                         settings/ — «Мои ГЕО» (self-service города:
+                         listMyCitiesAction/updateMyCitiesAction в
+                         app/actions/managers.ts, UI
+                         components/curator/my-geo-settings.tsx), профиль,
+                         смена пароля, push, 2FA (общая карточка
+                         shared/twofa-settings, как у менеджера в
+                         app/settings)
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
@@ -172,7 +176,10 @@ components/shared/       кросс-ролевые компоненты; use-xls
 components/curator/      UI менеджера по кадрам
   curator-leads-view.tsx «Мои лиды»: вкладки активные/архив, фильтры,
                          клиентский поиск, Excel-экспорт (как у админа)
-  lead-detail-panel.tsx + lead-detail/  боковая карточка лида
+  lead-detail-panel.tsx + lead-detail/  боковая карточка лида;
+                         lead-transfer-section — передача лида коллеге-куратору
+                         (transferMyLeadAction: владение проверяется под
+                         row-lock, initiated_by_role='curator')
 components/manager/      UI менеджера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
                          use-inbox-shortcuts.ts (j/k, Alt+стрелки),
@@ -187,7 +194,7 @@ components/manager/      UI менеджера
                          thread-search.tsx — телеграм-поиск по диалогу
                          (лупа в шапке) и навигация по кружкам/фото с
                          прикреплением к карточке лида: hits от новых к
-                         старым, цель догружается loadOlder-циклом,
+                         старым, цель д��гружается loadOlder-циклом,
                          подсветка через data-message-id в message-list;
                          связь с LeadCardPanel — CustomEvent
                          'omnidesk:lead-attachments-changed';
@@ -370,7 +377,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
 - **Стиль промпта:** русский, тёплый, «ведёт админа за руку», финальное слово
   за админом.
 - **Новый инструмент:** `tool({...})` с понятным русским `description`,
-  данные — ТОЛЬКО через `lib/data/*` (не пиши SQL в инструменте), запись в
+  данные �� ТОЛЬКО через `lib/data/*` (не пиши SQL в инструменте), запись в
   `actions`, при необходимости — в `SYSTEM_INSTRUCTIONS`.
 
 ## 7. ИИ-менеджер (продавец) — как устроен
@@ -491,6 +498,11 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   заглушка; восстановление пропущенных сообщений сделано своим dialog sync с
   per-chat watermarks (миграция 105). При обновлении зависимости проверь,
   не реализовали ли `catchUp()`.
+- **Только личные чаты в инбоксе:** группы/супергруппы/каналы TG отсекаются
+  и в live-обработчике (`worker/src/telegram-updates.ts`), и в dialog sync
+  (`worker/src/telegram-history.ts`); беседы VK (peer_id ≥ 2e9) — в
+  `app/api/vk/webhook/[channelId]/route.ts`. Не возвращай ingest групп —
+  это осознанное решение против мусора в инбоксе.
 - Сапрессии `react-hooks/set-state-in-effect` (~18 файлов) — НЕ техдолг, а
   осознанные паттерны (browser-API на маунте, debounce, derived-state с
   замером DOM). Не «чини» их ради галочки.

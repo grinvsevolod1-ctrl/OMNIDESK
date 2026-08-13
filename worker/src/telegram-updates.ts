@@ -34,37 +34,28 @@ export function attachTelegramHandlers(ctx: TgSessionCtx): void {
       const sender = (await msg.getSender().catch(() => null)) as Api.User | null
 
       const isUserChat = chat?.className === 'User'
+      // Только личные чаты: группы, супергруппы и каналы не попадают в инбокс
+      // вообще — это мусор для продавца (chat === null трактуем как личку:
+      // сущность могла не подгрузиться, а терять сообщения клиента нельзя).
+      if (chat && !isUserChat) return
       const handle = chatId ?? (sender ? String(sender.id) : 'unknown')
-      let contactName: string
-      // Public @username of the contact, when they have one — captured for a
-      // direct (user) chat. Stored separately from the name so the panel can
-      // show "Имя · @username". Groups don't have a single contact username.
-      let contactUsername: string | null = null
-      if (isUserChat || !chat) {
-        const u = (chat as Api.User) ?? sender
-        contactUsername = u && 'username' in u ? (u.username ?? null) : null
-        contactName =
-          u && 'firstName' in u
-            ? [u.firstName, u.lastName].filter(Boolean).join(' ') ||
-              (u.username ? `@${u.username}` : 'Telegram user')
-            : 'Telegram user'
-      } else {
-        // group/supergroup: show the chat title, prefix the sender in body
-        contactName =
-          chat && 'title' in chat && chat.title ? chat.title : 'Telegram group'
-      }
+      // После фильтра выше здесь только личные чаты — контакт и его
+      // @username берутся из сущности пользователя (или отправителя).
+      const u = (chat as Api.User | null) ?? sender
+      const contactUsername =
+        u && 'username' in u ? (u.username ?? null) : null
+      const contactName =
+        u && 'firstName' in u
+          ? [u.firstName, u.lastName].filter(Boolean).join(' ') ||
+            (u.username ? `@${u.username}` : 'Telegram user')
+          : 'Telegram user'
 
-      const senderName =
-        sender && 'firstName' in sender
-          ? [sender.firstName, sender.lastName].filter(Boolean).join(' ') ||
-            (sender.username ? `@${sender.username}` : 'Member')
-          : 'Member'
       // Detect any media so the panel can render/stream it. For media without
       // a caption we fall back to a friendly placeholder instead of the old
       // generic "[non-text message]".
       const media = classifyTgMedia(msg)
-      const caption = msg.message || (media ? media.placeholder : '[non-text message]')
-      const finalBody = isUserChat || !chat ? caption : `${senderName}: ${caption}`
+      const finalBody =
+        msg.message || (media ? media.placeholder : '[non-text message]')
 
       // Persist this peer's access_hash (keyed on the same handle we store the
       // conversation under) so we can address it after a restart without the

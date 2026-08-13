@@ -14,6 +14,7 @@ import { LeadDetailFields } from '@/components/curator/lead-detail/lead-fields'
 import { LeadHistory } from '@/components/curator/lead-detail/lead-history'
 import { LeadIdentity } from '@/components/curator/lead-detail/lead-identity'
 import { LeadLifecycleActions } from '@/components/curator/lead-detail/lead-lifecycle-actions'
+import { LeadTransferSection } from '@/components/curator/lead-detail/lead-transfer-section'
 import { PanelSection } from '@/components/curator/lead-detail/panel-section'
 import { LeadStatusForm } from '@/components/curator/lead-panel-forms'
 import { LeadAttachments } from '@/components/shared/lead-attachments'
@@ -192,6 +193,21 @@ export function LeadDetailPanel({
               />
             )}
           </PanelSection>
+
+          {/* Передача коллеге: только в кураторской панели и пока лид
+              не в архиве — из архива сначала верните лид. */}
+          {variant === 'curator' && !card.archivedAt ? (
+            <PanelSection>
+              <LeadTransferSection
+                leadCardId={card.id}
+                currentCuratorId={card.curatorId}
+                onTransferred={() => {
+                  onUpdated()
+                  onClose()
+                }}
+              />
+            </PanelSection>
+          ) : null}
 
           {/* Lifecycle: финальные лиды можно архивировать или вернуть ИИ. */}
           {isFinalLeadStatus(card.status) ? (

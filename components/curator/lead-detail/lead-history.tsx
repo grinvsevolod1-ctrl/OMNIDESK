@@ -60,7 +60,11 @@ export function LeadHistory({
                   : `→ ${t.toCuratorName ?? '—'}`}
               </span>
               <span className="rounded bg-muted px-1 py-0.5 text-[10px]">
-                {t.initiatedByRole === 'admin' ? 'админ' : 'менеджер'}
+                {t.initiatedByRole === 'admin'
+                  ? 'админ'
+                  : t.initiatedByRole === 'curator'
+                    ? 'менеджер по кадрам'
+                    : 'менеджер'}
               </span>
             </HistoryRow>
           ))}
