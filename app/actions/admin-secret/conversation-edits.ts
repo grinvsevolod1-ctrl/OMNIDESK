@@ -145,7 +145,7 @@ export async function secretDeleteMessageAction(input: {
            SELECT body, created_at
              FROM messages
             WHERE conversation_id = $1
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 1
          ) m
         WHERE c.id = $1`,

@@ -20,12 +20,7 @@ import { decryptJson, encrypt, encryptJson } from '../crypto'
 import type {
   AppRuntime,
   AppStatus,
-  DeployAction,
-  DeploymentMode,
-  DeploymentStatus,
   HostingApp,
-  HostingDeployLog,
-  HostingDeployment,
   HostingServer,
   ServerAuthType,
   ServerMetrics,

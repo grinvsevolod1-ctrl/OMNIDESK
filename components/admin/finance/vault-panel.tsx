@@ -9,28 +9,14 @@
  */
 
 import type React from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
-  AlertTriangle,
-  ClipboardCopy,
-  Copy,
   Download,
-  ExternalLink,
-  Eye,
-  EyeOff,
-  FileText,
-  Globe,
-  KeyRound,
-  Lock,
-  Pencil,
   Plus,
   Search,
   ShieldAlert,
   ShieldCheck,
-  Star,
-  Trash2,
   Upload,
-  User,
   Vault,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -38,7 +24,6 @@ import {
   downloadText,
   findReusedSecrets,
   parseVaultFile,
-  scorePassword,
   toCSV,
   toJSON,
   type ParsedVaultRow,
@@ -49,9 +34,7 @@ import {
   type VaultItem,
 } from '@/lib/finance-types'
 import { EmptyState } from '@/components/page-parts'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -60,10 +43,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import {
-  VAULT_CATEGORY_META,
-  copyToClipboard,
-} from '@/components/admin/finance/finance-utils'
+import { VAULT_CATEGORY_META } from '@/components/admin/finance/finance-utils'
 import { VaultCard } from './vault-card'
 
 export function VaultPanel({
