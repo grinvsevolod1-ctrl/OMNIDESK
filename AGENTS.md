@@ -159,7 +159,14 @@ components/manager/      UI менеджера
                          (<40px) с мёртвой зоной 40–120px. НЕ возвращай
                          position-only логику — она даёт цикл «утаскивает
                          вниз при скролле вверх» (тот же паттерн в
-                         god-messenger/use-god-scroll.ts)
+                         god-messenger/use-god-scroll.ts);
+                         thread-search.tsx — телеграм-поиск по диалогу
+                         (лупа в шапке) и навигация по кружкам/фото с
+                         прикреплением к карточке лида: hits от новых к
+                         старым, цель догружается loadOlder-циклом,
+                         подсветка через data-message-id в message-list;
+                         связь с LeadCardPanel — CustomEvent
+                         'omnidesk:lead-attachments-changed'
   autopilot-manager.tsx + autopilot/  автопилот: use-autopilot.ts, rule-editor
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
@@ -191,7 +198,7 @@ lib/
                            поиск (дата/ФИО/телефон/@username/город/регион/
                            имя сотрудника — менеджера И менеджера по кадрам)
                          conversations.ts → conversation-transfer.ts
-                           (передача диалогов, admin bulk reassignment)
+                           (передача ди��логов, admin bulk reassignment)
                          shared.ts → shared-converters.ts (row → domain
                            маппинги toManager/toChannel/toConversation/toMessage)
                          brain-loaders.ts — next-сторона BrainInputLoaders
@@ -381,7 +388,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 - **UI-конвенция строк фильтров:** контролы h-9, иконки `size-4 shrink-0`
   (выровнено в «Все лиды» и «Мои лиды» — поддерживай при добавлении кнопок).
 - **СТАНДАРТ UI «как у Apple» — скорость и плавность обязательны.** Любые
-  панели, шиты, оверлеи и модалки открываются мгновенно и без единого
+  панели, шиты, оверлеи �� модалки открываются мгновенно и без единого
   дёрганого кадра. Правила:
   - Боковые панели/шиты — ТОЛЬКО через общий `components/shared/slide-over.tsx`
     (панель всегда смонтирована, анимация `transition-transform` +

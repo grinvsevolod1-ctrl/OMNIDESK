@@ -42,7 +42,6 @@ import {
 } from '@/app/actions/lead-cards'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
 
 export type ThreadSearchMode = 'text' | 'video_note' | 'photo'
@@ -209,15 +208,21 @@ export function useThreadSearch({
     [conversationId, goTo],
   )
 
+  /** Ввод запроса: короткий запрос сразу гасит результаты (без эффекта). */
+  const onQueryChange = useCallback((value: string) => {
+    setQuery(value)
+    if (value.trim().length < 2) {
+      generation.current++
+      setHits([])
+      setIndex(-1)
+    }
+  }, [])
+
   /* Текстовый поиск — с дебаунсом по вводу. */
   useEffect(() => {
     if (!open || mode !== 'text' || !conversationId) return
     const q = query.trim()
-    if (q.length < 2) {
-      setHits([])
-      setIndex(-1)
-      return
-    }
+    if (q.length < 2) return
     const gen = ++generation.current
     const t = setTimeout(() => {
       setBusy(true)
@@ -312,7 +317,7 @@ export function useThreadSearch({
               <Input
                 ref={inputRef}
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => onQueryChange(e.target.value)}
                 placeholder="Поиск по диалогу…"
                 className="h-8 flex-1 border-none bg-transparent px-1 shadow-none focus-visible:ring-0"
               />
@@ -424,6 +429,7 @@ export function useThreadSearch({
     step,
     close,
     attach,
+    onQueryChange,
   ])
 
   return {

@@ -2,18 +2,23 @@
 
 import { useRef, useState, useTransition } from 'react'
 import { createPortal } from 'react-dom'
-import { CircleDot, Loader2, Paperclip, Play, Trash2, X } from 'lucide-react'
+import {
+  CircleDot,
+  ImageIcon,
+  Loader2,
+  Paperclip,
+  Play,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  attachLeadVideoNoteAction,
   deleteLeadAttachmentAction,
-  listConversationVideoNotesAction,
   type LeadAttachmentView,
 } from '@/app/actions/lead-cards'
 import { Button } from '@/components/ui/button'
 import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import { compressImageFile } from '@/lib/compress-image'
-import type { ConversationVideoNote } from '@/lib/data/lead-attachments'
 import { formatMskDateTime as formatDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
@@ -196,12 +201,33 @@ export function LeadAttachments({
             )}
             Прикрепить
           </Button>
-          {conversationId ? (
-            <VideoNotePicker
-              leadCardId={leadCardId}
-              conversationId={conversationId}
-              onChanged={onChanged}
-            />
+          {conversationId && onBrowseMedia ? (
+            <>
+              {/* Телеграм-стиль: кнопки открывают навигацию по сообщениям
+                  треда (стрелки/Esc), клик по медиа — подтверждение выбора. */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={pending}
+                onClick={() => onBrowseMedia('video_note')}
+                title="Найти кружок в диалоге и прикрепить"
+              >
+                <CircleDot className="size-3.5" />
+                Кружок
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={pending}
+                onClick={() => onBrowseMedia('photo')}
+                title="Найти фото в диалоге и прикрепить"
+              >
+                <ImageIcon className="size-3.5" />
+                Документ
+              </Button>
+            </>
           ) : null}
         </div>
       </div>
@@ -382,111 +408,4 @@ export function LeadAttachments({
   )
 }
 
-/**
- * «Прикрепить кружок»: находит все video_note активного диалога по порядку
- * и закрепляет выбранный за карточкой.
- */
-function VideoNotePicker({
-  leadCardId,
-  conversationId,
-  onChanged,
-}: {
-  leadCardId: string
-  conversationId: string
-  onChanged: (next: LeadAttachmentView[]) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [notes, setNotes] = useState<ConversationVideoNote[] | null>(null)
-  const [pending, startTransition] = useTransition()
 
-  function toggle() {
-    const next = !open
-    setOpen(next)
-    if (next && notes === null) {
-      startTransition(async () => {
-        try {
-          setNotes(await listConversationVideoNotesAction(conversationId))
-        } catch {
-          toast.error('Не удалось найти кружки')
-          setNotes([])
-        }
-      })
-    }
-  }
-
-  function attach(note: ConversationVideoNote) {
-    startTransition(async () => {
-      const res = await attachLeadVideoNoteAction({
-        leadCardId,
-        conversationId,
-        messageId: note.messageId,
-      })
-      if (res.ok && res.attachments) {
-        toast.success(res.message)
-        onChanged(res.attachments)
-        setOpen(false)
-      } else {
-        toast.error(res.message)
-      }
-    })
-  }
-
-  return (
-    <div className="relative">
-      <Button
-        variant="outline"
-        size="sm"
-        className="gap-1.5"
-        onClick={toggle}
-        aria-expanded={open}
-        title="Прикрепить кружок из диалога"
-      >
-        <CircleDot className="size-3.5" />
-        Кружок
-      </Button>
-      {open ? (
-        <div className="absolute right-0 top-full z-20 mt-1.5 w-64 rounded-xl border border-border bg-popover p-2 shadow-lg">
-          <p className="px-1 pb-1.5 text-xs font-medium text-muted-foreground">
-            Кружки этого диалога
-          </p>
-          {pending && notes === null ? (
-            <p className="flex items-center gap-2 px-1 py-2 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" />
-              Ищем кружки…
-            </p>
-          ) : !notes || notes.length === 0 ? (
-            <p className="px-1 py-2 text-xs text-muted-foreground">
-              В диалоге нет видео-кружков
-            </p>
-          ) : (
-            <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto">
-              {notes.map((n) => (
-                <li key={n.messageId}>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted disabled:opacity-50"
-                    onClick={() => attach(n)}
-                    disabled={pending}
-                  >
-                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary">
-                      {n.ordinal}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block font-medium">
-                        Кружок №{n.ordinal}
-                      </span>
-                      <span className="block text-muted-foreground">
-                        {n.direction === 'in' ? 'от клиента' : 'наш'} ·{' '}
-                        {formatDateTime(n.createdAt)}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : null}
-    </div>
-  )
-}

@@ -25,6 +25,8 @@ import { MessageList } from '@/components/manager/inbox/message-list'
 import { ComposerBanners } from '@/components/manager/inbox/composer-banners'
 import { useInbox } from '@/components/manager/inbox/use-inbox'
 import { useInboxShortcuts } from '@/components/manager/inbox/use-inbox-shortcuts'
+import { useThreadSearch } from '@/components/manager/inbox/thread-search'
+import { useCallback } from 'react'
 
 /* -------------------------------------------------------------------------- */
 /*  Presentational shell. All state/effects/actions live in useInbox; this    */
@@ -164,6 +166,38 @@ export function InboxView({
   // j/k and Alt+arrows walk the filtered list without touching the mouse.
   useInboxShortcuts({ filtered, activeId, setActiveId })
 
+  /**
+   * Скролл к сообщению по id для поиска/медиа-навигации. true — сообщение
+   * уже в DOM (проскроллили), false — надо догружать историю.
+   */
+  const scrollToMessage = useCallback(
+    (id: string): boolean => {
+      const container = messagesScrollRef.current
+      if (!container) return false
+      const el = container.querySelector(`[data-message-id="${CSS.escape(id)}"]`)
+      if (!el) return false
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return true
+    },
+    [messagesScrollRef],
+  )
+
+  // Телеграм-стиль поиск по диалогу + навигация по кружкам/фото
+  // с прикреплением к карточке лида.
+  const threadSearch = useThreadSearch({
+    conversationId: activeId,
+    loadOlder: handleLoadOlder,
+    scrollToMessage,
+    onAttached: (leadCardId) => {
+      // Сообщаем карточке лида (LeadCardPanel), что вложения изменились.
+      window.dispatchEvent(
+        new CustomEvent('omnidesk:lead-attachments-changed', {
+          detail: { leadCardId },
+        }),
+      )
+    },
+  })
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-card">
       {/* AI hand-off banner — leads the AI promoted to «Ликвид» and handed
@@ -246,7 +280,12 @@ export function InboxView({
               onToggleAi={() => toggleAi(active.id, !activeAiLed)}
               onChangeStatus={(v) => changeStatus(active.id, v)}
               onOpenTransfer={() => openTransfer(active.id)}
+              onOpenSearch={threadSearch.openText}
+              onBrowseMedia={threadSearch.openMedia}
             />
+
+            {/* Бар поиска/медиа-навигации — под шапкой, над сообщениями. */}
+            {threadSearch.bar}
 
             <MessageList
               active={active}
@@ -273,6 +312,12 @@ export function InboxView({
               onForward={forwardMessage}
               onDelete={deleteMessage}
               onShowHistory={setHistoryMessage}
+              highlightedId={threadSearch.highlightedId}
+              onBubbleClick={
+                threadSearch.attachLeadCardId
+                  ? threadSearch.onMessageClick
+                  : undefined
+              }
             />
 
             <ComposerBanners

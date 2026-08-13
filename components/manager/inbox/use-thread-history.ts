@@ -78,11 +78,16 @@ export function useThreadHistory({
       })
   }, [activeId, localMessages, setLocalMessages])
 
-  const handleLoadOlder = useCallback(async () => {
-    if (!activeId || loadingOlder) return
+  /**
+   * Догрузить страницу истории. Возвращает hasMore — есть ли ещё старые
+   * сообщения. Это позволяет поиску по треду долистывать до цели циклом.
+   */
+  const handleLoadOlder = useCallback(async (): Promise<boolean> => {
+    // Параллельная загрузка уже идёт — считаем, что история ещё может быть.
+    if (!activeId || loadingOlder) return Boolean(activeId)
     const current = localMessages[activeId] ?? []
     const oldest = current[0]
-    if (!oldest) return
+    if (!oldest) return false
     setLoadingOlder(true)
     const container = messagesScrollRef.current
     const prevHeight = container?.scrollHeight ?? 0
@@ -105,8 +110,10 @@ export function useThreadHistory({
         })
       }
       if (!res.hasMore) setNoOlder((p) => ({ ...p, [activeId]: true }))
+      return res.ok ? res.hasMore : false
     } catch {
       toast.error('Не удалось загрузить историю')
+      return false
     } finally {
       setLoadingOlder(false)
     }
