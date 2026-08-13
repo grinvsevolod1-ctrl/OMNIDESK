@@ -268,6 +268,20 @@ export function useThreadSearch({
     }
   }, [mediaActive])
 
+  /* Карточка лида закрылась (крестик/Esc/смена диалога) — медиа-режим без
+     неё не имеет смысла: закрываем бар, раскладка возвращается в исходное
+     (иначе оставался пустой правый отступ под карточку). */
+  useEffect(() => {
+    if (!mediaActive) return
+    const onCardOpen = (e: Event) => {
+      const detail = (e as CustomEvent<{ open?: boolean }>).detail
+      if (detail?.open === false) close()
+    }
+    window.addEventListener('omnidesk:lead-card-open', onCardOpen)
+    return () =>
+      window.removeEventListener('omnidesk:lead-card-open', onCardOpen)
+  }, [mediaActive, close])
+
   /* Esc закрывает бар (capture — раньше обработчика «закрыть диалог»). */
   useEffect(() => {
     if (!open) return

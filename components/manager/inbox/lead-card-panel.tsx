@@ -123,6 +123,16 @@ export function LeadCardPanel({
     if (next) void load()
   }
 
+  // Сообщаем инбоксу об открытии/закрытии карточки: медиа-режим (кружки/фото)
+  // существует только рядом с открытой карточкой — при её закрытии бар
+  // навигации тоже закрывается и раскладка возвращается в исходное состояние
+  // (иначе оставался правый отступ под карточку — «чёрный экран»).
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('omnidesk:lead-card-open', { detail: { open } }),
+    )
+  }, [open])
+
   // Esc closes the card first (capture phase + preventDefault so the
   // inbox-level handler doesn't ALSO close the dialog in the same press);
   // a second Esc then closes the dialog as usual.
