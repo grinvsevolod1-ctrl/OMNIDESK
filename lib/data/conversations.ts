@@ -297,6 +297,39 @@ export async function listMessagesBefore(
 }
 
 /**
+ * Поиск по тексту сообщений одного диалога (кнопка-лупа в треде).
+ * Возвращает только id/дату/сниппет совпадений от НОВЫХ к старым — клиент
+ * навигируется по ним, догружая историю по мере необходимости.
+ * Manager-scoped через join: чужой диалог просто даёт [].
+ */
+export async function searchConversationMessages(
+  conversationId: string,
+  managerId: string,
+  q: string,
+  limit = 200,
+): Promise<Array<{ id: string; createdAt: string; snippet: string }>> {
+  const needle = q.trim()
+  if (!needle) return []
+  const rows = await query<{ id: string; created_at: Date; body: string }>(
+    `SELECT m.id, m.created_at, m.body
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.conversation_id = $1
+        AND c.manager_id = $2
+        AND m.deleted_at IS NULL
+        AND m.body ILIKE '%' || $3 || '%'
+      ORDER BY m.created_at DESC
+      LIMIT $4`,
+    [conversationId, managerId, needle, Math.min(Math.max(1, limit), 200)],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    createdAt: new Date(r.created_at).toISOString(),
+    snippet: r.body.length > 90 ? `${r.body.slice(0, 90)}…` : r.body,
+  }))
+}
+
+/**
  * Backfill: every message for a manager created strictly after `since`,
  * ordered oldest-first. Used by the SSE route to replay events a browser
  * missed while it was disconnected (gap recovery via Last-Event-ID).

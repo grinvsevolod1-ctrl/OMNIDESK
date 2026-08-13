@@ -12,6 +12,7 @@ import {
   listMessagesBefore,
   markMessageDeleted,
   markMessageFailed,
+  searchConversationMessages,
   setConversationAiAutopilot,
   setMessageReaction,
 } from '@/lib/data'
@@ -373,4 +374,17 @@ export async function loadOlderMessagesAction(
     PAGE,
   )
   return { ok: true, messages, hasMore: messages.length >= PAGE }
+}
+
+/**
+ * Поиск по тексту сообщений открытого диалога (кнопка-лупа в треде).
+ * Возвращает совпадения от новых к старым: id, дата и сниппет.
+ */
+export async function searchThreadMessagesAction(
+  conversationId: string,
+  q: string,
+): Promise<Array<{ id: string; createdAt: string; snippet: string }>> {
+  const session = await requireManager()
+  if (!conversationId || !q.trim()) return []
+  return searchConversationMessages(conversationId, session.sub, q)
 }

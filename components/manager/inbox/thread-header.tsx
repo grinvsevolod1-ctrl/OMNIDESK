@@ -5,6 +5,7 @@ import {
   BrainCircuit,
   Info,
   MoreVertical,
+  Search,
   UserPlus,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -51,6 +52,8 @@ export function ThreadHeader({
   onToggleAi,
   onChangeStatus,
   onOpenTransfer,
+  onOpenSearch,
+  onBrowseMedia,
 }: {
   active: Conversation
   activePresence: PresenceState | null
@@ -65,7 +68,20 @@ export function ThreadHeader({
   onToggleAi: () => void
   onChangeStatus: (value: string) => void
   onOpenTransfer: () => void
+  /** Открыть телеграм-стиль поиск по сообщениям диалога. */
+  onOpenSearch: () => void
+  /** Навигация по кружкам/фото диалога для прикрепления к карточке лида. */
+  onBrowseMedia: (kind: 'video_note' | 'photo', leadCardId: string) => void
 }) {
+  // Telegram-диалоги дают числовой Telegram ID вместо телефона — раньше он
+  // ошибочно подставлялся в поле «Телефон» карточки. Телефон — только из
+  // WhatsApp; числовой telegram-handle идёт в отдельное поле Telegram ID.
+  const phoneDefault =
+    active.channelType === 'whatsapp' ? active.contactHandle : undefined
+  const telegramIdDefault =
+    active.channelType === 'telegram' && /^\d+$/.test(active.contactHandle)
+      ? active.contactHandle
+      : undefined
   return (
     <div className="flex h-14 items-center gap-3 border-b border-border px-3 sm:px-4">
       <Button
@@ -137,12 +153,21 @@ export function ThreadHeader({
           defaults={{
             fullName: active.contactName !== 'NULL' ? active.contactName : '',
             telegramUsername: active.contactUsername,
-            phone:
-              active.channelType === 'whatsapp' || active.channelType === 'telegram'
-                ? active.contactHandle
-                : undefined,
+            phone: phoneDefault,
+            telegramId: telegramIdDefault,
           }}
+          onBrowseMedia={onBrowseMedia}
         />
+
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onOpenSearch}
+          aria-label="Поиск по диалогу"
+          title="Поиск по сообщениям диалога"
+        >
+          <Search className="size-4" />
+        </Button>
 
         <StatusChip
           status={active.status}

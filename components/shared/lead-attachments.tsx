@@ -33,15 +33,28 @@ const ROLE_LABEL: Record<string, string> = {
  */
 export function LeadAttachments({
   leadCardId,
+  ensureCardId,
   conversationId,
   attachments,
   onChanged,
+  onBrowseMedia,
 }: {
-  leadCardId: string
+  /** null — карточка ещё не сохранена (см. ensureCardId). */
+  leadCardId: string | null
+  /**
+   * Ленивая инициализация карточки: вызывается перед первым прикреплением,
+   * когда карточка ещё не сохранена. Возвращает id или null при ошибке.
+   */
+  ensureCardId?: () => Promise<string | null>
   /** Диалог карточки — включает кнопку «Прикрепить кружок». */
   conversationId?: string | null
   attachments: LeadAttachmentView[]
   onChanged: (next: LeadAttachmentView[]) => void
+  /**
+   * Телеграм-стиль выбор медиа из диалога: кнопки «Кружок»/«Фото» открывают
+   * навигацию по треду вместо старого выпадающего списка.
+   */
+  onBrowseMedia?: (kind: 'video_note' | 'photo') => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [pending, startTransition] = useTransition()
@@ -71,6 +84,9 @@ export function LeadAttachments({
       }
     }
     startTransition(async () => {
+      // Карточка ещё не сохранена — тихо сохраняем и цепляем файлы к ней.
+      const cardId = leadCardId ?? (await ensureCardId?.()) ?? null
+      if (!cardId) return
       // Фото сжимаются на клиенте (даунскейл до 2048px + JPEG) — на мобильном
       // интернете загрузка ускоряется в разы. Видео идёт как есть.
       const prepared = await Promise.all(
@@ -79,7 +95,7 @@ export function LeadAttachments({
         ),
       )
       const form = new FormData()
-      form.set('leadCardId', leadCardId)
+      form.set('leadCardId', cardId)
       for (const f of prepared) form.append('files', f)
       // Обычный fetch к API-роуту вместо server action: POST экшена с крупным
       // видео режется прокси-слоями и падает с генерик-ошибкой «An unexpected

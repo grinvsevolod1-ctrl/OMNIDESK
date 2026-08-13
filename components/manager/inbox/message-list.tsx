@@ -42,6 +42,8 @@ export function MessageList({
   onForward,
   onDelete,
   onShowHistory,
+  highlightedId,
+  onBubbleClick,
 }: {
   active: Conversation
   activeId: string | null
@@ -62,6 +64,10 @@ export function MessageList({
   onForward: (message: Message, toConversationId: string) => void
   onDelete: (message: Message) => void
   onShowHistory: (message: Message) => void
+  /** Подсветить сообщение (навигация поиска/медиа по треду). */
+  highlightedId?: string | null
+  /** Клик по бабблу — выбор медиа в режиме «прикрепить к карточке». */
+  onBubbleClick?: (message: Message) => void
 }) {
   // Infinite scroll up: when the top sentinel becomes visible near the top of
   // the feed, older messages load automatically — no button press needed.
@@ -152,6 +158,7 @@ export function MessageList({
             // off-screen bubbles — a large win on 300-message threads.
             <div
               key={m.id}
+              data-message-id={m.id}
               style={{
                 contentVisibility: 'auto',
                 containIntrinsicSize: 'auto 56px',
@@ -316,7 +323,15 @@ export function MessageList({
                       className={cn(
                         'flex max-w-[80%] flex-col gap-1 sm:max-w-[70%]',
                         isOut ? 'items-end' : 'items-start',
+                        // Подсветка цели поиска/медиа-навигации — как в
+                        // Telegram: мягкое кольцо вокруг сообщения.
+                        highlightedId === m.id &&
+                          'rounded-2xl ring-2 ring-primary/70 ring-offset-2 ring-offset-background transition-shadow',
+                        onBubbleClick && 'cursor-pointer',
                       )}
+                      onClick={
+                        onBubbleClick ? () => onBubbleClick(m) : undefined
+                      }
                     >
                       {canAct ? (
                         <MessageContextMenu

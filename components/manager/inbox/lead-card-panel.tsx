@@ -34,14 +34,18 @@ import type { CuratorWithLoad } from '@/lib/data/lead-cards'
 export function LeadCardPanel({
   conversationId,
   defaults,
+  onBrowseMedia,
 }: {
   conversationId: string
   defaults?: {
     fullName?: string
     phone?: string
     telegramUsername?: string
+    telegramId?: string
     city?: string
   }
+  /** Телеграм-стиль навигация по кружкам/фото диалога для прикрепления. */
+  onBrowseMedia?: (kind: 'video_note' | 'photo', leadCardId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [pending, startTransition] = useTransition()
@@ -52,6 +56,7 @@ export function LeadCardPanel({
   const [telegramUsername, setTelegramUsername] = useState(
     defaults?.telegramUsername ?? '',
   )
+  const [telegramId, setTelegramId] = useState(defaults?.telegramId ?? '')
   const [city, setCity] = useState(defaults?.city ?? '')
   const [address, setAddress] = useState('')
   const [vacancy, setVacancy] = useState('')
@@ -67,6 +72,7 @@ export function LeadCardPanel({
       setTelegramUsername(
         card.telegramUsername || defaults?.telegramUsername || '',
       )
+      setTelegramId(card.telegramId || defaults?.telegramId || '')
       setCity(card.city || defaults?.city || '')
       setAddress(card.address)
       setVacancy(card.vacancy)
@@ -79,6 +85,7 @@ export function LeadCardPanel({
       setFullName(defaults?.fullName ?? '')
       setPhone(defaults?.phone ?? '')
       setTelegramUsername(defaults?.telegramUsername ?? '')
+      setTelegramId(defaults?.telegramId ?? '')
       setCity(defaults?.city ?? '')
       setAddress('')
       setVacancy('')
@@ -100,6 +107,7 @@ export function LeadCardPanel({
     setFullName(defaults?.fullName ?? '')
     setPhone(defaults?.phone ?? '')
     setTelegramUsername(defaults?.telegramUsername ?? '')
+    setTelegramId(defaults?.telegramId ?? '')
     setCity(defaults?.city ?? '')
     setAddress('')
     setVacancy('')
@@ -180,6 +188,7 @@ export function LeadCardPanel({
         fullName,
         phone,
         telegramUsername,
+        telegramId,
         city,
         address,
         vacancy,
@@ -199,6 +208,56 @@ export function LeadCardPanel({
       }
     })
   }
+
+  /**
+   * Вложения доступны СРАЗУ, до сохранения: при первом прикреплении карточка
+   * тихо сохраняется с текущими полями, и файл цепляется уже к ней.
+   */
+  const ensureCardId = useCallback(async (): Promise<string | null> => {
+    if (cardId) return cardId
+    const res = await saveLeadCardAction({
+      conversationId,
+      fullName,
+      phone,
+      telegramUsername,
+      telegramId,
+      city,
+      address,
+      vacancy,
+      curatorId: null,
+    })
+    if (!res.ok) {
+      toast.error(res.message)
+      return null
+    }
+    const card = await getLeadCardAction(conversationId)
+    if (card) setCardId(card.id)
+    return card?.id ?? null
+  }, [
+    cardId,
+    conversationId,
+    fullName,
+    phone,
+    telegramUsername,
+    telegramId,
+    city,
+    address,
+    vacancy,
+  ])
+
+  // Прикрепление кружка/фото происходит в баре навигации по треду (вне этой
+  // панели) — событие сообщает карточке, что список вложений изменился.
+  useEffect(() => {
+    if (!cardId) return
+    const onChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ leadCardId?: string }>).detail
+      if (!detail?.leadCardId || detail.leadCardId === cardId)
+        void mutateDetail()
+    }
+    window.addEventListener('omnidesk:lead-attachments-changed', onChanged)
+    return () =>
+      window.removeEventListener('omnidesk:lead-attachments-changed', onChanged)
+  }, [cardId, mutateDetail])
 
   return (
     <>
@@ -293,6 +352,14 @@ export function LeadCardPanel({
                   />
                 </Field>
               </div>
+              <Field label="Telegram ID">
+                <Input
+                  value={telegramId}
+                  onChange={(e) => setTelegramId(e.target.value)}
+                  placeholder="123456789"
+                  inputMode="numeric"
+                />
+              </Field>
               <Field label="Город" required>
                 <CityInput
                   value={city}
@@ -380,18 +447,28 @@ export function LeadCardPanel({
                 </p>
               ) : null}
 
+              {/* Файлы: доступны СРАЗУ (карточка сохранится тихо при первом
+                  прикреплении). Кружки/фото выбираются навигацией по треду. */}
+              <div className="border-t border-border pt-3.5">
+                <LeadAttachments
+                  leadCardId={cardId}
+                  ensureCardId={ensureCardId}
+                  conversationId={conversationId}
+                  attachments={detail?.attachments ?? []}
+                  onChanged={() => void mutateDetail()}
+                  onBrowseMedia={
+                    onBrowseMedia
+                      ? async (kind) => {
+                          const id = await ensureCardId()
+                          if (id) onBrowseMedia(kind, id)
+                        }
+                      : undefined
+                  }
+                />
+              </div>
+
               {cardId ? (
                 <>
-                  {/* Файлы: фото/видео + телеграм-кружки из этого диалога */}
-                  <div className="border-t border-border pt-3.5">
-                    <LeadAttachments
-                      leadCardId={cardId}
-                      conversationId={conversationId}
-                      attachments={detail?.attachments ?? []}
-                      onChanged={() => void mutateDetail()}
-                    />
-                  </div>
-
                   {/* Статус менеджера по кадрам — менеджер видит текущий статус и историю */}
                   {detail?.card?.status || detail?.statusHistory?.length ? (
                     <div className="flex flex-col gap-2 border-t border-border pt-3.5">
@@ -473,8 +550,9 @@ export function LeadCardPanel({
                 </>
               ) : (
                 <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
-                  Сохраните карточку, чтобы прикреплять файлы, кружки и
-                  оставлять комментарии.
+                  Комментарии станут доступны после сохранения карточки.
+                  Файлы, кружки и фото можно прикреплять сразу — карточка
+                  сохранится автоматически.
                 </p>
               )}
             </div>
