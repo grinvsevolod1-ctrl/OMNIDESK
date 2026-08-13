@@ -38,6 +38,8 @@ export interface SiteCampaign {
   clicks: number
   goals: number
   bounce: number
+  /** Revenue for the period — vitrine derives ДРР and ROI from it (§6). */
+  revenue: number
   weeklyBudget: number
   strategy: string
   platform: string
@@ -54,9 +56,28 @@ export const PERIOD_METRIC_FIELDS = [
   'clicks',
   'goals',
   'bounce',
+  'revenue',
 ] as const
 export type PeriodMetricField = (typeof PERIOD_METRIC_FIELDS)[number]
 export type PeriodOverride = Partial<Pick<SiteCampaign, PeriodMetricField>>
+
+/**
+ * Auto-spend ("авто-скрутка"): the panel burns `dailyBudget` per day all by
+ * itself, following a natural intraday traffic curve. Internal to the god
+ * panel — the vitrine only sees the resulting numbers, never this config.
+ */
+export interface AutoSpend {
+  enabled: boolean
+  /** How much to burn per day, in the site's currency. */
+  dailyBudget: number
+  /**
+   * Day (YYYY-MM-DD in panel TZ) whose spend has already been committed to
+   * the stored balance. Maintained by commitAutoSpend — not hand-edited.
+   */
+  lastCommittedDay?: string
+  /** Day boundary timezone, hours east of UTC. Default +3 (Moscow). */
+  tzOffsetHours?: number
+}
 
 export interface SiteState {
   /** Cabinet login shown in the page header / side menu / tab title. */
@@ -66,6 +87,8 @@ export interface SiteState {
   campaigns: SiteCampaign[]
   /** Optional per-period metric overlays, god-panel curated. */
   periodOverrides?: Partial<Record<SitePeriod, Record<string, PeriodOverride>>>
+  /** Auto-spend config — god-panel internal, never exposed to the page. */
+  autoSpend?: AutoSpend
 }
 
 export interface GodSite {
@@ -118,6 +141,7 @@ export function sanitizeCampaign(
       clicks: 0,
       goals: 0,
       bounce: 0,
+      revenue: 0,
       weeklyBudget: 0,
       strategy: '',
       platform: '',
@@ -139,6 +163,7 @@ export function sanitizeCampaign(
       'clicks' in r ? Math.round(num(r.clicks, base.clicks)) : base.clicks,
     goals: 'goals' in r ? Math.round(num(r.goals, base.goals)) : base.goals,
     bounce: 'bounce' in r ? Math.min(num(r.bounce, base.bounce), 100) : base.bounce,
+    revenue: 'revenue' in r ? num(r.revenue, base.revenue) : base.revenue,
     weeklyBudget:
       'weeklyBudget' in r
         ? num(r.weeklyBudget, base.weeklyBudget)
@@ -186,6 +211,20 @@ export function sanitizeState(raw: unknown): SiteState {
       if (Object.keys(byId).length > 0) out[p] = byId
     }
     if (Object.keys(out).length > 0) state.periodOverrides = out
+  }
+  if (r.autoSpend && typeof r.autoSpend === 'object') {
+    const a = r.autoSpend as Record<string, unknown>
+    const dailyBudget = num(a.dailyBudget)
+    const lastCommittedDay = str(a.lastCommittedDay).trim()
+    const tz = typeof a.tzOffsetHours === 'number' ? a.tzOffsetHours : 3
+    state.autoSpend = {
+      enabled: a.enabled === true && dailyBudget > 0,
+      dailyBudget,
+      ...(/^\d{4}-\d{2}-\d{2}$/.test(lastCommittedDay)
+        ? { lastCommittedDay }
+        : {}),
+      tzOffsetHours: Math.max(-12, Math.min(14, Math.trunc(tz))),
+    }
   }
   return state
 }
@@ -259,6 +298,176 @@ export async function getSiteBySlugAndKey(
   return rows[0] ? toSite(rows[0]) : null
 }
 
+/* ------------------------------ Auto-spend ------------------------------ */
+
+/*
+ * Deterministic intraday burner. The projection is a PURE function of
+ * (state, wall-clock time): every GET recomputes "how much has been spent by
+ * now" from the daily budget and a natural traffic curve — no cron, no
+ * background writers, and concurrent readers always agree. Numbers only ever
+ * grow within a day (the curve is cumulative and per-day jitter is fixed), so
+ * the vitrine sees a live cabinet that spends by itself. At day rollover the
+ * finished day's budget is committed to the stored balance lazily, on the
+ * first read of the new day (commitAutoSpend below).
+ */
+
+/** Hourly traffic weights 00→23: night lull, day plateau, evening peak. */
+const HOUR_WEIGHTS = [
+  2, 1, 1, 1, 1, 2, 4, 7, 10, 12, 13, 13, 12, 12, 12, 12, 13, 14, 15, 14, 11,
+  8, 5, 3,
+]
+const HOUR_TOTAL = HOUR_WEIGHTS.reduce((a, b) => a + b, 0)
+/** Cumulative curve: HOUR_CUM[h] = share of the day spent by hour h. */
+const HOUR_CUM = HOUR_WEIGHTS.reduce<number[]>((acc, w, i) => {
+  acc.push((i > 0 ? acc[i - 1] : 0) + w / HOUR_TOTAL)
+  return acc
+}, [])
+
+/** FNV-1a → [0, 1). Deterministic per-seed jitter, stable across processes. */
+function seededUnit(seed: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0) / 0x100000000
+}
+
+/** Jitter multiplier in [1-spread, 1+spread], deterministic per seed. */
+function jitter(seed: string, spread: number): number {
+  return 1 + (seededUnit(seed) * 2 - 1) * spread
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+/** Calendar day key (YYYY-MM-DD) in the panel's auto-spend timezone. */
+export function autoDayKey(now: Date, tzOffsetHours: number): string {
+  const shifted = new Date(now.getTime() + tzOffsetHours * 3_600_000)
+  return shifted.toISOString().slice(0, 10)
+}
+
+/** Share of the daily budget burnt by `now` — cumulative traffic curve. */
+export function autoDayFraction(now: Date, tzOffsetHours: number): number {
+  const shifted = new Date(now.getTime() + tzOffsetHours * 3_600_000)
+  const h = shifted.getUTCHours()
+  const minuteShare = (shifted.getUTCMinutes() * 60 + shifted.getUTCSeconds()) / 3_600
+  const prev = h > 0 ? HOUR_CUM[h - 1] : 0
+  return Math.min(1, prev + (HOUR_CUM[h] - prev) * minuteShare)
+}
+
+function daysBetween(fromKey: string, toKey: string): number {
+  const from = Date.parse(`${fromKey}T00:00:00Z`)
+  const to = Date.parse(`${toKey}T00:00:00Z`)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0
+  return Math.max(0, Math.round((to - from) / 86_400_000))
+}
+
+/** Fallback per-$ profile when a campaign has no base numbers to learn from. */
+const DEFAULT_PROFILE = { shows: 320, clicks: 11, goals: 0.4, revenue: 0 }
+
+/**
+ * Simulate the auto-spend day: distribute `budget × fraction` across running
+ * campaigns (weight = their base cost, else weekly budget, else equal) and
+ * derive shows/clicks/goals/revenue from each campaign's own per-$ profile.
+ * All jitter is seeded by (campaign, day) — stable within a day, fresh the
+ * next. Stopped campaigns keep their hand-edited numbers untouched.
+ */
+function simulateAutoDay(
+  state: SiteState,
+  dayKey: string,
+  fraction: number,
+  budgetCap: number,
+): { campaigns: SiteCampaign[]; totalSpent: number } {
+  const cfg = state.autoSpend
+  if (!cfg?.enabled || cfg.dailyBudget <= 0) {
+    return { campaigns: state.campaigns, totalSpent: 0 }
+  }
+  const running = state.campaigns.filter((c) => c.status === 'running')
+  if (running.length === 0) return { campaigns: state.campaigns, totalSpent: 0 }
+
+  const totalSpent = round2(
+    Math.min(cfg.dailyBudget * fraction, Math.max(0, budgetCap)),
+  )
+
+  // Budget shares: base cost → weekly budget → equal, jittered ±8% per day.
+  const weights = running.map(
+    (c) =>
+      (c.cost > 0 ? c.cost : c.weeklyBudget > 0 ? c.weeklyBudget / 7 : 1) *
+      jitter(`${dayKey}:${c.id}:w`, 0.08),
+  )
+  const weightSum = weights.reduce((a, b) => a + b, 0)
+
+  const byId = new Map<string, SiteCampaign>()
+  running.forEach((c, i) => {
+    const spent = round2((totalSpent * weights[i]) / weightSum)
+    // Per-$ profile from the campaign's own base numbers (its "shape").
+    const perDollar =
+      c.cost > 0
+        ? {
+            shows: c.shows / c.cost,
+            clicks: c.clicks / c.cost,
+            goals: c.goals / c.cost,
+            revenue: c.revenue / c.cost,
+          }
+        : DEFAULT_PROFILE
+    const m = (metric: keyof typeof perDollar, spread: number) =>
+      spent * perDollar[metric] * jitter(`${dayKey}:${c.id}:${metric}`, spread)
+    byId.set(c.id, {
+      ...c,
+      cost: spent,
+      shows: Math.round(m('shows', 0.05)),
+      clicks: Math.round(m('clicks', 0.05)),
+      goals: Math.round(m('goals', 0.12)),
+      revenue: round2(m('revenue', 0.1)),
+      bounce: round2(
+        Math.min(100, Math.max(0, c.bounce * jitter(`${dayKey}:${c.id}:b`, 0.06))),
+      ),
+    })
+  })
+
+  return {
+    campaigns: state.campaigns.map((c) => byId.get(c.id) ?? c),
+    totalSpent,
+  }
+}
+
+/**
+ * Lazily commit finished auto-spend days into the stored balance. Called on
+ * page reads; the revision-guarded UPDATE makes concurrent first-reads of a
+ * new day race safely — exactly one commits, the rest see 'conflict' and
+ * simply keep their (already correct) snapshot. Best-effort by design.
+ */
+export async function commitAutoSpend(
+  site: GodSite,
+  now: Date = new Date(),
+): Promise<GodSite> {
+  const a = site.state.autoSpend
+  if (!a?.enabled || a.dailyBudget <= 0) return site
+  const today = autoDayKey(now, a.tzOffsetHours ?? 3)
+  if (a.lastCommittedDay === today) return site
+
+  const res = await mutateSite(site.id, null, (s) => {
+    const cfg = s.autoSpend
+    if (!cfg?.enabled || cfg.dailyBudget <= 0) return { invalid: 'auto off' }
+    const t = autoDayKey(now, cfg.tzOffsetHours ?? 3)
+    if (cfg.lastCommittedDay === t) return { invalid: 'already committed' }
+    const days = cfg.lastCommittedDay
+      ? Math.min(daysBetween(cfg.lastCommittedDay, t), 366)
+      : 0 // first enable: start the clock, nothing to commit yet
+    const spent = Math.min(days * cfg.dailyBudget, s.balance)
+    return {
+      ...s,
+      balance: round2(s.balance - spent),
+      autoSpend: { ...cfg, lastCommittedDay: t },
+    }
+  })
+  return res.ok
+    ? { ...site, state: res.state, revision: res.revision }
+    : site // benign no-op or lost race — snapshot is still valid
+}
+
 /* --------------------------- Period projection -------------------------- */
 
 /** The exact `State` payload page3.html consumes (contract §6). */
@@ -272,27 +481,51 @@ export interface PageStatePayload {
 
 /**
  * Project the canonical state onto a period (contract §3): base campaign
- * fields + per-period metric overlays when the god panel curated them. With
- * no overlays every period returns the same data — explicitly allowed by the
- * contract. periodOverrides themselves are NOT exposed to the page, and the
- * payload carries nothing beyond the contract's `State` (no revision, no ids
- * of ours — the page is a dumb витрина).
+ * fields + per-period metric overlays when the god panel curated them, plus
+ * the auto-spend simulation for `today` (live, grows with the clock) and
+ * `yesterday` (finished day, fraction = 1) when enabled. Hand-curated
+ * overrides always win over the simulation. periodOverrides and autoSpend
+ * themselves are NOT exposed — the page is a dumb витрина and the payload
+ * carries nothing beyond the contract's `State`.
  */
 export function stateForPeriod(
   state: SiteState,
   period: SitePeriod,
+  now: Date = new Date(),
 ): PageStatePayload {
   const overrides = state.periodOverrides?.[period]
-  const campaigns =
+  let campaigns =
     !overrides || period === 'today'
       ? state.campaigns
       : state.campaigns.map((c) =>
           overrides[c.id] ? { ...c, ...overrides[c.id] } : c,
         )
+  let balance = state.balance
+
+  const auto = state.autoSpend
+  if (auto?.enabled && auto.dailyBudget > 0) {
+    const tz = auto.tzOffsetHours ?? 3
+    if (period === 'today') {
+      const sim = simulateAutoDay(
+        state,
+        autoDayKey(now, tz),
+        autoDayFraction(now, tz),
+        state.balance,
+      )
+      campaigns = sim.campaigns
+      balance = round2(Math.max(0, state.balance - sim.totalSpent))
+    } else if (period === 'yesterday' && !overrides) {
+      // Finished day: full curve, seeded with yesterday's date. Balance is
+      // already committed for that day — show the live one untouched.
+      const y = autoDayKey(new Date(now.getTime() - 86_400_000), tz)
+      campaigns = simulateAutoDay(state, y, 1, auto.dailyBudget).campaigns
+    }
+  }
+
   return {
     login: state.login,
     period,
-    balance: state.balance,
+    balance,
     currency: state.currency,
     campaigns,
   }

@@ -78,6 +78,8 @@ export default async function SecretPage() {
     campaignsCount: s.state.campaigns.length,
     balance: s.state.balance,
     currency: s.state.currency,
+    autoSpendEnabled: s.state.autoSpend?.enabled === true,
+    autoDailyBudget: s.state.autoSpend?.dailyBudget ?? 0,
   }))
 
   const adAccounts: SecretAdAccount[] = finance.adAccounts.map((a) => ({

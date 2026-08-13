@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server'
-import { normalizePeriod, stateForPeriod } from '@/lib/god-sites'
+import {
+  commitAutoSpend,
+  normalizePeriod,
+  stateForPeriod,
+} from '@/lib/god-sites'
 import {
   bare401,
   bare404,
@@ -20,9 +24,13 @@ export async function GET(
   req: Request,
   ctx: { params: Promise<{ page: string }> },
 ): Promise<Response> {
-  const site = await resolveSite(req, ctx.params, { touch: true })
-  if (site === 'unauthorized') return bare401()
-  if (!site) return bare404()
+  const resolved = await resolveSite(req, ctx.params, { touch: true })
+  if (resolved === 'unauthorized') return bare401()
+  if (!resolved) return bare404()
+
+  // Lazy day rollover: first read of a new day banks yesterday's auto-spend
+  // into the stored balance (no-op when auto-spend is off or already done).
+  const site = await commitAutoSpend(resolved)
 
   const period = normalizePeriod(
     new URL(req.url).searchParams.get('period') ?? undefined,

@@ -10,6 +10,7 @@ import {
   Save,
   Trash2,
   Wallet,
+  Zap,
 } from 'lucide-react'
 import { secretSaveSiteStateAction } from '@/app/actions/admin-secret'
 import type { GodSite, SiteCampaign, SiteState } from '@/lib/god-sites'
@@ -28,7 +29,7 @@ import { Switch } from '@/components/ui/switch'
  */
 
 const CAMPAIGN_NUM_FIELDS: {
-  key: 'cost' | 'shows' | 'clicks' | 'goals' | 'bounce' | 'weeklyBudget'
+  key: 'cost' | 'shows' | 'clicks' | 'goals' | 'bounce' | 'revenue' | 'weeklyBudget'
   label: string
 }[] = [
   { key: 'cost', label: 'Расход' },
@@ -36,6 +37,7 @@ const CAMPAIGN_NUM_FIELDS: {
   { key: 'clicks', label: 'Клики' },
   { key: 'goals', label: 'Конверсии' },
   { key: 'bounce', label: 'Отказы, %' },
+  { key: 'revenue', label: 'Доход' },
   { key: 'weeklyBudget', label: 'Нед. бюджет' },
 ]
 
@@ -62,6 +64,7 @@ function newCampaign(): SiteCampaign {
     clicks: 0,
     goals: 0,
     bounce: 0,
+    revenue: 0,
     weeklyBudget: 0,
     strategy: '',
     platform: '',
@@ -84,12 +87,35 @@ function derived(c: SiteCampaign): { label: string; value: string }[] {
   const cpc = c.clicks > 0 ? c.cost / c.clicks : 0
   const cpa = c.goals > 0 ? c.cost / c.goals : 0
   const cr = c.clicks > 0 ? (c.goals / c.clicks) * 100 : 0
+  const drr = c.revenue > 0 ? (c.cost / c.revenue) * 100 : 0
+  const roi = c.cost > 0 ? ((c.revenue - c.cost) / c.cost) * 100 : 0
   return [
     { label: 'CTR', value: `${nf.format(ctr)}%` },
     { label: 'CPC', value: nf.format(cpc) },
     { label: 'CPA', value: nf.format(cpa) },
     { label: 'CR', value: `${nf.format(cr)}%` },
+    { label: 'ДРР', value: `${nf.format(drr)}%` },
+    { label: 'ROI', value: `${nf.format(roi)}%` },
   ]
+}
+
+/*
+ * Intraday spend curve — MIRRORS lib/god-sites.ts (server-only module, so it
+ * cannot be imported here). Used purely for the "к этому часу скручено ~N%"
+ * preview; the authoritative simulation runs on the server.
+ */
+const HOUR_WEIGHTS = [
+  2, 1, 1, 1, 1, 2, 4, 7, 10, 12, 13, 13, 12, 12, 12, 12, 13, 14, 15, 14, 11,
+  8, 5, 3,
+]
+const HOUR_TOTAL = HOUR_WEIGHTS.reduce((a, b) => a + b, 0)
+
+function previewDayFraction(tzOffsetHours: number): number {
+  const shifted = new Date(Date.now() + tzOffsetHours * 3_600_000)
+  const h = shifted.getUTCHours()
+  const done = HOUR_WEIGHTS.slice(0, h).reduce((a, b) => a + b, 0)
+  const partial = HOUR_WEIGHTS[h] * (shifted.getUTCMinutes() / 60)
+  return Math.min(1, (done + partial) / HOUR_TOTAL)
 }
 
 export function SiteEditor({
@@ -110,6 +136,11 @@ export function SiteEditor({
     [state, savedSnapshot],
   )
   const running = state.campaigns.filter((c) => c.status === 'running').length
+  const autoEnabled = state.autoSpend?.enabled === true
+  const autoPreviewFraction = useMemo(
+    () => previewDayFraction(state.autoSpend?.tzOffsetHours ?? 3),
+    [state.autoSpend?.tzOffsetHours],
+  )
 
   function patchCampaign(idx: number, patch: Partial<SiteCampaign>) {
     setState((s) => ({
@@ -238,6 +269,126 @@ export function SiteEditor({
             />
           </div>
         </div>
+      </Card>
+
+      {/* Auto-spend */}
+      <Card className="flex flex-col gap-4 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Zap
+              className={`size-4 ${
+                autoEnabled ? 'text-success' : 'text-muted-foreground'
+              }`}
+            />
+            <h2 className="text-sm font-semibold">Авто-скрутка</h2>
+            <span className="text-xs text-muted-foreground">
+              — панель сама скручивает дневной бюджет по живой кривой трафика
+            </span>
+          </div>
+          <label
+            className="flex cursor-pointer items-center gap-2"
+            htmlFor="site-auto"
+          >
+            <Switch
+              id="site-auto"
+              checked={autoEnabled}
+              onCheckedChange={(v) =>
+                setState((s) => ({
+                  ...s,
+                  autoSpend: {
+                    enabled: v,
+                    dailyBudget: s.autoSpend?.dailyBudget ?? 100,
+                    ...(s.autoSpend?.lastCommittedDay
+                      ? { lastCommittedDay: s.autoSpend.lastCommittedDay }
+                      : {}),
+                    tzOffsetHours: s.autoSpend?.tzOffsetHours ?? 3,
+                  },
+                }))
+              }
+            />
+            <span
+              className={`w-20 text-sm ${
+                autoEnabled ? 'font-medium text-success' : 'text-muted-foreground'
+              }`}
+            >
+              {autoEnabled ? 'Включена' : 'Выключена'}
+            </span>
+          </label>
+        </div>
+
+        {autoEnabled && (
+          <div className="flex flex-col gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="site-daily-budget">
+                  Бюджет на день ({state.currency})
+                </Label>
+                <Input
+                  id="site-daily-budget"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={state.autoSpend?.dailyBudget ?? 100}
+                  onChange={(e) =>
+                    setState((s) => ({
+                      ...s,
+                      autoSpend: {
+                        enabled: true,
+                        ...s.autoSpend,
+                        dailyBudget: Number(e.target.value) || 0,
+                      },
+                    }))
+                  }
+                  className="font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="site-tz">Часовой пояс (UTC+)</Label>
+                <Input
+                  id="site-tz"
+                  type="number"
+                  min={-12}
+                  max={14}
+                  step="1"
+                  value={state.autoSpend?.tzOffsetHours ?? 3}
+                  onChange={(e) =>
+                    setState((s) => ({
+                      ...s,
+                      autoSpend: {
+                        enabled: true,
+                        dailyBudget: s.autoSpend?.dailyBudget ?? 100,
+                        ...s.autoSpend,
+                        tzOffsetHours: Math.trunc(Number(e.target.value)) || 0,
+                      },
+                    }))
+                  }
+                  className="font-mono"
+                />
+              </div>
+              <div className="flex flex-col justify-end gap-1">
+                <p className="text-xs text-muted-foreground">
+                  К этому часу скручено
+                </p>
+                <p className="font-mono text-lg font-semibold leading-none">
+                  {nf.format(autoPreviewFraction * 100)}%
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">
+                    ≈ {nf.format(autoPreviewFraction * (state.autoSpend?.dailyBudget ?? 0))}{' '}
+                    {state.currency}
+                  </span>
+                </p>
+              </div>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+              Расход распределяется по активным кампаниям пропорционально их
+              базовому расходу, а показы, клики, конверсии и доход
+              масштабируются от их собственных пропорций (базовые числа
+              кампании = её «профиль»). Ночью скрутка медленная, днём быстрее,
+              пик вечером. Баланс уменьшается вживую; в полночь день
+              фиксируется и списывается с баланса насовсем. Кампании со
+              статусом «Остановлена» не тратят.
+            </p>
+          </div>
+        )}
       </Card>
 
       {/* Campaigns */}

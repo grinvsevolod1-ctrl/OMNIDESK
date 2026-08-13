@@ -17,6 +17,7 @@ const CAMPAIGN: SiteCampaign = {
   clicks: 50,
   goals: 5,
   bounce: 12.5,
+  revenue: 250,
   weeklyBudget: 700,
   strategy: 'Максимум кликов',
   platform: 'Поиск',
@@ -138,6 +139,87 @@ describe('stateForPeriod', () => {
     expect(stateForPeriod(state, 'today').login).toBe('')
   })
 })
+
+describe('auto-spend projection', () => {
+  const autoState = sanitizeState({
+    login: 'auto-cab',
+    balance: 1000,
+    currency: '$',
+    campaigns: [
+      CAMPAIGN,
+      { ...CAMPAIGN, id: '987654321', name: 'Стоп', status: 'stopped' },
+    ],
+    autoSpend: { enabled: true, dailyBudget: 100, tzOffsetHours: 3 },
+  })
+  // 20:30 Moscow time — most of the day's curve is behind.
+  const evening = new Date('2026-08-13T17:30:00Z')
+  const night = new Date('2026-08-13T00:30:00Z') // 03:30 MSK
+
+  it('sanitizes the config and disables it without a budget', () => {
+    expect(autoState.autoSpend?.enabled).toBe(true)
+    const noBudget = sanitizeState({
+      balance: 1,
+      campaigns: [],
+      autoSpend: { enabled: true, dailyBudget: 0 },
+    })
+    expect(noBudget.autoSpend?.enabled).toBe(false)
+  })
+
+  it('burns spend deterministically and monotonically through the day', () => {
+    const early = stateForPeriod(autoState, 'today', night)
+    const late = stateForPeriod(autoState, 'today', evening)
+    const again = stateForPeriod(autoState, 'today', evening)
+    expect(late.campaigns[0].cost).toBeGreaterThan(early.campaigns[0].cost)
+    expect(again).toEqual(late) // pure function of (state, now)
+    expect(late.campaigns[0].cost).toBeLessThanOrEqual(100)
+    expect(late.balance).toBeLessThan(1000)
+    expect(round2(1000 - late.balance)).toBeCloseTo(
+      round2(late.campaigns[0].cost),
+      1,
+    )
+  })
+
+  it('never touches stopped campaigns and scales metrics from the profile', () => {
+    const out = stateForPeriod(autoState, 'today', evening)
+    const stopped = out.campaigns.find((c) => c.id === '987654321')
+    expect(stopped?.cost).toBe(CAMPAIGN.cost)
+    const live = out.campaigns.find((c) => c.id === CAMPAIGN.id)
+    // shows/clicks scale roughly with the base per-$ ratios (10 shows/$).
+    expect(live!.shows / Math.max(live!.cost, 0.01)).toBeGreaterThan(5)
+    expect(live!.revenue).toBeGreaterThan(0)
+  })
+
+  it('yesterday shows the finished day at full budget', () => {
+    const y = stateForPeriod(autoState, 'yesterday', evening)
+    const live = y.campaigns.find((c) => c.id === CAMPAIGN.id)!
+    expect(live.cost).toBeGreaterThan(80) // ~dailyBudget minus jitter share
+    expect(live.cost).toBeLessThanOrEqual(100)
+    expect(y.balance).toBe(1000) // committed already — untouched
+  })
+
+  it('never exposes autoSpend to the page payload', () => {
+    const out = stateForPeriod(autoState, 'today', evening) as unknown as Record<
+      string,
+      unknown
+    >
+    expect(out.autoSpend).toBeUndefined()
+  })
+
+  it('never spends below zero balance', () => {
+    const broke = sanitizeState({
+      balance: 5,
+      campaigns: [CAMPAIGN],
+      autoSpend: { enabled: true, dailyBudget: 100, tzOffsetHours: 3 },
+    })
+    const out = stateForPeriod(broke, 'today', evening)
+    expect(out.balance).toBeGreaterThanOrEqual(0)
+    expect(out.campaigns[0].cost).toBeLessThanOrEqual(5)
+  })
+})
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
 
 describe('normalizePeriod / hashApiKey', () => {
   it('falls back to today for unknown periods', () => {

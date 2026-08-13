@@ -45,6 +45,8 @@ export interface SiteListItem {
   campaignsCount: number
   balance: number
   currency: string
+  autoSpendEnabled: boolean
+  autoDailyBudget: number
 }
 
 function toListItem(s: GodSite): SiteListItem {
@@ -58,6 +60,8 @@ function toListItem(s: GodSite): SiteListItem {
     campaignsCount: s.state.campaigns.length,
     balance: s.state.balance,
     currency: s.state.currency,
+    autoSpendEnabled: s.state.autoSpend?.enabled === true,
+    autoDailyBudget: s.state.autoSpend?.dailyBudget ?? 0,
   }
 }
 

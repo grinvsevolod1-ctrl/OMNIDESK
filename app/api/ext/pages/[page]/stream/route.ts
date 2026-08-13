@@ -1,4 +1,5 @@
 import {
+  commitAutoSpend,
   getSiteBySlugAndKey,
   normalizePeriod,
   stateForPeriod,
@@ -36,8 +37,9 @@ export async function GET(
   const token = readToken(req)
   if (!token) return bare401()
 
-  const site = await getSiteBySlugAndKey(page, token, { touch: true })
-  if (!site) return bare404()
+  const resolved = await getSiteBySlugAndKey(page, token, { touch: true })
+  if (!resolved) return bare404()
+  const site = await commitAutoSpend(resolved)
 
   const period: SitePeriod = normalizePeriod(
     new URL(req.url).searchParams.get('period') ?? undefined,
@@ -60,13 +62,20 @@ export async function GET(
         // Re-resolving by slug+key each tick doubles as live revocation:
         // a rotated/deleted key kills the stream on the next poll.
         void getSiteBySlugAndKey(page, token, { touch: true })
+          .then((found) => (found ? commitAutoSpend(found) : null))
           .then((fresh) => {
             if (!fresh) {
               cleanup()
               controller.close()
               return
             }
-            if (fresh.revision !== lastRevision) {
+            // Auto-spend makes `today` a function of the clock, so the
+            // payload changes every tick even at the same revision — resend
+            // continuously while it's on; otherwise only on real edits.
+            const autoTicking =
+              fresh.state.autoSpend?.enabled === true &&
+              (period === 'today' || period === 'yesterday')
+            if (fresh.revision !== lastRevision || autoTicking) {
               lastRevision = fresh.revision
               send(stateForPeriod(fresh.state, period))
             }

@@ -13,6 +13,7 @@ import {
   Pencil,
   Plus,
   Trash2,
+  Zap,
 } from 'lucide-react'
 import {
   secretCreateSiteAction,
@@ -182,7 +183,20 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
                       />
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate font-medium leading-tight">{s.title}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="truncate font-medium leading-tight">
+                          {s.title}
+                        </p>
+                        {s.autoSpendEnabled && (
+                          <span
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success"
+                            title={`Авто-скрутка: ${new Intl.NumberFormat('ru-RU').format(s.autoDailyBudget)} ${s.currency} в день`}
+                          >
+                            <Zap className="size-2.5" />
+                            Авто
+                          </span>
+                        )}
+                      </div>
                       <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
                         {s.slug}
                       </p>
