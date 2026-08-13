@@ -85,21 +85,25 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    задать `SECRET_PANEL_PASSWORD` на VPS и перезапустить процесс — никакого
    in-band восстановления по дизайну.
 5. **Управляемые сайты** (вкладка «Сайты», `lib/god-sites.ts`, миграция 132) —
-   часть god-панели и подчиняются всем правилам выше. Внешние HTML-макеты
-   (напр. page3.html «Директ Про») хостятся на чужом домене и ходят в
-   `app/api/ext/[key]/*` — публичный REST+SSE контракт, где ключ в пути =
-   единственный кредитив (SHA-256-хэш в БД, показывается один раз при
-   создании/ротации). Неверный ключ → голый 404 (fail-closed, как гейт).
-   Оптимистичные блокировки через revision (409 при конфликте). Server
-   actions вкладки (`app/actions/admin-secret/sites.ts`) требуют god-cookie
-   поверх requireAdmin и НЕ пишут в admin-видимый журнал аудита.
+   часть god-панели и подчиняются всем правилам выше. Внешние HTML-витрины
+   (напр. page3.html «Директ Про») хостятся на чужом домене и ЧИТАЮТ данные из
+   `GET /api/ext/pages/{PAGE_ID}/state?period=` (+ опциональный SSE
+   `/stream?token=`) — контракт строго read-only, страница НИЧЕГО не пишет.
+   PAGE_ID = slug сайта, токен = одноразовый API-ключ (SHA-256-хэш в БД,
+   показывается один раз при создании/ротации), передаётся Bearer'ом или
+   `?token=` (SSE). Slug и токен матчатся ОДНИМ запросом: чужой/неверный
+   токен неотличим от несуществующего slug — голый 404 (fail-closed, как
+   гейт); 401 только при полностью отсутствующем токене. Все правки данных —
+   только из вкладки «Сайты» (optimistic locking по revision). Server actions
+   вкладки (`app/actions/admin-secret/sites.ts`) требуют god-cookie поверх
+   requireAdmin и НЕ пишут в admin-видимый журнал аудита.
 
 ## 5. Карта директорий
 
 ```
 app/                     Next.js App Router
   actions/               server actions. Крупные — БАРЕЛИ:
-                         admin-accounts.ts → -telegram (телефон/QR-��огин, 2FA),
+                         admin-accounts.ts → -telegram (телефон/QR-����огин, 2FA),
                            -bots (VK/MAX), -maintenance (статус/прокси/удаление),
                            -shared (хелперы, НЕ 'use server')
                          finance.ts → finance-workspace, finance-ads,
@@ -124,8 +128,9 @@ app/                     Next.js App Router
                          retry-dead-letters, sync-ads, curator-status,
                          console-schedules, ai-health — алерт при всплеске
                          ошибок мозга, retention — ночная чистка);
-                         api/ext/[key]/* — публичный REST+SSE контракт
-                         управляемых сайтов (раздел 4 п.5, fail-closed 404)
+                         api/ext/pages/[page]/{state,stream} — read-only
+                         REST+SSE контракт витрин page3.html (раздел 4 п.5,
+                         fail-closed 404, PAGE_ID=slug + Bearer/?token=)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (раздел 4)
 components/admin/        UI админки
   ai-console.tsx + ai-console/   чат копилота: контейнер + use-ai-console.ts;
@@ -188,7 +193,7 @@ components/manager/      UI менеджера
                          'omnidesk:lead-attachments-changed';
                          lead-card-panel.tsx + lead-card/ — карточка лида:
                          контейнер + use-lead-card.ts (состояние формы,
-                         сохранение, вложения) + lead-card-form (поля) +
+                         сохранение, вложени��) + lead-card-form (поля) +
                          lead-card-details (детали/история)
   autopilot-manager.tsx + autopilot/  автопи��от: use-autopilot.ts, rule-editor
 components/
@@ -281,9 +286,11 @@ lib/
                          прокси, лонгполл-настройки) и vk-media.ts (скачивание
                          и загрузка вложений). Импорты через @/lib/vk.
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
-  god-sites.ts           данные управляемых сайтов (ИЗОЛИРОВАН, раздел 4 п.5):
-                         ключи (sha-256), санитизация state, optimistic
-                         locking по revision, проекция периодов
+  god-sites.ts           данные управляемых сайтов-витрин (ИЗОЛИРОВАН,
+                         раздел 4 п.5): PAGE_ID=slug + токен (sha-256, матч
+                         одним запросом), санитизация state, optimistic
+                         locking по revision (только god-редактор — контракт
+                         страницы read-only), проекция периодов stateForPeriod
   twofa.ts               2FA сотрудников (менеджер/менеджер по кадрам):
                          TOTP (секрет AES-256-GCM) или свой Telegram-бот
                          (BotFather, код через Bot API), backup-коды (bcrypt).

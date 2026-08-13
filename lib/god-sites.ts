@@ -7,18 +7,21 @@ import { query } from './db'
  * God-panel managed external sites ("управляемые сайты").
  *
  * Standalone HTML mockups (page3.html — кабинет «Директ Про») are hosted on a
- * separate domain and talk to OMNIDESK through /api/ext/<key>/* (REST contract
- * in the mockup's API-INTEGRATION.md). This module is the single data layer
- * for that API and for the god-panel "Сайты" tab.
+ * separate domain and READ their data from OMNIDESK through
+ * /api/ext/pages/{PAGE_ID}/* (contract in the mockup's API-INTEGRATION.md).
+ * The page is a pure витрина: PAGE_ID (= slug here) identifies the page, the
+ * Bearer token (= one-time API key) authenticates it, and no mutation ever
+ * arrives from the page — ALL editing happens in the god-panel "Сайты" tab.
+ * This module is the single data layer for both.
  *
  * SACRED INVARIANT (AGENTS.md §4): god-panel only. Never import this from
  * regular admin/manager/curator code or from lib/ai-console — enforced by
  * lib/ai/isolation.test.ts.
  *
- * Concurrency: contract §5 optimistic locking. Every mutation carries the
- * caller's known revision; the UPDATE is guarded by `WHERE revision = $n`, so
- * a stale write loses the race atomically (no read-modify-write window) and
- * the caller gets a 'conflict' to surface as HTTP 409.
+ * Concurrency: god-panel editors use optimistic locking. Every save carries
+ * the editor's known revision; the UPDATE is guarded by `WHERE revision = $n`,
+ * so a stale save loses the race atomically (no read-modify-write window) and
+ * the caller gets a 'conflict' instead of silently clobbering newer data.
  */
 
 /* ------------------------------- Types --------------------------------- */
@@ -224,48 +227,57 @@ function toSite(r: SiteRow): GodSite {
 }
 
 /**
- * Resolve a site by its plaintext API key. Returns null for unknown keys —
- * the API layer answers a bare 404 (fail-closed, indistinguishable from a
- * nonexistent route). Also stamps last_seen_at ("жива ли страница").
+ * Resolve a site by its PAGE_ID (slug) AND plaintext API key in one shot.
+ * The pair must match: a valid slug with a wrong token misses exactly like a
+ * nonexistent slug — the API layer answers a bare 404 either way, so probing
+ * cannot distinguish "page exists" from "page doesn't" (fail-closed, same
+ * philosophy as the god gate). Also stamps last_seen_at ("жива ли страница").
  */
-export async function getSiteByApiKey(
+export async function getSiteBySlugAndKey(
+  slug: string,
   key: string,
   opts?: { touch?: boolean },
 ): Promise<GodSite | null> {
+  const s = (slug ?? '').trim().toLowerCase()
+  if (!s || s.length > 60) return null
   if (!key || key.length < 16 || key.length > 128) return null
   const hash = hashApiKey(key)
   const rows = opts?.touch
     ? await query<SiteRow>(
         `UPDATE god_sites SET last_seen_at = now()
-          WHERE api_key_hash = $1
+          WHERE slug = $1 AND api_key_hash = $2
           RETURNING *`,
-        [hash],
+        [s, hash],
       )
-    : await query<SiteRow>(`SELECT * FROM god_sites WHERE api_key_hash = $1`, [
-        hash,
-      ])
+    : await query<SiteRow>(
+        `SELECT * FROM god_sites WHERE slug = $1 AND api_key_hash = $2`,
+        [s, hash],
+      )
   return rows[0] ? toSite(rows[0]) : null
 }
 
 /* --------------------------- Period projection -------------------------- */
 
-/**
- * Project the canonical state onto a period (contract §3): base campaign
- * fields + per-period metric overlays when the god panel curated them. With
- * no overlays every period returns the same data — explicitly allowed by the
- * contract. periodOverrides themselves are NOT exposed to the page.
- */
-export function stateForPeriod(
-  state: SiteState,
-  period: SitePeriod,
-  revision: number,
-): {
-  revision: number
+/** The exact `State` payload page3.html consumes (contract §6). */
+export interface PageStatePayload {
   period: SitePeriod
   balance: number
   currency: string
   campaigns: SiteCampaign[]
-} {
+}
+
+/**
+ * Project the canonical state onto a period (contract §3): base campaign
+ * fields + per-period metric overlays when the god panel curated them. With
+ * no overlays every period returns the same data — explicitly allowed by the
+ * contract. periodOverrides themselves are NOT exposed to the page, and the
+ * payload carries nothing beyond the contract's `State` (no revision, no ids
+ * of ours — the page is a dumb витрина).
+ */
+export function stateForPeriod(
+  state: SiteState,
+  period: SitePeriod,
+): PageStatePayload {
   const overrides = state.periodOverrides?.[period]
   const campaigns =
     !overrides || period === 'today'
@@ -274,7 +286,6 @@ export function stateForPeriod(
           overrides[c.id] ? { ...c, ...overrides[c.id] } : c,
         )
   return {
-    revision,
     period,
     balance: state.balance,
     currency: state.currency,
@@ -331,124 +342,13 @@ async function mutateSite(
   return { ok: true, revision: site.revision, state: site.state }
 }
 
-/* ------------------------- Page-facing mutations ------------------------ */
-
-export async function patchCampaign(
-  siteId: string,
-  campaignId: string,
-  patch: unknown,
-  expected: number | null,
-): Promise<MutationResult> {
-  return mutateSite(siteId, expected, (state) => {
-    const idx = state.campaigns.findIndex((c) => c.id === campaignId)
-    if (idx === -1) return { invalid: 'campaign not found' }
-    const campaigns = [...state.campaigns]
-    // id is immutable through PATCH — it is the routing key.
-    campaigns[idx] = {
-      ...sanitizeCampaign(patch, campaigns[idx]),
-      id: campaigns[idx].id,
-    }
-    return { ...state, campaigns }
-  })
-}
-
-export async function createCampaign(
-  siteId: string,
-  raw: unknown,
-  expected: number | null,
-): Promise<MutationResult & { createdId?: string }> {
-  let createdId = ''
-  const res = await mutateSite(siteId, expected, (state) => {
-    if (state.campaigns.length >= MAX_CAMPAIGNS) {
-      return { invalid: 'too many campaigns' }
-    }
-    const c = sanitizeCampaign(raw)
-    if (!c.id || state.campaigns.some((e) => e.id === c.id)) {
-      // Generate a numeric id like the real cabinet uses.
-      c.id = String(100000000 + Math.floor(Math.random() * 900000000))
-    }
-    createdId = c.id
-    return { ...state, campaigns: [...state.campaigns, c] }
-  })
-  return res.ok ? { ...res, createdId } : res
-}
-
-export async function deleteCampaign(
-  siteId: string,
-  campaignId: string,
-  expected: number | null,
-): Promise<MutationResult> {
-  return mutateSite(siteId, expected, (state) => {
-    if (!state.campaigns.some((c) => c.id === campaignId)) {
-      return { invalid: 'campaign not found' }
-    }
-    const overrides = state.periodOverrides
-      ? Object.fromEntries(
-          Object.entries(state.periodOverrides).map(([p, byId]) => [
-            p,
-            Object.fromEntries(
-              Object.entries(byId).filter(([cid]) => cid !== campaignId),
-            ),
-          ]),
-        )
-      : undefined
-    return {
-      ...state,
-      campaigns: state.campaigns.filter((c) => c.id !== campaignId),
-      ...(overrides ? { periodOverrides: overrides } : {}),
-    }
-  })
-}
-
-export async function setCampaignStatus(
-  siteId: string,
-  campaignId: string,
-  status: unknown,
-  expected: number | null,
-): Promise<MutationResult> {
-  if (status !== 'running' && status !== 'stopped') {
-    return { ok: false, error: 'invalid', message: 'bad status' }
-  }
-  return mutateSite(siteId, expected, (state) => {
-    const idx = state.campaigns.findIndex((c) => c.id === campaignId)
-    if (idx === -1) return { invalid: 'campaign not found' }
-    const campaigns = [...state.campaigns]
-    campaigns[idx] = { ...campaigns[idx], status }
-    return { ...state, campaigns }
-  })
-}
-
-export async function setBalance(
-  siteId: string,
-  balance: unknown,
-  currency: unknown,
-  expected: number | null,
-): Promise<MutationResult> {
-  const b = num(balance, Number.NaN)
-  if (Number.isNaN(b)) return { ok: false, error: 'invalid', message: 'bad balance' }
-  return mutateSite(siteId, expected, (state) => ({
-    ...state,
-    balance: b,
-    currency: currency !== undefined ? str(currency, state.currency) || state.currency : state.currency,
-  }))
-}
-
-export async function topupBalance(
-  siteId: string,
-  amount: unknown,
-  expected: number | null,
-): Promise<MutationResult> {
-  const a = num(amount, Number.NaN)
-  if (Number.isNaN(a) || a <= 0) {
-    return { ok: false, error: 'invalid', message: 'bad amount' }
-  }
-  return mutateSite(siteId, expected, (state) => ({
-    ...state,
-    balance: Math.min(state.balance + a, MAX_NUM),
-  }))
-}
-
 /* --------------------------- God-panel actions -------------------------- */
+
+/*
+ * NOTE: there are deliberately NO page-facing mutations. The contract is
+ * read-only — page3.html never sends writes; every change flows through the
+ * god-panel editor (saveSiteState below).
+ */
 
 export async function listSites(): Promise<GodSite[]> {
   const rows = await query<SiteRow>(

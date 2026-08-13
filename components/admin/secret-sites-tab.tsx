@@ -131,10 +131,13 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-2xl text-sm text-muted-foreground text-pretty">
-          Внешние страницы-макеты, которые тянут данные отсюда по ключу
-          (эндпоинт <code className="text-foreground">/api/ext/&lt;key&gt;</code>
-          ). Сервер — источник истины: всё, что вы правите здесь, страница
-          показывает при следующем опросе.
+          Внешние страницы-витрины (только чтение). Страница находит свои
+          данные по идентификатору = slug (эндпоинт{' '}
+          <code className="text-foreground">
+            /api/ext/pages/&lt;slug&gt;/state
+          </code>
+          ) и авторизуется токеном. Всё, что вы правите здесь, витрина
+          показывает при следующем опросе или сразу по SSE.
         </p>
         <Button
           size="sm"
@@ -150,7 +153,7 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
         <EmptyState
           icon={Globe}
           title="Нет управляемых сайтов"
-          description="Создайте сайт — получите одноразовый API-ключ и укажите его в параметре ?api страницы-макета."
+          description="Создайте сайт — получите одноразовый токен. На витрине задайте ?api=<панель>/api/ext&page=<slug>&token=<токен>."
         />
       ) : (
         <div className="flex flex-col gap-3">
@@ -331,11 +334,11 @@ function ApiKeyDialog({
     <Dialog open={Boolean(data)} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>API-ключ — сохраните сейчас</DialogTitle>
+          <DialogTitle>Токен — сохраните сейчас</DialogTitle>
           <DialogDescription>
             {data?.title}
-            {' — ключ показывается только один раз. Подставьте его в '}
-            <code>?api=…/api/ext/&lt;ключ&gt;</code> на странице-макете.
+            {' — токен показывается только один раз. На витрине укажите '}
+            <code>{'?api=<панель>/api/ext&page=<slug>&token=<токен>'}</code>.
           </DialogDescription>
         </DialogHeader>
         {data && (

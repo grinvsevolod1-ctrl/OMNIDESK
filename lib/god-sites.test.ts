@@ -99,24 +99,31 @@ describe('stateForPeriod', () => {
   })
 
   it('applies per-period overlays without mutating the base', () => {
-    const week = stateForPeriod(state, 'week', 3)
+    const week = stateForPeriod(state, 'week')
     expect(week.campaigns[0].cost).toBe(777)
-    expect(week.revision).toBe(3)
+    expect(week.period).toBe('week')
     // Base state untouched.
     expect(state.campaigns[0].cost).toBe(100)
   })
 
   it('today always shows the canonical (live-editable) numbers', () => {
-    const today = stateForPeriod(state, 'today', 3)
+    const today = stateForPeriod(state, 'today')
     expect(today.campaigns[0].cost).toBe(100)
   })
 
-  it('never leaks periodOverrides to the page payload', () => {
-    const out = stateForPeriod(state, 'week', 1) as unknown as Record<
+  it('exposes nothing beyond the contract State (no overrides, no revision)', () => {
+    const out = stateForPeriod(state, 'week') as unknown as Record<
       string,
       unknown
     >
     expect(out.periodOverrides).toBeUndefined()
+    expect(out.revision).toBeUndefined()
+    expect(Object.keys(out).sort()).toEqual([
+      'balance',
+      'campaigns',
+      'currency',
+      'period',
+    ])
   })
 })
 
