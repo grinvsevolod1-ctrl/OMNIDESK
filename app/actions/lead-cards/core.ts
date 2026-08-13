@@ -60,6 +60,8 @@ export async function saveLeadCardAction(input: {
   fullName: string
   phone: string
   telegramUsername: string
+  /** Числовой Telegram ID — отдельное поле, не подменяет телефон. */
+  telegramId?: string
   city: string
   address: string
   vacancy: string
@@ -90,6 +92,7 @@ export async function saveLeadCardAction(input: {
       fullName: input.fullName,
       phone: input.phone,
       telegramUsername: input.telegramUsername,
+      telegramId: input.telegramId ?? '',
       city: input.city,
       address: input.address,
       vacancy: input.vacancy,

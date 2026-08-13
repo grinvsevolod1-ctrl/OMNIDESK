@@ -16,6 +16,8 @@ export interface LeadCard {
   fullName: string
   phone: string
   telegramUsername: string
+  /** Числовой Telegram ID контакта — отдельно от телефона (миграция 130). */
+  telegramId: string
   city: string
   /** Регион РФ по справочнику (заполняется в админской выборке). */
   region?: string | null
@@ -63,6 +65,7 @@ export interface LeadCardRow {
   full_name: string
   phone: string
   telegram_username: string
+  telegram_id: string
   city: string
   address: string
   vacancy: string
@@ -117,6 +120,7 @@ export function toLeadCard(r: LeadCardRow): LeadCard {
     fullName: r.full_name ?? '',
     phone: r.phone ?? '',
     telegramUsername: r.telegram_username ?? '',
+    telegramId: r.telegram_id ?? '',
     city: r.city ?? '',
     address: r.address ?? '',
     vacancy: r.vacancy ?? '',
@@ -149,7 +153,7 @@ export function toComment(r: CommentRow): LeadCardComment {
 
 export const CARD_SELECT = `
   lc.id, lc.conversation_id, lc.manager_id, lc.curator_id,
-  lc.full_name, lc.phone, lc.telegram_username, lc.city, lc.address, lc.vacancy,
+  lc.full_name, lc.phone, lc.telegram_username, lc.telegram_id, lc.city, lc.address, lc.vacancy,
   lc.status, lc.previous_status, lc.status_confirmed_at, lc.status_confirmed_date,
   lc.transferred_at, lc.archived_at, lc.created_at, lc.updated_at,
   m.name AS manager_name,

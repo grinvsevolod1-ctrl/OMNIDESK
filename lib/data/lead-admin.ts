@@ -278,6 +278,7 @@ const INLINE_EDITABLE_FIELDS = {
   full_name: 160,
   phone: 40,
   telegram_username: 80,
+  telegram_id: 40,
   city: 120,
   address: 300,
   vacancy: 80,

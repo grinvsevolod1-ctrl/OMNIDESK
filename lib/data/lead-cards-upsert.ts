@@ -18,6 +18,8 @@ export interface UpsertLeadCardInput {
   fullName: string
   phone: string
   telegramUsername: string
+  /** Числовой Telegram ID — отдельно от телефона (миграция 130). */
+  telegramId: string
   city: string
   address: string
   vacancy: string
@@ -76,6 +78,7 @@ export async function upsertLeadCard(
   const fullName = input.fullName.trim()
   const phone = input.phone.trim()
   const telegramUsername = input.telegramUsername.trim().replace(/^@/, '')
+  const telegramId = input.telegramId.trim()
   // Canonical spelling from the city dictionary («москва» -> «Москва»).
   const city = normalizeCityName(input.city)
     ? await rememberCity(input.city).catch(() => normalizeCityName(input.city))
@@ -140,26 +143,27 @@ export async function upsertLeadCard(
           SET full_name = $2,
               phone = $3,
               telegram_username = $4,
-              city = $5,
-              address = $6,
-              vacancy = $7,
-              manager_id = $8,
-              curator_id = COALESCE($9, curator_id),
+              telegram_id = $5,
+              city = $6,
+              address = $7,
+              vacancy = $8,
+              manager_id = $9,
+              curator_id = COALESCE($10, curator_id),
               transferred_at = CASE
-                WHEN $10::boolean THEN now()
+                WHEN $11::boolean THEN now()
                 ELSE transferred_at
               END,
               -- Fresh transfer: the new curator must confirm status today.
-              status = CASE WHEN $10::boolean THEN NULL ELSE status END,
+              status = CASE WHEN $11::boolean THEN NULL ELSE status END,
               previous_status = CASE
-                WHEN $10::boolean THEN COALESCE(status, previous_status)
+                WHEN $11::boolean THEN COALESCE(status, previous_status)
                 ELSE previous_status
               END,
               status_confirmed_at = CASE
-                WHEN $10::boolean THEN NULL ELSE status_confirmed_at
+                WHEN $11::boolean THEN NULL ELSE status_confirmed_at
               END,
               status_confirmed_date = CASE
-                WHEN $10::boolean THEN NULL ELSE status_confirmed_date
+                WHEN $11::boolean THEN NULL ELSE status_confirmed_date
               END,
               updated_at = now()
         WHERE id = $1`,
@@ -168,6 +172,7 @@ export async function upsertLeadCard(
         fullName,
         phone,
         telegramUsername,
+        telegramId,
         city,
         address,
         vacancy,
@@ -202,9 +207,9 @@ export async function upsertLeadCard(
   await query(
     `INSERT INTO lead_cards (
        id, conversation_id, manager_id, curator_id,
-       full_name, phone, telegram_username, city, address, vacancy,
+       full_name, phone, telegram_username, telegram_id, city, address, vacancy,
        transferred_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                CASE WHEN $4::uuid IS NOT NULL THEN now() ELSE NULL END)`,
     [
       id,
@@ -214,6 +219,7 @@ export async function upsertLeadCard(
       fullName,
       phone,
       telegramUsername,
+      telegramId,
       city,
       address,
       vacancy,

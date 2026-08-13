@@ -142,18 +142,28 @@ export async function addLeadFileAttachment(input: {
 }
 
 /**
- * Прикрепить кружок из диалога. Проверяет, что сообщение действительно
- * является video_note ЭТОГО диалога. Идемпотентно (уникальный индекс).
+ * Прикрепить кружок или фото из диалога. Проверяет, что сообщение
+ * действительно принадлежит ЭТОМУ диалогу и имеет подходящий тип медиа.
+ * Идемпотентно (уникальный индекс).
  */
 export async function addLeadVideoNoteAttachment(input: {
   leadCardId: string
   conversationId: string
   messageId: string
   authorId: string
+  /** 'video_note' (по умолчанию) или 'photo' — фото из переписки. */
+  kind?: 'video_note' | 'photo'
 }): Promise<LeadAttachment | null> {
+  const kind = input.kind ?? 'video_note'
+  // Легаси-кружки могли попасть в архив как voice/audio с video/* MIME.
+  const typeCondition =
+    kind === 'photo'
+      ? `media_type = 'image'`
+      : `(media_type = 'video_note'
+          OR (media_type IN ('voice', 'audio') AND media_mime LIKE 'video/%'))`
   const msg = await query<{ id: string; media_mime: string | null }>(
     `SELECT id, media_mime FROM messages
-      WHERE id = $1 AND conversation_id = $2 AND media_type = 'video_note'
+      WHERE id = $1 AND conversation_id = $2 AND ${typeCondition}
       LIMIT 1`,
     [input.messageId, input.conversationId],
   )
@@ -162,11 +172,11 @@ export async function addLeadVideoNoteAttachment(input: {
   const rows = await query<{ id: string }>(
     `INSERT INTO lead_card_attachments
        (lead_card_id, author_id, kind, message_id, mime)
-     VALUES ($1, $2, 'video_note', $3, $4)
+     VALUES ($1, $2, $5, $3, $4)
      ON CONFLICT (lead_card_id, message_id) WHERE message_id IS NOT NULL
      DO NOTHING
      RETURNING id`,
-    [input.leadCardId, input.authorId, input.messageId, msg[0].media_mime],
+    [input.leadCardId, input.authorId, input.messageId, msg[0].media_mime, kind],
   )
   if (!rows[0]) {
     // Уже прикреплён — вернуть существующий.
@@ -258,7 +268,14 @@ export interface ConversationVideoNote {
   ordinal: number
 }
 
-/** Все кружки диалога по порядку появления. */
+/**
+ * Все кружки диалога по порядку появления.
+ *
+ * ВАЖНО: кружки, попавшие в архив до поддержки video_note, лежат в БД как
+ * voice/audio с video/* MIME (та же эвристика, что effectiveMediaType в
+ * message-media.tsx). Без второго условия менеджер видел кружки в переписке,
+ * а кнопка «Кружок» отвечала «в диалоге нет кружков».
+ */
 export async function listConversationVideoNotes(
   conversationId: string,
 ): Promise<ConversationVideoNote[]> {
@@ -270,7 +287,35 @@ export async function listConversationVideoNotes(
     `SELECT id, created_at, direction
        FROM messages
       WHERE conversation_id = $1
-        AND media_type = 'video_note'
+        AND (
+          media_type = 'video_note'
+          OR (media_type IN ('voice', 'audio') AND media_mime LIKE 'video/%')
+        )
+        AND deleted_at IS NULL
+      ORDER BY created_at ASC`,
+    [conversationId],
+  )
+  return rows.map((r, i) => ({
+    messageId: r.id,
+    createdAt: new Date(r.created_at).toISOString(),
+    direction: r.direction,
+    ordinal: i + 1,
+  }))
+}
+
+/** Все фотографии диалога по порядку появления (кнопка «Документ»). */
+export async function listConversationPhotos(
+  conversationId: string,
+): Promise<ConversationVideoNote[]> {
+  const rows = await query<{
+    id: string
+    created_at: string | Date
+    direction: 'in' | 'out'
+  }>(
+    `SELECT id, created_at, direction
+       FROM messages
+      WHERE conversation_id = $1
+        AND media_type = 'image'
         AND deleted_at IS NULL
       ORDER BY created_at ASC`,
     [conversationId],

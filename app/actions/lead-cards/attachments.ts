@@ -18,6 +18,7 @@ import {
   addLeadVideoNoteAttachment,
   deleteLeadAttachment,
   getLeadAttachmentById,
+  listConversationPhotos,
   listConversationVideoNotes,
   listLeadAttachments,
   type ConversationVideoNote,
@@ -70,18 +71,39 @@ export async function listConversationVideoNotesAction(
   return listConversationVideoNotes(conversationId)
 }
 
-/** Закрепить кружок из диалога за карточкой — менеджер карточки или админ. */
+/**
+ * Фотографии диалога по порядку — для выбора при закреплении («Документ»).
+ * Тот же доступ, что и у кружков: менеджер диалога и админ.
+ */
+export async function listConversationPhotosAction(
+  conversationId: string,
+): Promise<ConversationVideoNote[]> {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+  if (session.role === 'curator') throw new Error('Forbidden')
+  const card = await getLeadCardByConversation(conversationId)
+  if (card && !canBrowseDialogVideoNotes(session, card)) {
+    throw new Error('Forbidden')
+  }
+  return listConversationPhotos(conversationId)
+}
+
+/** Закрепить кружок или фото из диалога за карточкой — менеджер карточки или админ. */
 export async function attachLeadVideoNoteAction(input: {
   leadCardId: string
   conversationId: string
   messageId: string
+  /** 'video_note' (по умолчанию) или 'photo' — фото из переписки. */
+  kind?: 'video_note' | 'photo'
 }): Promise<{ ok: boolean; message: string; attachments?: LeadAttachmentView[] }> {
+  const kind = input.kind ?? 'video_note'
+  const noun = kind === 'photo' ? 'Документ' : 'Кружок'
   const session = await getSession()
   if (!session) return { ok: false, message: 'Не авторизовано.' }
   if (session.role === 'curator') {
     return {
       ok: false,
-      message: 'Кружок из диалога закрепляет менеджер, который ведёт диалог.',
+      message: `${noun} из диалога закрепляет менеджер, который ведёт диалог.`,
     }
   }
   const card = await getLeadCardById(input.leadCardId)
@@ -92,7 +114,7 @@ export async function attachLeadVideoNoteAction(input: {
     return { ok: false, message: 'Нет доступа к диалогу этой карточки.' }
   }
   if (card.conversationId !== input.conversationId) {
-    return { ok: false, message: 'Кружок из другого диалога.' }
+    return { ok: false, message: `${noun} из другого диалога.` }
   }
   try {
     const res = await addLeadVideoNoteAttachment({
@@ -100,13 +122,22 @@ export async function attachLeadVideoNoteAction(input: {
       conversationId: input.conversationId,
       messageId: input.messageId,
       authorId: session.sub,
+      kind,
     })
-    if (!res) return { ok: false, message: 'Это не кружок этого диалога.' }
+    if (!res) {
+      return {
+        ok: false,
+        message:
+          kind === 'photo'
+            ? 'Это не фото этого диалога.'
+            : 'Это не кружок этого диалога.',
+      }
+    }
     const attachments = withCanDelete(
       session,
       await listLeadAttachments(input.leadCardId),
     )
-    return { ok: true, message: 'Кружок закреплён.', attachments }
+    return { ok: true, message: `${noun} закреплён.`, attachments }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Ошибка'
     return { ok: false, message: msg }
