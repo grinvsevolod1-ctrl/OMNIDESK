@@ -45,7 +45,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   (sync-ads, retry-dead-letters, followup, curator-status, console-schedules,
   ai-health, retention), backup-db, db-vacuum, auto-deploy.
 - **Vitest** — юнит-тесты рядом с кодом (`lib/**/*.test.ts` и
-  `worker/src/**/*.test.ts`), сейчас ~273. Интеграционные —
+  `worker/src/**/*.test.ts`), сейчас ~288. Интеграционные —
   `tests/integration/*.test.ts` (`pnpm test:integration`): требуют
   `DATABASE_URL` (без него скипаются), проверяют гонку livechat-диалогов
   (миграция 128), IDOR-скоупинг сообщений/медиа, revocation сессий,
@@ -126,7 +126,10 @@ components/admin/        UI админки
                          (фильтры/пагинация/поллинг/экспорт/передача),
                          leads-filter-bar, leads-period-filter, xlsx-download
   finance/               финансы: expenses-panel + expenses/use-expenses.ts,
-                         vault-panel + vault-card + vault-dialog (сейф паролей)
+                         vault-panel + vault-card + vault-dialog (сейф паролей),
+                         ads-panel.tsx + ads-panel/ — рекламные кабинеты:
+                         контейнер + ad-account-card (карточка кабинета,
+                         пополнение/статистика) + ads-summary-table (сводка)
   os-shell/              ОС-шелл god-панели: os-shell + use-os-shell.ts
   create-account-card.tsx + create-account/  подключение TG-аккаунта
   settings/              настройки админа: system-health-section (метрики из
@@ -166,7 +169,11 @@ components/manager/      UI менеджера
                          старым, цель догружается loadOlder-циклом,
                          подсветка через data-message-id в message-list;
                          связь с LeadCardPanel — CustomEvent
-                         'omnidesk:lead-attachments-changed'
+                         'omnidesk:lead-attachments-changed';
+                         lead-card-panel.tsx + lead-card/ — карточка лида:
+                         контейнер + use-lead-card.ts (состояние формы,
+                         сохранение, вложения) + lead-card-form (поля) +
+                         lead-card-details (детали/история)
   autopilot-manager.tsx + autopilot/  автопилот: use-autopilot.ts, rule-editor
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
