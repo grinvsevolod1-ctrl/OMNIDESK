@@ -1,13 +1,21 @@
 'use client'
 
 import { useMemo, useState, useTransition } from 'react'
-import { Loader2, RefreshCw, Server, ShieldAlert, Trash2 } from 'lucide-react'
+import {
+  Loader2,
+  RefreshCw,
+  Send,
+  Server,
+  ShieldAlert,
+  Trash2,
+} from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   adminDeleteChannelAction,
   adminHealthCheckAction,
   adminReassignProxyAction,
+  adminSetOutreachAction,
 } from '@/app/actions/admin-accounts'
 import { StatusBadge } from '@/components/page-parts'
 import { Button } from '@/components/ui/button'
@@ -127,6 +135,15 @@ function AccountRow({
     })
   }
 
+  function toggleOutreach() {
+    startTransition(async () => {
+      const res = await adminSetOutreachAction(channel.id, !channel.isOutreach)
+      if (res.ok) toast.success(res.message)
+      else toast.error(res.message)
+      router.refresh()
+    })
+  }
+
   function remove() {
     startTransition(async () => {
       try {
@@ -164,6 +181,15 @@ function AccountRow({
       </div>
 
       <div className="flex items-center gap-2">
+        {channel.isOutreach ? (
+          <span
+            className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
+            title="С этого аккаунта менеджеры пишут лидам первыми"
+          >
+            <Send className="size-3" />
+            Для исходящих
+          </span>
+        ) : null}
         <span className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground">
           {SESSION_LABEL[channel.sessionStatus] ?? channel.sessionStatus}
         </span>
@@ -197,6 +223,32 @@ function AccountRow({
             ))}
           </SelectContent>
         </Select>
+
+        {channel.type === 'telegram' ? (
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={toggleOutreach}
+            disabled={pending}
+            aria-label={
+              channel.isOutreach
+                ? 'Снять назначение аккаунта для исходящих'
+                : 'Назначить аккаунтом для исходящих сообщений менеджеров'
+            }
+            title={
+              channel.isOutreach
+                ? 'Аккаунт для исходящих — нажмите, чтобы снять'
+                : 'Назначить для исходящих (менеджеры пишут лидам с него)'
+            }
+            className={cn(
+              'shrink-0',
+              channel.isOutreach &&
+                'border-primary/50 bg-primary/10 text-primary hover:bg-primary/20',
+            )}
+          >
+            <Send className="size-4" />
+          </Button>
+        ) : null}
 
         <Button
           variant="outline"

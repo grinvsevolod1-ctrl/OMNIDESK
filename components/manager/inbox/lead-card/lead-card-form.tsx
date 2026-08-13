@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CityInput } from '@/components/shared/city-input'
 import { cn } from '@/lib/utils'
+import { TelegramOutreachButton } from './telegram-outreach-button'
 import type { LeadCardState } from './use-lead-card'
 
 /** Поля карточки лида + подбор менеджера по кадрам по городу. */
@@ -30,11 +31,19 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
           />
         </Field>
         <Field label="Telegram">
-          <Input
-            value={fields.telegramUsername}
-            onChange={(e) => fields.setTelegramUsername(e.target.value)}
-            placeholder="@username"
-          />
+          <div className="flex items-center gap-1.5">
+            <Input
+              value={fields.telegramUsername}
+              onChange={(e) => fields.setTelegramUsername(e.target.value)}
+              placeholder="@username"
+              className="min-w-0 flex-1"
+            />
+            <TelegramOutreachButton
+              username={fields.telegramUsername}
+              telegramId={fields.telegramId}
+              contactName={fields.fullName.trim() || undefined}
+            />
+          </div>
         </Field>
       </div>
       <Field label="Telegram ID">

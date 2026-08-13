@@ -191,7 +191,7 @@ components/manager/      UI менеджера
                          position-only логику — она даёт цикл «утаскивает
                          вниз при скролле вверх» (тот же паттерн в
                          god-messenger/use-god-scroll.ts);
-                         thread-search.tsx — тел����грам-поиск по диалогу
+                         thread-search.tsx — тел������грам-поиск по диалогу
                          (лупа в шапке) и навигация по кружкам/фото с
                          прикреплением к карточке лида: hits от новых к
                          старым, цель д��гружается loadOlder-циклом,
@@ -201,7 +201,16 @@ components/manager/      UI менеджера
                          lead-card-panel.tsx + lead-card/ — карточка лида:
                          контейнер + use-lead-card.ts (состояние формы,
                          сохранение, вложени��) + lead-card-form (поля) +
-                         lead-card-details (детали/история)
+                         lead-card-details (детали/история) +
+                         telegram-outreach-button — кнопка «написать лиду в
+                         TG» у поля Telegram: менеджер пишет ПЕРВЫМ строго с
+                         выделенного админом outreach-аккаунта (флаг
+                         config.manual_outreach на ОДНОМ telegram-канале,
+                         тумблер Send в admin/accounts-table; actions —
+                         app/actions/telegram-outreach.ts). Ключ диалога —
+                         числовой TG id (как у входящих воркера), цель
+                         отправки — @username, когда есть; чужой тред того же
+                         контакта на outreach-канале НЕ перехватывается
   autopilot-manager.tsx + autopilot/  автопи��от: use-autopilot.ts, rule-editor
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
@@ -470,7 +479,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 ## 10. Правила работы в этом репозитории
 
 - **Ветка:** пользователь просит пушить прямо в `main` и не плодить ветки —
-  следуй его явному указанию.
+  следуй его явно��у указанию.
 - **Кириллица/UTF-8:** после правок промптов и текстов проверяй
   `grep -rlP '\xEF\xBF\xBD' lib components app worker/src scripts AGENTS.md`
   — должно быть пусто (битые символы уже случались).
@@ -545,7 +554,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 | «Все лиды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
 | «Мои лиды» (менеджер по кадрам) | `components/curator/curator-leads-view.tsx` |
 | «Мои лиды» (менеджер) | `components/manager/manager-leads-view.tsx` |
-| Excel-выгрузки лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), клиент — `components/admin/leads/xlsx-download.ts` |
+| Excel-выгрузки лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), к��иент — `components/admin/leads/xlsx-download.ts` |
 | Realtime лидов (push) | миграция 127 + `app/api/stream/route.ts` + `lib/hooks/use-lead-events.ts` |
 | Карточка лида (куратор) | `lead-detail-panel.tsx` + `components/curator/lead-detail/*` |
 | Инбокс менеджера | `inbox-view.tsx` + `components/manager/inbox/use-inbox.ts` (+ шорткаты `use-inbox-shortcuts.ts`) |

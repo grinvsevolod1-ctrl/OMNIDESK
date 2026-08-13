@@ -76,9 +76,13 @@ export async function startTelegramOutreachAction(input: {
     }
   }
 
-  // Числовой id — канонический ключ входящих у воркера; username — фолбэк.
-  const handle = /^\d+$/.test(telegramId) ? telegramId : username
-  const target = /^\d+$/.test(telegramId) ? telegramId : `@${username}`
+  // Ключ диалога — числовой id (так воркер ключует ВХОДЯЩИЕ, и ответ лида
+  // попадёт в этот же тред); цель ОТПРАВКИ — @username, когда он есть: для
+  // первого контакта числовой id может не резолвиться (у аккаунта ещё нет
+  // access_hash незнакомого пользователя), а username Telegram резолвит сам.
+  const hasId = /^\d+$/.test(telegramId)
+  const handle = hasId ? telegramId : username
+  const target = username ? `@${username}` : telegramId
   const contactName =
     (input.contactName ?? '').trim() || (username ? `@${username}` : handle)
 
@@ -137,7 +141,7 @@ export async function startTelegramOutreachAction(input: {
     action: 'conversation.outreach',
     entityType: 'conversation',
     entityId: conv.id,
-    details: { channelId: channel.id, viaUsername: !(/^\d+$/.test(telegramId)) },
+    details: { channelId: channel.id, viaUsername: !hasId },
   }).catch(() => {})
 
   revalidatePath('/app/inbox')
