@@ -102,14 +102,16 @@ export function DashboardShell({
           >
             <BrandMark className="size-5 shrink-0 text-foreground" />
             {!collapsed ? (
-              <>
-                <span className="text-sm font-semibold tracking-tight">
+              // Роль — второй строкой под логотипом: длинные названия
+              // («Менеджер по кадрам») не ломают шапку переносом бейджа.
+              <span className="flex min-w-0 flex-col leading-tight">
+                <span className="truncate text-sm font-semibold tracking-tight">
                   Omnidesk
                 </span>
-                <span className="ml-auto rounded-md border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                <span className="truncate text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
                   {roleLabel}
                 </span>
-              </>
+              </span>
             ) : null}
           </div>
 
@@ -195,7 +197,9 @@ export function DashboardShell({
 
         {/* Main column */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md md:px-6">
+          {/* Без backdrop-blur: пере-блюр контента под sticky-шапкой на каждом
+              кадре скролла — источник глюков (см. стандарт UI в AGENTS.md). */}
+          <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background px-4 md:px-6">
             <Button
               variant="ghost"
               size="icon-sm"

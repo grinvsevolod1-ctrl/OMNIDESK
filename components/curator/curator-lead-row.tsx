@@ -119,6 +119,9 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
       <li
         className={cn(
           'group flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-card p-3 transition-colors hover:bg-muted/30',
+          // Строки за экраном не рендерятся при скролле — списки из сотен
+          // лидов скроллятся без глюков (см. стандарт UI в AGENTS.md).
+          '[content-visibility:auto] [contain-intrinsic-size:auto_9rem]',
           needs && 'ring-1 ring-amber-500/30',
           isArchived && 'opacity-70 hover:opacity-100',
         )}
@@ -181,6 +184,8 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
     <li
       className={cn(
         'flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 transition-colors hover:bg-muted/30 sm:px-5',
+        // Строки за экраном не рендерятся при скролле (стандарт UI, AGENTS.md).
+        '[content-visibility:auto] [contain-intrinsic-size:auto_3.5rem]',
         needs && 'bg-amber-500/[0.04]',
         isArchived && 'opacity-70 hover:opacity-100',
       )}

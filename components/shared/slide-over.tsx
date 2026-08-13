@@ -20,6 +20,8 @@ import { cn } from '@/lib/utils'
  * Мобайл — bottom-sheet снизу, десктоп — правая колонка. Esc закрывает,
  * скролл body блокируется, пока панель открыта.
  */
+const SLIDE_MS = 300
+
 export function SlideOver({
   open,
   onClose,
@@ -36,6 +38,17 @@ export function SlideOver({
   // Ленивый mount: до первого открытия контент не существует в DOM.
   const [everOpened, setEverOpened] = useState(open)
   if (open && !everOpened) setEverOpened(true)
+
+  // Первое открытие: пока панель едет (300мс), внутри лёгкий скелетон —
+  // тяжёлый mount контента (формы, редакторы, история) происходит ПОСЛЕ
+  // завершения transition и не съедает кадры анимации. Дальше контент
+  // живёт в DOM, и повторные открытия мгновенны и полностью плавны.
+  const [contentReady, setContentReady] = useState(open)
+  useEffect(() => {
+    if (!everOpened || contentReady) return
+    const t = setTimeout(() => setContentReady(true), SLIDE_MS + 20)
+    return () => clearTimeout(t)
+  }, [everOpened, contentReady])
 
   // Esc закрывает панель (только пока открыта).
   useEffect(() => {
@@ -109,7 +122,15 @@ export function SlideOver({
             <X className="size-4" />
           </Button>
         </header>
-        {everOpened ? children : null}
+        {everOpened && contentReady ? (
+          children
+        ) : everOpened ? (
+          <div className="flex flex-1 flex-col gap-5 px-4 py-4 sm:px-5">
+            <SlideOverSectionSkeleton rows={3} />
+            <SlideOverSectionSkeleton rows={2} />
+            <SlideOverSectionSkeleton rows={2} />
+          </div>
+        ) : null}
       </aside>
     </>
   )

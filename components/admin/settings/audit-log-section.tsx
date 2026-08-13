@@ -38,15 +38,22 @@ function fmtWhen(iso: string): string {
   })
 }
 
-export async function AuditLogSection() {
+export async function AuditLogSection({
+  bare = false,
+}: {
+  /** Без собственного заголовка секции — имя даёт вкладка настроек. */
+  bare?: boolean
+} = {}) {
   const page = await listAudit({ limit: 30, offset: 0 })
 
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          Журнал действий
-        </h2>
+        {!bare ? (
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Журнал действий
+          </h2>
+        ) : null}
         <span className="text-xs text-muted-foreground">
           всего {page.total}
         </span>

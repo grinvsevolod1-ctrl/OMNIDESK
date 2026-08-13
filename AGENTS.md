@@ -139,7 +139,11 @@ components/admin/        UI админки
 components/shared/       кросс-ролевые компоненты; use-xlsx-export.ts — общий
                          флоу Excel-выгрузки (admin/manager/curator leads);
                          slide-over.tsx — ЕДИНЫЙ шелл боковых панелей/шитов
-                         (transform-only анимация, см. стандарт UI в разделе 10)
+                         (transform-only анимация, см. стандарт UI в разделе 10);
+                         settings-shell.tsx — ЕДИНЫЙ шелл страниц настроек всех
+                         ролей: свой сайдбар-вкладки справа (ездящая подсветка),
+                         панели живут в DOM (серверный контент сохраняется),
+                         диплинк через #tab-id
   secret-*, god-messenger/   UI god-панели (ИЗОЛИРОВАНО)
 components/curator/      UI менеджера по кадрам
   curator-leads-view.tsx «Мои лиды»: вкладки активные/архив, фильтры,

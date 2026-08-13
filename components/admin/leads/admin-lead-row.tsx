@@ -59,6 +59,8 @@ export const AdminLeadRow = memo(function AdminLeadRow({
     <li
       className={cn(
         'flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 sm:px-5',
+        // Строки за экраном не рендерятся при скролле (стандарт UI, AGENTS.md).
+        '[content-visibility:auto] [contain-intrinsic-size:auto_3.75rem]',
         // Новый лид, появившийся при фоновом обновлении, —
         // плавная подсветка на несколько секунд.
         isFresh &&

@@ -75,7 +75,12 @@ function StatChip({
   )
 }
 
-export async function SystemHealthSection() {
+export async function SystemHealthSection({
+  bare = false,
+}: {
+  /** Без собственного заголовка секции — имя даёт вкладка настроек. */
+  bare?: boolean
+} = {}) {
   const [health, metrics] = await Promise.all([
     getSystemHealth(),
     getHealthMetrics(),
@@ -117,9 +122,11 @@ export async function SystemHealthSection() {
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          Здоровье системы
-        </h2>
+        {!bare ? (
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Здоровье системы
+          </h2>
+        ) : null}
         <Badge
           variant="outline"
           className={
