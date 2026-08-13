@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -86,6 +86,15 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
   } | null>(null)
   const [openSite, setOpenSite] = useState<GodSite | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
+
+  // Auto-refresh the list every 30s so the "на связи" dot and «Опрос»
+  // column stay honest without a manual reload. Paused while the editor is
+  // open — a refresh there would be useless churn (the editor owns its copy).
+  useEffect(() => {
+    if (openSite) return
+    const t = setInterval(() => router.refresh(), 30_000)
+    return () => clearInterval(t)
+  }, [openSite, router])
 
   function openEditor(id: string) {
     setLoadingId(id)

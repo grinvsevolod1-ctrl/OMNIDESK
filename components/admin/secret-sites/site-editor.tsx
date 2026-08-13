@@ -7,13 +7,18 @@ import {
   CircleDot,
   Loader2,
   Plus,
+  RefreshCw,
   Save,
   Trash2,
   Wallet,
   Zap,
 } from 'lucide-react'
-import { secretSaveSiteStateAction } from '@/app/actions/admin-secret'
+import {
+  secretGetSiteAction,
+  secretSaveSiteStateAction,
+} from '@/app/actions/admin-secret'
 import type { GodSite, SiteCampaign, SiteState } from '@/lib/god-sites'
+import { autoDayFraction } from '@/lib/god-sites-sim'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -99,23 +104,13 @@ function derived(c: SiteCampaign): { label: string; value: string }[] {
   ]
 }
 
-/*
- * Intraday spend curve — MIRRORS lib/god-sites.ts (server-only module, so it
- * cannot be imported here). Used purely for the "к этому часу скручено ~N%"
- * preview; the authoritative simulation runs on the server.
+/**
+ * "К этому часу скручено ~N%" preview — the SAME curve the server simulation
+ * uses (lib/god-sites-sim.ts is pure and shared), so the preview can never
+ * silently drift from what the vitrine actually shows.
  */
-const HOUR_WEIGHTS = [
-  2, 1, 1, 1, 1, 2, 4, 7, 10, 12, 13, 13, 12, 12, 12, 12, 13, 14, 15, 14, 11,
-  8, 5, 3,
-]
-const HOUR_TOTAL = HOUR_WEIGHTS.reduce((a, b) => a + b, 0)
-
 function previewDayFraction(tzOffsetHours: number): number {
-  const shifted = new Date(Date.now() + tzOffsetHours * 3_600_000)
-  const h = shifted.getUTCHours()
-  const done = HOUR_WEIGHTS.slice(0, h).reduce((a, b) => a + b, 0)
-  const partial = HOUR_WEIGHTS[h] * (shifted.getUTCMinutes() / 60)
-  return Math.min(1, (done + partial) / HOUR_TOTAL)
+  return autoDayFraction(new Date(), tzOffsetHours)
 }
 
 export function SiteEditor({
@@ -127,7 +122,8 @@ export function SiteEditor({
 }) {
   const [pending, startTransition] = useTransition()
   const [state, setState] = useState<SiteState>(site.state)
-  const [revision] = useState(site.revision)
+  const [revision, setRevision] = useState(site.revision)
+  const [conflict, setConflict] = useState(false)
   const [savedSnapshot, setSavedSnapshot] = useState(() =>
     JSON.stringify(site.state),
   )
@@ -168,8 +164,33 @@ export function SiteEditor({
           toast.success(res.message)
           onClose()
         } else {
+          if (res.conflict) setConflict(true)
           toast.error(res.message)
         }
+      } catch {
+        toast.error('Внутренняя ошибка сервера')
+      }
+    })
+  }
+
+  /**
+   * Conflict recovery: pull the fresh state + revision in place, discarding
+   * local edits — no need to close and reopen the editor.
+   */
+  function reloadFresh() {
+    startTransition(async () => {
+      try {
+        const fresh = await secretGetSiteAction(site.id)
+        if (!fresh) {
+          toast.error('Сайт не найден — возможно, удалён')
+          onClose()
+          return
+        }
+        setState(fresh.state)
+        setRevision(fresh.revision)
+        setSavedSnapshot(JSON.stringify(fresh.state))
+        setConflict(false)
+        toast.success('Данные перезагружены')
       } catch {
         toast.error('Внутренняя ошибка сервера')
       }
@@ -224,6 +245,33 @@ export function SiteEditor({
           </Button>
         </div>
       </div>
+
+      {/* Version conflict: someone saved newer data while this editor was
+          open. Offer an in-place reload (discards local edits) — the old
+          flow forced closing and reopening the whole editor. */}
+      {conflict && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
+          <p className="text-sm text-pretty">
+            <span className="font-medium">Конфликт версий.</span>{' '}
+            Данные сайта изменились, пока редактор был открыт — сохранение
+            отклонено, чтобы не затереть новое.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={reloadFresh}
+            disabled={pending}
+            className="press-scale shrink-0 gap-1.5"
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
+            Перезагрузить данные
+          </Button>
+        </div>
+      )}
 
       {/* Cabinet header data */}
       <Card className="flex flex-col gap-4 p-4">
@@ -295,13 +343,13 @@ export function SiteEditor({
               onCheckedChange={(v) =>
                 setState((s) => ({
                   ...s,
+                  // Spread the existing config so server-maintained fields
+                  // (lastCommittedDay, startDay) survive the toggle.
                   autoSpend: {
+                    dailyBudget: 100,
+                    tzOffsetHours: 3,
+                    ...s.autoSpend,
                     enabled: v,
-                    dailyBudget: s.autoSpend?.dailyBudget ?? 100,
-                    ...(s.autoSpend?.lastCommittedDay
-                      ? { lastCommittedDay: s.autoSpend.lastCommittedDay }
-                      : {}),
-                    tzOffsetHours: s.autoSpend?.tzOffsetHours ?? 3,
                   },
                 }))
               }

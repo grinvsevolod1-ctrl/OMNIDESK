@@ -215,6 +215,59 @@ describe('auto-spend projection', () => {
     expect(out.balance).toBeGreaterThanOrEqual(0)
     expect(out.campaigns[0].cost).toBeLessThanOrEqual(5)
   })
+
+  it('aggregates week/month as sums of per-day simulations', () => {
+    const today = stateForPeriod(autoState, 'today', evening)
+    const week = stateForPeriod(autoState, 'week', evening)
+    const month = stateForPeriod(autoState, 'month', evening)
+    const live = (p: typeof today) =>
+      p.campaigns.find((c) => c.id === CAMPAIGN.id)!
+    // Aggregates dwarf a single day and nest: today < week < month.
+    expect(live(week).cost).toBeGreaterThan(live(today).cost)
+    expect(live(month).cost).toBeGreaterThan(live(week).cost)
+    // ~6 finished days at dailyBudget plus today's partial (± jitter).
+    expect(live(week).cost).toBeGreaterThan(400)
+    expect(live(week).cost).toBeLessThan(720)
+    // Deterministic: same inputs, same aggregate.
+    expect(stateForPeriod(autoState, 'week', evening)).toEqual(week)
+    // Stopped campaigns keep their hand-edited numbers in aggregates too.
+    const stopped = week.campaigns.find((c) => c.id === '987654321')
+    expect(stopped?.cost).toBe(CAMPAIGN.cost)
+    // Balance shows the live one — aggregate periods don't re-spend it.
+    expect(week.balance).toBe(1000)
+  })
+
+  it('anchors «all» at autoSpend.startDay when present', () => {
+    const anchored = sanitizeState({
+      balance: 100000,
+      campaigns: [CAMPAIGN],
+      autoSpend: {
+        enabled: true,
+        dailyBudget: 100,
+        tzOffsetHours: 3,
+        startDay: '2026-06-13', // 61 days before `evening` (13 Aug)
+      },
+    })
+    const all = stateForPeriod(anchored, 'all', evening)
+    const month = stateForPeriod(anchored, 'month', evening)
+    expect(all.campaigns[0].cost).toBeGreaterThan(month.campaigns[0].cost)
+    // ~60 finished days + today's partial.
+    expect(all.campaigns[0].cost).toBeGreaterThan(4500)
+  })
+
+  it('hand-curated overrides win over the aggregate simulation', () => {
+    const curated = sanitizeState({
+      balance: 1000,
+      campaigns: [CAMPAIGN],
+      autoSpend: { enabled: true, dailyBudget: 100, tzOffsetHours: 3 },
+      periodOverrides: { week: { [CAMPAIGN.id]: { cost: 777 } } },
+    })
+    const week = stateForPeriod(curated, 'week', evening)
+    expect(week.campaigns[0].cost).toBe(777) // override beats simulation
+    expect(week.campaigns[0].shows).toBeGreaterThan(
+      CAMPAIGN.shows, // non-overridden fields still come from the aggregate
+    )
+  })
 })
 
 function round2(n: number): number {

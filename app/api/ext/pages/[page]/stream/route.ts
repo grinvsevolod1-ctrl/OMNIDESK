@@ -69,12 +69,14 @@ export async function GET(
               controller.close()
               return
             }
-            // Auto-spend makes `today` a function of the clock, so the
-            // payload changes every tick even at the same revision — resend
-            // continuously while it's on; otherwise only on real edits.
+            // Auto-spend makes `today` — and the aggregates that include
+            // today's partial (week/month/all) — a function of the clock, so
+            // the payload changes every tick even at the same revision;
+            // resend continuously while it's on. `yesterday` is a finished
+            // day (fraction = 1, deterministic): identical every tick, so
+            // only real edits (revision bumps) resend it.
             const autoTicking =
-              fresh.state.autoSpend?.enabled === true &&
-              (period === 'today' || period === 'yesterday')
+              fresh.state.autoSpend?.enabled === true && period !== 'yesterday'
             if (fresh.revision !== lastRevision || autoTicking) {
               lastRevision = fresh.revision
               send(stateForPeriod(fresh.state, period))

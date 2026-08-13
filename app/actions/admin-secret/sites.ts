@@ -147,7 +147,7 @@ export async function secretSaveSiteStateAction(
   id: string,
   state: unknown,
   revision: number,
-): Promise<ActionResult & { revision?: number }> {
+): Promise<ActionResult & { revision?: number; conflict?: boolean }> {
   await requireGod()
   const res = await saveSiteState(id, state, revision)
   if (res.ok) {
@@ -155,9 +155,12 @@ export async function secretSaveSiteStateAction(
     return { ok: true, message: 'Состояние сохранено', revision: res.revision }
   }
   if (res.error === 'conflict') {
+    // Machine-readable flag so the editor can offer an in-place reload
+    // instead of forcing the operator to close and reopen.
     return {
       ok: false,
-      message: 'Конфликт версий — страница изменила данные. Обновите редактор.',
+      conflict: true,
+      message: 'Конфликт версий — данные изменились. Перезагрузите редактор.',
     }
   }
   if (res.error === 'invalid') return { ok: false, message: res.message }
