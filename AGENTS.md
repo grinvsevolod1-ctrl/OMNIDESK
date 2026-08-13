@@ -191,7 +191,7 @@ components/manager/      UI менеджера
                          position-only логику — она даёт цикл «утаскивает
                          вниз при скролле вверх» (тот же паттерн в
                          god-messenger/use-god-scroll.ts);
-                         thread-search.tsx — тел��грам-поиск по диалогу
+                         thread-search.tsx — тел����грам-поиск по диалогу
                          (лупа в шапке) и навигация по кружкам/фото с
                          прикреплением к карточке лида: hits от новых к
                          старым, цель д��гружается loadOlder-циклом,
@@ -301,7 +301,15 @@ lib/
                          (today живой, yesterday = день целиком, week/month/all
                          = СУММА посуточных симуляций — якорь «всего времени»
                          autoSpend.startDay; ручные periodOverrides
-                         накладываются поверх и побеждают). last_seen_at
+                         накладываются поверх и побеждают). Payload также несёт
+                         organization/phone/orgId (окно организации; алиасы
+                         org/org_id/accountId принимаются на входе, отдаётся
+                         canonical camelCase; пустые поля опускаются) и
+                         recommendations[] {id,title,text,category,campaign
+                         (НАЗВАНИЕ кампании, ''=весь аккаунт),impact} — если
+                         список пуст, ключ НЕ отдаётся и страница считает
+                         рекомендации сама (text-алиас description принимается
+                         на входе). last_seen_at
                          троттлится (touch не чаще раза в 30с). ВНИМАНИЕ:
                          шапка-комментарий scripts/132_god_sites.sql описывает
                          СТАРЫЙ контракт с мутациями от страницы — он

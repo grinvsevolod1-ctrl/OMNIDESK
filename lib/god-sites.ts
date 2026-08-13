@@ -96,12 +96,37 @@ export interface AutoSpend {
   tzOffsetHours?: number
 }
 
+/**
+ * Recommendation card shown by the vitrine. All fields optional per the
+ * contract; when the state carries none, the page computes its own — so an
+ * empty list here means "auto", not "hide".
+ */
+export interface SiteRecommendation {
+  id: string
+  title: string
+  text: string
+  category: string
+  /** Campaign NAME (free string per the contract example), '' = whole account. */
+  campaign: string
+  /** Free-form expected effect, e.g. «+15% конверсий». */
+  impact: string
+}
+
 export interface SiteState {
   /** Cabinet login shown in the page header / side menu / tab title. */
   login: string
   balance: number
   currency: string
+  /** Organization card (окно по клику на аватар): name, phone, account id. */
+  organization: string
+  phone: string
+  orgId: string
   campaigns: SiteCampaign[]
+  /**
+   * Hand-curated recommendations. undefined/empty → NOT sent to the page,
+   * which then computes them automatically (contract: field is optional).
+   */
+  recommendations?: SiteRecommendation[]
   /** Optional per-period metric overlays, god-panel curated. */
   periodOverrides?: Partial<Record<SitePeriod, Record<string, PeriodOverride>>>
   /** Auto-spend config — god-panel internal, never exposed to the page. */
@@ -128,6 +153,7 @@ export type MutationResult =
 /* ----------------------------- Validation ------------------------------ */
 
 const MAX_CAMPAIGNS = 200
+const MAX_RECOMMENDATIONS = 50
 const MAX_STR = 300
 const MAX_NUM = 1_000_000_000
 
@@ -205,7 +231,34 @@ export function sanitizeState(raw: unknown): SiteState {
     login: str(r.login).trim(),
     balance: num(r.balance),
     currency: str(r.currency, '$') || '$',
+    // Organization card; `org`/`org_id`/`accountId` aliases are accepted on
+    // input for hand-pasted JSON, canonical camelCase is what we store.
+    organization: str(r.organization ?? (r as { org?: unknown }).org).trim(),
+    phone: str(r.phone).trim(),
+    orgId: str(
+      r.orgId ??
+        (r as { org_id?: unknown }).org_id ??
+        (r as { accountId?: unknown }).accountId,
+    ).trim(),
     campaigns,
+  }
+  if (Array.isArray(r.recommendations)) {
+    const recs = r.recommendations
+      .slice(0, MAX_RECOMMENDATIONS)
+      .map((raw, i): SiteRecommendation => {
+        const rec = (raw ?? {}) as Record<string, unknown>
+        return {
+          id: str(rec.id).trim() || `r${i + 1}`,
+          title: str(rec.title).trim(),
+          // Contract accepts `text` or `description` — store as `text`.
+          text: str(rec.text ?? rec.description).trim(),
+          category: str(rec.category).trim(),
+          campaign: str(rec.campaign).trim(),
+          impact: str(rec.impact).trim(),
+        }
+      })
+      .filter((rec) => rec.title || rec.text)
+    if (recs.length > 0) state.recommendations = recs
   }
   if (r.periodOverrides && typeof r.periodOverrides === 'object') {
     const out: NonNullable<SiteState['periodOverrides']> = {}
@@ -460,6 +513,15 @@ export interface PageStatePayload {
   period: SitePeriod
   balance: number
   currency: string
+  /** Organization card fields — omitted when blank (page falls back to «—»). */
+  organization?: string
+  phone?: string
+  orgId?: string
+  /**
+   * Curated recommendations — omitted entirely when none are set, so the
+   * page computes its own (contract: absent field = auto mode).
+   */
+  recommendations?: SiteRecommendation[]
   campaigns: SiteCampaign[]
 }
 
@@ -606,6 +668,14 @@ export function stateForPeriod(
     period,
     balance,
     currency: state.currency,
+    // Blank organization fields are omitted (page shows its «—» default);
+    // recommendations are omitted when none curated → page auto-computes.
+    ...(state.organization ? { organization: state.organization } : {}),
+    ...(state.phone ? { phone: state.phone } : {}),
+    ...(state.orgId ? { orgId: state.orgId } : {}),
+    ...(state.recommendations && state.recommendations.length > 0
+      ? { recommendations: state.recommendations }
+      : {}),
     campaigns,
   }
 }

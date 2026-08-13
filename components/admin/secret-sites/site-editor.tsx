@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft,
   CircleDot,
+  Lightbulb,
   Loader2,
   Plus,
   RefreshCw,
@@ -17,7 +18,12 @@ import {
   secretGetSiteAction,
   secretSaveSiteStateAction,
 } from '@/app/actions/admin-secret'
-import type { GodSite, SiteCampaign, SiteState } from '@/lib/god-sites'
+import type {
+  GodSite,
+  SiteCampaign,
+  SiteRecommendation,
+  SiteState,
+} from '@/lib/god-sites'
 import { autoDayFraction } from '@/lib/god-sites-sim'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,6 +31,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 
 /**
  * Full cabinet-state editor for a managed external site: login, balance,
@@ -138,10 +145,21 @@ export function SiteEditor({
     [state.autoSpend?.tzOffsetHours],
   )
 
+  const recommendations = state.recommendations ?? []
+
   function patchCampaign(idx: number, patch: Partial<SiteCampaign>) {
     setState((s) => ({
       ...s,
       campaigns: s.campaigns.map((c, i) => (i === idx ? { ...c, ...patch } : c)),
+    }))
+  }
+
+  function patchRecommendation(idx: number, patch: Partial<SiteRecommendation>) {
+    setState((s) => ({
+      ...s,
+      recommendations: (s.recommendations ?? []).map((r, i) =>
+        i === idx ? { ...r, ...patch } : r,
+      ),
     }))
   }
 
@@ -279,7 +297,7 @@ export function SiteEditor({
           <Wallet className="size-4 text-muted-foreground" />
           <h2 className="text-sm font-semibold">Кабинет</h2>
           <span className="text-xs text-muted-foreground">
-            — шапка витрины: логин, баланс и валюта
+            — шапка витрины: логин, баланс, валюта и данные организации
           </span>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -314,6 +332,41 @@ export function SiteEditor({
               value={state.currency}
               placeholder="₽"
               onChange={(e) => setState((s) => ({ ...s, currency: e.target.value }))}
+            />
+          </div>
+        </div>
+        {/* Organization card — окно по клику на аватар на витрине. Пустые
+            поля не отправляются, страница показывает свой прочерк. */}
+        <div className="grid grid-cols-1 gap-3 border-t pt-4 sm:grid-cols-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="site-org">Организация</Label>
+            <Input
+              id="site-org"
+              value={state.organization}
+              placeholder="ООО Ромашка"
+              onChange={(e) =>
+                setState((s) => ({ ...s, organization: e.target.value }))
+              }
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="site-phone">Телефон</Label>
+            <Input
+              id="site-phone"
+              value={state.phone}
+              placeholder="+7 900 123-45-67"
+              onChange={(e) => setState((s) => ({ ...s, phone: e.target.value }))}
+              className="font-mono"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="site-orgid">Идентификатор</Label>
+            <Input
+              id="site-orgid"
+              value={state.orgId}
+              placeholder={state.login || 'porg-xxxxxx'}
+              onChange={(e) => setState((s) => ({ ...s, orgId: e.target.value }))}
+              className="font-mono"
             />
           </div>
         </div>
@@ -437,6 +490,163 @@ export function SiteEditor({
             </p>
           </div>
         )}
+      </Card>
+
+      {/* Recommendations — optional curated cards; empty = page auto-computes */}
+      <Card className="flex flex-col gap-4 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Lightbulb
+              className={`size-4 ${
+                recommendations.length > 0
+                  ? 'text-success'
+                  : 'text-muted-foreground'
+              }`}
+            />
+            <h2 className="text-sm font-semibold">Рекомендации</h2>
+            <span className="text-xs text-muted-foreground">
+              {recommendations.length > 0
+                ? `— витрина покажет эти ${recommendations.length} шт.`
+                : '— пусто: витрина считает рекомендации сама'}
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              setState((s) => ({
+                ...s,
+                recommendations: [
+                  ...(s.recommendations ?? []),
+                  {
+                    id: `r${Date.now().toString(36)}`,
+                    title: '',
+                    text: '',
+                    category: '',
+                    campaign: '',
+                    impact: '',
+                  },
+                ],
+              }))
+            }
+            className="press-scale gap-1.5"
+          >
+            <Plus className="size-4" />
+            Добавить рекомендацию
+          </Button>
+        </div>
+
+        {recommendations.map((rec, idx) => (
+          <div
+            key={rec.id}
+            className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3"
+          >
+            <div className="flex items-start gap-3">
+              <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor={`rec-${rec.id}-title`} className="text-xs">
+                    Заголовок
+                  </Label>
+                  <Input
+                    id={`rec-${rec.id}-title`}
+                    value={rec.title}
+                    placeholder="Повысьте CTR объявлений"
+                    onChange={(e) =>
+                      patchRecommendation(idx, { title: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor={`rec-${rec.id}-impact`} className="text-xs">
+                    Эффект
+                  </Label>
+                  <Input
+                    id={`rec-${rec.id}-impact`}
+                    value={rec.impact}
+                    placeholder="+15% конверсий"
+                    onChange={(e) =>
+                      patchRecommendation(idx, { impact: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() =>
+                  setState((s) => {
+                    const next = (s.recommendations ?? []).filter(
+                      (_, i) => i !== idx,
+                    )
+                    return {
+                      ...s,
+                      // Drop the key entirely when the list empties, so the
+                      // payload omits it and the page returns to auto mode.
+                      ...(next.length > 0
+                        ? { recommendations: next }
+                        : { recommendations: undefined }),
+                    }
+                  })
+                }
+                title="Удалить рекомендацию"
+                className="press-scale mt-6 size-8 shrink-0 p-0 text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`rec-${rec.id}-text`} className="text-xs">
+                Текст
+              </Label>
+              <Textarea
+                id={`rec-${rec.id}-text`}
+                value={rec.text}
+                rows={2}
+                placeholder="Добавьте быстрые ссылки и уточнения в объявления."
+                onChange={(e) =>
+                  patchRecommendation(idx, { text: e.target.value })
+                }
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor={`rec-${rec.id}-category`} className="text-xs">
+                  Категория
+                </Label>
+                <Input
+                  id={`rec-${rec.id}-category`}
+                  value={rec.category}
+                  placeholder="Объявления / Ставки / Бюджет…"
+                  onChange={(e) =>
+                    patchRecommendation(idx, { category: e.target.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor={`rec-${rec.id}-campaign`} className="text-xs">
+                  Кампания (пусто = весь аккаунт)
+                </Label>
+                <Input
+                  id={`rec-${rec.id}-campaign`}
+                  value={rec.campaign}
+                  list="site-campaign-names"
+                  placeholder="Название кампании"
+                  onChange={(e) =>
+                    patchRecommendation(idx, { campaign: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+        {/* Campaign-name suggestions for the recommendation binding — the
+            contract references campaigns by NAME, so a datalist keeps free
+            input possible while nudging toward exact existing names. */}
+        <datalist id="site-campaign-names">
+          {state.campaigns.map((c) => (
+            <option key={c.id} value={c.name} />
+          ))}
+        </datalist>
       </Card>
 
       {/* Campaigns */}

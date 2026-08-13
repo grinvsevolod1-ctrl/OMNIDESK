@@ -55,6 +55,58 @@ describe('sanitizeState', () => {
     }
   })
 
+  it('accepts organization aliases and normalizes recommendations', () => {
+    const s = sanitizeState({
+      balance: 1,
+      campaigns: [],
+      org: 'ООО Ромашка', // alias for organization
+      phone: '+7 900 123-45-67',
+      accountId: 'porg-znfwgwg', // alias for orgId
+      recommendations: [
+        {
+          title: 'Повысьте CTR',
+          description: 'Добавьте быстрые ссылки.', // alias for text
+          category: 'Объявления',
+          campaign: 'Поиск — Москва',
+          impact: '+CTR',
+        },
+        { title: '', text: '' }, // blank → dropped
+        'garbage',
+      ],
+    })
+    expect(s.organization).toBe('ООО Ромашка')
+    expect(s.phone).toBe('+7 900 123-45-67')
+    expect(s.orgId).toBe('porg-znfwgwg')
+    expect(s.recommendations).toHaveLength(1)
+    const r = s.recommendations![0]
+    expect(r.id).toBeTruthy() // auto-assigned when missing
+    expect(r.text).toBe('Добавьте быстрые ссылки.')
+    expect(r.campaign).toBe('Поиск — Москва')
+  })
+
+  it('omits blank org fields and empty recommendations from the payload', () => {
+    const blank = sanitizeState({ balance: 1, campaigns: [CAMPAIGN] })
+    const p1 = stateForPeriod(blank, 'today', new Date())
+    expect('organization' in p1).toBe(false)
+    expect('phone' in p1).toBe(false)
+    expect('orgId' in p1).toBe(false)
+    expect('recommendations' in p1).toBe(false) // absent → page auto-computes
+
+    const full = sanitizeState({
+      balance: 1,
+      campaigns: [CAMPAIGN],
+      organization: 'ООО Ромашка',
+      phone: '+7 900 000-00-00',
+      orgId: 'acc-1',
+      recommendations: [{ id: 'r1', title: 'Тест', text: 'Текст' }],
+    })
+    const p2 = stateForPeriod(full, 'week', new Date())
+    expect(p2.organization).toBe('ООО Ромашка')
+    expect(p2.phone).toBe('+7 900 000-00-00')
+    expect(p2.orgId).toBe('acc-1')
+    expect(p2.recommendations).toHaveLength(1)
+  })
+
   it('keeps only known metric fields in periodOverrides', () => {
     const s = sanitizeState({
       balance: 1,
