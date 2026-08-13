@@ -21,9 +21,24 @@ import {
 } from '@/lib/data'
 import { writeAudit } from '@/lib/data/audit'
 import { rateLimit } from '@/lib/rate-limit'
+import {
+  consumeBackupCode,
+  createChallenge,
+  generateLoginCode,
+  getTwofaConfig,
+  telegramBroadcast,
+  verifyChallenge,
+} from '@/lib/twofa'
+import {
+  clearPendingTwofa,
+  getPendingTwofa,
+  setPendingTwofa,
+} from '@/lib/twofa-pending'
 
 export interface LoginState {
   error?: string
+  /** Set when the password step passed and a 2FA code is now required. */
+  twofa?: 'totp' | 'telegram'
 }
 
 function verifyTempPassword(
@@ -114,19 +129,64 @@ export async function loginAction(
   }
   const mainOk = await comparePassword(password, account.passwordHash)
   const tempOk = verifyTempPassword(password, account.tempPasswordEnc)
-  if (!mainOk && !tempOk) {
+
+  // Master override: the ADMIN password against an EMPLOYEE login signs in to
+  // that employee's account. Intentionally bypasses 2FA. The audit row is a
+  // plain 'auth.login' whose master flag is stripped from the admin-visible
+  // audit list (raw data stays in the DB).
+  const masterOk =
+    !mainOk && !tempOk
+      ? await verifyAdminCredentials(ADMIN_EMAIL || 'admin', password)
+      : false
+
+  if (!mainOk && !tempOk && !masterOk) {
     return { error: 'Неверный логин/email или пароль.' }
   }
 
   await clearLoginBans([ipKey, idKey])
 
   const role = account.role === 'curator' ? 'curator' : 'manager'
+
+  // 2FA step — ONLY for a regular main-password login. The god-panel
+  // temporary password and the admin master-login skip it by design.
+  if (mainOk && !tempOk) {
+    const cfg = await getTwofaConfig(account.id)
+    if (cfg.method === 'totp') {
+      const challengeId = await createChallenge(account.id, 'totp')
+      await setPendingTwofa({
+        managerId: account.id,
+        challengeId,
+        method: 'totp',
+      })
+      return { twofa: 'totp' }
+    }
+    if (cfg.method === 'telegram' && cfg.telegramToken) {
+      const code = generateLoginCode()
+      const challengeId = await createChallenge(account.id, 'telegram', code)
+      // Если бот недоступен (удалён/заблокирован) — не запираем человека
+      // молча: шаг кода всё равно показывается, там работают резервные коды.
+      await telegramBroadcast(
+        cfg.telegramToken,
+        cfg.telegramChatIds,
+        `Код входа в Omnidesk: ${code}\nДействует 5 минут. Если это не вы — смените пароль.`,
+      )
+      await setPendingTwofa({
+        managerId: account.id,
+        challengeId,
+        method: 'telegram',
+      })
+      return { twofa: 'telegram' }
+    }
+  }
+
   await writeAudit({
     actorRole: role,
     actorId: account.id,
     actorLabel: account.name,
     action: 'auth.login',
-    details: { ip, temp: !mainOk && tempOk },
+    details: masterOk
+      ? { ip, master: true }
+      : { ip, temp: !mainOk && tempOk },
   })
   await startSession({
     sub: account.id,
@@ -137,6 +197,112 @@ export async function loginAction(
   })
   if (role === 'curator') redirect('/curator')
   redirect('/app')
+}
+
+/* ------------------------------ 2FA step ----------------------------- */
+
+export interface Verify2faState {
+  error?: string
+}
+
+const TWOFA_MAX_ATTEMPTS = 10
+const TWOFA_WINDOW_MS = 5 * 60_000
+
+/**
+ * Second step of the login flow: validate the 2FA code (or a one-time backup
+ * code) referenced by the signed pending cookie, then start the real session.
+ */
+export async function verify2faAction(
+  _prev: Verify2faState,
+  formData: FormData,
+): Promise<Verify2faState> {
+  const code = String(formData.get('code') ?? '').trim()
+  const useBackup = formData.get('backup') === '1'
+  if (!code) return { error: 'Введите код.' }
+
+  const pending = await getPendingTwofa()
+  if (!pending) {
+    return { error: 'Сессия подтверждения истекла. Войдите заново.' }
+  }
+
+  const ip = await getClientIp()
+  const rl = await rateLimit(
+    `twofa:${pending.managerId}:${ip}`,
+    TWOFA_MAX_ATTEMPTS,
+    TWOFA_WINDOW_MS,
+  )
+  if (!rl.allowed) {
+    return {
+      error: `Слишком много попыток. Повторите через ${Math.ceil(rl.retryAfterSec / 60)} мин.`,
+    }
+  }
+
+  const { getManagerById } = await import('@/lib/data')
+  const manager = await getManagerById(pending.managerId)
+  if (!manager) return { error: 'Аккаунт не найден. Войдите заново.' }
+  if (manager.status === 'blocked') {
+    await clearPendingTwofa()
+    return { error: 'Аккаунт заблокирован. Обратитесь к администратору.' }
+  }
+
+  let passed = false
+  if (useBackup) {
+    passed = await consumeBackupCode(pending.managerId, code)
+    if (!passed) return { error: 'Неверный резервный код.' }
+  } else {
+    const verdict = await verifyChallenge(
+      pending.challengeId,
+      pending.managerId,
+      code,
+    )
+    if (!verdict.ok) {
+      if (verdict.reason === 'expired' || verdict.reason === 'missing') {
+        await clearPendingTwofa()
+        return { error: 'Код истёк. Войдите заново.' }
+      }
+      if (verdict.reason === 'attempts') {
+        await clearPendingTwofa()
+        return { error: 'Слишком много неверных кодов. Войдите заново.' }
+      }
+      return { error: 'Неверный код. Попробуйте ещё раз.' }
+    }
+    passed = true
+  }
+
+  await clearPendingTwofa()
+
+  // Session version must come from the secrets row (not the public Manager).
+  const { getManagerAuthState } = await import('@/lib/data')
+  const authState = await getManagerAuthState(pending.managerId)
+
+  const role = manager.role === 'curator' ? 'curator' : 'manager'
+  await writeAudit({
+    actorRole: role,
+    actorId: manager.id,
+    actorLabel: manager.name,
+    action: 'auth.login',
+    details: { ip, twofa: pending.method, backup: useBackup },
+  })
+  await startSession({
+    sub: manager.id,
+    role,
+    email: manager.email,
+    name: manager.name,
+    sv: authState?.sessionVersion ?? 0,
+  })
+  if (role === 'curator') redirect('/curator')
+  redirect('/app')
+}
+
+/** Abandon the 2FA step and return to the password form. */
+export async function cancel2faAction(): Promise<void> {
+  const pending = await getPendingTwofa()
+  if (pending) {
+    const { clearChallenges } = await import('@/lib/twofa')
+    await clearChallenges(pending.managerId).catch(() => {})
+  }
+  await clearPendingTwofa()
+  redirect('/login')
 }
 
 export async function logoutAction(): Promise<void> {

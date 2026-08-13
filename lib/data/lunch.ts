@@ -26,7 +26,10 @@ export async function setManagerOnLunch(
   onLunch: boolean,
 ): Promise<void> {
   await query(
-    `UPDATE managers SET on_lunch = $2 WHERE id = $1 AND role = 'manager'`,
+    `UPDATE managers
+        SET on_lunch = $2,
+            lunch_started_at = CASE WHEN $2 THEN now() ELSE NULL END
+      WHERE id = $1 AND role = 'manager'`,
     [managerId, onLunch],
   )
 }
@@ -63,7 +66,8 @@ export async function tryGoOnLunch(managerId: string): Promise<boolean> {
     )
     if (Number(rows[0]?.n ?? 0) < 1) return false
     await db.query(
-      `UPDATE managers SET on_lunch = true WHERE id = $1 AND role = 'manager'`,
+      `UPDATE managers SET on_lunch = true, lunch_started_at = now()
+        WHERE id = $1 AND role = 'manager'`,
       [managerId],
     )
     return true
@@ -86,6 +90,41 @@ export async function countAvailableManagers(): Promise<number> {
     console.error('countAvailableManagers failed (migration 034?):', err)
     // Fail open: if we can't count, don't trap a manager off-lunch.
     return 99
+  }
+}
+
+export interface LunchState {
+  onLunch: boolean
+  /** ISO timestamp of when lunch started, or null when not on lunch. */
+  startedAt: string | null
+}
+
+/**
+ * Read a manager's lunch flag together with when it started (for the live
+ * "на обеде уже N минут" timer). Tolerates the lunch_started_at column not
+ * existing yet (migration 131) by falling back to the flag only.
+ */
+export async function getManagerLunchState(
+  managerId: string,
+): Promise<LunchState> {
+  try {
+    const rows = await query<{
+      on_lunch: boolean
+      lunch_started_at: string | Date | null
+    }>(
+      'SELECT on_lunch, lunch_started_at FROM managers WHERE id = $1 LIMIT 1',
+      [managerId],
+    )
+    const row = rows[0]
+    return {
+      onLunch: row?.on_lunch ?? false,
+      startedAt:
+        row?.on_lunch && row.lunch_started_at
+          ? new Date(row.lunch_started_at).toISOString()
+          : null,
+    }
+  } catch {
+    return { onLunch: await getManagerOnLunch(managerId), startedAt: null }
   }
 }
 
