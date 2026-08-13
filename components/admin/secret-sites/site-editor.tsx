@@ -1,13 +1,15 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
+  CircleDot,
   Loader2,
   Plus,
   Save,
   Trash2,
+  Wallet,
 } from 'lucide-react'
 import { secretSaveSiteStateAction } from '@/app/actions/admin-secret'
 import type { GodSite, SiteCampaign, SiteState } from '@/lib/god-sites'
@@ -16,19 +18,13 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 
 /**
- * Full cabinet-state editor for a managed external site: balance, currency
- * and every field of every campaign. Saves the whole state atomically under
- * optimistic locking — if the live page mutated data meanwhile, the save
- * answers a conflict and the operator reopens the editor with fresh data.
+ * Full cabinet-state editor for a managed external site: login, balance,
+ * currency and every field of every campaign. Saves the whole state
+ * atomically under optimistic locking — a stale save answers a conflict and
+ * the operator reopens the editor with fresh data.
  */
 
 const CAMPAIGN_NUM_FIELDS: {
@@ -76,6 +72,26 @@ function newCampaign(): SiteCampaign {
   }
 }
 
+const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
+
+/**
+ * Derived metrics exactly as the vitrine computes them (contract §7) — shown
+ * read-only so the operator sees the resulting CTR/CPC/CPA while typing raw
+ * numbers, instead of checking the live page after every save.
+ */
+function derived(c: SiteCampaign): { label: string; value: string }[] {
+  const ctr = c.shows > 0 ? (c.clicks / c.shows) * 100 : 0
+  const cpc = c.clicks > 0 ? c.cost / c.clicks : 0
+  const cpa = c.goals > 0 ? c.cost / c.goals : 0
+  const cr = c.clicks > 0 ? (c.goals / c.clicks) * 100 : 0
+  return [
+    { label: 'CTR', value: `${nf.format(ctr)}%` },
+    { label: 'CPC', value: nf.format(cpc) },
+    { label: 'CPA', value: nf.format(cpa) },
+    { label: 'CR', value: `${nf.format(cr)}%` },
+  ]
+}
+
 export function SiteEditor({
   site,
   onClose,
@@ -86,6 +102,14 @@ export function SiteEditor({
   const [pending, startTransition] = useTransition()
   const [state, setState] = useState<SiteState>(site.state)
   const [revision] = useState(site.revision)
+  const [savedSnapshot, setSavedSnapshot] = useState(() =>
+    JSON.stringify(site.state),
+  )
+  const dirty = useMemo(
+    () => JSON.stringify(state) !== savedSnapshot,
+    [state, savedSnapshot],
+  )
+  const running = state.campaigns.filter((c) => c.status === 'running').length
 
   function patchCampaign(idx: number, patch: Partial<SiteCampaign>) {
     setState((s) => ({
@@ -94,11 +118,22 @@ export function SiteEditor({
     }))
   }
 
+  function back() {
+    if (
+      dirty &&
+      !window.confirm('Есть несохранённые изменения. Выйти без сохранения?')
+    ) {
+      return
+    }
+    onClose()
+  }
+
   function save() {
     startTransition(async () => {
       try {
         const res = await secretSaveSiteStateAction(site.id, state, revision)
         if (res.ok) {
+          setSavedSnapshot(JSON.stringify(state))
           toast.success(res.message)
           onClose()
         } else {
@@ -112,84 +147,108 @@ export function SiteEditor({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+      {/* Sticky toolbar: always-reachable save + dirty indicator */}
+      <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card/95 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+        <div className="flex min-w-0 items-center gap-3">
           <Button
             size="sm"
-            variant="outline"
-            onClick={onClose}
-            className="press-scale gap-1.5"
+            variant="ghost"
+            onClick={back}
+            className="press-scale shrink-0 gap-1.5"
           >
             <ArrowLeft className="size-4" />
             Назад
           </Button>
-          <div>
-            <p className="font-medium leading-tight">{site.title}</p>
-            <p className="text-xs text-muted-foreground">
+          <div className="min-w-0">
+            <p className="truncate font-medium leading-tight">{site.title}</p>
+            <p className="truncate text-xs text-muted-foreground">
               <span className="font-mono">{site.slug}</span>
-              {' · rev '}
-              {revision}
+              {' · кампаний: '}
+              {state.campaigns.length}
+              {' · активных: '}
+              {running}
             </p>
           </div>
         </div>
-        <Button size="sm" onClick={save} disabled={pending} className="press-scale gap-1.5">
-          {pending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Save className="size-4" />
-          )}
-          Сохранить всё
-        </Button>
+        <div className="flex items-center gap-3">
+          <span
+            className={`text-xs transition-opacity ${
+              dirty ? 'text-warning opacity-100' : 'text-muted-foreground opacity-60'
+            }`}
+          >
+            {dirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены'}
+          </span>
+          <Button
+            size="sm"
+            onClick={save}
+            disabled={pending || !dirty}
+            className="press-scale gap-1.5"
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Save className="size-4" />
+            )}
+            Сохранить всё
+          </Button>
+        </div>
       </div>
 
       {/* Cabinet header data */}
-      <Card className="flex flex-wrap items-end gap-3 p-4">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="site-login">Логин кабинета</Label>
-          <Input
-            id="site-login"
-            value={state.login}
-            placeholder="client-login"
-            onChange={(e) => setState((s) => ({ ...s, login: e.target.value }))}
-            className="w-52 font-mono"
-          />
+      <Card className="flex flex-col gap-4 p-4">
+        <div className="flex items-center gap-2">
+          <Wallet className="size-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">Кабинет</h2>
+          <span className="text-xs text-muted-foreground">
+            — шапка витрины: логин, баланс и валюта
+          </span>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="site-balance">Баланс</Label>
-          <Input
-            id="site-balance"
-            type="number"
-            min={0}
-            step="0.01"
-            value={state.balance}
-            onChange={(e) =>
-              setState((s) => ({ ...s, balance: Number(e.target.value) || 0 }))
-            }
-            className="w-40 font-mono"
-          />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="site-login">Логин кабинета</Label>
+            <Input
+              id="site-login"
+              value={state.login}
+              placeholder="client-login"
+              onChange={(e) => setState((s) => ({ ...s, login: e.target.value }))}
+              className="font-mono"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="site-balance">Баланс</Label>
+            <Input
+              id="site-balance"
+              type="number"
+              min={0}
+              step="0.01"
+              value={state.balance}
+              onChange={(e) =>
+                setState((s) => ({ ...s, balance: Number(e.target.value) || 0 }))
+              }
+              className="font-mono"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="site-currency">Валюта</Label>
+            <Input
+              id="site-currency"
+              value={state.currency}
+              placeholder="₽"
+              onChange={(e) => setState((s) => ({ ...s, currency: e.target.value }))}
+            />
+          </div>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="site-currency">Валюта</Label>
-          <Input
-            id="site-currency"
-            value={state.currency}
-            onChange={(e) => setState((s) => ({ ...s, currency: e.target.value }))}
-            className="w-20 text-center"
-          />
-        </div>
-        <p className="pb-2 text-xs text-muted-foreground">
-          Страница увидит изменения при следующем опросе (обычно до 5 секунд).
-        </p>
       </Card>
 
       {/* Campaigns */}
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">
-          {'Кампании ('}
-          {state.campaigns.length}
-          {')'}
-        </h2>
+        <div className="flex items-center gap-2">
+          <CircleDot className="size-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">Кампании</h2>
+          <Badge variant="outline" className="font-mono text-xs">
+            {state.campaigns.length}
+          </Badge>
+        </div>
         <Button
           size="sm"
           variant="outline"
@@ -203,14 +262,24 @@ export function SiteEditor({
         </Button>
       </div>
 
+      {state.campaigns.length === 0 && (
+        <Card className="flex flex-col items-center gap-1 p-8 text-center">
+          <p className="text-sm font-medium">Кампаний пока нет</p>
+          <p className="text-sm text-muted-foreground">
+            Витрина покажет пустой список — добавьте первую кампанию.
+          </p>
+        </Card>
+      )}
+
       {state.campaigns.map((c, idx) => (
-        <Card key={c.id} className="flex flex-col gap-4 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <Card key={c.id} className="flex flex-col gap-0 overflow-hidden p-0">
+          {/* Campaign header */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 pb-3">
             <div className="flex min-w-0 flex-1 items-center gap-2.5">
               <Badge
                 variant="outline"
-                className="shrink-0 font-mono text-xs"
-                title="Номер кампании"
+                className="shrink-0 font-mono text-xs text-muted-foreground"
+                title="Номер кампании (виден на витрине)"
               >
                 {c.id}
               </Badge>
@@ -221,81 +290,101 @@ export function SiteEditor({
                 aria-label="Название кампании"
               />
             </div>
-            <div className="flex items-center gap-2">
-              <Select
-                value={c.status}
-                onValueChange={(v) =>
-                  patchCampaign(idx, { status: v as 'running' | 'stopped' })
-                }
+            <div className="flex items-center gap-3">
+              <label
+                className="flex cursor-pointer items-center gap-2"
+                htmlFor={`c-${c.id}-status`}
               >
-                <SelectTrigger
-                  className="w-36"
-                  aria-label="Статус кампании"
+                <Switch
+                  id={`c-${c.id}-status`}
+                  checked={c.status === 'running'}
+                  onCheckedChange={(v) =>
+                    patchCampaign(idx, { status: v ? 'running' : 'stopped' })
+                  }
+                />
+                <span
+                  className={`w-24 text-sm ${
+                    c.status === 'running'
+                      ? 'font-medium text-success'
+                      : 'text-muted-foreground'
+                  }`}
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="running">Идут показы</SelectItem>
-                  <SelectItem value="stopped">Остановлена</SelectItem>
-                </SelectContent>
-              </Select>
+                  {c.status === 'running' ? 'Идут показы' : 'Остановлена'}
+                </span>
+              </label>
               <Button
                 size="sm"
-                variant="outline"
-                onClick={() =>
-                  setState((s) => ({
-                    ...s,
-                    campaigns: s.campaigns.filter((_, i) => i !== idx),
-                  }))
-                }
+                variant="ghost"
+                onClick={() => {
+                  if (window.confirm(`Удалить кампанию «${c.name}»?`)) {
+                    setState((s) => ({
+                      ...s,
+                      campaigns: s.campaigns.filter((_, i) => i !== idx),
+                    }))
+                  }
+                }}
                 title="Удалить кампанию"
-                className="press-scale border-destructive/40 text-destructive hover:text-destructive"
+                className="press-scale size-8 p-0 text-muted-foreground hover:text-destructive"
               >
                 <Trash2 className="size-4" />
               </Button>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            {CAMPAIGN_NUM_FIELDS.map((f) => (
-              <div key={f.key} className="flex flex-col gap-1.5">
-                <Label htmlFor={`c-${c.id}-${f.key}`} className="text-xs">
-                  {f.label}
-                </Label>
-                <Input
-                  id={`c-${c.id}-${f.key}`}
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={c[f.key]}
-                  onChange={(e) =>
-                    patchCampaign(idx, {
-                      [f.key]: Number(e.target.value) || 0,
-                    } as Partial<SiteCampaign>)
-                  }
-                  className="font-mono"
-                />
-              </div>
-            ))}
+          {/* Metrics */}
+          <div className="flex flex-col gap-3 px-4 pb-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              {CAMPAIGN_NUM_FIELDS.map((f) => (
+                <div key={f.key} className="flex flex-col gap-1.5">
+                  <Label htmlFor={`c-${c.id}-${f.key}`} className="text-xs">
+                    {f.label}
+                  </Label>
+                  <Input
+                    id={`c-${c.id}-${f.key}`}
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={c[f.key]}
+                    onChange={(e) =>
+                      patchCampaign(idx, {
+                        [f.key]: Number(e.target.value) || 0,
+                      } as Partial<SiteCampaign>)
+                    }
+                    className="font-mono"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {CAMPAIGN_TEXT_FIELDS.map((f) => (
+                <div key={f.key} className="flex flex-col gap-1.5">
+                  <Label htmlFor={`c-${c.id}-${f.key}`} className="text-xs">
+                    {f.label}
+                  </Label>
+                  <Input
+                    id={`c-${c.id}-${f.key}`}
+                    value={c[f.key]}
+                    placeholder={f.placeholder}
+                    onChange={(e) =>
+                      patchCampaign(idx, {
+                        [f.key]: e.target.value,
+                      } as Partial<SiteCampaign>)
+                    }
+                  />
+                </div>
+              ))}
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {CAMPAIGN_TEXT_FIELDS.map((f) => (
-              <div key={f.key} className="flex flex-col gap-1.5">
-                <Label htmlFor={`c-${c.id}-${f.key}`} className="text-xs">
-                  {f.label}
-                </Label>
-                <Input
-                  id={`c-${c.id}-${f.key}`}
-                  value={c[f.key]}
-                  placeholder={f.placeholder}
-                  onChange={(e) =>
-                    patchCampaign(idx, {
-                      [f.key]: e.target.value,
-                    } as Partial<SiteCampaign>)
-                  }
-                />
-              </div>
+          {/* Derived preview — what the vitrine will render from these numbers */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t bg-muted/40 px-4 py-2.5">
+            <span className="text-xs text-muted-foreground">На витрине:</span>
+            {derived(c).map((m) => (
+              <span key={m.label} className="text-xs">
+                <span className="text-muted-foreground">{m.label} </span>
+                <span className="font-mono font-medium">{m.value}</span>
+              </span>
             ))}
           </div>
         </Card>

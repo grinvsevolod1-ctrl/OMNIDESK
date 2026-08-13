@@ -7,7 +7,10 @@ import {
   Copy,
   Globe,
   KeyRound,
+  Link2,
   Loader2,
+  MoreVertical,
+  Pencil,
   Plus,
   Trash2,
 } from 'lucide-react'
@@ -19,7 +22,6 @@ import {
   type SiteListItem,
 } from '@/app/actions/admin-secret'
 import type { GodSite } from '@/lib/god-sites'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
@@ -30,6 +32,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { EmptyState } from '@/components/page-parts'
@@ -41,15 +50,17 @@ import { SiteEditor } from '@/components/admin/secret-sites/site-editor'
  * site is opened. SACRED INVARIANT (AGENTS.md §4): god-panel only.
  */
 
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString('ru-RU', {
+function fmtRelative(iso: string | null): string {
+  if (!iso) return 'ещё не подключалась'
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return 'ещё не подключалась'
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  if (sec < 60) return 'только что'
+  if (sec < 3600) return `${Math.floor(sec / 60)} мин назад`
+  if (sec < 86400) return `${Math.floor(sec / 3600)} ч назад`
+  return new Date(iso).toLocaleDateString('ru-RU', {
     day: '2-digit',
     month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
   })
 }
 
@@ -67,9 +78,11 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const [createOpen, setCreateOpen] = useState(false)
-  const [newKey, setNewKey] = useState<{ title: string; key: string } | null>(
-    null,
-  )
+  const [newKey, setNewKey] = useState<{
+    title: string
+    slug: string
+    key: string
+  } | null>(null)
   const [openSite, setOpenSite] = useState<GodSite | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
 
@@ -87,12 +100,12 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
     })
   }
 
-  function rotateKey(id: string, title: string) {
+  function rotateKey(id: string, title: string, slug: string) {
     startTransition(async () => {
       try {
         const res = await secretRotateSiteKeyAction(id)
         if (res.ok && res.apiKey) {
-          setNewKey({ title, key: res.apiKey })
+          setNewKey({ title, slug, key: res.apiKey })
           toast.success(res.message)
         } else toast.error(res.message)
       } catch {
@@ -129,15 +142,10 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-2xl text-sm text-muted-foreground text-pretty">
-          Внешние страницы-витрины (только чтение). Страница находит свои
-          данные по идентификатору = slug (эндпоинт{' '}
-          <code className="text-foreground">
-            /api/ext/pages/&lt;slug&gt;/state
-          </code>
-          ) и авторизуется токеном. Всё, что вы правите здесь, витрина
-          показывает при следующем опросе или сразу по SSE.
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <p className="max-w-xl text-sm text-muted-foreground text-pretty">
+          Внешние страницы-витрины. Витрина только читает данные — всё, что вы
+          правите здесь, она покажет при следующем опросе или сразу по SSE.
         </p>
         <Button
           size="sm"
@@ -153,90 +161,141 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
         <EmptyState
           icon={Globe}
           title="Нет управляемых сайтов"
-          description="Создайте сайт — получите одноразовый токен. На витрине задайте ?api=<панель>/api/ext&page=<slug>&token=<токен>."
+          description="Создайте сайт — получите одноразовый токен и подключите витрину за минуту."
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          {sites.map((s) => (
-            <Card key={s.id} className="flex flex-col gap-3 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <span
-                    className={`size-2 shrink-0 rounded-full ${
-                      isOnline(s.lastSeenAt) ? 'bg-success' : 'bg-muted-foreground/40'
-                    }`}
-                    title={isOnline(s.lastSeenAt) ? 'Страница на связи' : 'Не на связи'}
-                  />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-medium">{s.title}</span>
-                      <Badge variant="outline" className="shrink-0 font-mono text-xs">
-                        {s.slug}
-                      </Badge>
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {sites.map((s) => {
+            const online = isOnline(s.lastSeenAt)
+            return (
+              <Card key={s.id} className="flex flex-col gap-0 overflow-hidden p-0">
+                {/* Header: identity + actions */}
+                <div className="flex items-start justify-between gap-3 p-4 pb-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <div className="relative mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                      <Globe className="size-4 text-muted-foreground" />
+                      <span
+                        className={`absolute -right-0.5 -top-0.5 size-2.5 rounded-full ring-2 ring-card ${
+                          online ? 'bg-success animate-pulse' : 'bg-muted-foreground/40'
+                        }`}
+                        title={online ? 'Страница на связи' : 'Не на связи'}
+                      />
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      {'Кампаний: '}
-                      {s.campaignsCount}
-                      {' · Баланс: '}
+                    <div className="min-w-0">
+                      <p className="truncate font-medium leading-tight">{s.title}</p>
+                      <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+                        {s.slug}
+                      </p>
+                    </div>
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={pending}
+                          className="press-scale size-8 shrink-0 p-0"
+                          aria-label="Действия с сайтом"
+                        >
+                          <MoreVertical className="size-4" />
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => rotateKey(s.id, s.title, s.slug)}
+                        className="gap-2"
+                      >
+                        <KeyRound className="size-4" />
+                        Заменить токен
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        variant="destructive"
+                        className="gap-2"
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `Удалить «${s.title}»? Витрина сразу перестанет получать данные.`,
+                            )
+                          )
+                            removeSite(s.id)
+                        }}
+                      >
+                        <Trash2 className="size-4" />
+                        Удалить сайт
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+
+                {/* Vital stats */}
+                <div className="grid grid-cols-3 gap-px bg-border">
+                  <div className="flex flex-col gap-0.5 bg-card px-4 py-2.5">
+                    <span className="text-xs text-muted-foreground">Баланс</span>
+                    <span className="truncate font-mono text-sm font-semibold">
                       {fmtMoney(s.balance, s.currency)}
-                      {' · Опрос: '}
-                      {fmtDate(s.lastSeenAt)}
-                      {' · rev '}
-                      {s.revision}
-                    </p>
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5 bg-card px-4 py-2.5">
+                    <span className="text-xs text-muted-foreground">Кампаний</span>
+                    <span className="font-mono text-sm font-semibold">
+                      {s.campaignsCount}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5 bg-card px-4 py-2.5">
+                    <span className="text-xs text-muted-foreground">Опрос</span>
+                    <span
+                      className={`truncate text-sm font-medium ${
+                        online ? 'text-success' : 'text-muted-foreground'
+                      }`}
+                    >
+                      {fmtRelative(s.lastSeenAt)}
+                    </span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+
+                {/* Footer: endpoint + edit */}
+                <div className="flex items-center justify-between gap-2 border-t p-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(
+                        `/api/ext/pages/${s.slug}/state`,
+                      )
+                      toast.success('Эндпоинт скопирован')
+                    }}
+                    title="Скопировать эндпоинт"
+                    className="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <Link2 className="size-3.5 shrink-0" />
+                    <span className="truncate">{`/api/ext/pages/${s.slug}/state`}</span>
+                  </button>
                   <Button
                     size="sm"
                     onClick={() => openEditor(s.id)}
                     disabled={pending}
-                    className="press-scale"
+                    className="press-scale shrink-0 gap-1.5"
                   >
                     {loadingId === s.id ? (
                       <Loader2 className="size-4 animate-spin" />
                     ) : (
-                      'Редактировать'
+                      <Pencil className="size-3.5" />
                     )}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => rotateKey(s.id, s.title)}
-                    disabled={pending}
-                    title="Заменить API-ключ — старый перестанет работать сразу"
-                    className="press-scale gap-1.5"
-                  >
-                    <KeyRound className="size-4" />
-                    Ключ
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Удалить «${s.title}»? Ключ перестанет работать сразу.`,
-                        )
-                      )
-                        removeSite(s.id)
-                    }}
-                    disabled={pending}
-                    className="press-scale border-destructive/40 text-destructive hover:text-destructive"
-                  >
-                    <Trash2 className="size-4" />
+                    Редактировать
                   </Button>
                 </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            )
+          })}
         </div>
       )}
 
       <CreateSiteDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(title, key) => setNewKey({ title, key })}
+        onCreated={(title, slug, key) => setNewKey({ title, slug, key })}
       />
       <ApiKeyDialog data={newKey} onClose={() => setNewKey(null)} />
     </div>
@@ -252,7 +311,7 @@ function CreateSiteDialog({
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
-  onCreated: (title: string, apiKey: string) => void
+  onCreated: (title: string, slug: string, apiKey: string) => void
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -267,7 +326,7 @@ function CreateSiteDialog({
           onOpenChange(false)
           setSlug('')
           setTitle('')
-          onCreated(title, res.apiKey)
+          onCreated(title, slug.trim().toLowerCase(), res.apiKey)
         } else {
           toast.error(res.message)
         }
@@ -284,8 +343,8 @@ function CreateSiteDialog({
         <DialogHeader>
           <DialogTitle>Новый управляемый сайт</DialogTitle>
           <DialogDescription>
-            После создания вы получите API-ключ. Он показывается один раз —
-            хранится только его отпечаток.
+            После создания вы получите токен и готовую ссылку для витрины.
+            Токен показывается один раз — хранится только его отпечаток.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
@@ -297,9 +356,12 @@ function CreateSiteDialog({
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Кабинет «Директ Про»"
             />
+            <p className="text-xs text-muted-foreground">
+              Только для этого списка — витрина его не видит.
+            </p>
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="site-slug">Slug</Label>
+            <Label htmlFor="site-slug">Идентификатор страницы (slug)</Label>
             <Input
               id="site-slug"
               value={slug}
@@ -307,6 +369,9 @@ function CreateSiteDialog({
               placeholder="direct-pro-1"
               className="font-mono"
             />
+            <p className="text-xs text-muted-foreground">
+              Латиница, цифры и дефисы. Войдёт в адрес API — потом не поменять.
+            </p>
           </div>
         </div>
         <DialogFooter>
@@ -327,35 +392,63 @@ function ApiKeyDialog({
   data,
   onClose,
 }: {
-  data: { title: string; key: string } | null
+  data: { title: string; slug: string; key: string } | null
   onClose: () => void
 }) {
+  function copy(value: string, label: string) {
+    void navigator.clipboard.writeText(value)
+    toast.success(label)
+  }
+
   return (
     <Dialog open={Boolean(data)} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Токен — сохраните сейчас</DialogTitle>
+          <DialogTitle>Подключение витрины</DialogTitle>
           <DialogDescription>
             {data?.title}
-            {' — токен показывается только один раз. На витрине укажите '}
-            <code>{'?api=<панель>/api/ext&page=<slug>&token=<токен>'}</code>.
+            {' — токен показывается только один раз. Сохраните его сейчас.'}
           </DialogDescription>
         </DialogHeader>
         {data && (
-          <div className="flex items-center gap-2">
-            <Input readOnly value={data.key} className="font-mono text-xs" />
-            <Button
-              size="sm"
-              variant="outline"
-              className="press-scale shrink-0 gap-1.5"
-              onClick={() => {
-                void navigator.clipboard.writeText(data.key)
-                toast.success('Ключ скопирован')
-              }}
-            >
-              <Copy className="size-4" />
-              Копировать
-            </Button>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs text-muted-foreground">Токен</Label>
+              <div className="flex items-center gap-2">
+                <Input readOnly value={data.key} className="font-mono text-xs" />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="press-scale shrink-0 gap-1.5"
+                  onClick={() => copy(data.key, 'Токен скопирован')}
+                >
+                  <Copy className="size-4" />
+                  Копировать
+                </Button>
+              </div>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs text-muted-foreground">
+                Параметры для страницы-витрины
+              </Label>
+              <button
+                type="button"
+                onClick={() =>
+                  copy(
+                    `?api=/api/ext&page=${data.slug}&token=${data.key}`,
+                    'Строка параметров скопирована',
+                  )
+                }
+                title="Скопировать строку параметров"
+                className="rounded-md border bg-muted/50 p-2.5 text-left font-mono text-xs leading-relaxed break-all transition-colors hover:bg-muted"
+              >
+                {`?api=<адрес панели>/api/ext&page=${data.slug}&token=${data.key}`}
+              </button>
+              <p className="text-xs text-muted-foreground">
+                Нажмите, чтобы скопировать. Добавьте к адресу витрины,
+                подставив адрес панели.
+              </p>
+            </div>
           </div>
         )}
         <DialogFooter>
