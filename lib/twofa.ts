@@ -192,7 +192,9 @@ export async function verifyTotp(
   const clean = token.replace(/\s+/g, '')
   if (!/^\d{6}$/.test(clean)) return false
   try {
-    const res = await verify({ token: clean, secret, window: 1 })
+    // epochTolerance в секундах: 30 = ±1 временной шаг (компенсация дрейфа
+    // часов). verify возвращает { valid, delta }.
+    const res = await verify({ token: clean, secret, epochTolerance: 30 })
     return Boolean(res && (res as { valid?: boolean }).valid)
   } catch {
     return false
