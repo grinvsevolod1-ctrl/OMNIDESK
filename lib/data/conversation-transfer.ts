@@ -10,6 +10,7 @@
  *   - a conversation_transfers audit row records previous → new owner.
  */
 import { query, withTransaction } from '../db'
+import { excludeAdminSql } from './shared'
 
 export interface TransferTarget {
   id: string
@@ -22,6 +23,11 @@ export interface TransferTarget {
  * Active managers a conversation can be handed off to, excluding the caller and
  * any blocked accounts. On-lunch managers are still returned (a manual transfer
  * is an explicit choice) but flagged so the UI can de-emphasise them.
+ *
+ * role = 'manager' is REQUIRED: the managers table also holds curators
+ * (менеджеры по кадрам, migration 111), and conversations must never be
+ * handed off to them — they work lead cards, not the inbox. The env-backed
+ * administrator row is excluded the same way listManagers does it.
  */
 export async function listTransferTargets(
   excludeManagerId: string,
@@ -33,7 +39,8 @@ export async function listTransferTargets(
   }>(
     `SELECT id, name, on_lunch
        FROM managers
-      WHERE status = 'active' AND id <> $1
+      WHERE status = 'active' AND role = 'manager' AND id <> $1
+        ${excludeAdminSql('managers')}
       ORDER BY on_lunch ASC, name ASC`,
     [excludeManagerId],
   )
@@ -57,9 +64,13 @@ export async function transferConversation(input: {
   toManagerId: string
   note?: string
 }): Promise<boolean> {
-  // Guard: the target must be an existing active manager (and not the caller).
+  // Guard: the target must be an existing active MANAGER (not a curator —
+  // same table, different role — and not the env-backed admin row) and not
+  // the caller.
   const target = await query<{ id: string }>(
-    `SELECT id FROM managers WHERE id = $1 AND status = 'active'`,
+    `SELECT id FROM managers
+      WHERE id = $1 AND status = 'active' AND role = 'manager'
+        ${excludeAdminSql('managers')}`,
     [input.toManagerId],
   )
   if (target.length === 0 || input.toManagerId === input.fromManagerId) {
@@ -108,9 +119,12 @@ export async function adminReassignConversations(input: {
   const ids = input.conversationIds.filter(Boolean)
   if (ids.length === 0) return 0
 
-  // Target must be a real, active manager.
+  // Target must be a real, active MANAGER (curators and the env-backed admin
+  // row share the table but must never own inbox conversations).
   const target = await query<{ id: string }>(
-    `SELECT id FROM managers WHERE id = $1 AND status = 'active'`,
+    `SELECT id FROM managers
+      WHERE id = $1 AND status = 'active' AND role = 'manager'
+        ${excludeAdminSql('managers')}`,
     [input.toManagerId],
   )
   if (target.length === 0) return 0
