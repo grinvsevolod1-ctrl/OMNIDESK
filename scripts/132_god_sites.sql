@@ -1,36 +1,48 @@
 -- 132: God-panel managed external sites ("управляемые сайты").
 --
--- Standalone HTML pages (presentation mockups) embed a polling API client and
--- pull state/commands from this panel:  GET /api/ext/<key>/state  every N ms.
--- The page can also POST its current state back so the panel always sees live
--- data. The key is a random secret shown ONCE at creation; only its SHA-256
--- hash is stored here.
+-- Standalone HTML mockups (e.g. page3.html — "Директ Про" cabinet) are hosted
+-- OUTSIDE this project and talk to OMNIDESK over a small REST API:
+--
+--   API_BASE = https://<panel-host>/api/ext/<key>
+--   GET  /state?period=…    — full cabinet state (poll / initial load)
+--   GET  /stream?period=…   — SSE live stream (optional transport)
+--   PATCH/POST/DELETE /campaigns…, /balance, /balance/topup — mutations
+--
+-- The server is the source of truth. Mutations carry the client's known
+-- `revision` (If-Match header + body field); a mismatch answers HTTP 409 and
+-- changes nothing (optimistic locking, contract §5). Every applied change
+-- bumps `revision`.
+--
+-- The <key> is a random secret shown ONCE at creation; only its SHA-256 hash
+-- is stored. An unknown key answers a bare 404 — indistinguishable from a
+-- route that does not exist (fail-closed).
 --
 -- SACRED INVARIANT (AGENTS.md section 4): this whole module belongs to the
 -- god panel. No regular admin/manager/curator UI, no Admin AI import, no
--- mention anywhere outside god code. The public /api/ext route answers a bare
--- 404 for unknown keys — indistinguishable from a nonexistent route.
+-- mention anywhere outside god code.
 --
 -- Run on your VPS:  psql "$DATABASE_URL" -f scripts/132_god_sites.sql
 
 CREATE TABLE IF NOT EXISTS god_sites (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  -- The mockup "login" identity (e.g. porg-zvuq2cjx). Channel and storage keys
-  -- on the page derive from it (yd-<slug>, ydState_<slug>).
+  -- Short identity of the mockup (e.g. direct-pro-1). Purely informational.
   slug TEXT NOT NULL UNIQUE,
   title TEXT NOT NULL,
   -- SHA-256 hex of the API key. The key itself is shown once at creation.
   api_key_hash TEXT NOT NULL UNIQUE,
-  -- Last known full state of the page (balance/campaigns/notifications...).
-  -- Written by the page's POST-back and by panel-side edits.
-  state JSONB NOT NULL DEFAULT '{}'::jsonb,
-  -- Pending command queue for the polling channel. Each element:
-  --   { "action": "setBalance", "args": [950] }
-  -- GET drains the queue atomically (returns {commands:[...]} and clears it).
-  commands JSONB NOT NULL DEFAULT '[]'::jsonb,
-  -- Bumped on every state change (panel UI freshness/polling hints).
-  state_version INT NOT NULL DEFAULT 1,
-  -- When the page last reported its state (POST-back) — "жива ли страница".
+  -- Full cabinet state (server = source of truth):
+  --   {
+  --     "balance": 812.5, "currency": "$",
+  --     "campaigns": [ { Campaign } ],
+  --     "periodOverrides": { "week": { "<campaignId>": { "cost": 99 } } }
+  --   }
+  -- `campaigns` carries the canonical ("today") metrics; periodOverrides
+  -- optionally overlay per-period metric values (god-panel curated).
+  state JSONB NOT NULL DEFAULT '{"balance":0,"currency":"$","campaigns":[]}'::jsonb,
+  -- Optimistic-locking revision (contract §5). Bumped on EVERY state change,
+  -- whether it came from the page or from the god panel.
+  revision INT NOT NULL DEFAULT 1,
+  -- When the page last called GET /state|/stream — "жива ли страница".
   last_seen_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

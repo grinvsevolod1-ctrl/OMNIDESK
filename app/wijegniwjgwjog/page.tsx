@@ -9,9 +9,11 @@ import {
   type AdPlatform,
 } from '@/lib/finance'
 import { getGatewayBalance } from '@/lib/ai/gateway-balance'
+import { listSites } from '@/lib/god-sites'
 import { SecretDashboard } from '@/components/admin/secret-dashboard'
 import { SecretGate } from '@/components/admin/secret-gate'
 import type { SecretAdAccount } from '@/components/admin/secret-ads-tab'
+import type { SiteListItem } from '@/app/actions/admin-secret'
 
 export const dynamic = 'force-dynamic'
 

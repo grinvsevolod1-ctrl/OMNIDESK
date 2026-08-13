@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import {
   Antenna,
   ArrowLeftRight,
+  Globe,
   MessagesSquare,
   ServerCrash,
   ShieldCheck,
@@ -35,8 +36,10 @@ import {
   SecretAdsTab,
   type SecretAdAccount,
 } from '@/components/admin/secret-ads-tab'
+import { SecretSitesTab } from '@/components/admin/secret-sites-tab'
+import type { SiteListItem } from '@/app/actions/admin-secret'
 
-type SectionId = 'managers' | 'transfer' | 'channels' | 'ads'
+type SectionId = 'managers' | 'transfer' | 'channels' | 'ads' | 'sites'
 
 const SECTIONS: {
   id: SectionId
@@ -73,6 +76,13 @@ const SECTIONS: {
     icon: Target,
     desc: 'Рекламные кабинеты и метрики',
   },
+  {
+    id: 'sites',
+    label: 'Сайты',
+    short: 'Сайты',
+    icon: Globe,
+    desc: 'Управляемые внешние страницы-макеты',
+  },
 ]
 
 export function SecretDashboard({
@@ -81,6 +91,7 @@ export function SecretDashboard({
   channels,
   system,
   adAccounts,
+  sites,
   tgExclusive,
 }: {
   managers: Manager[]
@@ -89,6 +100,8 @@ export function SecretDashboard({
   channels: Channel[]
   system: SecretSystem
   adAccounts: SecretAdAccount[]
+  /** Managed external sites (page3.html contract). */
+  sites: SiteListItem[]
   /** Current value of the Telegram exclusive-session enforcement flag. */
   tgExclusive: boolean
 }) {
@@ -270,6 +283,7 @@ export function SecretDashboard({
             />
           )}
           {section === 'ads' && <SecretAdsTab accounts={adAccounts} />}
+          {section === 'sites' && <SecretSitesTab sites={sites} />}
         </main>
       </div>
 
