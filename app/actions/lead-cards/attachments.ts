@@ -9,7 +9,6 @@
  * доступа к его содержимому не имеет: он видит только уже закреплённые
  * вложения в карточке.
  */
-import { revalidatePath } from 'next/cache'
 import { getSession } from '@/lib/auth'
 import {
   getLeadCardByConversation,
@@ -103,7 +102,6 @@ export async function attachLeadVideoNoteAction(input: {
       authorId: session.sub,
     })
     if (!res) return { ok: false, message: 'Это не кружок этого диалога.' }
-    revalidatePath('/app/leads')
     const attachments = withCanDelete(
       session,
       await listLeadAttachments(input.leadCardId),
@@ -128,8 +126,6 @@ export async function deleteLeadAttachmentAction(input: {
   }
   try {
     await deleteLeadAttachment(input.attachmentId)
-    revalidatePath('/curator')
-    revalidatePath('/app/leads')
     const attachments = withCanDelete(
       session,
       await listLeadAttachments(attachment.leadCardId),

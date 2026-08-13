@@ -179,6 +179,18 @@ export function CuratorLeadsView({
   }, [leads, archived, tab, statusFilter, search, sort, tick])
   const shown = filtered.slice(0, visible)
 
+  // Данные выбранного лида из уже загруженного списка — панель деталей
+  // показывает их мгновенно (fallback), пока сеть догружает остальное.
+  const selectedLead = useMemo(
+    () =>
+      selectedId
+        ? (leads.find((l) => l.id === selectedId) ??
+          archived?.find((l) => l.id === selectedId) ??
+          null)
+        : null,
+    [selectedId, leads, archived],
+  )
+
   // Компактный поиск: раскрывается на фокусе или пока есть текст.
   const searchExpanded = searchFocused || search.length > 0
 
@@ -225,7 +237,7 @@ export function CuratorLeadsView({
 
       {/* Панель фильтров — в стиле админской таблицы */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* ��кладки Активные / Архив — h-9, как все контролы строки */}
+        {/* Вкладки Активные / Архив — h-9, как все контролы строки */}
         <div className="flex h-9 items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
           <button
             type="button"

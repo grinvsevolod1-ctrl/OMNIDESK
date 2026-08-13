@@ -3,8 +3,11 @@
 /**
  * Карточка лида: чтение, сохранение/передача, статусы и комментарии.
  * Часть распила app/actions/lead-cards.ts.
+ *
+ * Здесь НЕТ revalidatePath: все дашборды рендерятся динамически (cookie-auth),
+ * а клиенты сами обновляют состояние через refresh()/mutate после action —
+ * серверный ре-рендер страницы был бы третьим, выбрасываемым запросом.
  */
-import { revalidatePath } from 'next/cache'
 import { getSession, requireCurator } from '@/lib/auth'
 import {
   addLeadComment,
@@ -93,10 +96,6 @@ export async function saveLeadCardAction(input: {
       curatorId: input.curatorId ?? null,
       isAdmin: session.role === 'admin',
     })
-    revalidatePath('/app/inbox')
-    revalidatePath('/curator')
-    revalidatePath('/admin/curators')
-
     if (transferred && card.curatorId) {
       void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
     }
@@ -171,8 +170,6 @@ export async function updateLeadStatusAction(input: {
       status: input.status as LeadStatus,
       comment: input.comment,
     })
-    revalidatePath('/curator')
-    revalidatePath('/admin/curators')
     // Пуш менеджеру карточки: он сразу видит вердикт менеджера по кадрам, не заходя в
     // «Мои лиды». Доставка не должна ломать основное действие — fire-and-forget.
     void (async () => {
@@ -220,8 +217,6 @@ export async function addLeadCommentAction(input: {
       authorName: isRootAdmin ? (session.name ?? 'Администратор') : null,
       body: input.body,
     })
-    revalidatePath('/curator')
-    revalidatePath('/app/leads')
     // Менеджер по кадрам написал комментарий → пуш менеджеру карточки (не самому себе).
     if (session.role === 'curator' && card.managerId) {
       void sendPushToManager(card.managerId, {

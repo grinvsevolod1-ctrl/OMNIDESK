@@ -4,7 +4,6 @@
  * Жизненный цикл лида: архив финальных статусов и возврат в воронку ИИ
  * (миграция 117). Часть распила app/actions/lead-cards.ts.
  */
-import { revalidatePath } from 'next/cache'
 import { getSession, requireCurator } from '@/lib/auth'
 import { query } from '@/lib/db'
 import {
@@ -57,8 +56,6 @@ export async function setLeadArchivedAction(input: {
       actorName:
         session.role === 'admin' ? (session.name ?? 'Администратор') : null,
     })
-    revalidatePath('/curator')
-    revalidatePath('/admin/curators')
     return {
       ok: true,
       message: input.archived ? 'Лид перенесён в архив.' : 'Лид возвращён из архива.',
@@ -121,8 +118,6 @@ export async function returnLeadToFunnelAction(input: {
       body: 'Лид возвращён в работу ИИ-менеджера (реанимация из финального статуса).',
     }).catch(() => null)
 
-    revalidatePath('/curator')
-    revalidatePath('/admin/curators')
     return {
       ok: true,
       message: `Лид «${card.fullName || 'без имени'}» возвращён в воронку — ИИ снова ведёт диалог.`,

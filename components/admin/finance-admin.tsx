@@ -410,7 +410,7 @@ export function FinanceAdmin({
             onDelete={(item) =>
               setConfirm({
                 title: 'Удалить запись?',
-                description: `«${item.title}» и все её секреты ��удут удалены безвозвратно.`,
+                description: `«${item.title}» и все её секреты будут удалены безвозвратно.`,
                 onConfirm: () =>
                   run(() => deleteVaultItemAction(item.id), () =>
                     setConfirm(null),

@@ -4,7 +4,6 @@
  * Админские операции над лидами: выборка с фильтрами, передача, корзина,
  * inline-редактирование. Часть распила app/actions/lead-cards.ts.
  */
-import { revalidatePath } from 'next/cache'
 import { getSession, requireAdmin } from '@/lib/auth'
 import {
   adminSetLeadStatus,
@@ -50,8 +49,6 @@ export async function transferLeadAdminAction(input: {
   await requireAdmin()
   try {
     const card = await transferLeadToCurator(input.leadCardId, input.curatorId)
-    revalidatePath('/admin/curators')
-    revalidatePath('/curator')
     if (card.curatorId) {
       void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
     }
@@ -118,7 +115,6 @@ export async function softDeleteLeadAction(input: {
       deletedById: session.sub === 'admin' ? null : session.sub,
       deletedByName: session.name ?? null,
     })
-    revalidatePath('/admin/curators')
     return { ok: true, message: 'Лид перемещён в корзину' }
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
@@ -136,7 +132,6 @@ export async function restoreLeadAction(
       restoredById: session.sub === 'admin' ? null : session.sub,
       restoredByName: session.name ?? null,
     })
-    revalidatePath('/admin/curators')
     return { ok: true, message: 'Лид восстановлен' }
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
@@ -166,7 +161,6 @@ export async function adminSetLeadStatusAction(input: {
       comment: input.comment,
       authorName: session.name ?? 'Администратор',
     })
-    revalidatePath('/admin/curators')
     return { ok: true, message: 'Статус обновлён' }
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
@@ -207,8 +201,6 @@ export async function updateLeadFieldAction(input: {
       field: input.field,
       value: input.value,
     })
-    revalidatePath('/admin/curators')
-    revalidatePath('/curator')
     return { ok: true, message: 'Сохранено' }
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }

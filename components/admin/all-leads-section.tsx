@@ -159,15 +159,21 @@ export function AllLeadsSection({
       ) : null}
 
       {/* Полная карточка лида — та же панель, что у менеджера по кадрам,
-          в админ-режиме (статус через админский action, виден владелец). */}
-      {openedLeadId ? (
-        <LeadDetailPanel
-          leadId={openedLeadId}
-          variant="admin"
-          onClose={() => setOpenedLeadId(null)}
-          onUpdated={refresh}
-        />
-      ) : null}
+          в админ-режиме (статус через админский action, виден владелец).
+          Всегда смонтирована (transform-only анимация) и открывается
+          мгновенно с данными из строки списка. */}
+      <LeadDetailPanel
+        leadId={openedLeadId}
+        fallbackLead={
+          openedLeadId
+            ? (leads.find((l) => l.id === openedLeadId) ?? null)
+            : null
+        }
+        variant="admin"
+        onClose={() => setOpenedLeadId(null)}
+        onUpdated={refresh}
+      />
+
     </section>
   )
 }

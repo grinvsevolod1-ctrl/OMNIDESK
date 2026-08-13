@@ -439,16 +439,20 @@ export function ManagerLeadsView({
         </div>
       ) : null}
 
-      {openLeadId ? (
-        <ManagerLeadDetailPanel
-          leadId={openLeadId}
-          onClose={() => {
-            setOpenLeadId(null)
-            // Менеджер по кадрам мог обновить статус, пока панель была открыта.
-            reload(offset)
-          }}
-        />
-      ) : null}
+      {/* Всегда смонтирована (transform-only анимация), открывается мгновенно
+          с данными из строки списка. */}
+      <ManagerLeadDetailPanel
+        leadId={openLeadId}
+        fallbackLead={
+          openLeadId ? (leads.find((l) => l.id === openLeadId) ?? null) : null
+        }
+        onClose={() => {
+          setOpenLeadId(null)
+          // Менеджер по кадрам мог обновить статус, пока панель была открыта.
+          reload(offset)
+        }}
+      />
+
     </div>
   )
 }
