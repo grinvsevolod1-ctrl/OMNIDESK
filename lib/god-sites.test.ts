@@ -122,8 +122,20 @@ describe('stateForPeriod', () => {
       'balance',
       'campaigns',
       'currency',
+      'login',
       'period',
     ])
+  })
+
+  it('carries the cabinet login through to the page payload', () => {
+    const withLogin = sanitizeState({
+      login: '  direct-pro-001  ',
+      balance: 1,
+      campaigns: [],
+    })
+    expect(stateForPeriod(withLogin, 'today').login).toBe('direct-pro-001')
+    // Absent login degrades to an empty string, never undefined.
+    expect(stateForPeriod(state, 'today').login).toBe('')
   })
 })
 

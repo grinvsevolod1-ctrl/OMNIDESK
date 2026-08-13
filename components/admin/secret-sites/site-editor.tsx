@@ -143,8 +143,18 @@ export function SiteEditor({
         </Button>
       </div>
 
-      {/* Balance */}
+      {/* Cabinet header data */}
       <Card className="flex flex-wrap items-end gap-3 p-4">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="site-login">Логин кабинета</Label>
+          <Input
+            id="site-login"
+            value={state.login}
+            placeholder="client-login"
+            onChange={(e) => setState((s) => ({ ...s, login: e.target.value }))}
+            className="w-52 font-mono"
+          />
+        </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="site-balance">Баланс</Label>
           <Input

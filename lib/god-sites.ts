@@ -59,6 +59,8 @@ export type PeriodMetricField = (typeof PERIOD_METRIC_FIELDS)[number]
 export type PeriodOverride = Partial<Pick<SiteCampaign, PeriodMetricField>>
 
 export interface SiteState {
+  /** Cabinet login shown in the page header / side menu / tab title. */
+  login: string
   balance: number
   currency: string
   campaigns: SiteCampaign[]
@@ -158,6 +160,7 @@ export function sanitizeState(raw: unknown): SiteState {
     ? r.campaigns.slice(0, MAX_CAMPAIGNS).map((c) => sanitizeCampaign(c))
     : []
   const state: SiteState = {
+    login: str(r.login).trim(),
     balance: num(r.balance),
     currency: str(r.currency, '$') || '$',
     campaigns,
@@ -260,6 +263,7 @@ export async function getSiteBySlugAndKey(
 
 /** The exact `State` payload page3.html consumes (contract §6). */
 export interface PageStatePayload {
+  login: string
   period: SitePeriod
   balance: number
   currency: string
@@ -286,6 +290,7 @@ export function stateForPeriod(
           overrides[c.id] ? { ...c, ...overrides[c.id] } : c,
         )
   return {
+    login: state.login,
     period,
     balance: state.balance,
     currency: state.currency,
