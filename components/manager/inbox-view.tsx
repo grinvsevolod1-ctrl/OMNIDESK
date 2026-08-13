@@ -213,6 +213,7 @@ export function InboxView({
       {/* ------------------------------------------------------------------ */}
       <ConversationList
         active={Boolean(active)}
+        hiddenForFocus={threadSearch.mediaActive}
         activeId={activeId}
         setActiveId={setActiveId}
         setDetailsOpen={setDetailsOpen}
@@ -262,6 +263,10 @@ export function InboxView({
         className={cn(
           'flex min-w-0 flex-1 flex-col',
           !active && 'hidden md:flex',
+          // Медиа-режим: карточка лида (fixed, 28rem справа) остаётся открытой,
+          // поэтому тред получает правый отступ — диалог и бар навигации
+          // видны целиком рядом с карточкой, ничего не перекрыто.
+          threadSearch.mediaActive && 'sm:pr-[min(28rem,45vw)]',
         )}
       >
         {active ? (

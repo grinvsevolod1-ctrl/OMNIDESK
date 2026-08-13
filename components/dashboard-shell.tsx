@@ -56,6 +56,10 @@ export function DashboardShell({
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  // Временный фокус-режим (навигация по кружкам/фото в инбоксе): сайдбар
+  // сворачивается на время, НЕ трогая сохранённое предпочтение пользователя,
+  // и разворачивается обратно, когда режим выключается.
+  const [focusMode, setFocusMode] = useState(false)
 
   // Полноэкранные страницы (инбокс) занимают всю доступную высоту без полей и
   // прокрутки страницы — скроллится только их внутреннее содержимое.
@@ -71,6 +75,17 @@ export function DashboardShell({
       /* ignore */
     }
   }, [])
+
+  useEffect(() => {
+    const onFocusMode = (e: Event) => {
+      const detail = (e as CustomEvent<{ active?: boolean }>).detail
+      setFocusMode(Boolean(detail?.active))
+    }
+    window.addEventListener('omnidesk:focus-mode', onFocusMode)
+    return () => window.removeEventListener('omnidesk:focus-mode', onFocusMode)
+  }, [])
+
+  const effectiveCollapsed = collapsed || focusMode
 
   function toggleCollapsed() {
     setCollapsed((v) => {
@@ -91,17 +106,17 @@ export function DashboardShell({
         <aside
           className={cn(
             'hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-200 ease-out lg:flex',
-            collapsed ? 'w-16' : 'w-64',
+            effectiveCollapsed ? 'w-16' : 'w-64',
           )}
         >
           <div
             className={cn(
               'flex h-14 items-center border-b border-sidebar-border',
-              collapsed ? 'justify-center px-0' : 'gap-2 px-5',
+              effectiveCollapsed ? 'justify-center px-0' : 'gap-2 px-5',
             )}
           >
             <BrandMark className="size-5 shrink-0 text-foreground" />
-            {!collapsed ? (
+            {!effectiveCollapsed ? (
               // Роль — второй строкой под логотипом: длинные названия
               // («Менеджер по кадрам») не ломают шапку переносом бейджа.
               <span className="flex min-w-0 flex-col leading-tight">
@@ -118,20 +133,24 @@ export function DashboardShell({
           <div
             className={cn(
               'flex-1 overflow-y-auto py-3',
-              collapsed ? 'px-2' : 'px-3',
+              effectiveCollapsed ? 'px-2' : 'px-3',
             )}
           >
-            <NavLinks nav={nav} pathname={pathname} collapsed={collapsed} />
+            <NavLinks
+              nav={nav}
+              pathname={pathname}
+              collapsed={effectiveCollapsed}
+            />
           </div>
 
           {/* Collapse toggle */}
           <div
             className={cn(
               'border-t border-sidebar-border py-2',
-              collapsed ? 'px-2' : 'px-3',
+              effectiveCollapsed ? 'px-2' : 'px-3',
             )}
           >
-            {collapsed ? (
+            {effectiveCollapsed ? (
               <Tooltip>
                 <TooltipTrigger
                   render={

@@ -91,9 +91,15 @@ export function ConversationList({
   transferTargets,
   openTransfer,
   changeStatus,
+  hiddenForFocus = false,
 }: {
   /** Whether a thread is currently open (hides the list on mobile). */
   active: boolean
+  /**
+   * Фокус-режим (навигация по кружкам/фото): список полностью скрыт, чтобы
+   * диалог был виден целиком рядом с открытой карточкой лида.
+   */
+  hiddenForFocus?: boolean
   activeId: string | null
   setActiveId: (id: string) => void
   setDetailsOpen: (open: boolean) => void
@@ -142,6 +148,7 @@ export function ConversationList({
       className={cn(
         'flex w-full flex-col border-r border-border md:w-[340px] md:shrink-0',
         active && 'hidden md:flex',
+        hiddenForFocus && 'md:hidden',
       )}
     >
       <ConversationListHeader

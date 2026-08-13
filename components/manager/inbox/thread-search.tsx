@@ -55,6 +55,11 @@ interface SearchHit {
 export interface ThreadSearchState {
   open: boolean
   mode: ThreadSearchMode
+  /**
+   * Активен медиа-режим (кружки/фото): инбокс прячет список диалогов, а
+   * DashboardShell временно сворачивает сайдбар — виден весь диалог.
+   */
+  mediaActive: boolean
   /** id подсвеченного сообщения (цель навигации). */
   highlightedId: string | null
   /** Карточка, к которой прикрепляем медиа (медиа-режимы). */
@@ -246,6 +251,23 @@ export function useThreadSearch({
     return () => clearTimeout(t)
   }, [open, mode, conversationId, query, goTo])
 
+  const mediaActive = open && mode !== 'text'
+
+  /* Медиа-режим = фокус-режим: сайдбар навигации временно сворачивается
+     (DashboardShell слушает это событие), чтобы был виден весь диалог рядом
+     с открытой карточкой лида. Закрытие/размонтирование всё возвращает. */
+  useEffect(() => {
+    if (!mediaActive) return
+    window.dispatchEvent(
+      new CustomEvent('omnidesk:focus-mode', { detail: { active: true } }),
+    )
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent('omnidesk:focus-mode', { detail: { active: false } }),
+      )
+    }
+  }, [mediaActive])
+
   /* Esc закрывает бар (capture — раньше обработчика «закрыть диалог»). */
   useEffect(() => {
     if (!open) return
@@ -282,13 +304,15 @@ export function useThreadSearch({
         if (res.ok) {
           toast.success(res.message)
           onAttached(attachLeadCardId)
-          setConfirmTarget(null)
+          // Файл прикреплён — закрываем бар, всё возвращается в исходное
+          // (сайдбар и список диалогов разворачиваются обратно).
+          close()
         } else {
           toast.error(res.message)
         }
       })
       .finally(() => setBusy(false))
-  }, [confirmTarget, attachLeadCardId, conversationId, mode, onAttached])
+  }, [confirmTarget, attachLeadCardId, conversationId, mode, onAttached, close])
 
   /** Клик по сообщению в треде в медиа-режиме. */
   const onMessageClick = useCallback(
@@ -435,6 +459,7 @@ export function useThreadSearch({
   return {
     open,
     mode,
+    mediaActive,
     highlightedId: open && current ? current.id : null,
     attachLeadCardId: open ? attachLeadCardId : null,
     openText,
