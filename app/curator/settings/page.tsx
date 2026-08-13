@@ -1,3 +1,4 @@
+import { getTwofaStatusAction } from '@/app/actions/twofa'
 import { ChangePasswordForm } from '@/components/manager/change-password-form'
 import { NotificationSettings } from '@/components/manager/notification-settings'
 import { PageHeader } from '@/components/page-parts'
@@ -6,6 +7,7 @@ import {
   SettingsShell,
   type SettingsTab,
 } from '@/components/shared/settings-shell'
+import { TwofaSettings } from '@/components/shared/twofa-settings'
 import { Card } from '@/components/ui/card'
 import { requireCurator } from '@/lib/auth'
 
@@ -19,13 +21,14 @@ const TABS: SettingsTab[] = [
   {
     id: 'security',
     label: 'Безопасность',
-    hint: 'Смена пароля',
+    hint: 'Пароль и 2FA',
     icon: 'key',
   },
 ]
 
 export default async function CuratorSettingsPage() {
   const session = await requireCurator()
+  const twofa = await getTwofaStatusAction()
 
   const notificationsPanel = (
     <Card className="p-5">
@@ -41,16 +44,19 @@ export default async function CuratorSettingsPage() {
   )
 
   const securityPanel = (
-    <Card className="p-5">
-      <h2 className="font-medium">Смена пароля</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        После смены пароля все остальные устройства будут разлогинены —
-        текущая сессия останется активной.
-      </p>
-      <div className="mt-4">
-        <ChangePasswordForm />
-      </div>
-    </Card>
+    <div className="flex flex-col gap-4">
+      <Card className="p-5">
+        <h2 className="font-medium">Смена пароля</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          После смены пароля все остальные устройства будут разлогинены —
+          текущая сессия останется активной.
+        </p>
+        <div className="mt-4">
+          <ChangePasswordForm />
+        </div>
+      </Card>
+      {twofa && <TwofaSettings initial={twofa} />}
+    </div>
   )
 
   return (

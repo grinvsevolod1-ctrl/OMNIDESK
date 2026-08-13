@@ -1,3 +1,4 @@
+import { getTwofaStatusAction } from '@/app/actions/twofa'
 import { ChangePasswordForm } from '@/components/manager/change-password-form'
 import { LunchToggle } from '@/components/manager/lunch-toggle'
 import { NotificationSettings } from '@/components/manager/notification-settings'
@@ -7,6 +8,7 @@ import {
   SettingsShell,
   type SettingsTab,
 } from '@/components/shared/settings-shell'
+import { TwofaSettings } from '@/components/shared/twofa-settings'
 import { Card } from '@/components/ui/card'
 import { requireManager } from '@/lib/auth'
 import { getManagerOnLunch } from '@/lib/data'
@@ -27,14 +29,17 @@ const TABS: SettingsTab[] = [
   {
     id: 'security',
     label: 'Безопасность',
-    hint: 'Смена пароля',
+    hint: 'Пароль и 2FA',
     icon: 'key',
   },
 ]
 
 export default async function ManagerSettingsPage() {
   const session = await requireManager()
-  const onLunch = await getManagerOnLunch(session.sub)
+  const [onLunch, twofa] = await Promise.all([
+    getManagerOnLunch(session.sub),
+    getTwofaStatusAction(),
+  ])
 
   const availabilityPanel = (
     <Card className="p-5">
@@ -62,16 +67,19 @@ export default async function ManagerSettingsPage() {
   )
 
   const securityPanel = (
-    <Card className="p-5">
-      <h2 className="font-medium">Смена пароля</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Держите аккаунт в безопасности — используйте надёжный пароль. После
-        смены все остальные устройства будут разлогинены.
-      </p>
-      <div className="mt-4">
-        <ChangePasswordForm />
-      </div>
-    </Card>
+    <div className="flex flex-col gap-4">
+      <Card className="p-5">
+        <h2 className="font-medium">Смена пароля</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Держите аккаунт в безопасности — используйте надёжный пароль. После
+          смены все остальные устройства будут разлогинены.
+        </p>
+        <div className="mt-4">
+          <ChangePasswordForm />
+        </div>
+      </Card>
+      {twofa && <TwofaSettings initial={twofa} />}
+    </div>
   )
 
   return (

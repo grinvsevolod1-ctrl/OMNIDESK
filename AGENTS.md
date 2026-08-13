@@ -99,7 +99,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 ```
 app/                     Next.js App Router
   actions/               server actions. Крупные — БАРЕЛИ:
-                         admin-accounts.ts → -telegram (телефон/QR-логин, 2FA),
+                         admin-accounts.ts → -telegram (телефон/QR-��огин, 2FA),
                            -bots (VK/MAX), -maintenance (статус/прокси/удаление),
                            -shared (хелперы, НЕ 'use server')
                          finance.ts → finance-workspace, finance-ads,
@@ -116,7 +116,9 @@ app/                     Next.js App Router
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
   curator/               страницы менеджера по кадрам: layout на общем
                          DashboardShell (сайдбар: Обзор, Настройки),
-                         settings/ — профиль, смена пароля, push
+                         settings/ — профиль, смена пароля, push, 2FA
+                         (общая карточка shared/twofa-settings, как у
+                         менеджера в app/settings)
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
@@ -188,7 +190,7 @@ components/manager/      UI менеджера
                          контейнер + use-lead-card.ts (состояние формы,
                          сохранение, вложения) + lead-card-form (поля) +
                          lead-card-details (детали/история)
-  autopilot-manager.tsx + autopilot/  автопилот: use-autopilot.ts, rule-editor
+  autopilot-manager.tsx + autopilot/  автопи��от: use-autopilot.ts, rule-editor
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
                          навигация с «жидкой» подсветкой — dashboard-nav.tsx
