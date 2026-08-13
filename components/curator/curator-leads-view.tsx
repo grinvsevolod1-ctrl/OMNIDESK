@@ -225,7 +225,7 @@ export function CuratorLeadsView({
 
       {/* Панель фильтров — в стиле админской таблицы */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* Вкладки Активные / Архив — h-9, как все контролы строки */}
+        {/* ��кладки Активные / Архив — h-9, как все контролы строки */}
         <div className="flex h-9 items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
           <button
             type="button"
@@ -454,13 +454,15 @@ export function CuratorLeadsView({
         </button>
       ) : null}
 
-      {selectedId ? (
-        <LeadDetailPanel
-          leadId={selectedId}
-          onClose={() => setSelectedId(null)}
-          onUpdated={() => void refresh()}
-        />
-      ) : null}
+      {/* Панель всегда смонтирована (transform-only анимация) — открывается
+          мгновенно с данными из строки списка, сеть догружает остальное. */}
+      <LeadDetailPanel
+        leadId={selectedId}
+        fallbackLead={selectedLead}
+        onClose={() => setSelectedId(null)}
+        onUpdated={() => void refresh()}
+      />
+
 
       {/* Hard lock overlay: only status updates are allowed via the detail panel */}
       {locked && !selectedId ? (
