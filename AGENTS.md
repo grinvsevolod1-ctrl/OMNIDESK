@@ -36,7 +36,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `128`.
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `130`.
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: GramJS (Telegram), боты
@@ -177,7 +177,23 @@ lib/
   ai/                    manager-brain.ts (мозг продавца), deal-heat.ts
                          (температура сделок 0–100, без модели),
                          assemble-brain-input.ts — ЕДИНСТВЕННАЯ сборка входа
-                         мозга (раздел 7), isolation.test.ts
+                         мозга (раздел 7), isolation.test.ts;
+                         ai-lead-run.ts — ЕДИНСТВЕННЫЙ оркестратор AI-lead
+                         хода (эскалация → генерация → отправка → память →
+                         readiness) с single-flight + dirty-флагом: сообщение
+                         клиента, пришедшее во время in-flight генерации, НЕ
+                         теряется — по завершении запускается один повторный
+                         проход со свежей историей. Оба рантайма (livechat
+                         lib/autopilot/runtime.ts и worker
+                         autopilot-ai-lead.ts) — тонкие адаптеры над ним; НЕ
+                         дублируй пайплайн в рантаймах. In-flight
+                         реестр module-scoped — процесс с AI-lead должен быть
+                         ОДИН (pm2 cluster детектится и фейлится fail-fast,
+                         как в rate-limit.ts). brain/assess.ts: у
+                         detectEscalation есть дешёвый эвристический
+                         пре-фильтр clientShowsEscalationSignal (злость/
+                         «позовите человека»/повторы) — модель зовётся только
+                         при сигнале, НЕ на каждый inbound (латентность/цена)
   ai-console/            Admin AI: run-assistant.ts (30+ инструментов + промпт),
                          assistant.ts (типы действий/ревертов)
   admin-console/         ОС-шелл-копилот всей админки (кроме god-панели)
@@ -198,7 +214,15 @@ lib/
                            поиск (дата/ФИО/телефон/@username/город/регион/
                            имя сотрудника — менеджера И менеджера по кадрам)
                          conversations.ts → conversation-transfer.ts
-                           (передача ди��логов, admin bulk reassignment)
+                           (передача диалогов, admin bulk reassignment),
+                           conversation-messages.ts (чтение/запись сообщений
+                           треда: hydration, batch preload, older-paging,
+                           поиск, SSE gap recovery, addMessage),
+                           message-admin.ts (dispatch/reactions/edit)
+                         analytics.ts → analytics-admin.ts (админ-просмотр
+                           диалогов БЕЗ manager-скоупа + активность
+                           менеджеров; только за admin-гейтом),
+                           analytics-groups.ts (группы источников)
                          shared.ts → shared-converters.ts (row → domain
                            маппинги toManager/toChannel/toConversation/toMessage)
                          brain-loaders.ts — next-сторона BrainInputLoaders
@@ -267,8 +291,10 @@ worker/src/              воркер каналов
                          repo-ai-context, repo-ai-autopilot, repo-ai-logs
   brain-loaders.ts       worker-сторона BrainInputLoaders
   autopilot.ts, jobs.ts  запуск ИИ-ответов, обработка джобов; вынесены
-                         autopilot-ai-lead.ts (AI-lead пайплайн: single-flight,
-                         дефер, отправка) и autopilot-pacing.ts (typing-пейсинг)
+                         autopilot-ai-lead.ts (тонкий адаптер над
+                         lib/ai/ai-lead-run.ts: skip-гейты воркера + лоадеры/
+                         сендер; single-flight и dirty-повтор — в оркестраторе)
+                         и autopilot-pacing.ts (typing-пейсинг)
   hosting/               автономный DevOps-агент: agent.ts (петля инструментов),
                          agent-prompts.ts (toolDefs + системный промпт), ssh.ts,
                          pipeline.ts, agent-safety.ts (блок опасных команд)
@@ -316,7 +342,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   Все три рантайма (лайв-чат `lib/autopilot/runtime.ts`, воркер
   `worker/src/autopilot.ts`, дожим `lib/followup/runtime.ts`) вызывают её
   через свои `BrainInputLoaders`. Меняешь лимиты/состав/RAG — ТОЛЬКО там.
-  Для батчей: `loadSharedBrainContext` один раз → `assembleBrainInput` с
+  Для ��атчей: `loadSharedBrainContext` один раз → `assembleBrainInput` с
   `{ shared }` на диалог. RAG-запрос — последнее сообщение клиента; пустая
   строка НИКОГДА не эмбеддится (платный вызов ради мусора).
 - **Single-flight-гард** (`lib/autopilot/runtime.ts`,
