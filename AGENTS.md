@@ -191,7 +191,7 @@ components/manager/      UI менеджера
                          position-only логику — она даёт цикл «утаскивает
                          вниз при скролле вверх» (тот же паттерн в
                          god-messenger/use-god-scroll.ts);
-                         thread-search.tsx — тел������грам-поиск по диалогу
+                         thread-search.tsx — тел��������грам-поиск по диалогу
                          (лупа в шапке) и навигация по кружкам/фото с
                          прикреплением к карточке лида: hits от новых к
                          старым, цель д��гружается loadOlder-циклом,
@@ -201,16 +201,22 @@ components/manager/      UI менеджера
                          lead-card-panel.tsx + lead-card/ — карточка лида:
                          контейнер + use-lead-card.ts (состояние формы,
                          сохранение, вложени��) + lead-card-form (поля) +
-                         lead-card-details (детали/история) +
-                         telegram-outreach-button — кнопка «написать лиду в
-                         TG» у поля Telegram: менеджер пишет ПЕРВЫМ строго с
-                         выделенного админом outreach-аккаунта (флаг
-                         config.manual_outreach на ОДНОМ telegram-канале,
-                         тумблер Send в admin/accounts-table; actions —
+                         lead-card-details (детали/история).
+                         Ручной TG-аутрич — inbox/new-telegram-chat.tsx:
+                         общий TelegramComposeDialog (ник + имя + сообщение)
+                         и кнопка «Написать в ТГ» в панели фильтров инбокса
+                         (сценарий: лид оставил ник в VK — менеджер сам
+                         вводит его и пишет ПЕРВЫМ); в карточке лида у поля
+                         Telegram — lead-card/telegram-outreach-button с
+                         предзаполненным ником. Отправка строго с
+                         outreach-аккаунта (флаг config.manual_outreach на
+                         ОДНОМ telegram-канале, тумблер Send в
+                         admin/accounts-table; actions —
                          app/actions/telegram-outreach.ts). Ключ диалога —
                          числовой TG id (как у входящих воркера), цель
                          отправки — @username, когда есть; чужой тред того же
-                         контакта на outreach-канале НЕ перехватывается
+                         контакта на outreach-канале НЕ перехватывается;
+                         после отправки диалог открывается через setActiveId
   autopilot-manager.tsx + autopilot/  автопи��от: use-autopilot.ts, rule-editor
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
@@ -461,7 +467,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   'realtime' (событие `lead` с manager_id/curator_id) → `/api/stream`
   доставляет по роли (админ — все) → клиент пинает shared-поллер через
   `pokeSharedPoll`. Поллинг вьюх лидов — редкий фолбэк (60с), не основной
-  механизм. Инбокс живёт на своих событиях message/conversation.
+  механизм. Инбокс живёт на сво��х событиях message/conversation.
 
 ## 9. Команды проверки (запускай перед завершением)
 
@@ -547,9 +553,9 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
 | Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент co-pilot |
-| Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
+| Новый кана�� / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
 | БД-слой воркера | барели `worker/src/repo.ts` и `repo-ai.ts` |
-| Подключение аккаунтов | барель `app/actions/admin-accounts.ts` |
+| Подключение ак��аунтов | барель `app/actions/admin-accounts.ts` |
 | Лид-карточки (данные) | барель `lib/data/lead-cards.ts`; фильтры/поиск админа — `lib/data/lead-admin.ts` |
 | «Все лиды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
 | «Мои лиды» (менеджер по кадрам) | `components/curator/curator-leads-view.tsx` |

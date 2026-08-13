@@ -31,6 +31,7 @@ import {
   type SortMode,
 } from './visual'
 import { SyncBadge } from './atoms'
+import { NewTelegramChatButton } from './new-telegram-chat'
 
 /**
  * Inbox list header: title with unread badge, sync state, sort menu, search
@@ -64,6 +65,7 @@ export function ConversationListHeader({
   setShowMuted,
   hasActiveFilters,
   clearFilters,
+  onOpenConversation,
 }: {
   unreadTotal: number
   syncState: 'connecting' | 'live' | 'offline'
@@ -90,6 +92,8 @@ export function ConversationListHeader({
   setShowMuted: (updater: (v: boolean) => boolean) => void
   hasActiveFilters: boolean
   clearFilters: () => void
+  /** Открыть диалог по id — для кнопки «Написать в ТГ» после отправки. */
+  onOpenConversation?: (id: string) => void
 }) {
   const LEAD_STATUS_META = useLeadStatusMeta()
   const NOT_LIQUID_REASON_META = useNotLiquidReasonMeta()
@@ -178,6 +182,10 @@ export function ConversationListHeader({
           one source is connected; channel type only when several types are
           present. */}
       <div className="flex flex-wrap items-center gap-1.5">
+        {/* Ручной аутрич: лид оставил ник в другом канале (например, VK) —
+            менеджер пишет ему в TG с рабочего аккаунта, не с личного. */}
+        <NewTelegramChatButton onOpenConversation={onOpenConversation} />
+
         {availableTypes.length > 1 ? (
           <DropdownMenu>
             <DropdownMenuTrigger

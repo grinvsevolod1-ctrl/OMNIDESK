@@ -177,6 +177,7 @@ export function ConversationList({
         setShowMuted={setShowMuted}
         hasActiveFilters={hasActiveFilters}
         clearFilters={clearFilters}
+        onOpenConversation={setActiveId}
       />
 
       {/* List (virtualized — only near-viewport rows are mounted; see VirtualList) */}
