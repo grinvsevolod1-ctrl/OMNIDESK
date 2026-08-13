@@ -129,7 +129,9 @@ export function CreateCuratorDialog() {
                 Добавьте менеджера по кадрам и укажите города, за которые он отвечает.
               </DialogDescription>
             </DialogHeader>
-            <div className="my-4 flex flex-col gap-4">
+            {/* Контент формы скроллится внутри: при десятках городов диалог
+                не растягивает страницу, шапка и кнопки всегда на экране. */}
+            <div className="my-4 flex max-h-[min(60dvh,34rem)] flex-col gap-4 overflow-y-auto overscroll-contain pr-1">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="curator-name">Полное имя</Label>
                 <Input

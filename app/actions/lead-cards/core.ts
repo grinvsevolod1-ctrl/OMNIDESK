@@ -19,6 +19,7 @@ import {
   listLeadComments,
   listLeadStatusHistory,
   listLeadTransfers,
+  transferLeadToCurator,
   updateLeadStatus,
   upsertLeadCard,
 } from '@/lib/data/lead-cards'
@@ -53,6 +54,46 @@ export async function getLeadCardAction(conversationId: string) {
 export async function findCuratorsByCityAction(city: string) {
   await requireManagerOrAdmin()
   return findCuratorsByCity(city)
+}
+
+/**
+ * Менеджер по кадрам передаёт СВОЙ лид коллеге. Владение проверяется в
+ * transferLeadToCurator под row-lock (гонка двух передач исключена), статус
+ * сбрасывается — новый владелец подтверждает его как обычно. Дисциплина:
+ * после дедлайна с неподтверждёнными статусами передача недоступна.
+ */
+export async function transferMyLeadAction(input: {
+  leadCardId: string
+  toCuratorId: string
+}): Promise<LeadCardActionResult> {
+  const session = await requireCurator()
+  if (input.toCuratorId === session.sub) {
+    return { ok: false, message: 'Нельзя передать лид самому себе.' }
+  }
+  try {
+    await assertCuratorNotLocked(session.sub)
+    const card = await transferLeadToCurator(
+      input.leadCardId,
+      input.toCuratorId,
+      {
+        id: session.sub,
+        role: 'curator',
+        requireOwnerId: session.sub,
+      },
+    )
+    if (card.curatorId) {
+      void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
+    }
+    return {
+      ok: true,
+      message: `Лид передан${card.curatorName ? ` менеджеру по кадрам ${card.curatorName}` : ''}.`,
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'Ошибка передачи',
+    }
+  }
 }
 
 export async function saveLeadCardAction(input: {

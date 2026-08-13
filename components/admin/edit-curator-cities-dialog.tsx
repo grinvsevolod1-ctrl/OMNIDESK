@@ -90,7 +90,9 @@ export function EditCuratorCitiesDialog({
             {curator.name}: добавьте по одному городу на поле.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        {/* Список городов скроллится внутри диалога: при десятках позиций
+            шапка и кнопка «Сохранить» остаются на экране. */}
+        <div className="flex max-h-[min(55dvh,30rem)] flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
           <Label htmlFor="curator-cities-input">Города</Label>
           <CityListInput
             idPrefix="curator-cities-input"

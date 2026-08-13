@@ -39,28 +39,20 @@ function genPassword(): string {
 }
 
 /**
- * Города куратора — ТОЛЬКО из справочника (миграция 124): каждый элемент
- * должен резолвиться в город или регион (по имени/алиасу, «Чечня» →
- * «Чеченская Республика»). Возвращает канонические имена или текст ошибки.
+ * Города куратора: известные городá/регионы канонизируются по справочнику
+ * («Чечня» → «Чеченская Республика»), а НЕИЗВЕСТНЫЕ населённые пункты
+ * (посёлки вроде «Внуково») принимаются как есть — setCuratorCities сам
+ * добавит их в словарь. Раньше валидация была «только справочник» и не
+ * давала покрывать реальные, но отсутствующие в базе места.
  */
 async function resolveCuratorCities(
   raw: string[],
 ): Promise<{ ok: true; cities: string[] } | { ok: false; message: string }> {
   const resolved: string[] = []
-  const unknown: string[] = []
   for (const item of raw) {
     const hit = await resolveCityOrRegion(item).catch(() => null)
-    if (hit) {
-      if (!resolved.includes(hit.value)) resolved.push(hit.value)
-    } else {
-      unknown.push(item)
-    }
-  }
-  if (unknown.length > 0) {
-    return {
-      ok: false,
-      message: `Не найдено в справочнике: ${unknown.join(', ')}. Выберите город или регион из подсказок.`,
-    }
+    const value = hit ? hit.value : item
+    if (value && !resolved.includes(value)) resolved.push(value)
   }
   if (resolved.length === 0) {
     return { ok: false, message: 'Укажите хотя бы один город или регион.' }
@@ -221,7 +213,7 @@ export async function createCuratorAction(
         username: created.username ?? undefined,
       }
     }
-    // Аккаунт уже создан (managers.city заполнен) — не роняем экшен digest'ом,
+    // Аккаунт уже создан (managers.city заполнен) — не роняем экшен digest'о��,
     // а честно сообщаем, что мульти-город не сохранился и почему.
     console.error('[v0] createCurator setCuratorCities failed:', err)
     revalidatePath('/admin/managers')
@@ -354,6 +346,66 @@ export async function updateCuratorCityAction(
   }
   revalidatePath('/admin/managers')
   revalidatePath('/admin/curators')
+  return { ok: true, message: `Города обновлены: ${canonical.join(', ')}.` }
+}
+
+/**
+ * Мои ГЕО: менеджер по кадрам читает список СВОИХ городов. Доступ только к
+ * собственному аккаунту (session.sub), чужие списки — только через админский
+ * listCuratorCitiesAction.
+ */
+export async function listMyCitiesAction(): Promise<string[]> {
+  const session = await getSession()
+  if (!session || session.role !== 'curator') return []
+  return listCuratorCities(session.sub).catch(() => [])
+}
+
+/**
+ * Мои ГЕО: менеджер по кадрам сам обновляет список своих городов
+ * (добавляет/удаляет, включая населённые пункты, которых нет в справочнике).
+ * Та же логика канонизации, что у админа; изменение пишется в аудит.
+ */
+export async function updateMyCitiesAction(
+  city: string,
+): Promise<ActionResult> {
+  const session = await getSession()
+  if (!session || session.role !== 'curator') {
+    return { ok: false, message: 'Нет доступа.' }
+  }
+  const rawCities = parseCityList(city)
+  if (rawCities.length === 0) {
+    return { ok: false, message: 'Укажите хотя бы один город.' }
+  }
+  const cityCheck = await resolveCuratorCities(rawCities)
+  if (!cityCheck.ok) return { ok: false, message: cityCheck.message }
+  let canonical: string[]
+  try {
+    canonical = await setCuratorCities(session.sub, cityCheck.cities)
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      return {
+        ok: false,
+        message:
+          'На сервере не применены миграции БД (таблицы городов ещё нет). Обратитесь к администратору.',
+      }
+    }
+    console.error('[v0] updateMyCitiesAction failed:', err)
+    return {
+      ok: false,
+      message: `Не удалось сохранить города: ${err instanceof Error ? err.message : 'ошибка базы данных'}`,
+    }
+  }
+  await writeAudit({
+    actorRole: 'curator',
+    actorId: session.sub,
+    actorLabel: session.name ?? 'Менеджер по кадрам',
+    action: 'curator.cities_update',
+    entityType: 'manager',
+    entityId: session.sub,
+    details: { cities: canonical },
+  })
+  revalidatePath('/curator/settings')
+  revalidatePath('/admin/managers')
   return { ok: true, message: `Города обновлены: ${canonical.join(', ')}.` }
 }
 

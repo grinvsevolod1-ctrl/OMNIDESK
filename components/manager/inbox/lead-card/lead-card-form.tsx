@@ -82,7 +82,10 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
             </p>
           ) : curators.length === 0 ? (
             <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
-              Нет менеджеров по кадрам для «{fields.city.trim()}»
+              Нет менеджеров по кадрам для «{fields.city.trim()}». Если это
+              небольшой населённый пункт, укажите его область или регион
+              (например, «Московская область») — подтянется менеджер по
+              кадрам, который её покрывает.
             </p>
           ) : (
             <div className="flex flex-col gap-1.5">

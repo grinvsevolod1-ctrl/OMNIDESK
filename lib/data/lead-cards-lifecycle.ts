@@ -21,7 +21,10 @@ import { recordStatusHistory, recordTransfer } from './lead-history'
 import { getLeadCardById } from './lead-cards-queries'
 
 /**
- * Admin: (re)assign a lead to another active curator with a status reset.
+ * (Re)assign a lead to another active curator with a status reset.
+ * Инициатор — админ (по умолчанию) или менеджер по кадрам, передающий
+ * СВОЙ лид коллеге (initiator.requireOwnerId серверно проверяет владение
+ * под row-lock — гонка двух передач исключена).
  *
  * Runs as ONE transaction with a row lock on the lead: the UPDATE, the
  * transfer record and the history entry either all land or none do. Without
@@ -32,6 +35,12 @@ import { getLeadCardById } from './lead-cards-queries'
 export async function transferLeadToCurator(
   leadCardId: string,
   newCuratorId: string,
+  initiator?: {
+    id: string | null
+    role: 'admin' | 'curator'
+    /** Куратор может передавать только свои лиды: проверяется под локом. */
+    requireOwnerId?: string
+  },
 ): Promise<LeadCard> {
   const id = await withTransaction(async (db) => {
     const ok = await db.query<{ id: string }>(
@@ -49,6 +58,12 @@ export async function transferLeadToCurator(
       [leadCardId],
     )
     if (!prev[0]) throw new Error('Лид не найден')
+    if (
+      initiator?.requireOwnerId &&
+      prev[0].curator_id !== initiator.requireOwnerId
+    ) {
+      throw new Error('Этот лид принадлежит другому менеджеру по кадрам')
+    }
 
     await db.query(
       `UPDATE lead_cards
@@ -69,8 +84,8 @@ export async function transferLeadToCurator(
         leadCardId,
         fromCuratorId: prev[0].curator_id,
         toCuratorId: newCuratorId,
-        initiatedById: null,
-        initiatedByRole: 'admin',
+        initiatedById: initiator?.id ?? null,
+        initiatedByRole: initiator?.role ?? 'admin',
       },
       db,
     )

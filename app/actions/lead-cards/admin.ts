@@ -35,8 +35,14 @@ export async function listCuratorLeadsAdminAction(curatorId: string) {
 }
 
 export async function listActiveCuratorsAction() {
+  // Менеджеру по кадрам список коллег нужен для передачи своих лидов.
   const session = await getSession()
-  if (!session || (session.role !== 'admin' && session.role !== 'manager')) {
+  if (
+    !session ||
+    (session.role !== 'admin' &&
+      session.role !== 'manager' &&
+      session.role !== 'curator')
+  ) {
     throw new Error('Forbidden')
   }
   return listActiveCurators()

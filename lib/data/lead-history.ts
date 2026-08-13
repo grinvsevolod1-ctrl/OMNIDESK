@@ -119,7 +119,7 @@ export async function recordTransfer(
     fromCuratorId: string | null
     toCuratorId: string
     initiatedById: string | null
-    initiatedByRole: 'manager' | 'admin'
+    initiatedByRole: 'manager' | 'admin' | 'curator'
   },
   db?: DbExecutor,
 ): Promise<void> {
