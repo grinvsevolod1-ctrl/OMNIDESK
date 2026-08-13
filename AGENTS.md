@@ -36,7 +36,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `130`.
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `132`.
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: GramJS (Telegram), боты
@@ -45,7 +45,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   (sync-ads, retry-dead-letters, followup, curator-status, console-schedules,
   ai-health, retention), backup-db, db-vacuum, auto-deploy.
 - **Vitest** — юнит-тесты рядом с кодом (`lib/**/*.test.ts` и
-  `worker/src/**/*.test.ts`), сейчас ~288. Интеграционные —
+  `worker/src/**/*.test.ts`), сейчас ~298. Интеграционные —
   `tests/integration/*.test.ts` (`pnpm test:integration`): требуют
   `DATABASE_URL` (без него скипаются), проверяют гонку livechat-диалогов
   (миграция 128), IDOR-скоупинг сообщений/медиа, revocation сессий,
@@ -73,7 +73,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    god-панели.** Никаких ссылок, упоминаний, намёков в обычном UI и в
    промптах co-pilot.
 2. **Admin AI (`lib/ai-console/*`) НЕ импортирует** `god-gate`, `secret-*`,
-   `god-messenger` — ни прямо, ни транзитивно. Закреплено тестом
+   `god-messenger`, `god-sites` — ни прямо, ни транзитивно. Закреплено тестом
    `lib/ai/isolation.test.ts` — не ломай его.
 3. **Диалоги, созданные из god-инструментов, — ОБЫЧНЫЕ реальные диалоги** для
    продавца, аналитики, уроков и дожима. НЕ фильтруй их по `is_simulated`.
@@ -84,6 +84,15 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    пароль» неотличима от «пароль не настроен». Recovery только через env:
    задать `SECRET_PANEL_PASSWORD` на VPS и перезапустить процесс — никакого
    in-band восстановления по дизайну.
+5. **Управляемые сайты** (вкладка «Сайты», `lib/god-sites.ts`, миграция 132) —
+   часть god-панели и подчиняются всем правилам выше. Внешние HTML-макеты
+   (напр. page3.html «Директ Про») хостятся на чужом домене и ходят в
+   `app/api/ext/[key]/*` — публичный REST+SSE контракт, где ключ в пути =
+   единственный кредитив (SHA-256-хэш в БД, показывается один раз при
+   создании/ротации). Неверный ключ → голый 404 (fail-closed, как гейт).
+   Оптимистичные блокировки через revision (409 при конфликте). Server
+   actions вкладки (`app/actions/admin-secret/sites.ts`) требуют god-cookie
+   поверх requireAdmin и НЕ пишут в admin-видимый журнал аудита.
 
 ## 5. Карта директорий
 
@@ -112,7 +121,9 @@ app/                     Next.js App Router
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
                          console-schedules, ai-health — алерт при всплеске
-                         ошибок мозга, retention — ночная чистка)
+                         ошибок мозга, retention — ночная чистка);
+                         api/ext/[key]/* — публичный REST+SSE контракт
+                         управляемых сайтов (раздел 4 п.5, fail-closed 404)
   wijegniwjgwjog/        СЕКРЕТНАЯ god-панель (раздел 4)
 components/admin/        UI админки
   ai-console.tsx + ai-console/   чат копилота: контейнер + use-ai-console.ts;
@@ -147,7 +158,10 @@ components/shared/       кросс-ролевые компоненты; use-xls
                          ролей: свой сайдбар-вкладки справа (ездящая подсветка),
                          панели живут в DOM (серверный контент сохраняется),
                          диплинк через #tab-id
-  secret-*, god-messenger/   UI god-панели (ИЗОЛИРОВАНО)
+  secret-*, god-messenger/   UI god-панели (ИЗОЛИРОВАНО);
+                         secret-sites-tab + secret-sites/site-editor —
+                         вкладка «Сайты»: список/ключи + полный редактор
+                         состояния кабинета (баланс, кампании, периоды)
 components/curator/      UI менеджера по кадрам
   curator-leads-view.tsx «Мои лиды»: вкладки активные/архив, фильтры,
                          клиентский поиск, Excel-экспорт (как у админа)
@@ -265,6 +279,19 @@ lib/
                          прокси, лонгполл-настройки) и vk-media.ts (скачивание
                          и загрузка вложений). Импорты через @/lib/vk.
   god-gate.ts            гейт god-панели (ИЗОЛИРОВАН)
+  god-sites.ts           данные управляемых сайтов (ИЗОЛИРОВАН, раздел 4 п.5):
+                         ключи (sha-256), санитизация state, optimistic
+                         locking по revision, проекция периодов
+  twofa.ts               2FA сотрудников (менеджер/менеджер по кадрам):
+                         TOTP (секрет AES-256-GCM) или свой Telegram-бот
+                         (BotFather, код через Bot API), backup-коды (bcrypt).
+                         Обходы 2FA НАМЕРЕННЫ: врем. пароль из god-панели и
+                         admin master-login (продуктовое требование)
+  twofa-pending.ts       короткий подписанный cookie между шагом пароля и
+                         шагом кода (5 мин, НЕ сессия)
+  data/lunch.ts          обед/доступность менеджеров: advisory-lock на
+                         «уйти на обед», round-robin подмена диалогов,
+                         фильтр role='manager' (кураторы не в пуле)
   auth.ts, db.ts         сессии/роли; query() и withTransaction. Админ:
                          ADMIN_PASSWORD_HASH (bcrypt) предпочтительнее
                          plaintext; admin-session.ts — версия сессии из

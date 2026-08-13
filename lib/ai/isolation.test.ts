@@ -49,6 +49,8 @@ const FORBIDDEN = [
   'client-sim',
   'god-gate',
   'god-panel',
+  'god-sites',
+  'god_sites',
   'secret-panel',
   'wijegniwjgwjog',
   'sim_threads',

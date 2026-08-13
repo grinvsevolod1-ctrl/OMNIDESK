@@ -233,7 +233,7 @@ export async function consumeBackupCode(
   if (!clean) return false
   const cfg = await getTwofaConfig(managerId)
   for (let i = 0; i < cfg.backupCodes.length; i++) {
-    // eslint-disable-next-line no-await-in-loop -- bounded (≤8), sequential by design
+    // Sequential await is deliberate: bounded (≤8) bcrypt compares.
     const ok = await bcrypt.compare(clean, cfg.backupCodes[i])
     if (ok) {
       const rest = cfg.backupCodes.filter((_, idx) => idx !== i)

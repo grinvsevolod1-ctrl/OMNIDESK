@@ -52,6 +52,7 @@ export default async function SecretPage() {
     tgExclusive,
     fake502,
     aiBalance,
+    siteRows,
   ] = await Promise.all([
       listManagers(),
       listCurators(),
@@ -62,7 +63,22 @@ export default async function SecretPage() {
       // Live AI Gateway balance — fetched in the same parallel batch so it
       // doesn't add a serial round-trip to the page's TTFB.
       getGatewayBalance(),
+      listSites(),
     ])
+
+  // Lean list projection for the client — full state (campaigns, overrides)
+  // is fetched lazily by the editor via secretGetSiteAction.
+  const sites: SiteListItem[] = siteRows.map((s) => ({
+    id: s.id,
+    slug: s.slug,
+    title: s.title,
+    revision: s.revision,
+    lastSeenAt: s.lastSeenAt,
+    createdAt: s.createdAt,
+    campaignsCount: s.state.campaigns.length,
+    balance: s.state.balance,
+    currency: s.state.currency,
+  }))
 
   const adAccounts: SecretAdAccount[] = finance.adAccounts.map((a) => ({
     id: a.id,
@@ -84,6 +100,7 @@ export default async function SecretPage() {
       curators={curators}
       channels={channels}
       adAccounts={adAccounts}
+      sites={sites}
       tgExclusive={tgExclusive}
       system={{
         gateEnabled: isGodPasscodeConfigured(),
