@@ -191,7 +191,7 @@ components/manager/      UI менеджера
                          position-only логику — она даёт цикл «утаскивает
                          вниз при скролле вверх» (тот же паттерн в
                          god-messenger/use-god-scroll.ts);
-                         thread-search.tsx — тел��������грам-поиск по диалогу
+                         thread-search.tsx — тел����������грам-поиск по диалогу
                          (лупа в шапке) и навигация по кружкам/фото с
                          прикреплением к карточке лида: hits от новых к
                          старым, цель д��гружается loadOlder-циклом,
@@ -216,7 +216,16 @@ components/manager/      UI менеджера
                          числовой TG id (как у входящих воркера), цель
                          отправки — @username, когда есть; чужой тред того же
                          контакта на outreach-канале НЕ перехватывается;
-                         после отправки диалог открывается через setActiveId
+                         после отправки диалог открывается через setActiveId.
+                         ДЕДУП: перед созданием проверяем
+                         findManagerTelegramConversation (по числовому id И
+                         по contact_username без учёта регистра, на ЛЮБОМ
+                         канале менеджера) — форма по мере ввода ника делает
+                         debounce-проверку findExistingTelegramConversation
+                         Action и, если диалог уже есть, показывает «Открыть
+                         диалог» вместо отправки; send-action тоже
+                         короткозамыкается на существующий тред (кроме того
+                         же outreach-канала, который переиспользуется штатно)
   autopilot-manager.tsx + autopilot/  автопи��от: use-autopilot.ts, rule-editor
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
@@ -279,7 +288,7 @@ lib/
                          hosting.ts → hosting-deployments.ts (история деплоев,
                            стрим логов, очередь deploy_jobs)
                          audit.ts — общий журнал действий (audit_log, миграция
-                           129): writeAudit НИКОГДА не кидает (fire-and-forget),
+                           129): writeAudit Н��КОГДА не кидает (fire-and-forget),
                            god-панель НЕ пишет в аудит (изоляция, раздел 4);
                            admin-audit.ts — старый лог только для servers-console
                          health-metrics.ts — метрики для вкладки «Здоровье
@@ -549,7 +558,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 
 | Задача | Где смотреть |
 |---|---|
-| Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
+| Новая возмож��ость Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
 | Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент co-pilot |

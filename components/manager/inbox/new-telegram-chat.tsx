@@ -1,10 +1,13 @@
 'use client'
 
-import { useState, useTransition } from 'react'
-import { Loader2, Send } from 'lucide-react'
+import { useEffect, useState, useTransition } from 'react'
+import { Loader2, MessageSquare, Send } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { startTelegramOutreachAction } from '@/app/actions/telegram-outreach'
+import {
+  findExistingTelegramConversationAction,
+  startTelegramOutreachAction,
+} from '@/app/actions/telegram-outreach'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -50,10 +53,44 @@ export function TelegramComposeDialog({
   const [name, setName] = useState(initialName)
   const [text, setText] = useState('')
   const [pending, startTransition] = useTransition()
+  // Id уже существующего диалога с этим контактом (проверяем по мере ввода).
+  const [existingId, setExistingId] = useState<string | null>(null)
 
   const handle = username.trim().replace(/^@+/, '')
   const id = (telegramId ?? '').trim()
   const canSend = Boolean((handle || /^\d+$/.test(id)) && text.trim())
+
+  // Проверяем «уже есть диалог?» по мере ввода ника (с debounce). Если да —
+  // покажем баннер «Открыть диалог» вместо создания нового. Ответ применяем
+  // только если ник/id не изменились за время запроса (защита от гонки).
+  useEffect(() => {
+    if (!open) return
+    const uname = handle
+    const numeric = /^\d+$/.test(id) ? id : ''
+    if (!uname && !numeric) {
+      setExistingId(null)
+      return
+    }
+    let cancelled = false
+    const t = setTimeout(async () => {
+      const res = await findExistingTelegramConversationAction({
+        username: uname || undefined,
+        telegramId: numeric || undefined,
+      }).catch(() => null)
+      if (!cancelled) setExistingId(res?.conversationId ?? null)
+    }, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [open, handle, id])
+
+  function openExisting() {
+    if (!existingId) return
+    onOpenChange(false)
+    onCreated?.(existingId)
+    router.refresh()
+  }
 
   function send() {
     if (!canSend || pending) return
@@ -65,6 +102,7 @@ export function TelegramComposeDialog({
         message: text.trim(),
       })
       if (res.ok) {
+        // alreadyExists — открыли существующий тред, «отправлено» не пишем.
         toast.success(res.message)
         onOpenChange(false)
         setText('')
@@ -130,30 +168,41 @@ export function TelegramComposeDialog({
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="tg-compose-text">Сообщение</Label>
-            <Textarea
-              id="tg-compose-text"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={4}
-              autoFocus={Boolean(initialUsername)}
-              placeholder="Здравствуйте! Пишу по вашей заявке…"
-              disabled={pending}
-              onKeyDown={(e) => {
-                // Ctrl/Cmd+Enter — отправить; учитываем CJK-композицию.
-                if (
-                  e.key === 'Enter' &&
-                  (e.ctrlKey || e.metaKey) &&
-                  !e.nativeEvent.isComposing &&
-                  e.keyCode !== 229
-                ) {
-                  e.preventDefault()
-                  send()
-                }
-              }}
-            />
-          </div>
+          {existingId ? (
+            /* С этим контактом уже есть диалог — не создаём новый, открываем. */
+            <div className="flex items-start gap-2.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2.5 text-sm">
+              <MessageSquare className="mt-0.5 size-4 shrink-0 text-primary" />
+              <p className="text-pretty text-foreground">
+                С этим контактом уже есть диалог. Откройте его, чтобы
+                продолжить переписку, — новый создавать не нужно.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="tg-compose-text">Сообщение</Label>
+              <Textarea
+                id="tg-compose-text"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={4}
+                autoFocus={Boolean(initialUsername)}
+                placeholder="Здравствуйте! Пишу по вашей заявке…"
+                disabled={pending}
+                onKeyDown={(e) => {
+                  // Ctrl/Cmd+Enter — отправить; учитываем CJK-композицию.
+                  if (
+                    e.key === 'Enter' &&
+                    (e.ctrlKey || e.metaKey) &&
+                    !e.nativeEvent.isComposing &&
+                    e.keyCode !== 229
+                  ) {
+                    e.preventDefault()
+                    send()
+                  }
+                }}
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end gap-2">
@@ -164,14 +213,21 @@ export function TelegramComposeDialog({
           >
             Отмена
           </Button>
-          <Button onClick={send} disabled={pending || !canSend}>
-            {pending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Send className="size-4" />
-            )}
-            Отправить
-          </Button>
+          {existingId ? (
+            <Button onClick={openExisting}>
+              <MessageSquare className="size-4" />
+              Открыть диалог
+            </Button>
+          ) : (
+            <Button onClick={send} disabled={pending || !canSend}>
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Send className="size-4" />
+              )}
+              Отправить
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -195,7 +251,7 @@ export function NewTelegramChatButton({
         type="button"
         onClick={() => setOpen(true)}
         className="flex shrink-0 items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
-        title="Написать лиду в Telegram с рабочего аккаунта (по нику из другого канала)"
+        title="Написать лиду в Telegram с рабочего аккаунта (по н��ку из другого канала)"
       >
         <Send className="size-3" />
         Написать в ТГ

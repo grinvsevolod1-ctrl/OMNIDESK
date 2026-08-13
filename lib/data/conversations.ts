@@ -57,6 +57,45 @@ export async function listConversations(
  * the worker keys inbound dialogs, so replies land in this same thread) and
  * falls back to the @username otherwise.
  */
+/**
+ * Does this manager ALREADY have a Telegram conversation with this contact —
+ * on ANY of their channels, not just the outreach account? Used to short-circuit
+ * manual outreach: if a thread already exists we send the manager straight into
+ * it instead of spawning a duplicate.
+ *
+ * Inbound dialogs store the numeric Telegram id in contact_handle and the
+ * @username separately in contact_username, so we match on BOTH: the numeric id
+ * and the case-insensitive username (same normalisation as lead-card linking).
+ */
+export async function findManagerTelegramConversation(input: {
+  managerId: string
+  /** Numeric Telegram id, if known. */
+  telegramId?: string
+  /** @username without the leading @, if known. */
+  username?: string
+}): Promise<{ id: string; channelId: string } | null> {
+  const id = (input.telegramId ?? '').trim()
+  const uname = (input.username ?? '').trim().replace(/^@+/, '')
+  if (!id && !uname) return null
+  const rows = await query<{ id: string; channel_id: string }>(
+    `SELECT id, channel_id
+       FROM conversations
+      WHERE manager_id = $1
+        AND channel_type = 'telegram'
+        AND (
+          ($2 <> '' AND contact_handle = $2)
+          OR ($3 <> '' AND (
+                contact_handle = $3
+                OR lower(regexp_replace(coalesce(contact_username, ''), '^@', '')) = lower($3)
+             ))
+        )
+      ORDER BY last_message_at DESC NULLS LAST
+      LIMIT 1`,
+    [input.managerId, id, uname],
+  )
+  return rows[0] ? { id: rows[0].id, channelId: rows[0].channel_id } : null
+}
+
 export async function findOrCreateOutreachConversation(input: {
   channelId: string
   managerId: string

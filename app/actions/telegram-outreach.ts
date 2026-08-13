@@ -5,6 +5,7 @@ import { requireManager } from '@/lib/auth'
 import {
   addMessage,
   enqueueJob,
+  findManagerTelegramConversation,
   findOrCreateOutreachConversation,
   getOutreachChannel,
   markMessageFailed,
@@ -16,6 +17,26 @@ export interface OutreachResult {
   message: string
   /** Id of the (created or reused) conversation so the UI can open it. */
   conversationId?: string
+  /** True when we opened an EXISTING dialog instead of sending a new message. */
+  alreadyExists?: boolean
+}
+
+/**
+ * Быстрая проверка «есть ли уже диалог с этим контактом у текущего менеджера».
+ * Вызывается по мере ввода ника в форме «Написать в Telegram»: если диалог
+ * найден, UI сразу предложит открыть его, а не создавать новый.
+ */
+export async function findExistingTelegramConversationAction(input: {
+  username?: string
+  telegramId?: string
+}): Promise<{ conversationId: string } | null> {
+  const session = await requireManager()
+  const found = await findManagerTelegramConversation({
+    managerId: session.sub,
+    username: input.username,
+    telegramId: input.telegramId,
+  })
+  return found ? { conversationId: found.id } : null
 }
 
 /**
@@ -76,11 +97,32 @@ export async function startTelegramOutreachAction(input: {
     }
   }
 
+  const hasId = /^\d+$/.test(telegramId)
+
+  // Уже есть диалог с этим контактом (на ЛЮБОМ канале менеджера, например
+  // входящий на его личном рабочем аккаунте)? Тогда не плодим новый — просто
+  // отправляем менеджера в существующий тред и продолжаем переписку там.
+  // Диалог на самом outreach-канале НЕ считаем «чужим»: его переиспользует и
+  // дошлёт сообщение обычный флоу ниже (findOrCreateOutreachConversation).
+  const outreachChannelId = channel.id
+  const existing = await findManagerTelegramConversation({
+    managerId: session.sub,
+    telegramId: hasId ? telegramId : undefined,
+    username: username || undefined,
+  })
+  if (existing && existing.channelId !== outreachChannelId) {
+    return {
+      ok: true,
+      alreadyExists: true,
+      conversationId: existing.id,
+      message: 'Диалог с этим контактом уже есть — открываю его.',
+    }
+  }
+
   // Ключ диалога — числовой id (так воркер ключует ВХОДЯЩИЕ, и ответ лида
   // попадёт в этот же тред); цель ОТПРАВКИ — @username, когда он есть: для
   // первого контакта числовой id может не резолвиться (у аккаунта ещё нет
   // access_hash незнакомого пользователя), а username Telegram резолвит сам.
-  const hasId = /^\d+$/.test(telegramId)
   const handle = hasId ? telegramId : username
   const target = username ? `@${username}` : telegramId
   const contactName =
