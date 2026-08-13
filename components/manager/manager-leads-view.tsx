@@ -220,14 +220,15 @@ export function ManagerLeadsView({
       <div className="flex flex-wrap items-center gap-2">
         {/* На узких экранах пресеты уходят в горизонтальный скролл, не ломая сетку */}
         <div className="scrollbar-thin -mx-1 max-w-full overflow-x-auto px-1 sm:mx-0 sm:px-0">
-          <div className="flex w-max items-center gap-1 rounded-xl border border-border bg-muted/30 p-1">
+          {/* h-9 с внутренними h-7 — та же высота, что у остальных контролов ряда */}
+          <div className="flex h-9 w-max items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
             {presetButtons.map((p) => (
               <button
                 key={p.key}
                 type="button"
                 onClick={() => setPreset(p.key)}
                 className={cn(
-                  'shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition-colors',
+                  'flex h-7 shrink-0 items-center whitespace-nowrap rounded-md px-3 text-sm transition-colors',
                   preset === p.key
                     ? 'bg-background font-medium shadow-sm'
                     : 'text-muted-foreground hover:text-foreground',

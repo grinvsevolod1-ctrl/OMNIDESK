@@ -6,7 +6,56 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+/**
+ * Собирает пары value → label из SelectItem-детей (включая вложенные
+ * SelectContent/SelectGroup/фрагменты и массивы из .map()).
+ */
+function collectSelectItems(
+  children: React.ReactNode,
+  acc: { value: unknown; label: React.ReactNode }[],
+) {
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return
+    const props = child.props as {
+      value?: unknown
+      children?: React.ReactNode
+    }
+    if (child.type === SelectItem) {
+      acc.push({ value: props.value, label: props.children })
+      return
+    }
+    if (props.children) collectSelectItems(props.children, acc)
+  })
+}
+
+/**
+ * Root с авто-`items`: base-ui показывает в закрытом триггере СЫРОЕ значение
+ * (например «transferred»), если Root не получил карту items. Здесь карта
+ * строится автоматически из SelectItem-детей, поэтому триггер всегда
+ * показывает человеческую надпись пункта. Явный проп `items` имеет приоритет.
+ */
+function Select<Value, Multiple extends boolean | undefined = false>({
+  items,
+  children,
+  ...props
+}: SelectPrimitive.Root.Props<Value, Multiple>) {
+  const derivedItems = React.useMemo(() => {
+    if (items) return items
+    const acc: { value: unknown; label: React.ReactNode }[] = []
+    collectSelectItems(children, acc)
+    return acc.length > 0 ? acc : undefined
+  }, [items, children])
+  return (
+    <SelectPrimitive.Root
+      items={
+        derivedItems as SelectPrimitive.Root.Props<Value, Multiple>['items']
+      }
+      {...props}
+    >
+      {children}
+    </SelectPrimitive.Root>
+  )
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
@@ -41,7 +90,10 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "flex w-fit items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 data-placeholder:text-muted-foreground data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=sm]:rounded-[min(var(--radius-md),10px)] *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "flex w-fit items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 data-placeholder:text-muted-foreground *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        // Высота обычными классами (не через data-атрибут), чтобы className
+        // вида `h-9` из мест использования мог её переопределить.
+        size === "sm" ? "h-7 rounded-[min(var(--radius-md),10px)]" : "h-8",
         className
       )}
       {...props}
@@ -61,9 +113,11 @@ function SelectContent({
   children,
   side = "bottom",
   sideOffset = 4,
-  align = "center",
+  align = "start",
   alignOffset = 0,
-  alignItemWithTrigger = true,
+  // false: список выпадает ПОД кнопкой (как обычное меню), а не поверх неё.
+  // Режим macOS (true) перекрывал триггер и выглядел сломанным.
+  alignItemWithTrigger = false,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<

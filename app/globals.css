@@ -165,6 +165,13 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Tailwind v4 сбрасывает cursor у кнопок на default — возвращаем pointer
+     всем кликабельным элементам, чтобы было видно, что элемент нажимается
+     (строки лидов, табы, триггеры выпадающих списков и т.д.). */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
   html {
     @apply font-sans;
     /* Плавная прокрутка по якорям/programmatic scroll — как в нативных

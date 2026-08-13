@@ -30,10 +30,13 @@ export const ManagerLeadRow = memo(function ManagerLeadRow({
   return (
     <li
       className={cn(
-        'flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 hover:bg-muted/40 sm:px-5',
+        // Вся строка кликабельна и показывает pointer — понятно, что карточку
+        // можно открыть (клик мимо кнопки имени тоже открывает).
+        'flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 hover:bg-muted/40 sm:px-5',
         isFresh &&
           'bg-primary/10 duration-150 animate-in fade-in slide-in-from-top-2',
       )}
+      onClick={() => onOpen(lead.id)}
     >
       <button
         type="button"
