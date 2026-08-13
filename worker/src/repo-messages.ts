@@ -50,9 +50,13 @@ async function resolveLunchManager(ownerId: string): Promise<string> {
     if (owner) return ownerId
 
     // Owner away — gather available substitutes, deterministically ordered.
+    // role = 'manager' is REQUIRED: the managers table also holds curators
+    // (менеджеры по кадрам) and the admin row — inbound dialogs must never be
+    // routed to them. Mirrors the app-side applyLunchSubstitution filter.
     const subs = await query<{ id: string }>(
       `SELECT id FROM managers
-        WHERE status = 'active' AND on_lunch = false AND id <> $1::uuid
+        WHERE role = 'manager'
+          AND status = 'active' AND on_lunch = false AND id <> $1::uuid
         ORDER BY id ASC`,
       [ownerId],
     )

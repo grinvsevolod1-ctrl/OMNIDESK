@@ -92,8 +92,14 @@ export async function resolveLivechatAgentId(
     ),
   )
   if (candidates.length === 0) return null
+  // role = 'manager' + status = 'active': the managers table also holds
+  // curators and the admin row — a live-chat visitor must land on a real,
+  // active manager only (same guard as everywhere else conversations are
+  // assigned).
   const alive = await query<{ id: string }>(
-    'SELECT id FROM managers WHERE id = ANY($1::uuid[]) LIMIT 1',
+    `SELECT id FROM managers
+      WHERE id = ANY($1::uuid[]) AND role = 'manager' AND status = 'active'
+      LIMIT 1`,
     [candidates],
   )
   return alive[0]?.id ?? null
