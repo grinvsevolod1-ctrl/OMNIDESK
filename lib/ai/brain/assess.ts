@@ -235,6 +235,47 @@ export interface EscalationVerdict {
 const ESCALATION_NONE: EscalationVerdict = { escalate: false, reason: '' }
 
 /**
+ * Cheap, dependency-free pre-filter for the escalation detector — the exact
+ * counterpart of clientShowsReadinessSignal above, and for the same reason:
+ * detectEscalation is a PAID gateway call that used to run sequentially before
+ * EVERY reply, adding a full model round-trip of latency to each turn. The
+ * overwhelming majority of turns carry no escalation signal at all, so the
+ * model is only consulted when the client's recent messages actually hint at
+ * one. Deliberately generous (anger, human demands, threats, verbatim
+ * repetition) so a real escalation is never missed; detectEscalation then
+ * makes the final conservative call.
+ *
+ * NOTE: JS's \b word boundary does not work with Cyrillic, so word boundaries
+ * are emulated with Unicode lookarounds under the /u flag.
+ */
+export function clientShowsEscalationSignal(history: BrainMessage[]): boolean {
+  const clientLines = history
+    .filter((m) => m.role === 'client')
+    .slice(-4)
+    .map((m) => m.body.toLowerCase())
+  if (clientLines.length === 0) return false
+  const text = clientLines.join(' \n ')
+
+  // Anger / insults / threats to leave or complain.
+  const ANGER =
+    /(?<![\p{L}\p{N}])(бесит|бесишь|достал|достали|задолбал|задолбали|надоел|надоело|хватит|отстань|отвали|идиот|тупой|тупая|дурак|дура|бред|чушь|ерунда|развод|разводилово|обман|обманываете|мошенник|мошенники|кидалово|лохотрон|жалоб\p{L}*|полици\p{L}*|прокуратур\p{L}*|суд|отпишусь|заблокирую|удаляюсь|scam|fraud|complaint|stupid|useless)(?![\p{L}\p{N}])/iu
+  // Explicit demand for a real person / accusation of being a bot.
+  const HUMAN =
+    /(?<![\p{L}\p{N}])(оператор\p{L}*|живо\p{L}+ (человек\p{L}*|сотрудник\p{L}*)|человек\p{L}* позов\p{L}*|позовите|соедините|переключите|руководител\p{L}*|начальник\p{L}*|директор\p{L}*|ты бот|вы бот|это бот|с ботом|не бот|робот\p{L}*|автоответчик\p{L}*|real (person|human)|human|operator|agent)(?![\p{L}\p{N}])/iu
+  if (ANGER.test(text) || HUMAN.test(text)) return true
+
+  // Stuck dialog: the client repeats essentially the same message back to
+  // back — the "same objection, no progress" pattern the detector looks for.
+  const normalized = clientLines.map((s) =>
+    s.replace(/[^\p{L}\p{N}]+/gu, ' ').trim(),
+  )
+  for (let i = 1; i < normalized.length; i++) {
+    if (normalized[i] && normalized[i] === normalized[i - 1]) return true
+  }
+  return false
+}
+
+/**
  * Detect when the bot should hand off to a human: the client is angry/insulting,
  * explicitly demands a real person/operator, threatens to leave/complain, or the
  * conversation is clearly stuck (client repeating the same objection with no
@@ -252,6 +293,19 @@ export async function detectEscalation(
   const recent = history.slice(-12)
   // Need at least a couple of client turns to judge a stuck/angry pattern.
   if (recent.filter((m) => m.role === 'client').length < 2) return ESCALATION_NONE
+
+  // Cost/latency guard: this used to be an unconditional model call BEFORE
+  // every reply (a full gateway round-trip added to each turn). Only consult
+  // the model when the cheap heuristic actually sees an escalation signal.
+  if (!clientShowsEscalationSignal(recent)) {
+    log?.({
+      level: 'debug',
+      event: 'escalation.no_signal',
+      message:
+        'Признаков эскалации в последних сообщениях клиента нет — проверка моделью пропущена.',
+    })
+    return ESCALATION_NONE
+  }
 
   const transcript = recent
     .map((m) => `${m.role === 'client' ? 'Клиент' : 'Менеджер'}: ${m.body}`)

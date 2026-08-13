@@ -11,15 +11,8 @@ import {
 } from '../data/ai-assist'
 import { assembleBrainInput } from '../ai/assemble-brain-input'
 import { dataBrainLoaders } from '../data/brain-loaders'
-import {
-  assessLeadReady,
-  type BrainLog,
-  clientShowsReadinessSignal,
-  detectEscalation,
-  extractClientMemory,
-  generateManagerReply,
-  isBrainConfigured,
-} from '../ai/manager-brain'
+import { runAiLead } from '../ai/ai-lead-run'
+import { type BrainLog, isBrainConfigured } from '../ai/manager-brain'
 import { logAi } from '../data/ai-log'
 import { deliverOutboundByChannel } from '../outbound-dispatch'
 import { isOffHoursFor } from '../offhours'
@@ -28,26 +21,16 @@ import {
   tryRecordFire,
 } from './data'
 import {
-  type AutopilotRule,
   type MatchInput,
   ruleRequiresDedupe,
   selectRule,
 } from './match'
 
 /**
- * Conversations with an AI-lead generation currently in flight. A second
- * inbound can arrive while the model is still composing; without this guard
- * both pass the pre-checks and the visitor receives two answers. Claimed
- * up-front and released in a finally so only one AI reply is generated per
- * conversation at a time. Module-scoped (per Node process) — the live-chat
- * ingest route runs single-instance, matching the worker's guard.
- */
-const aiLeadInFlight = new Set<string>()
-
-/**
  * Autopilot runtime for LIVE-CHAT inbound (runs inside the Next.js ingest
  * route). Messenger inbound (Telegram/WhatsApp) is handled separately in the
- * worker, which shares the same pure matcher (lib/autopilot/match.ts).
+ * worker, which shares the same pure matcher (lib/autopilot/match.ts) and the
+ * same AI-lead pipeline (lib/ai/ai-lead-run.ts).
  *
  * Given a freshly-recorded inbound message, this:
  *   1. loads the manager's active autopilot (master switch + enabled rules),
@@ -115,7 +98,7 @@ export async function runLivechatAutopilot(input: {
       if (!claimed) return
     }
 
-    await sendAutoReply(input.managerId, input.conversationId, replyText, rule)
+    await sendAutoReply(input.managerId, input.conversationId, replyText)
   } catch (err) {
     console.error('autopilot(livechat) failed:', err)
   }
@@ -124,10 +107,14 @@ export async function runLivechatAutopilot(input: {
 /**
  * AI-lead for live chat: when the AI is set to lead THIS conversation and the
  * global assistant is enabled, generate a full contextual reply with the shared
- * brain (persona + tone + playbook + correction lessons + thread history) and
- * send it as an outbound message authored as the AI. Returns true when it
- * handled the inbound (so canned rules are skipped). Best-effort — any failure
- * returns false so canned autopilot can still try.
+ * brain and send it as an outbound message authored as the AI. Returns true
+ * when it handled the inbound (so canned rules are skipped). Best-effort — any
+ * failure returns false so canned autopilot can still try.
+ *
+ * The pipeline itself (single-flight + dirty re-run, escalation, A/B overlay,
+ * generation, handover re-check, memory, readiness) lives in
+ * lib/ai/ai-lead-run.ts and is shared with the worker; this adapter only wires
+ * in live-chat I/O.
  */
 async function runLivechatAiLead(input: {
   managerId: string
@@ -170,16 +157,20 @@ async function runLivechatAiLead(input: {
     }
   }
 
-  // Single-flight per conversation: if a reply is already being generated for
-  // this thread, treat this inbound as handled so we never double-answer.
-  // The claim MUST be taken synchronously (no await between has() and add()),
-  // otherwise two concurrent inbounds can both pass the check and the visitor
-  // receives two answers — the exact race this guard exists to prevent.
-  if (aiLeadInFlight.has(input.conversationId)) return true
-  aiLeadInFlight.add(input.conversationId)
-
-  try {
-    if (!isBrainConfigured()) {
+  return runAiLead(input.conversationId, {
+    log,
+    logAi: (e) => {
+      void logAi({
+        level: e.level,
+        source: e.source,
+        event: e.event,
+        message: e.message,
+        conversationId: input.conversationId,
+        channelType: 'livechat',
+      })
+    },
+    precheck: async () => {
+      if (isBrainConfigured()) return true
       void logAi({
         level: 'error',
         source: 'ai-lead',
@@ -190,218 +181,29 @@ async function runLivechatAiLead(input: {
         channelType: 'livechat',
       })
       return false
-    }
-    if (!(await isConversationAiLed(input.conversationId))) {
-      void logAi({
-        level: 'info',
-        source: 'ai-lead',
-        event: 'skip.not_led',
-        message:
-          'Диалог не ведётся ИИ (мастер-выключатель выключен или диалог на паузе) — пропускаю.',
-        conversationId: input.conversationId,
-        channelType: 'livechat',
-      })
-      return false
-    }
-    const settings = await getAiAssistSettings()
-    if (!settings.enabled) {
-      void logAi({
-        level: 'info',
-        source: 'ai-lead',
-        event: 'skip.master_off',
-        message: 'Мастер-выключатель ИИ выключен — ответ не отправляется.',
-        conversationId: input.conversationId,
-        channelType: 'livechat',
-      })
-      return false
-    }
-
-    void logAi({
-      level: 'debug',
-      source: 'ai-lead',
-      event: 'inbound',
-      message: `Новое сообщение клиента: "${input.text.slice(0, 200)}" — готовлю ответ.`,
-      conversationId: input.conversationId,
-      channelType: 'livechat',
-    })
-
-    // Single source of truth for the brain's input context (limits, RAG query
-    // choice) — shared with the worker and follow-up runtimes.
-    const { lessons, corrections, history, memory, knowledge, directives } =
-      await assembleBrainInput(input.conversationId, dataBrainLoaders, {
-        queryText: input.text,
-      })
-
-    // Escalation guard: if the client is angry, demands a human, or the dialog
-    // is clearly stuck, hand off to a person instead of auto-replying. Uses the
-    // handoff path (status → «Передан человеку», pauses AI + flags the banner).
-    const escalation = await detectEscalation(history, log, {
-      model: settings.model,
-    })
-    if (escalation.escalate) {
-      const promoted = await markAiHandoffToHuman(input.conversationId)
-      void logAi({
-        level: 'info',
-        source: 'handoff',
-        event: 'escalated',
-        message: promoted
-          ? `ИИ передал диалог человеку (эскалация): ${escalation.reason || 'причина не указана'}.`
-          : `Эскалация (${escalation.reason || '—'}), но статус уже задан вручную — ИИ просто замолкает.`,
-        conversationId: input.conversationId,
-        channelType: 'livechat',
-      })
-      return true
-    }
-
-    // A/B: overlay the active experiment (if any) for this conversation's
-    // branch. Control (A) passes through untouched; failures degrade to the
-    // master settings — an experiment can never block replying to a client.
-    const exp = await applyActiveExperiment(
-      {
-        persona: settings.persona,
-        tone: settings.tone,
-        aggressiveness: settings.aggressiveness,
-      },
-      input.conversationId,
-    )
-
-    const reply = await generateManagerReply(
-      {
-        persona: exp.settings.persona,
-        tone: exp.settings.tone,
-        playbook: settings.playbook,
-        directives: [...exp.extraDirectives, ...directives],
-        lessons,
-        corrections,
-        memory,
-        knowledge,
-        aggressiveness: exp.settings.aggressiveness,
-        history,
-      },
-      log,
-      {
-        model: settings.model,
-        temperature: settings.temperature,
-        maxTokens: settings.maxTokens,
-        selfCritique: true,
-      },
-    )
-    if (!reply) {
-      void logAi({
-        level: 'warn',
-        source: 'ai-lead',
-        event: 'no_reply',
-        message: 'ИИ не сформировал ответ — клиенту ничего не отправлено.',
-        conversationId: input.conversationId,
-        channelType: 'livechat',
-      })
-      return false
-    }
-
-    // Re-check the AI-lead flag right before sending: a human may have sent a
-    // manual reply (which clears the flag) while we were composing. If so, bail
-    // out so the AI doesn't talk over the human.
-    if (!(await isConversationAiLed(input.conversationId))) {
-      void logAi({
-        level: 'info',
-        source: 'ai-lead',
-        event: 'handover.during_gen',
-        message:
-          'Пока ИИ готовил ответ, в диалог вошёл человек — отправка отменена.',
-        conversationId: input.conversationId,
-        channelType: 'livechat',
-      })
-      return true
-    }
-
-    await sendAiReply(input.managerId, input.conversationId, reply)
-    void logAi({
-      level: 'info',
-      source: 'ai-lead',
-      event: 'reply.sent',
-      message: `Ответ отправлен клиенту: "${reply.slice(0, 200)}"`,
-      conversationId: input.conversationId,
-      channelType: 'livechat',
-    })
-
-    // Refresh durable client memory in the background (best-effort, fire and
-    // forget — must never delay or fail the reply we already sent).
-    void (async () => {
-      try {
-        const nextHistory = [
-          ...history,
-          { role: 'manager' as const, body: reply },
-        ]
-        const summary = await extractClientMemory(
-          nextHistory,
-          memory,
-          log,
-          { model: settings.model },
-        )
-        if (summary !== null) {
-          await saveConversationAiMemory(
-            input.conversationId,
-            summary,
-            nextHistory.filter((m) => m.role === 'client').length,
-          )
-        }
-      } catch (err) {
-        console.error('autopilot(livechat) memory update failed:', err)
-      }
-    })()
-
-    // After replying, judge whether the client is now ready to hand over their
-    // data and start working. If so, move the lead to «Передан человеку» and
-    // hand it to a human (pauses the AI + flags the inbox banner). The «Ликвид»
-    // call is a manager decision, never automatic. Best-effort: never let a
-    // promotion failure affect the reply we already sent.
-    //
-    // Cost guard: the readiness check is a second gateway call on every turn, so
-    // we skip it entirely until the client's own recent messages actually show
-    // a readiness signal (agreement / sharing contacts). This cuts the vast
-    // majority of assessment calls without missing the moment a lead converts.
-    try {
-      if (!clientShowsReadinessSignal(history)) {
-        return true
-      }
-      const ready = await assessLeadReady(
-        [...history, { role: 'manager', body: reply }],
-        log,
-        { model: settings.model },
-      )
-      if (ready) {
-        const promoted = await markAiHandoffToHuman(input.conversationId)
-        if (promoted) {
-          // logAi below is the durable record; no stdout duplicate needed.
-          void logAi({
-            level: 'info',
-            source: 'handoff',
-            event: 'promoted',
-            message:
-              'ИИ передал лид человеку: статус изменён на «Передан человеку», ИИ поставлен на паузу. Классификацию «Ликвид» менеджер выставляет вручную.',
-            conversationId: input.conversationId,
-            channelType: 'livechat',
-          })
-        }
-      }
-    } catch (err) {
-      console.error('autopilot(livechat) readiness check failed:', err)
-    }
-    return true
-  } catch (err) {
-    console.error('autopilot(livechat) AI-lead failed:', err)
-    void logAi({
-      level: 'error',
-      source: 'ai-lead',
-      event: 'error',
-      message: `Сбой ИИ-лида: ${err instanceof Error ? err.message : String(err)}`,
-      conversationId: input.conversationId,
-      channelType: 'livechat',
-    })
-    return false
-  } finally {
-    aiLeadInFlight.delete(input.conversationId)
-  }
+    },
+    isConversationAiLed,
+    getConfig: () => getAiAssistSettings(),
+    // No explicit queryText: the inbound is already recorded, so the RAG query
+    // falls back to the NEWEST client message in history — which also keeps
+    // dirty re-runs querying against the latest message, not a stale capture.
+    assembleInput: (conversationId) =>
+      assembleBrainInput(conversationId, dataBrainLoaders),
+    applyExperiment: applyActiveExperiment,
+    markAiHandoffToHuman,
+    saveConversationAiMemory,
+    send: (conversationId, reply) =>
+      sendAiReply(input.managerId, conversationId, reply),
+    inboundLogMessage: `Новое сообщение клиента: "${input.text.slice(0, 200)}" — готовлю ответ.`,
+    onError: (err) => console.error('autopilot(livechat) AI-lead failed:', err),
+    onBackgroundError: (stage, err) =>
+      console.error(
+        stage === 'memory'
+          ? 'autopilot(livechat) memory update failed:'
+          : 'autopilot(livechat) readiness check failed:',
+        err,
+      ),
+  })
 }
 
 /** Send an AI-authored reply, keeping the AI-lead flag on (byAi). */
@@ -422,19 +224,35 @@ async function sendAiReply(
   }
 }
 
+/**
+ * Manager display names, cached with a short TTL: sendAutoReply used to hit
+ * the DB for the same name on every canned-rule fire. Names change rarely;
+ * 30s staleness is invisible to visitors and matches the brain-config cache.
+ */
+const managerNameCache = new Map<string, { name: string; expiresAt: number }>()
+const MANAGER_NAME_TTL_MS = 30_000
+
+async function getManagerDisplayName(managerId: string): Promise<string> {
+  const now = Date.now()
+  const cached = managerNameCache.get(managerId)
+  if (cached && cached.expiresAt > now) return cached.name
+  const nameRows = await query<{ name: string }>(
+    'SELECT name FROM managers WHERE id = $1',
+    [managerId],
+  )
+  const name = nameRows[0]?.name?.trim() || 'Поддержка'
+  managerNameCache.set(managerId, { name, expiresAt: now + MANAGER_NAME_TTL_MS })
+  return name
+}
+
 /** Send the auto-reply as an outbound message authored by the manager. */
 async function sendAutoReply(
   managerId: string,
   conversationId: string,
   body: string,
-  _rule: AutopilotRule,
 ): Promise<void> {
   // Author with the manager's display name so the visitor sees a normal reply.
-  const nameRows = await query<{ name: string }>(
-    'SELECT name FROM managers WHERE id = $1',
-    [managerId],
-  )
-  const author = nameRows[0]?.name?.trim() || 'Поддержка'
+  const author = await getManagerDisplayName(managerId)
   // addMessage inserts the outbound row; the DB notify trigger delivers it to
   // both the widget (SSE) and the manager's inbox in real time.
   // byAi: automated sends must not clear the AI-lead flag (only a human reply

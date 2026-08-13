@@ -28,13 +28,22 @@ export async function secretUpdateConversationAction(input: {
   const sets: string[] = []
   const params: unknown[] = [input.id]
 
+  // Semantics: `undefined` = "no change", a provided value (even '') = "set".
+  // An empty NAME is a legitimate edit — it clears a mistakenly-set name (the
+  // old `name !== ''` guard made a wrong contact_name impossible to erase).
   const name = input.contactName?.trim()
-  if (name !== undefined && name !== '') {
+  if (name !== undefined) {
     params.push(name)
     sets.push(`contact_name = $${params.length}`)
   }
+  // The HANDLE, however, is the outbound routing address for messenger
+  // channels — clearing it would silently break delivery, so an explicit
+  // empty value is rejected rather than treated as "no change".
   const handle = input.contactHandle?.trim()
-  if (handle !== undefined && handle !== '') {
+  if (handle !== undefined) {
+    if (handle === '') {
+      return { ok: false, message: 'Хэндл контакта не может быть пустым' }
+    }
     params.push(handle)
     sets.push(`contact_handle = $${params.length}`)
   }

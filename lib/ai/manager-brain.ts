@@ -44,6 +44,7 @@ export { generateManagerReply } from './brain/reply'
 
 export {
   clientShowsReadinessSignal,
+  clientShowsEscalationSignal,
   assessLeadReady,
   extractClientMemory,
   detectEscalation,
