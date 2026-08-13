@@ -110,7 +110,9 @@ export function LeadCardPanel({
           </Button>
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5">
+        {/* overflow-x-hidden: длинный контент (например, список городов у
+            менеджера по кадрам) не должен растягивать панель горизонтально. */}
+        <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-4 sm:px-5">
           <LeadCardForm state={state} />
 
           {transferredAt ? (

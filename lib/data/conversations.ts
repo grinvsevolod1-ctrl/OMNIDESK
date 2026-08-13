@@ -47,6 +47,47 @@ export async function listConversations(
 }
 
 /**
+ * Manual Telegram outreach (manager writes FIRST from the designated account):
+ * find an existing conversation on the outreach channel for this contact, or
+ * create a fresh one owned by the ACTING manager, so the thread shows up in
+ * their own inbox. Returns null when the contact already belongs to another
+ * manager's thread on that channel — a lead can't be silently poached.
+ *
+ * `handle` should be the lead's numeric Telegram ID when known (it matches how
+ * the worker keys inbound dialogs, so replies land in this same thread) and
+ * falls back to the @username otherwise.
+ */
+export async function findOrCreateOutreachConversation(input: {
+  channelId: string
+  managerId: string
+  contactName: string
+  handle: string
+}): Promise<{ id: string; foreign: boolean } | null> {
+  const existing = await query<{ id: string; manager_id: string }>(
+    `SELECT id, manager_id FROM conversations
+      WHERE channel_id = $1 AND contact_handle = $2
+      ORDER BY last_message_at DESC
+      LIMIT 1`,
+    [input.channelId, input.handle],
+  )
+  if (existing[0]) {
+    if (existing[0].manager_id !== input.managerId) {
+      return { id: existing[0].id, foreign: true }
+    }
+    return { id: existing[0].id, foreign: false }
+  }
+  const created = await query<{ id: string }>(
+    `INSERT INTO conversations
+       (channel_id, manager_id, channel_type, contact_name, contact_handle,
+        last_message, last_message_at, unread)
+     VALUES ($1, $2, 'telegram', $3, $4, '', now(), 0)
+     RETURNING id`,
+    [input.channelId, input.managerId, input.contactName, input.handle],
+  )
+  return created[0] ? { id: created[0].id, foreign: false } : null
+}
+
+/**
  * List a manager's conversations filtered by EFFECTIVE lead status (and, for
  * «Не ликвид», optionally a reason sub-status). Powers the dashboard status
  * board's drill-down modal. Manager-scoped — never leaks other managers' leads.

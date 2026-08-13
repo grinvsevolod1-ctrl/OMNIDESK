@@ -188,9 +188,40 @@
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Кастомные скроллбары ГЛОБАЛЬНО: никаких дефолтных серых полос ОС нигде в
+   панели. Тонкий закруглённый бегунок на прозрачном треке (как в Telegram),
+   ярче при наведении. Firefox — через scrollbar-width/color, остальные —
+   через ::-webkit-scrollbar. Утилиты .scrollbar-thin / .no-scrollbar ниже
+   сохранены: первая теперь просто синоним дефолта, вторая скрывает полосу. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent)
+    transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--foreground) 16%, transparent);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklch, var(--foreground) 32%, transparent);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 @layer utilities {
-  /* Тонкий, ненавязчивый скроллбар (как в Telegram): появляется при наведении,
-     не «съедает» ширину контента и не выглядит грубо. */
+  /* Тонкий, ненавязчивый скроллбар — теперь глобальный дефолт (см. выше);
+     класс оставлен, чтобы существующая разметка не менялась. */
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent)

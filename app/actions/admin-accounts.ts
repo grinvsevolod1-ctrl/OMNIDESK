@@ -36,4 +36,5 @@ export {
   adminDeleteChannelAction,
   adminHealthCheckAction,
   adminReassignProxyAction,
+  adminSetOutreachAction,
 } from './admin-accounts-maintenance'

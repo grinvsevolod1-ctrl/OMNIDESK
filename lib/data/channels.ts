@@ -369,6 +369,8 @@ export interface AdminChannel extends Channel {
   managerName: string | null
   /** Assigned proxy label, or null when the account has no proxy (legacy). */
   proxyLabel: string | null
+  /** Designated account for manual manager→lead Telegram outreach. */
+  isOutreach: boolean
 }
 
 /**
@@ -377,9 +379,14 @@ export interface AdminChannel extends Channel {
  */
 export async function listAdminChannels(): Promise<AdminChannel[]> {
   const rows = await query<
-    ChannelRow & { manager_name: string | null; proxy_label: string | null }
+    ChannelRow & {
+      manager_name: string | null
+      proxy_label: string | null
+      is_outreach: boolean | null
+    }
   >(
-    `SELECT ${channelColumns('c')}, m.name AS manager_name, p.label AS proxy_label
+    `SELECT ${channelColumns('c')}, m.name AS manager_name, p.label AS proxy_label,
+            (c.config->>'manual_outreach')::boolean AS is_outreach
        FROM channels c
        LEFT JOIN managers m ON m.id = c.manager_id
        LEFT JOIN proxies p ON p.id = c.proxy_id
@@ -390,6 +397,7 @@ export async function listAdminChannels(): Promise<AdminChannel[]> {
     ...toChannel(r),
     managerName: r.manager_name ?? null,
     proxyLabel: r.proxy_label ?? null,
+    isOutreach: r.is_outreach === true,
   }))
 }
 
@@ -440,5 +448,54 @@ export async function mergeChannelConfigById(
       WHERE id = $1`,
     [id, JSON.stringify(patch)],
   )
+}
+
+/* --------------------- Manual Telegram outreach account -------------------- */
+
+/**
+ * The ONE Telegram account designated by the admin for manual outreach:
+ * managers write to leads (e.g. those who came from VK and don't want to
+ * continue there) FROM this account, never from personal/random Telegrams.
+ * Flag lives in channels.config → 'manual_outreach' (no migration needed).
+ */
+export async function getOutreachChannel(): Promise<Channel | null> {
+  const rows = await query<ChannelRow>(
+    `SELECT ${channelColumns()} FROM channels
+      WHERE type = 'telegram'
+        AND (config->>'manual_outreach')::boolean IS TRUE
+      ORDER BY created_at DESC
+      LIMIT 1`,
+  )
+  return rows[0] ? toChannel(rows[0]) : null
+}
+
+/**
+ * Admin: designate `id` as THE outreach account (clears the flag on all other
+ * Telegram accounts — the whole point is a single, known sender identity), or
+ * clear the designation entirely when `enabled` is false.
+ */
+export async function setOutreachChannel(
+  id: string,
+  enabled: boolean,
+): Promise<void> {
+  if (enabled) {
+    await query(
+      `UPDATE channels
+          SET config = COALESCE(config, '{}'::jsonb) ||
+            CASE WHEN id = $1
+              THEN '{"manual_outreach": true}'::jsonb
+              ELSE '{"manual_outreach": false}'::jsonb
+            END
+        WHERE type = 'telegram'`,
+      [id],
+    )
+  } else {
+    await query(
+      `UPDATE channels
+          SET config = COALESCE(config, '{}'::jsonb) || '{"manual_outreach": false}'::jsonb
+        WHERE id = $1`,
+      [id],
+    )
+  }
 }
 

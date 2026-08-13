@@ -10,6 +10,7 @@ import {
   getProxyForChannel,
   getVkChannelById,
   getWhatsappAppConfig,
+  setOutreachChannel,
   updateChannelProxy,
   updateChannelSessionById,
   updateChannelStatus,
@@ -27,6 +28,38 @@ import {
   validateProxyForType,
   type AdminAccountResult,
 } from './admin-accounts-shared'
+
+/* --------------------- Manual outreach designation ----------------------- */
+
+/**
+ * Admin: designate ONE Telegram account for manual manager→lead outreach
+ * (managers write first to leads from THIS account — e.g. a VK lead who does
+ * not want to keep chatting on their personal VK). Enabling on one account
+ * clears the flag everywhere else; disabling leaves no outreach account.
+ */
+export async function adminSetOutreachAction(
+  channelId: string,
+  enabled: boolean,
+): Promise<AdminAccountResult> {
+  await requireAdmin()
+  const channel = await getChannelById(channelId)
+  if (!channel) return { ok: false, message: 'Аккаунт не найден.' }
+  if (channel.type !== 'telegram') {
+    return {
+      ok: false,
+      message: 'Для исходящих подходит только Telegram-аккаунт.',
+    }
+  }
+  await setOutreachChannel(channelId, enabled)
+  revalidatePath('/admin/accounts')
+  return {
+    ok: true,
+    message: enabled
+      ? `«${channel.name}» назначен аккаунтом для исходящих менеджеров.`
+      : `«${channel.name}» больше не используется для исходящих.`,
+    channelId,
+  }
+}
 
 /* ------------------------------ Health check ----------------------------- */
 

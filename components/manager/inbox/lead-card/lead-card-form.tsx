@@ -95,14 +95,17 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
                   type="button"
                   onClick={() => setCuratorId(c.id)}
                   className={cn(
-                    'flex items-center justify-between rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
+                    // min-w-0 по всей цепочке обязателен: без него длинный
+                    // список городов растягивал кнопку шире панели и появлялся
+                    // горизонтальный скролл всей карточки лида.
+                    'flex w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
                     curatorId === c.id
                       ? 'border-primary bg-primary/10 ring-1 ring-primary/30'
                       : 'border-border hover:bg-muted',
                   )}
                 >
-                  <span className="font-medium">{c.name}</span>
-                  <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="shrink-0 font-medium">{c.name}</span>
+                  <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                     <span className="flex min-w-0 items-center gap-1">
                       <MapPin className="size-3 shrink-0" />
                       <span className="truncate">
@@ -110,7 +113,7 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
                       </span>
                     </span>
                     <span
-                      className="rounded bg-muted px-1.5 py-0.5 text-[10px]"
+                      className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px]"
                       title="Активных лидов у менеджера по кадрам"
                     >
                       {c.activeLeads} лид.

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { MapPin, Pencil } from 'lucide-react'
+import { ChevronDown, ChevronUp, MapPin, Pencil } from 'lucide-react'
 import { CuratorLeadsDialog } from '@/components/admin/curator-leads-dialog'
 import { EditCuratorCitiesDialog } from '@/components/admin/edit-curator-cities-dialog'
 import { ManagerActions } from '@/components/admin/manager-actions'
@@ -45,6 +45,71 @@ function CityPill({ city }: { city: string }) {
       <MapPin className="size-3" />
       {city}
     </Badge>
+  )
+}
+
+/**
+ * Компактный список городов: первые несколько чипов + кнопка «+N ещё»,
+ * раскрывающая полный список (и «Свернуть» обратно). Без этого у менеджера
+ * по кадрам с 30+ городами строка таблицы разрасталась на пол-экрана.
+ */
+function CityChips({
+  cities,
+  limit = 4,
+  onEdit,
+}: {
+  cities: string[]
+  limit?: number
+  /** Клик по карандашу — открыть диалог редактирования городов. */
+  onEdit?: () => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const visible = expanded ? cities : cities.slice(0, limit)
+  const hidden = cities.length - limit
+
+  return (
+    <div className="flex max-w-md flex-wrap items-center gap-1.5">
+      {visible.map((city) => (
+        <CityPill key={city} city={city} />
+      ))}
+      {hidden > 0 ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            setExpanded((v) => !v)
+          }}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2.5 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+          aria-expanded={expanded}
+        >
+          {expanded ? (
+            <>
+              Свернуть
+              <ChevronUp className="size-3" />
+            </>
+          ) : (
+            <>
+              {`+${hidden} ещё`}
+              <ChevronDown className="size-3" />
+            </>
+          )}
+        </button>
+      ) : null}
+      {onEdit ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onEdit()
+          }}
+          className="inline-flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          title="Изменить города менеджера по кадрам"
+          aria-label="Изменить города"
+        >
+          <Pencil className="size-3" />
+        </button>
+      ) : null}
+    </div>
   )
 }
 
@@ -131,23 +196,16 @@ export function CuratorsTable({
                   ) : null}
                 </td>
                 <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="group flex flex-wrap items-center gap-1.5"
-                    onClick={() => setEditingCities(c)}
-                    title="Изменить города менеджера по кадрам"
-                  >
-                    {(citiesById?.[c.id]?.length
-                      ? citiesById[c.id]
-                      : c.city
-                        ? [c.city]
-                        : []
-                    ).map((city) => (
-                      <CityPill key={city} city={city} />
-                    ))}
-                    <Pencil className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                    <span className="sr-only">Изменить города</span>
-                  </button>
+                  <CityChips
+                    cities={
+                      citiesById?.[c.id]?.length
+                        ? citiesById[c.id]
+                        : c.city
+                          ? [c.city]
+                          : []
+                    }
+                    onEdit={() => setEditingCities(c)}
+                  />
                 </td>
                 <td className="px-5 py-3">
                   <DisciplinePill d={discipline?.[c.id]} h={history?.[c.id]} />
@@ -188,18 +246,23 @@ export function CuratorsTable({
                 <ManagerActions manager={c} />
               </div>
             </div>
-            <div className="mt-3 flex items-center justify-between">
+            <div className="mt-3 flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-1.5">
                 <StatusPill status={c.status} />
-                {(citiesById?.[c.id]?.length
-                  ? citiesById[c.id]
-                  : c.city
-                    ? [c.city]
-                    : []
-                ).map((city) => (
-                  <CityPill key={city} city={city} />
-                ))}
                 <DisciplinePill d={discipline?.[c.id]} h={history?.[c.id]} />
+              </div>
+              <div onClick={(e) => e.stopPropagation()}>
+                <CityChips
+                  cities={
+                    citiesById?.[c.id]?.length
+                      ? citiesById[c.id]
+                      : c.city
+                        ? [c.city]
+                        : []
+                  }
+                  limit={3}
+                  onEdit={() => setEditingCities(c)}
+                />
               </div>
               <span className="text-xs text-muted-foreground">
                 {formatDate(c.createdAt)}
