@@ -407,6 +407,71 @@ export async function personalSendTextAction(
   return { ok: true, message: 'Отправлено' }
 }
 
+/**
+ * Отправка фото/файла (base64 из композера, лимит 15 МБ — покрывает фото
+ * и документы; больше гонять через server action непрактично).
+ */
+export async function personalSendFileAction(
+  channelId: string,
+  peer: string,
+  file: {
+    dataB64: string
+    name: string
+    mime: string | null
+    asPhoto: boolean
+    caption?: string
+    replyToMsgId?: number
+  },
+): Promise<PersonalActionResult> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  if (!file.dataB64) return { ok: false, message: 'Пустой файл.' }
+  // base64 ≈ 4/3 исходника: 20 МБ строки ≈ 15 МБ файла.
+  if (file.dataB64.length > 20 * 1024 * 1024) {
+    return { ok: false, message: 'Файл больше 15 МБ — отправьте с телефона.' }
+  }
+  const data = await postJsonToWorker<{ sent?: boolean; error?: string }>(
+    '/personal/send-file',
+    {
+      channelId,
+      peer,
+      data: file.dataB64,
+      name: file.name,
+      mime: file.mime,
+      asPhoto: file.asPhoto,
+      ...(file.caption ? { caption: file.caption } : {}),
+      ...(file.replyToMsgId ? { replyToMsgId: file.replyToMsgId } : {}),
+    },
+  )
+  if (!data?.sent) {
+    return { ok: false, message: data?.error || 'Не удалось отправить файл.' }
+  }
+  return { ok: true, message: 'Отправлено' }
+}
+
+/** Голосовое сообщение (ogg/opus из браузерного рекордера). */
+export async function personalSendVoiceAction(
+  channelId: string,
+  peer: string,
+  audioB64: string,
+  durationSec: number,
+): Promise<PersonalActionResult> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  if (!audioB64) return { ok: false, message: 'Пустая запись.' }
+  if (audioB64.length > 8 * 1024 * 1024) {
+    return { ok: false, message: 'Запись слишком длинная.' }
+  }
+  const data = await postJsonToWorker<{ sent?: boolean; error?: string }>(
+    '/personal/send-voice',
+    { channelId, peer, audio: audioB64, durationSec },
+  )
+  if (!data?.sent) {
+    return { ok: false, message: data?.error || 'Не удалось отправить голосовое.' }
+  }
+  return { ok: true, message: 'Отправлено' }
+}
+
 /** Редактирование своего текстового сообщения. */
 export async function personalEditMessageAction(
   channelId: string,

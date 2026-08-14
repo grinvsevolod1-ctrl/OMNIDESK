@@ -4,7 +4,7 @@
  * report, controls and management dialog can't drift apart.
  */
 
-import type { ChannelType } from '@/lib/types'
+import type { ChannelType, PanelChannelType } from '@/lib/types'
 
 export type ChannelOption = {
   id: string
@@ -15,13 +15,21 @@ export type ChannelOption = {
 
 export type Preset = 'today' | '7d' | '30d' | 'custom'
 
-/** Brand dot / bar colour per channel type (decorative, not themable). */
-export const TYPE_DOT: Record<ChannelType, string> = {
+/**
+ * Brand dot / bar colour per channel type (decorative, not themable).
+ * PanelChannelType: personal-аккаунты god-панели в источники не попадают.
+ */
+export const TYPE_DOT: Record<PanelChannelType, string> = {
   telegram: 'bg-sky-500',
   whatsapp: 'bg-emerald-500',
   livechat: 'bg-violet-500',
   max: 'bg-amber-500',
   vk: 'bg-blue-500',
+}
+
+/** Безопасный доступ к TYPE_DOT для любого ChannelType (fallback — виджет). */
+export function typeDot(type: ChannelType): string {
+  return TYPE_DOT[type as PanelChannelType] ?? TYPE_DOT.livechat
 }
 
 export function startOfDay(d: Date): Date {

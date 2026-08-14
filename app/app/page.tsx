@@ -15,13 +15,7 @@ import { requireManager } from '@/lib/auth'
 import { getLeadAnalytics, getManagerStats, listChannels } from '@/lib/data'
 import { getChannelMeta, type ChannelType } from '@/lib/types'
 
-const ICONS: Record<ChannelType, BrandIconComponent> = {
-  telegram: channelIcon('telegram'),
-  whatsapp: channelIcon('whatsapp'),
-  livechat: channelIcon('livechat'),
-  max: channelIcon('max'),
-  vk: channelIcon('vk'),
-}
+
 
 export default async function ManagerOverviewPage() {
   const session = await requireManager()
@@ -126,7 +120,7 @@ export default async function ManagerOverviewPage() {
         ) : (
           <div className="divide-y divide-border">
             {channels.map((c) => {
-              const Icon = ICONS[c.type]
+              const Icon = channelIcon(c.type)
               return (
                 <div
                   key={c.id}

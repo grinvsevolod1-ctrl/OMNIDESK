@@ -25,7 +25,7 @@ import {
 } from '@/components/dictionaries-provider'
 import type { ChannelType, LeadStatus, NotLiquidReason } from '@/lib/types'
 import {
-  CHANNEL_VISUAL,
+  channelVisual,
   LEAD_STATUS_VISUAL,
   FilterChip,
   type SortMode,
@@ -210,9 +210,9 @@ export function ConversationListHeader({
                 >
                   <span className="flex flex-1 items-center gap-2">
                     <span
-                      className={cn('size-2 rounded-full', CHANNEL_VISUAL[t].dot)}
+                      className={cn('size-2 rounded-full', channelVisual(t).dot)}
                     />
-                    {CHANNEL_VISUAL[t].short}
+                    {channelVisual(t).short}
                     <span className="ml-auto text-[10px] text-muted-foreground">
                       {typeCounts[t]}
                     </span>
@@ -249,7 +249,7 @@ export function ConversationListHeader({
                     <span
                       className={cn(
                         'size-2 rounded-full',
-                        CHANNEL_VISUAL[s.type].dot,
+                        channelVisual(s.type).dot,
                       )}
                     />
                     <span className="truncate">{s.label}</span>

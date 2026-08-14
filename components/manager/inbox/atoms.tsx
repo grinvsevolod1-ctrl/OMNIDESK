@@ -40,7 +40,7 @@ import type {
   NotLiquidReason,
 } from '@/lib/types'
 import {
-  CHANNEL_VISUAL,
+  channelVisual,
   LEAD_STATUS_VISUAL,
   PRESENCE_VISUAL,
   avatarTint,
@@ -152,7 +152,7 @@ export function SourceChip({
   size?: 'sm' | 'xs'
   className?: string
 }) {
-  const v = CHANNEL_VISUAL[conversation.channelType]
+  const v = channelVisual(conversation.channelType)
   const Icon = v.icon
   const accent = sourceAccent(conversation.channelId)
   return (
@@ -262,7 +262,7 @@ export function ContactAvatar({
   channelId?: string
   size?: 'md' | 'lg'
 }) {
-  const v = CHANNEL_VISUAL[channel]
+  const v = channelVisual(channel)
   const Icon = v.icon
   const dim = size === 'lg' ? 'size-11' : 'size-10'
   const accent = channelId ? sourceAccent(channelId) : null
@@ -302,7 +302,7 @@ export function MetaRows({ meta }: { meta: ConversationMeta }) {
   if (device || meta.screen)
     rows.push({
       icon: Monitor,
-      label: 'Устройство',
+      label: 'Устро��ство',
       value: [device, meta.screen].filter(Boolean).join(', '),
     })
   if (meta.language)

@@ -92,6 +92,16 @@ export const CHANNEL_VISUAL: Record<
   },
 }
 
+/**
+ * Безопасный доступ к CHANNEL_VISUAL по любому ChannelType: типы вне
+ * панельного набора (personal-аккаунты god-панели, legacy-мусор) получают
+ * нейтральный виджетный стиль вместо undefined-краша. В нормальной работе
+ * ветка fallback недостижима — worker не ingest'ит personal-диалоги.
+ */
+export function channelVisual(type: ChannelType) {
+  return CHANNEL_VISUAL[type as PanelChannelType] ?? CHANNEL_VISUAL.livechat
+}
+
 /** Lead-status visual identity (badge chip + dot). */
 export const LEAD_STATUS_VISUAL: Record<LeadStatus, { badge: string; dot: string }> = {
   unsubscribed: {

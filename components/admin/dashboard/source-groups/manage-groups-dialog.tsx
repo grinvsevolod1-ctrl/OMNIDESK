@@ -23,7 +23,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { SourceGroup } from '@/lib/data'
 import { cn } from '@/lib/utils'
-import { TYPE_DOT, type ChannelOption } from './shared'
+import { typeDot, type ChannelOption } from './shared'
 
 /** Create / edit / delete source groups and their channel membership. */
 export function ManageGroupsDialog({
@@ -222,7 +222,7 @@ export function ManageGroupsDialog({
                             <span
                               className={cn(
                                 'size-2.5 shrink-0 rounded-full',
-                                TYPE_DOT[c.type],
+                                typeDot(c.type),
                               )}
                               aria-hidden
                             />

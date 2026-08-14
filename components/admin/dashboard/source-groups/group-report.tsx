@@ -9,7 +9,7 @@ import { Card } from '@/components/ui/card'
 import type { GroupAnalytics } from '@/lib/data'
 import type { PanelChannelType } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { TYPE_DOT } from './shared'
+import { typeDot } from './shared'
 
 // Rendered only once group analytics are fetched client-side, so defer the
 // heavy canvas chart out of the admin overview's initial bundle. ssr:false —
@@ -102,7 +102,7 @@ function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
                     <span
                       className={cn(
                         'flex size-8 shrink-0 items-center justify-center rounded-lg text-primary-foreground',
-                        TYPE_DOT[c.type],
+                        typeDot(c.type),
                       )}
                     >
                       <Icon className="size-4" />
@@ -120,7 +120,7 @@ function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                   <div
-                    className={cn('h-full rounded-full', TYPE_DOT[c.type])}
+                    className={cn('h-full rounded-full', typeDot(c.type))}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
