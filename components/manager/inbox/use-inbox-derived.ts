@@ -9,6 +9,7 @@ import type {
   LeadStatus,
   Message,
   NotLiquidReason,
+  PanelChannelType,
 } from '@/lib/types'
 
 /**
@@ -36,15 +37,20 @@ export function useInboxDerived({
   activeId: string | null
 }) {
   const typeCounts = useMemo(() => {
-    const counts: Record<ChannelType, number> = {
+    // PanelChannelType: personal-каналов в инбоксе менеджера не бывает
+    // (worker их не ingest'ит), но страховка ??= 0 не даст NaN при мусоре.
+    const counts: Record<PanelChannelType, number> = {
       telegram: 0,
       whatsapp: 0,
       livechat: 0,
       max: 0,
       vk: 0,
     }
-    for (const c of conversations) counts[c.channelType] += 1
-    return counts
+    for (const c of conversations) {
+      counts[c.channelType as PanelChannelType] ??= 0
+      counts[c.channelType as PanelChannelType] += 1
+    }
+    return counts as Record<ChannelType, number>
   }, [conversations])
 
   const statusCounts = useMemo(() => {

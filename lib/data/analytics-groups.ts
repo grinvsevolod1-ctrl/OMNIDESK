@@ -6,7 +6,7 @@
  */
 import { cachedAnalytics } from '../analytics-cache'
 import { query } from '../db'
-import type { ChannelStatus, ChannelType } from '../types'
+import type { ChannelStatus, ChannelType, PanelChannelType } from '../types'
 
 /* --------------------------- Source groups ----------------------------- */
 // A "source" (исторически "source group") — это ЕДИНАЯ сущность проекта: она же
@@ -204,7 +204,7 @@ export interface GroupAnalytics {
   /** Distinct people (conversations) who wrote in across the whole group. */
   totalPeople: number
   totalMessages: number
-  byType: Record<ChannelType, { people: number; messages: number }>
+  byType: Record<PanelChannelType, { people: number; messages: number }>
   byChannel: GroupChannelStat[]
   /** People per day, split by messenger type (oldest first, dense). */
   byDay: {
@@ -232,7 +232,9 @@ export interface GroupAnalytics {
     | null
 }
 
-function emptyTypeStats(): Record<ChannelType, { people: number; messages: number }> {
+// PanelChannelType: personal-аккаунты god-панели не привязываются к
+// источникам и не попадают в отчёты по группам.
+function emptyTypeStats(): Record<PanelChannelType, { people: number; messages: number }> {
   return {
     telegram: { people: 0, messages: 0 },
     whatsapp: { people: 0, messages: 0 },
@@ -326,11 +328,12 @@ async function getGroupAnalyticsUncached(
 
   const byType = emptyTypeStats()
   for (const c of byChannel) {
-    // Guard against channel types outside the known union (legacy/bad rows):
-    // a direct byType[c.type] would be undefined and crash on `.people`.
-    if (!byType[c.type]) continue
-    byType[c.type].people += c.people
-    byType[c.type].messages += c.messages
+    // Guard against channel types outside the panel union (legacy/bad rows,
+    // personal accounts): a direct byType[...] would be undefined and crash.
+    const t = c.type as PanelChannelType
+    if (!byType[t]) continue
+    byType[t].people += c.people
+    byType[t].messages += c.messages
   }
 
   // Dense per-day series across [from, to) so the chart has no gaps. `r.d` is
@@ -338,7 +341,9 @@ async function getGroupAnalyticsUncached(
   const dayMap = new Map<string, { telegram: number; whatsapp: number; livechat: number; max: number; vk: number }>()
   for (const r of dayRows) {
     const cur = dayMap.get(r.d) ?? { telegram: 0, whatsapp: 0, livechat: 0, max: 0, vk: 0 }
-    cur[r.type] = Number(r.people)
+    // Пропускаем типы вне панельного набора (personal-аккаунты и legacy-мусор).
+    if (!(r.type in cur)) continue
+    cur[r.type as PanelChannelType] = Number(r.people)
     dayMap.set(r.d, cur)
   }
   // Build the axis in the same local calendar. We shift the UTC instants by the
@@ -384,7 +389,9 @@ async function getGroupAnalyticsUncached(
     const hourMap = new Map<number, { telegram: number; whatsapp: number; livechat: number; max: number; vk: number }>()
     for (const r of hourRows) {
       const cur = hourMap.get(r.h) ?? { telegram: 0, whatsapp: 0, livechat: 0, max: 0, vk: 0 }
-      cur[r.type] = Number(r.people)
+      // Пропускаем типы вне панельного набора (personal-аккаунты и legacy-мусор).
+      if (!(r.type in cur)) continue
+      cur[r.type as PanelChannelType] = Number(r.people)
       hourMap.set(r.h, cur)
     }
     byHour = []
@@ -489,7 +496,9 @@ async function getManagerActivityAnalyticsUncached(
   const dayMap = new Map<string, { telegram: number; whatsapp: number; livechat: number; max: number; vk: number }>()
   for (const r of dayRows) {
     const cur = dayMap.get(r.d) ?? { telegram: 0, whatsapp: 0, livechat: 0, max: 0, vk: 0 }
-    cur[r.type] = Number(r.people)
+    // Пропускаем типы вне панельного набора (personal-аккаунты и legacy-мусор).
+    if (!(r.type in cur)) continue
+    cur[r.type as PanelChannelType] = Number(r.people)
     dayMap.set(r.d, cur)
   }
 
@@ -526,7 +535,9 @@ async function getManagerActivityAnalyticsUncached(
     const hourMap = new Map<number, { telegram: number; whatsapp: number; livechat: number; max: number; vk: number }>()
     for (const r of hourRows) {
       const cur = hourMap.get(r.h) ?? { telegram: 0, whatsapp: 0, livechat: 0, max: 0, vk: 0 }
-      cur[r.type] = Number(r.people)
+      // Пропускаем типы вне панельного набора (personal-аккаунты и legacy-мусор).
+      if (!(r.type in cur)) continue
+      cur[r.type as PanelChannelType] = Number(r.people)
       hourMap.set(r.h, cur)
     }
     byHour = []

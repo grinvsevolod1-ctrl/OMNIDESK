@@ -22,7 +22,12 @@ import {
   mskTodayKeys,
 } from '@/lib/time'
 import { getChannelMeta } from '@/lib/types'
-import type { ChannelType, Conversation, LeadStatus } from '@/lib/types'
+import type {
+  ChannelType,
+  Conversation,
+  LeadStatus,
+  PanelChannelType,
+} from '@/lib/types'
 import {
   channelIcon,
   type BrandIconComponent,
@@ -36,8 +41,9 @@ import {
  * Per-source visual identity. Brand-tinted accents are intentional: a manager
  * should tell Telegram vs WhatsApp vs widget apart at a glance.
  */
+// PanelChannelType: в инбоксе менеджера personal-каналы не появляются.
 export const CHANNEL_VISUAL: Record<
-  ChannelType,
+  PanelChannelType,
   {
     icon: BrandIconComponent
     short: string

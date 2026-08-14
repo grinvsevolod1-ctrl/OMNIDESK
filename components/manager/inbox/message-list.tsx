@@ -14,7 +14,7 @@ import {
 } from '@/components/manager/inbox/message-media'
 import { CHANNEL_VISUAL, dayLabel, timeShort } from '@/components/manager/inbox/visual'
 import { DeliveryTicks } from '@/components/manager/inbox/atoms'
-import type { Conversation, Message } from '@/lib/types'
+import type { Conversation, Message, PanelChannelType } from '@/lib/types'
 import type { VisitorTyping } from '@/components/manager/inbox/use-inbox-realtime'
 
 /**
@@ -225,7 +225,9 @@ export function MessageList({
                         <p
                           className={cn(
                             'mb-0.5 text-[11px] font-semibold',
-                            CHANNEL_VISUAL[active.channelType].accentText,
+                            CHANNEL_VISUAL[
+                              active.channelType as PanelChannelType
+                            ]?.accentText,
                           )}
                         >
                           {m.author}

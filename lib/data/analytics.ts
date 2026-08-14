@@ -7,10 +7,10 @@ import { cachedAnalytics } from '../analytics-cache'
 import { query } from '../db'
 import { mskDayKey } from '../time'
 import type {
-  ChannelType,
   LeadStatus,
   Manager,
   NotLiquidReason,
+  PanelChannelType,
 } from '../types'
 import { effectiveStatusSql } from './shared'
 import {
@@ -26,7 +26,9 @@ export interface AdminStats {
   blockedManagers: number
   totalChannels: number
   connectedChannels: number
-  channelsByType: Record<ChannelType, number>
+  // PanelChannelType: personal-аккаунты god-панели в admin-статистику не
+  // входят (listAllChannels их уже отфильтровывает).
+  channelsByType: Record<PanelChannelType, number>
 }
 
 export async function getAdminStats(): Promise<AdminStats> {

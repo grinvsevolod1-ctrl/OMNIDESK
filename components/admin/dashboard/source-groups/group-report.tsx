@@ -7,7 +7,7 @@ import { useChannelTypeLabels } from '@/components/dictionaries-provider'
 import { StatCard } from '@/components/page-parts'
 import { Card } from '@/components/ui/card'
 import type { GroupAnalytics } from '@/lib/data'
-import type { ChannelType } from '@/lib/types'
+import type { PanelChannelType } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { TYPE_DOT } from './shared'
 
@@ -29,7 +29,7 @@ export function Report({ analytics }: { analytics: GroupAnalytics }) {
   // Блоки по типам мессенджеров больше не захардкожены под Telegram/WhatsApp/
   // Онлайн-чат: строим их из фактических данных и сортируем по убыванию лидов.
   // «Всего написали» закреплён первым, дальше — три самых активных канала.
-  const CHANNEL_TYPES: ChannelType[] = [
+  const CHANNEL_TYPES: PanelChannelType[] = [
     'telegram',
     'whatsapp',
     'livechat',

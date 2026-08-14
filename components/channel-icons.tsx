@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react'
 import { MessageCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { ChannelType } from '@/lib/types'
+import type { ChannelType, PanelChannelType } from '@/lib/types'
 
 /**
  * Shared brand icons for every messenger channel plus Yandex Telemost.
@@ -207,7 +207,9 @@ export function LivechatIcon({ className }: BrandIconProps) {
   return <MessageCircle className={cn(BASE, className)} aria-hidden="true" />
 }
 
-const CHANNEL_ICONS: Record<ChannelType, BrandIconComponent> = {
+// PanelChannelType: personal-аккаунты god-панели в обычном UI не рендерятся,
+// поэтому иконка для них здесь не нужна (fallback ниже всё равно безопасен).
+const CHANNEL_ICONS: Record<PanelChannelType, BrandIconComponent> = {
   telegram: TelegramIcon,
   whatsapp: WhatsappIcon,
   vk: VkIcon,
@@ -217,7 +219,7 @@ const CHANNEL_ICONS: Record<ChannelType, BrandIconComponent> = {
 
 /** Resolve the brand icon component for a channel type. */
 export function channelIcon(type: ChannelType): BrandIconComponent {
-  return CHANNEL_ICONS[type] ?? LivechatIcon
+  return CHANNEL_ICONS[type as PanelChannelType] ?? LivechatIcon
 }
 
 /**

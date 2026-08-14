@@ -5,7 +5,7 @@
  */
 import { query } from '../db'
 import {
-  CHANNEL_META,
+  getChannelMeta,
   type ChannelType,
   type ContactChannelGroup,
   type ContactRecord,
@@ -90,7 +90,9 @@ export async function listContactsByChannel(): Promise<ContactChannelGroup[]> {
     const contacts = byType.get(type) ?? []
     groups.push({
       channelType: type,
-      label: CHANNEL_META[type]?.label ?? type,
+      // Безопасный доступ: тип вне панельного набора (legacy/bad rows)
+      // получает читаемый fallback-лейбл вместо undefined-краша.
+      label: getChannelMeta(type).label || type,
       count: contacts.length,
       contacts,
     })

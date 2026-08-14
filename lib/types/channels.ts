@@ -12,6 +12,14 @@ export type ChannelType =
   | 'max'
   | 'vk'
 
+/**
+ * Типы каналов, видимые в ОБЫЧНОЙ панели (админка, инбокс, аналитика).
+ * Personal-аккаунты сюда не входят намеренно: все Record-карты UI-меты
+ * строятся по этому типу, чтобы personal не требовал иконок/лейблов в
+ * обычных интерфейсах — его там быть не должно.
+ */
+export type PanelChannelType = Exclude<ChannelType, 'telegram_personal'>
+
 export type ChannelStatus = 'connected' | 'pending' | 'error' | 'disconnected'
 
 /**
@@ -70,7 +78,7 @@ export interface Channel {
 }
 
 export const CHANNEL_META: Record<
-  ChannelType,
+  PanelChannelType,
   { label: string; description: string }
 > = {
   telegram: {
@@ -109,7 +117,7 @@ export function getChannelMeta(type: string | null | undefined): {
   description: string
 } {
   if (type && type in CHANNEL_META) {
-    return CHANNEL_META[type as ChannelType]
+    return CHANNEL_META[type as PanelChannelType]
   }
   const raw = (type ?? '').trim()
   const label = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'Канал'

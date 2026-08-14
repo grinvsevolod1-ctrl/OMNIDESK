@@ -55,6 +55,10 @@ const FORBIDDEN = [
   'wijegniwjgwjog',
   'sim_threads',
   'sim-threads',
+  // Личные Telegram-аккаунты владельца (миграция 135) — тоже god-структура:
+  // co-pilot и мозг продавца не должны знать об их существовании.
+  'telegram_personal',
+  'telegram-personal',
 ]
 
 function readSource(rel: string): string {
@@ -64,7 +68,12 @@ function readSource(rel: string): string {
 describe('AI co-pilot isolation from simulator / god panel', () => {
   for (const rel of GUARDED_FILES) {
     it(`${rel} does not import or reference sim/god internals`, () => {
-      const src = readSource(rel)
+      // Единственная легальная форма упоминания personal-аккаунтов в
+      // admin-видимом коде — SQL-фильтр, который их ИСКЛЮЧАЕТ из выборки.
+      const src = readSource(rel).replaceAll(
+        "type <> 'telegram_personal'",
+        '',
+      )
       for (const needle of FORBIDDEN) {
         expect(
           src.includes(needle),
@@ -80,6 +89,46 @@ describe('AI co-pilot isolation from simulator / god panel', () => {
       // No import lines pulling anything under lib/client-sim/*.
       expect(/from\s+['"][^'"]*client-sim/.test(src)).toBe(false)
       expect(/import\s*\(\s*['"][^'"]*client-sim/.test(src)).toBe(false)
+    }
+  })
+})
+
+/**
+ * Personal Telegram isolation (миграция 135): личные аккаунты владельца
+ * живут в channels под type='telegram_personal', и обычные admin-видимые
+ * выборки обязаны их исключать. Эти проверки статически убеждаются, что
+ * фильтр не потеряли при правке запросов.
+ */
+describe('personal Telegram accounts stay invisible to the regular panel', () => {
+  it('listAllChannels excludes telegram_personal', () => {
+    const src = readSource('lib/data/channels.ts')
+    const fn = src.slice(src.indexOf('export async function listAllChannels'))
+    const body = fn.slice(0, fn.indexOf('export async function', 10))
+    expect(
+      body.includes("type <> 'telegram_personal'"),
+      'listAllChannels must filter out personal accounts',
+    ).toBe(true)
+  })
+
+  it('getSystemHealth channel scan excludes telegram_personal', () => {
+    const src = readSource('lib/data/ai-health.ts')
+    expect(
+      src.includes("type <> 'telegram_personal'"),
+      'ai-health channel query must filter out personal accounts',
+    ).toBe(true)
+  })
+
+  it('manager inbox and seller pipeline never reference personal accounts', () => {
+    for (const rel of [
+      'lib/data/conversations.ts',
+      'lib/data/messages.ts',
+      'lib/ai/manager-brain.ts',
+    ]) {
+      const src = readSource(rel)
+      expect(
+        src.includes('telegram_personal'),
+        `${rel} must not reference telegram_personal`,
+      ).toBe(false)
     }
   })
 })
