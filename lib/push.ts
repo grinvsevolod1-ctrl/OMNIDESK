@@ -317,6 +317,13 @@ export interface PushPayload {
   url?: string
   /** Collapse key so repeat messages from one chat replace each other. */
   tag?: string
+  /**
+   * 'security' renders action buttons («Да, это я» / «Разлогинить все») in
+   * the service worker instead of the plain open-inbox behavior.
+   */
+  kind?: 'security'
+  /** Signed token the kick button POSTs to /api/security/kick. */
+  kickToken?: string
 }
 
 export type EndpointPushResult =

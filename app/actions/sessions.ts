@@ -7,6 +7,7 @@ import {
   getManagerById,
 } from '@/lib/data'
 import { writeAudit } from '@/lib/data/audit'
+import { revokeTrustedDevice } from '@/lib/trusted-device'
 
 export interface SessionsActionResult {
   ok: boolean
@@ -52,4 +53,31 @@ export async function logoutOtherDevicesAction(): Promise<SessionsActionResult> 
   })
 
   return { ok: true, message: 'Все остальные устройства разлогинены' }
+}
+
+/**
+ * Отзыв одного доверенного устройства (пропуска 2FA) из вкладки «Сессии».
+ * Скоуп по manager_id внутри revokeTrustedDevice — чужой пропуск отозвать
+ * нельзя. Само устройство остаётся залогиненным (это пропуск 2FA, а не
+ * сессия) — при следующем входе оно снова спросит код.
+ */
+export async function revokeTrustedDeviceAction(
+  deviceId: string,
+): Promise<SessionsActionResult> {
+  const session = await getSession()
+  if (!session || (session.role !== 'manager' && session.role !== 'curator')) {
+    return { ok: false, message: 'Нет доступа' }
+  }
+  if (!deviceId) return { ok: false, message: 'Устройство не указано' }
+
+  await revokeTrustedDevice(session.sub, deviceId)
+  await writeAudit({
+    actorRole: session.role,
+    actorId: session.sub,
+    actorLabel: session.name,
+    action: 'auth.trusted_device_revoke',
+    entityType: 'trusted_device',
+    entityId: deviceId,
+  })
+  return { ok: true, message: 'Устройство забыто — при входе снова спросим код' }
 }

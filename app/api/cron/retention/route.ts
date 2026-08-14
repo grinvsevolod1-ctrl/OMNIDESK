@@ -59,6 +59,9 @@ const SWEEPS: Sweep[] = [
   // Учёт запусков кронов (миграция 133): для мониторинга достаточно
   // последних недель, месячная история покрывает любой разбор инцидента.
   { table: 'cron_runs', days: 30, ageColumn: 'started_at' },
+  // Истёкшие 2FA-пропуска (миграция 134): проверка при входе и так их не
+  // пускает (expires_at > now()), здесь только уборка мёртвых строк.
+  { table: 'trusted_devices', days: 0, ageColumn: 'expires_at' },
 ]
 
 async function handle(request: Request): Promise<Response> {

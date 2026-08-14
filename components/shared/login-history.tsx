@@ -8,7 +8,13 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { listMyLogins, type LoginEvent } from '@/lib/data/audit'
+import { getManagerAuthState } from '@/lib/data'
+import {
+  listTrustedDevices,
+  type TrustedDeviceInfo,
+} from '@/lib/trusted-device'
 import { LogoutOtherDevicesButton } from './logout-other-devices-button'
+import { TrustedDeviceRevokeButton } from './trusted-device-revoke-button'
 
 /**
  * Вкладка «Сессии» в настройках менеджера/куратора: последние входы в аккаунт
@@ -104,8 +110,47 @@ function LoginRow({ event }: { event: LoginEvent }) {
   )
 }
 
+function TrustedDeviceRow({ device }: { device: TrustedDeviceInfo }) {
+  const DeviceIcon = isMobile(device.userAgent) ? Smartphone : MonitorSmartphone
+  return (
+    <div className="flex items-center gap-3 py-3">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40">
+        <DeviceIcon className="size-4 text-muted-foreground" />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-sm font-medium">
+          {describeUa(device.userAgent)}
+        </span>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+          {device.ip ? (
+            <span className="flex items-center gap-1">
+              <Globe className="size-3" />
+              {device.ip}
+            </span>
+          ) : null}
+          <span>
+            {'до '}
+            {new Date(device.expiresAt).toLocaleDateString('ru-RU', {
+              day: 'numeric',
+              month: 'long',
+            })}
+          </span>
+        </div>
+      </div>
+      <TrustedDeviceRevokeButton deviceId={device.id} />
+    </div>
+  )
+}
+
 export async function LoginHistory({ managerId }: { managerId: string }) {
-  const logins = await listMyLogins(managerId, 20)
+  const authState = await getManagerAuthState(managerId)
+  const [logins, trusted] = await Promise.all([
+    listMyLogins(managerId, 20),
+    listTrustedDevices(managerId, authState?.sessionVersion ?? 0),
+  ])
+  // Мёртвые пропуски (выданные под старый session_version) не показываем —
+  // они уже не работают и только путают список.
+  const activeTrusted = trusted.filter((d) => d.active)
 
   return (
     <div className="flex flex-col gap-4">
@@ -121,6 +166,21 @@ export async function LoginHistory({ managerId }: { managerId: string }) {
           <LogoutOtherDevicesButton />
         </div>
       </Card>
+
+      {activeTrusted.length > 0 ? (
+        <Card className="p-5">
+          <h2 className="font-medium">Доверенные устройства</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Эти устройства не спрашивают код 2FA при входе (30 дней с момента
+            подтверждения). «Забыть» — при следующем входе снова спросим код.
+          </p>
+          <div className="mt-2 divide-y divide-border">
+            {activeTrusted.map((d) => (
+              <TrustedDeviceRow key={d.id} device={d} />
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       <Card className="p-5">
         <h2 className="font-medium">Последние входы</h2>

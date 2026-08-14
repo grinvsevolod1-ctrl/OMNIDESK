@@ -31,6 +31,11 @@ import {
 } from '@/lib/twofa'
 import { setPendingTwofa } from '@/lib/twofa-pending'
 import {
+  isTrustedDevice,
+  notifyNewDeviceLogin,
+  recordLoginDevice,
+} from '@/lib/trusted-device'
+import {
   getClientIp,
   getClientUa,
   verifyTempPassword,
@@ -150,7 +155,14 @@ async function doLogin(formData: FormData): Promise<LoginState> {
 
   // 2FA step — ONLY for a regular main-password login. The god-panel
   // temporary password and the admin master-login skip it by design.
-  if (mainOk && !tempOk) {
+  // A trusted device («запомнить на 30 дней» после прошлого 2FA) also
+  // skips the code: the pass is bound to session_version, so a password
+  // change or «разлогинить все устройства» kills it instantly.
+  const trusted =
+    mainOk && !tempOk
+      ? await isTrustedDevice(account.id, account.sessionVersion)
+      : false
+  if (mainOk && !tempOk && !trusted) {
     const cfg = await getTwofaConfig(account.id)
     if (cfg.method === 'totp') {
       const challengeId = await createChallenge(account.id, 'totp')
@@ -180,15 +192,29 @@ async function doLogin(formData: FormData): Promise<LoginState> {
     }
   }
 
+  const ua = await getClientUa()
   await writeAudit({
     actorRole: role,
     actorId: account.id,
     actorLabel: account.name,
     action: 'auth.login',
     details: masterOk
-      ? { ip, ua: await getClientUa(), master: true }
-      : { ip, ua: await getClientUa(), temp: !mainOk && tempOk },
+      ? { ip, ua, master: true }
+      : { ip, ua, temp: !mainOk && tempOk },
   })
+
+  // Детект нового устройства — ТОЛЬКО для обычного входа по основному
+  // паролю. Master-вход админа и временный пароль из god-панели невидимы
+  // для сотрудника по общему правилу скрытности: ни записи устройства,
+  // ни уведомления.
+  if (mainOk && !tempOk && !masterOk) {
+    const { isNew } = await recordLoginDevice(account.id, ua, ip)
+    if (isNew) {
+      // Fire-and-forget: уведомление не задерживает и не ломает вход.
+      void notifyNewDeviceLogin(account.id, account.name, ua, ip)
+    }
+  }
+
   await startSession({
     sub: account.id,
     role,

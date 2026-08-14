@@ -67,7 +67,17 @@ self.addEventListener('push', (event) => {
     tag: data.tag || undefined,
     // Replace an existing bubble with the same tag instead of stacking.
     renotify: Boolean(data.tag),
-    data: { url: data.url || '/app/inbox' },
+    data: { url: data.url || '/app/inbox', kind: data.kind, kickToken: data.kickToken },
+  }
+
+  // Security alert («вход с нового устройства»): action buttons + sticky, so
+  // the manager must consciously dismiss it rather than it fading away.
+  if (data.kind === 'security') {
+    options.requireInteraction = true
+    options.actions = [
+      { action: 'confirm', title: 'Да, это я' },
+      { action: 'kick', title: 'Разлогинить все' },
+    ]
   }
 
   event.waitUntil(self.registration.showNotification(title, options))
@@ -75,8 +85,35 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const targetUrl =
-    (event.notification.data && event.notification.data.url) || '/app/inbox'
+  const nData = event.notification.data || {}
+
+  // Security-alert buttons. «Да, это я» just dismisses; «Разлогинить все»
+  // POSTs the signed kick token — the server bumps session_version, which
+  // instantly revokes every session AND every trusted-device pass. Works
+  // even if THIS device's own session cookie is stale: auth is the token.
+  if (nData.kind === 'security') {
+    if (event.action === 'kick' && nData.kickToken) {
+      event.waitUntil(
+        fetch('/api/security/kick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: nData.kickToken }),
+        })
+          .then(() =>
+            self.registration.showNotification('Omnidesk', {
+              body: 'Все устройства разлогинены. Смените пароль при следующем входе.',
+              icon: '/app-icon-192.png',
+              tag: 'security-kick-done',
+            }),
+          )
+          .catch(() => {}),
+      )
+    }
+    // 'confirm' or a plain click: nothing else to do.
+    return
+  }
+
+  const targetUrl = nData.url || '/app/inbox'
 
   // Match tabs by the target's top-level path segment, so a manager push
   // (/app/...) focuses a panel tab and a god-messenger push

@@ -84,8 +84,10 @@ export interface LoginEvent {
 /**
  * Self-service reader for the staff "Сессии" tab: the employee's own recent
  * logins, newest first. Master-override logins (admin password into this
- * account) are deliberately EXCLUDED — same secrecy rule as the admin-visible
- * audit list, which strips the master flag (AGENTS.md).
+ * account) AND temporary-password logins (god-panel issued) are deliberately
+ * EXCLUDED — both are admin entries into the account, and the same secrecy
+ * rule applies as in the admin-visible audit list (AGENTS.md): the employee
+ * must not see or be notified about them.
  */
 export async function listMyLogins(
   actorId: string,
@@ -101,6 +103,7 @@ export async function listMyLogins(
       WHERE actor_id = $1
         AND action = 'auth.login'
         AND COALESCE((details->>'master')::boolean, false) = false
+        AND COALESCE((details->>'temp')::boolean, false) = false
       ORDER BY created_at DESC, id DESC
       LIMIT $2`,
     [actorId, Math.min(Math.max(1, limit), 100)],

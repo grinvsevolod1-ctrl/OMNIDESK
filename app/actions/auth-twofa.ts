@@ -10,6 +10,11 @@ import { startSession } from '@/lib/auth'
 import { writeAudit } from '@/lib/data/audit'
 import { rateLimit } from '@/lib/rate-limit'
 import { logServerError } from '@/lib/server-log'
+import {
+  grantTrustedDevice,
+  notifyNewDeviceLogin,
+  recordLoginDevice,
+} from '@/lib/trusted-device'
 import { consumeBackupCode, verifyChallenge } from '@/lib/twofa'
 import { clearPendingTwofa, getPendingTwofa } from '@/lib/twofa-pending'
 import {
@@ -104,6 +109,7 @@ async function doVerify2fa(formData: FormData): Promise<Verify2faState> {
   const authState = await getManagerAuthState(pending.managerId)
 
   const role = manager.role === 'curator' ? 'curator' : 'manager'
+  const ua = await getClientUa()
   await writeAudit({
     actorRole: role,
     actorId: manager.id,
@@ -111,11 +117,30 @@ async function doVerify2fa(formData: FormData): Promise<Verify2faState> {
     action: 'auth.login',
     details: {
       ip,
-      ua: await getClientUa(),
+      ua,
       twofa: pending.method,
       backup: useBackup,
     },
   })
+
+  // «Запомнить это устройство на 30 дней»: пропуск выдаётся ТОЛЬКО после
+  // успешно пройденного 2FA и привязан к session_version — смена пароля
+  // или «разлогинить все устройства» мгновенно его обесценивают.
+  if (formData.get('remember') === '1') {
+    await grantTrustedDevice(
+      manager.id,
+      authState?.sessionVersion ?? 0,
+      ua,
+      ip,
+    ).catch(() => {})
+  }
+
+  // Вход через 2FA — всегда обычный вход по основному паролю, поэтому детект
+  // нового устройства здесь безусловный (в отличие от auth-login.ts).
+  {
+    const { isNew } = await recordLoginDevice(manager.id, ua, ip)
+    if (isNew) void notifyNewDeviceLogin(manager.id, manager.name, ua, ip)
+  }
   await startSession({
     sub: manager.id,
     role,

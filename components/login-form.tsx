@@ -91,6 +91,17 @@ function TwofaStep({ method }: { method: 'totp' | 'telegram' }) {
       </div>
       {useBackup ? <input type="hidden" name="backup" value="1" /> : null}
 
+      <label className="flex cursor-pointer items-center gap-2.5 text-sm text-muted-foreground select-none">
+        <input
+          type="checkbox"
+          name="remember"
+          value="1"
+          defaultChecked
+          className="size-4 accent-primary"
+        />
+        Запомнить это устройство на 30 дней
+      </label>
+
       {state.error ? (
         <div
           role="alert"
