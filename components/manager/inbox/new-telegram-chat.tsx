@@ -58,7 +58,12 @@ export function TelegramComposeDialog({
 
   const handle = username.trim().replace(/^@+/, '')
   const id = (telegramId ?? '').trim()
-  const canSend = Boolean((handle || /^\d+$/.test(id)) && text.trim())
+  const hasTarget = Boolean(handle || /^\d+$/.test(id))
+  const canSend = Boolean(hasTarget && text.trim())
+  // Баннер «уже есть диалог» показываем через производное значение, а не
+  // синхронным setExistingId(null) в эффекте (react-hooks/set-state-in-effect):
+  // пустой ввод «прячет» найденный id без лишнего каскадного ре-рендера.
+  const foundExistingId = hasTarget ? existingId : null
 
   // Проверяем «уже есть диалог?» по мере ввода ника (с debounce). Если да —
   // покажем баннер «Открыть диалог» вместо создания нового. Ответ применяем
@@ -67,10 +72,7 @@ export function TelegramComposeDialog({
     if (!open) return
     const uname = handle
     const numeric = /^\d+$/.test(id) ? id : ''
-    if (!uname && !numeric) {
-      setExistingId(null)
-      return
-    }
+    if (!uname && !numeric) return
     let cancelled = false
     const t = setTimeout(async () => {
       const res = await findExistingTelegramConversationAction({
@@ -86,9 +88,9 @@ export function TelegramComposeDialog({
   }, [open, handle, id])
 
   function openExisting() {
-    if (!existingId) return
+    if (!foundExistingId) return
     onOpenChange(false)
-    onCreated?.(existingId)
+    onCreated?.(foundExistingId)
     router.refresh()
   }
 
@@ -168,7 +170,7 @@ export function TelegramComposeDialog({
             />
           </div>
 
-          {existingId ? (
+          {foundExistingId ? (
             /* С этим контактом уже есть диалог — не создаём новый, открываем. */
             <div className="flex items-start gap-2.5 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2.5 text-sm">
               <MessageSquare className="mt-0.5 size-4 shrink-0 text-primary" />
@@ -213,7 +215,7 @@ export function TelegramComposeDialog({
           >
             Отмена
           </Button>
-          {existingId ? (
+          {foundExistingId ? (
             <Button onClick={openExisting}>
               <MessageSquare className="size-4" />
               Открыть диалог

@@ -106,6 +106,12 @@ const nextConfig = {
       // response was received from the server" error and crashing the inbox to
       // the error boundary. Raise the cap to comfortably cover the app's own
       // largest allowed upload (VK 200 MB) plus multipart/form-data overhead.
+      //
+      // ANTI-DOS: this cap is GLOBAL for all Server Actions, including the
+      // unauthenticated /login action. The per-route defence lives at nginx
+      // (deploy/nginx.conf.example): default client_max_body_size 1m, with
+      // 210m allowed ONLY under /admin, /app and /curator where authenticated
+      // media uploads actually happen. Keep both files in sync.
       bodySizeLimit: '210mb',
     },
   },

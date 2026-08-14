@@ -52,9 +52,24 @@ export function verifyGodPasscode(passcode: string): boolean {
   return safeEqual(passcode, SECRET_PANEL_PASSWORD)
 }
 
+/**
+ * Credential fingerprint baked into every unlock token: a truncated SHA-256 of
+ * the CURRENT passcode. Rotating SECRET_PANEL_PASSWORD changes the fingerprint,
+ * so every previously issued cookie stops matching and the panel re-locks
+ * immediately — without this, an old cookie stayed valid for up to 12h after a
+ * rotation. Truncated to 16 hex chars: enough to make forgery infeasible
+ * (the token is HMAC-signed anyway), short enough not to leak hash material.
+ */
+function passcodeFingerprint(): string {
+  return createHash('sha256')
+    .update(SECRET_PANEL_PASSWORD)
+    .digest('hex')
+    .slice(0, 16)
+}
+
 /** Mint the signed unlock token to store in the cookie. */
 export async function signGodToken(): Promise<string> {
-  return new SignJWT({ scope: 'god' })
+  return new SignJWT({ scope: 'god', pfp: passcodeFingerprint() })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime(`${GOD_MAX_AGE}s`)
@@ -90,7 +105,10 @@ export async function isGodUnlocked(): Promise<boolean> {
   if (!token) return false
   try {
     const { payload } = await jwtVerify(token, getAuthSecret())
-    return payload.scope === 'god'
+    // Tokens minted before a passcode rotation carry the OLD fingerprint (or
+    // none at all) and are rejected — rotating SECRET_PANEL_PASSWORD revokes
+    // all outstanding unlock cookies instantly.
+    return payload.scope === 'god' && payload.pfp === passcodeFingerprint()
   } catch {
     return false
   }

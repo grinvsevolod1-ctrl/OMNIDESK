@@ -45,7 +45,19 @@ async function sessionIsValid(session: SessionUser): Promise<boolean> {
     if (!state) return false
     if (state.status === 'blocked') return false
     return (session.sv ?? 0) === state.sessionVersion
-  } catch {
+  } catch (error) {
+    // FAIL-OPEN by design: a transient DB hiccup must not lock every
+    // manager/curator out of the panel (page-level getSession still re-checks
+    // and fails closed where it matters). The trade-off: while the DB is down,
+    // a REVOKED-but-unexpired JWT passes this middleware check. Log every
+    // occurrence so a burst of these lines in the logs is visible instead of
+    // silent — if they correlate with a suspected token theft, restart the
+    // panel after the DB recovers to force re-validation.
+    console.error(
+      '[proxy] session revocation check failed (DB error?) — failing OPEN for',
+      `${session.role}:${session.sub}:`,
+      error instanceof Error ? error.message : error,
+    )
     return true
   }
 }

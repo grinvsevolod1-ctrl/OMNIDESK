@@ -296,7 +296,7 @@ export async function markInboundDeletedByProviderId(
 
 /**
  * Housekeeping: удалить осиротевшие media_blobs — строки, на которые больше не
- * ссылается ни messages, ни message_edits, ни lead_attachments (все FK либо
+ * ссылается ни messages, ни message_edits, ни lead_card_attachments (все FK либо
  * SET NULL, либо CASCADE, так что после удаления родителя байты повисают
  * навсегда и копят гигабайты в БД).
  *
@@ -314,7 +314,7 @@ export async function cleanupOrphanedMediaBlobs(limit = 200): Promise<number> {
          WHERE b.created_at < now() - interval '24 hours'
            AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.media_blob_id = b.id)
            AND NOT EXISTS (SELECT 1 FROM message_edits e WHERE e.media_blob_id = b.id)
-           AND NOT EXISTS (SELECT 1 FROM lead_attachments la WHERE la.media_blob_id = b.id)
+           AND NOT EXISTS (SELECT 1 FROM lead_card_attachments la WHERE la.media_blob_id = b.id)
          LIMIT $1
       )
       RETURNING mb.id`,

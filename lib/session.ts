@@ -14,10 +14,27 @@ export function getAuthSecret(): Uint8Array {
   return getSecret()
 }
 
+// Warn about a weak (16–31 char) AUTH_SECRET once per process, not per request.
+let warnedShortSecret = false
+
 function getSecret(): Uint8Array {
   const secret = process.env.AUTH_SECRET
 
   if (secret && secret.length >= 16) {
+    // HS256 wants a key of >= 32 bytes; anything shorter materially weakens
+    // the HMAC. We still ACCEPT 16–31 chars so a running deployment with an
+    // older secret keeps booting (throwing here would brick the panel on the
+    // next restart), but we complain loudly so it gets rotated:
+    //   openssl rand -base64 32
+    // NOTE: rotating AUTH_SECRET invalidates all outstanding sessions.
+    if (secret.length < 32 && !warnedShortSecret) {
+      warnedShortSecret = true
+      console.warn(
+        `[session] AUTH_SECRET is only ${secret.length} chars — below the 32+ ` +
+          'recommended for HS256. Rotate it to a value from `openssl rand -base64 32` ' +
+          '(this will log everyone out once).',
+      )
+    }
     return new TextEncoder().encode(secret)
   }
 

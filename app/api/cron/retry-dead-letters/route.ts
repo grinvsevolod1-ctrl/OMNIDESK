@@ -52,7 +52,7 @@ async function handle(request: Request): Promise<Response> {
     // bans so the table doesn't accumulate dead rows.
     const prunedBans = await pruneLoginBans()
     // …и подчистить осиротевшие media_blobs (байты без единой ссылки из
-    // messages/message_edits/lead_attachments). Не критично для реплея —
+    // messages/message_edits/lead_card_attachments). Не критично для реплея —
     // ошибка чистки не должна ронять весь тик.
     const prunedBlobs = await cleanupOrphanedMediaBlobs().catch((err) => {
       logServerError('cron.cleanup-media-blobs', err)

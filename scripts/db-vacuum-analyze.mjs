@@ -32,7 +32,7 @@ const HOT_TABLES = [
   'media_blobs',
   'lead_cards',
   'lead_card_comments',
-  'lead_attachments',
+  'lead_card_attachments',
   'webhook_dead_letter',
   'channel_jobs',
   'login_attempts',
