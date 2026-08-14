@@ -16,6 +16,7 @@ export function CityListInput({
   cities,
   onChange,
   required,
+  hideAddButton,
 }: {
   idPrefix: string
   /** When set, a hidden input submits the comma-joined list via FormData. */
@@ -23,6 +24,12 @@ export function CityListInput({
   cities: string[]
   onChange: (next: string[]) => void
   required?: boolean
+  /**
+   * Скрыть встроенную кнопку «Добавить город» — родитель рендерит свою
+   * (например, в шапке карточки «Мои ГЕО») и сам решает, куда вставлять
+   * новое поле.
+   */
+  hideAddButton?: boolean
 }) {
   const rows = cities.length > 0 ? cities : ['']
   const joined = rows
@@ -67,16 +74,18 @@ export function CityListInput({
           ) : null}
         </div>
       ))}
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="self-start"
-        onClick={() => onChange([...rows, ''])}
-      >
-        <Plus className="size-4" />
-        Добавить город
-      </Button>
+      {hideAddButton ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="self-start"
+          onClick={() => onChange([...rows, ''])}
+        >
+          <Plus className="size-4" />
+          Добавить город
+        </Button>
+      )}
       <p className="text-xs text-muted-foreground">
         Первый город — основной. Лиды подбираются по любому из указанных.
       </p>

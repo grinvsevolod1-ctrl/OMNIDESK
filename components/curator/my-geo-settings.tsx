@@ -7,7 +7,7 @@
  * в админских диалогах; список скроллится внутри карточки.
  */
 import { useState, useTransition } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
 import {
@@ -47,11 +47,29 @@ export function MyGeoSettings() {
     })
   }
 
+  // Новое поле вставляем СВЕРХУ списка — кнопка живёт в шапке, и добавленный
+  // инпут появляется сразу под ней без прокрутки длинного списка. Первый
+  // (верхний) город остаётся основным, что видно куратору сразу.
+  function addCity() {
+    setValue(['', ...current])
+  }
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex max-h-[26rem] flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
+      <div className="flex items-center justify-between gap-2">
         <Label htmlFor="my-geo-input">Мои города и регионы</Label>
-        <CityListInput idPrefix="my-geo-input" cities={current} onChange={setValue} />
+        <Button type="button" variant="outline" size="sm" onClick={addCity}>
+          <Plus className="size-4" />
+          Добавить город
+        </Button>
+      </div>
+      <div className="flex max-h-[26rem] flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
+        <CityListInput
+          idPrefix="my-geo-input"
+          cities={current}
+          onChange={setValue}
+          hideAddButton
+        />
       </div>
       <p className="text-xs text-muted-foreground">
         Можно указывать и населённые пункты, которых нет в подсказках, — они
