@@ -5,7 +5,8 @@
  * общие хелперы и типы состояний — в auth-shared.ts. Наружу всё
  * реэкспортируется барелем auth.ts.
  */
-import { redirect } from 'next/navigation'
+import { redirect, unstable_rethrow } from 'next/navigation'
+import { logServerError } from '@/lib/server-log'
 import { adminSessionVersion } from '@/lib/admin-session'
 import {
   ADMIN_EMAIL,
@@ -43,6 +44,22 @@ export async function loginAction(
   _prev: LoginState,
   formData: FormData,
 ): Promise<LoginState> {
+  try {
+    return await doLogin(formData)
+  } catch (error) {
+    // redirect() бросает NEXT_REDIRECT — framework-ошибки пробрасываем как есть.
+    unstable_rethrow(error)
+    // Всё остальное (БД недоступна, DATABASE_URL не задан и т.п.) — не крашим
+    // страницу через error boundary («An unexpected response was received from
+    // the server»), а показываем понятную ошибку в самой форме.
+    const errorId = logServerError('auth.login', error)
+    return {
+      error: `Сервис временно недоступен (нет связи с базой данных). Попробуйте позже. Код: ${errorId}`,
+    }
+  }
+}
+
+async function doLogin(formData: FormData): Promise<LoginState> {
   const identifier = String(
     formData.get('identifier') ?? formData.get('email') ?? '',
   ).trim()

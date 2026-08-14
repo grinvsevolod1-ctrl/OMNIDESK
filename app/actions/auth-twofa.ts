@@ -5,10 +5,11 @@
  * подписанной pending-cookie и старт настоящей сессии. Шаг пароля —
  * в auth-login.ts; наружу всё реэкспортируется барелем auth.ts.
  */
-import { redirect } from 'next/navigation'
+import { redirect, unstable_rethrow } from 'next/navigation'
 import { startSession } from '@/lib/auth'
 import { writeAudit } from '@/lib/data/audit'
 import { rateLimit } from '@/lib/rate-limit'
+import { logServerError } from '@/lib/server-log'
 import { consumeBackupCode, verifyChallenge } from '@/lib/twofa'
 import { clearPendingTwofa, getPendingTwofa } from '@/lib/twofa-pending'
 import {
@@ -28,6 +29,21 @@ export async function verify2faAction(
   _prev: Verify2faState,
   formData: FormData,
 ): Promise<Verify2faState> {
+  try {
+    return await doVerify2fa(formData)
+  } catch (error) {
+    // redirect() бросает NEXT_REDIRECT — framework-ошибки пробрасываем как есть.
+    unstable_rethrow(error)
+    // Инфраструктурный сбой (БД недоступна) — понятная ошибка в форме вместо
+    // краха страницы через error boundary.
+    const errorId = logServerError('auth.verify2fa', error)
+    return {
+      error: `Сервис временно недоступен (нет связи с базой данных). Попробуйте позже. Код: ${errorId}`,
+    }
+  }
+}
+
+async function doVerify2fa(formData: FormData): Promise<Verify2faState> {
   const code = String(formData.get('code') ?? '').trim()
   const useBackup = formData.get('backup') === '1'
   if (!code) return { error: 'Введите код.' }
