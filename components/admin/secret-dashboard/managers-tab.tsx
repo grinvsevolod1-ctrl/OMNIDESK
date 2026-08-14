@@ -14,15 +14,20 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  ShieldCheck,
+  ShieldOff,
   Trash2,
   Users,
 } from 'lucide-react'
 import {
   secretClearManagerTempPasswordAction,
+  secretGetManagerTwofaAction,
+  secretResetManagerTwofaAction,
   secretRevealManagerTempPasswordAction,
   secretSetManagerStatusAction,
   secretSetManagerTempPasswordAction,
   type ActionResult,
+  type ManagerTwofaInfo,
 } from '@/app/actions/admin-secret'
 import { EmptyState } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
@@ -190,6 +195,7 @@ export function ManagersTab({
                         ID
                       </Button>
                       <ManagerTempPassword manager={m} />
+                      <ManagerTwofa manager={m} />
                       <Button
                         variant="outline"
                         size="sm"
@@ -238,6 +244,170 @@ export function ManagersTab({
         </div>
       )}
     </Card>
+  )
+}
+
+/* ------------------------------- 2FA ---------------------------------- */
+
+const TWOFA_METHOD_LABEL: Record<string, string> = {
+  off: 'Выключена',
+  totp: 'Приложение-аутентификатор',
+  telegram: 'Telegram-бот',
+}
+
+/**
+ * Per-employee 2FA control for the God panel. Shows the current method and
+ * counters (secrets are never returned to the client) and lets the owner
+ * forcibly remove 2FA — the recovery path when an employee lost their phone
+ * or deleted their Telegram bot. The account password stays untouched.
+ */
+function ManagerTwofa({ manager }: { manager: Manager }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [info, setInfo] = useState<ManagerTwofaInfo | null>(null)
+
+  async function load() {
+    setLoading(true)
+    try {
+      const res = await secretGetManagerTwofaAction(manager.id)
+      if (res.ok) setInfo(res)
+      else toast.error(res.message)
+    } catch {
+      toast.error('Не удалось загрузить статус 2FA')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function onOpenChange(next: boolean) {
+    setOpen(next)
+    if (next) {
+      setInfo(null)
+      void load()
+    }
+  }
+
+  function handleReset() {
+    setBusy(true)
+    ;(async () => {
+      try {
+        const res = await secretResetManagerTwofaAction(manager.id)
+        if (res.ok) {
+          toast.success(res.message)
+          setInfo((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  method: 'off',
+                  enabledAt: null,
+                  backupCodesLeft: 0,
+                  telegramRecipients: 0,
+                }
+              : prev,
+          )
+        } else {
+          toast.error(res.message)
+        }
+      } catch {
+        toast.error('Не удалось удалить 2FA')
+      } finally {
+        setBusy(false)
+      }
+    })()
+  }
+
+  const enabled = info?.method === 'totp' || info?.method === 'telegram'
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <Button
+        variant="outline"
+        size="sm"
+        className="gap-1.5"
+        onClick={() => onOpenChange(true)}
+      >
+        <ShieldCheck className="size-3.5" />
+        2FA
+      </Button>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Двухфакторная защита</DialogTitle>
+          <DialogDescription>
+            {manager.name} — принудительное удаление 2FA на случай потери
+            телефона или бота. Пароль аккаунта не меняется, сотрудник сможет
+            включить защиту заново в своих настройках.
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading || !info ? (
+          <div className="flex h-24 items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" /> Загрузка…
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div
+              className={cn(
+                'flex items-center gap-3 rounded-lg border p-3',
+                enabled
+                  ? 'border-success/40 bg-success/5'
+                  : 'border-border bg-muted/30',
+              )}
+            >
+              {enabled ? (
+                <ShieldCheck className="size-5 shrink-0 text-success" />
+              ) : (
+                <ShieldOff className="size-5 shrink-0 text-muted-foreground" />
+              )}
+              <div className="min-w-0">
+                <p className="text-sm font-medium">
+                  {TWOFA_METHOD_LABEL[info.method ?? 'off']}
+                </p>
+                {info.enabledAt ? (
+                  <p className="text-xs text-muted-foreground">
+                    Включена: {new Date(info.enabledAt).toLocaleString('ru-RU')}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Вход только по паролю
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {enabled && (
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="secondary">
+                  Резервных кодов: {info.backupCodesLeft ?? 0}
+                </Badge>
+                {info.method === 'telegram' && (
+                  <Badge variant="secondary">
+                    Получателей: {info.telegramRecipients ?? 0}
+                  </Badge>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="destructive"
+            className="gap-1.5"
+            disabled={busy || loading || !enabled}
+            onClick={handleReset}
+          >
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <ShieldOff className="size-4" />
+            )}
+            Удалить 2FA
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

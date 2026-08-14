@@ -21,6 +21,7 @@ import {
   updateManagerStatus,
 } from '@/lib/data'
 import { generatePassword } from '@/lib/crypto'
+import { clearChallenges, disableTwofa, getTwofaConfig } from '@/lib/twofa'
 import {
   type ChannelType,
   type Conversation,
@@ -136,6 +137,67 @@ export async function secretClearManagerTempPasswordAction(
   audit(admin, 'manager.temp_password.clear', { targetId: managerId })
   revalidatePath(ADMIN_PATH)
   return { ok: true, message: 'Временный пароль удалён', password: null, setAt: null }
+}
+
+/* ===================================================================== */
+/*  God-mode 2FA reset                                                   */
+/* ===================================================================== */
+
+export interface ManagerTwofaInfo extends ActionResult {
+  method?: 'off' | 'totp' | 'telegram'
+  enabledAt?: string | null
+  backupCodesLeft?: number
+  telegramRecipients?: number
+}
+
+/**
+ * Read-only 2FA status of any staff account (manager or curator) for the God
+ * panel. Secrets themselves (TOTP secret, bot token) are NEVER returned —
+ * only the method and counters.
+ */
+export async function secretGetManagerTwofaAction(
+  managerId: string,
+): Promise<ManagerTwofaInfo> {
+  await requireAdmin()
+  if (!managerId) return { ok: false, message: 'Не указан сотрудник' }
+  const manager = await getManagerById(managerId)
+  if (!manager) return { ok: false, message: 'Сотрудник не найден' }
+  const cfg = await getTwofaConfig(managerId)
+  return {
+    ok: true,
+    message: 'OK',
+    method: cfg.method,
+    enabledAt: cfg.enabledAt ? new Date(cfg.enabledAt).toISOString() : null,
+    backupCodesLeft: cfg.backupCodes.length,
+    telegramRecipients: cfg.telegramChatIds.length,
+  }
+}
+
+/**
+ * Forcibly remove a staff account's 2FA (recovery path: lost phone, deleted
+ * Telegram bot, etc.). Wipes the method, encrypted secrets, backup codes and
+ * pending challenges — the employee logs in with password only and can
+ * re-enroll from their own Settings → 2FA. The main password is untouched.
+ */
+export async function secretResetManagerTwofaAction(
+  managerId: string,
+): Promise<ActionResult> {
+  const admin = await requireAdmin()
+  if (!managerId) return { ok: false, message: 'Не указан сотрудник' }
+  const manager = await getManagerById(managerId)
+  if (!manager) return { ok: false, message: 'Сотрудник не найден' }
+  const cfg = await getTwofaConfig(managerId)
+  if (cfg.method === 'off')
+    return { ok: false, message: 'У сотрудника 2FA не включена' }
+  await disableTwofa(managerId)
+  await clearChallenges(managerId)
+  audit(admin, 'manager.twofa_reset', {
+    targetId: managerId,
+    summary: `Сброшена 2FA (${cfg.method}) у «${manager.name}»`,
+    detail: { method: cfg.method },
+  })
+  revalidatePath(ADMIN_PATH)
+  return { ok: true, message: `2FA удалена у «${manager.name}»` }
 }
 
 /* ===================================================================== */

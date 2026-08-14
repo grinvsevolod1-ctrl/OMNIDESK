@@ -29,8 +29,14 @@ const TABS: SettingsTab[] = [
   {
     id: 'security',
     label: 'Безопасность',
-    hint: 'Пароль и 2FA',
+    hint: 'Смена пароля',
     icon: 'key',
+  },
+  {
+    id: 'twofa',
+    label: 'Двухфакторная защита',
+    hint: 'Второй фактор входа',
+    icon: 'shield',
   },
 ]
 
@@ -67,20 +73,19 @@ export default async function ManagerSettingsPage() {
   )
 
   const securityPanel = (
-    <div className="flex flex-col gap-4">
-      <Card className="p-5">
-        <h2 className="font-medium">Смена пароля</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Держите аккаунт в безопасности — используйте надёжный пароль. После
-          смены все остальные устройства будут разлогинены.
-        </p>
-        <div className="mt-4">
-          <ChangePasswordForm />
-        </div>
-      </Card>
-      {twofa && <TwofaSettings initial={twofa} />}
-    </div>
+    <Card className="p-5">
+      <h2 className="font-medium">Смена пароля</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Держите аккаунт в безопасности — используйте надёжный пароль. После
+        смены все остальные устройства будут разлогинены.
+      </p>
+      <div className="mt-4">
+        <ChangePasswordForm />
+      </div>
+    </Card>
   )
+
+  const twofaPanel = twofa ? <TwofaSettings initial={twofa} /> : null
 
   return (
     <div className="flex flex-col gap-6">
@@ -91,6 +96,7 @@ export default async function ManagerSettingsPage() {
           availability: availabilityPanel,
           notifications: notificationsPanel,
           security: securityPanel,
+          twofa: twofaPanel,
         }}
       >
         <SettingsIdentityCard
