@@ -253,7 +253,7 @@ export function NewTelegramChatButton({
         type="button"
         onClick={() => setOpen(true)}
         className="flex shrink-0 items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
-        title="Написать лиду в Telegram с рабочего аккаунта (по н��ку из другого канала)"
+        title="Написать лиду в Telegram с рабочего аккаунта (по нику из другого канала)"
       >
         <Send className="size-3" />
         Написать в ТГ

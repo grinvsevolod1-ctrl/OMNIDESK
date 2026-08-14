@@ -214,7 +214,7 @@ export async function createCuratorAction(
         username: created.username ?? undefined,
       }
     }
-    // Аккаунт уже создан (managers.city заполнен) — не роняем экшен digest'о��,
+    // Аккаунт уже создан (managers.city заполнен) — не роняем экшен digest'ом,
     // а честно сообщаем, что мульти-город не сохранился и почему.
     console.error('[v0] createCurator setCuratorCities failed:', err)
     revalidatePath('/admin/managers')

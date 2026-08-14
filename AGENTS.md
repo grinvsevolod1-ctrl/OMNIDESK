@@ -103,7 +103,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 ```
 app/                     Next.js App Router
   actions/               server actions. Крупные — БАРЕЛИ:
-                         admin-accounts.ts → -telegram (телефон/QR-����огин, 2FA),
+                         admin-accounts.ts → -telegram (телефон/QR-логин, 2FA),
                            -bots (VK/MAX), -maintenance (статус/прокси/удаление),
                            -shared (хелперы, НЕ 'use server')
                          finance.ts → finance-workspace, finance-ads,
@@ -191,16 +191,16 @@ components/manager/      UI менеджера
                          position-only логику — она даёт цикл «утаскивает
                          вниз при скролле вверх» (тот же паттерн в
                          god-messenger/use-god-scroll.ts);
-                         thread-search.tsx — тел����������грам-поиск по диалогу
+                         thread-search.tsx — телеграм-поиск по диалогу
                          (лупа в шапке) и навигация по кружкам/фото с
                          прикреплением к карточке лида: hits от новых к
-                         старым, цель д��гружается loadOlder-циклом,
+                         старым, цель догружается loadOlder-циклом,
                          подсветка через data-message-id в message-list;
                          связь с LeadCardPanel — CustomEvent
                          'omnidesk:lead-attachments-changed';
                          lead-card-panel.tsx + lead-card/ — карточка лида:
                          контейнер + use-lead-card.ts (состояние формы,
-                         сохранение, вложени��) + lead-card-form (поля) +
+                         сохранение, вложения) + lead-card-form (поля) +
                          lead-card-details (детали/история).
                          Ручной TG-аутрич — inbox/new-telegram-chat.tsx:
                          общий TelegramComposeDialog (ник + имя + сообщение)
@@ -226,7 +226,7 @@ components/manager/      UI менеджера
                          диалог» вместо отправки; send-action тоже
                          короткозамыкается на существующий тред (кроме того
                          же outreach-канала, который переиспользуется штатно)
-  autopilot-manager.tsx + autopilot/  автопи��от: use-autopilot.ts, rule-editor
+  autopilot-manager.tsx + autopilot/  автопилот: use-autopilot.ts, rule-editor
 components/
   dashboard-shell.tsx    каркас разделов (сайдбар, мобильный лист, топбар);
                          навигация с «жидкой» подсветкой — dashboard-nav.tsx
@@ -288,7 +288,7 @@ lib/
                          hosting.ts → hosting-deployments.ts (история деплоев,
                            стрим логов, очередь deploy_jobs)
                          audit.ts — общий журнал действий (audit_log, миграция
-                           129): writeAudit Н��КОГДА не кидает (fire-and-forget),
+                           129): writeAudit НИКОГДА не кидает (fire-and-forget),
                            god-панель НЕ пишет в аудит (изоляция, раздел 4);
                            admin-audit.ts — старый лог только для servers-console
                          health-metrics.ts — метрики для вкладки «Здоровье
@@ -349,7 +349,7 @@ lib/
                          (BotFather, код через Bot API), backup-коды (bcrypt).
                          Обходы 2FA НАМЕРЕННЫ: врем. пароль из god-панели и
                          admin master-login (продуктовое требование)
-  twofa-pending.ts       короткий ��одписанный cookie между шагом пароля и
+  twofa-pending.ts       короткий подписанный cookie между шагом пароля и
                          шагом кода (5 мин, НЕ сессия)
   data/lunch.ts          обед/доступность менеджеров: advisory-lock на
                          «уйти на обед», round-robin подмена диалогов,
@@ -409,7 +409,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
 - **Точка входа:** `lib/ai-console/run-assistant.ts` — `prepareAssistantRun`
   собирает `tools` и `SYSTEM_INSTRUCTIONS`.
 - **Типы действий/ревертов:** `lib/ai-console/assistant.ts`
-  (`ExecutedAction['kind']`, `SettingsRevert`). Новый вид действия — ��десь
+  (`ExecutedAction['kind']`, `SettingsRevert`). Новый вид действия — здесь
   + иконка в карте иконок `components/admin/ai-console.tsx`.
 - **Что умеет:** настройки (enabled/tone/persona/aggressiveness/model/params),
   директивы (remember/list/update/toggle/forget/reorder), база знаний, уроки,
@@ -419,11 +419,11 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   `generateScenario`.
 - **Рискованные действия гардируются:** выключение ИИ, дожим уровня 3,
   включение авто-дожима возвращают `needsConfirmation` (через `pending`),
-  UI показывает кно��ку подтверждения.
+  UI показывает кнопку подтверждения.
 - **Стиль промпта:** русский, тёплый, «ведёт админа за руку», финальное слово
   за админом.
 - **Новый инструмент:** `tool({...})` с понятным русским `description`,
-  данные �� ТОЛЬКО через `lib/data/*` (не пиши SQL в инструменте), запись в
+  данные — ТОЛЬКО через `lib/data/*` (не пиши SQL в инструменте), запись в
   `actions`, при необходимости — в `SYSTEM_INSTRUCTIONS`.
 
 ## 7. ИИ-менеджер (продавец) — как устроен
@@ -438,7 +438,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   Все три рантайма (лайв-чат `lib/autopilot/runtime.ts`, воркер
   `worker/src/autopilot.ts`, дожим `lib/followup/runtime.ts`) вызывают её
   через свои `BrainInputLoaders`. Меняешь лимиты/состав/RAG — ТОЛЬКО там.
-  Для ��атчей: `loadSharedBrainContext` один раз → `assembleBrainInput` с
+  Для батчей: `loadSharedBrainContext` один раз → `assembleBrainInput` с
   `{ shared }` на диалог. RAG-запрос — последнее сообщение клиента; пустая
   строка НИКОГДА не эмбеддится (платный вызов ради мусора).
 - **Single-flight-гард** (`lib/autopilot/runtime.ts`,
@@ -476,7 +476,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   'realtime' (событие `lead` с manager_id/curator_id) → `/api/stream`
   доставляет по роли (админ — все) → клиент пинает shared-поллер через
   `pokeSharedPoll`. Поллинг вьюх лидов — редкий фолбэк (60с), не основной
-  механизм. Инбокс живёт на сво��х событиях message/conversation.
+  механизм. Инбокс живёт на своих событиях message/conversation.
 
 ## 9. Команды проверки (запускай перед завершением)
 
@@ -494,27 +494,44 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 ## 10. Правила работы в этом репозитории
 
 - **Ветка:** пользователь просит пушить прямо в `main` и не плодить ветки —
-  следуй его явно��у указанию.
+  следуй его явному указанию.
 - **Кириллица/UTF-8:** после правок промптов и текстов проверяй
   `grep -rlP '\xEF\xBF\xBD' lib components app worker/src scripts AGENTS.md`
   — должно быть пусто (битые символы уже случались).
 - **Никакого хардкода поведения продавца** — любое новое поведение это
   настройка, директива или урок из чата, а не константа в коде.
 - **Не удаляй и не обходи** тест изоляции `lib/ai/isolation.test.ts`.
-- **Конвенция декомпозиции:** клиентская логика тяжёлого компонента — в хук
-  `use-*.ts` рядом, компонент остаётся презентационным; верстка режется на
-  подкомпоненты в подпапке; крупные модули данных/типов дробятся по доменам
-  с барелем (импорты не меняются). Рефакторинг = «переставить, не менять
-  п��ведение»: дословный перенос + `pnpm check`. Кандидат на декомпозицию —
-  файл >~700 строк ИЛИ смешение несвязанных доменов.
-- **UI-конв��нция строк фильтров:** контролы h-9, иконки `size-4 shrink-0`
+- **СТРУКТУРА НОВОГО КОДА — пиши правильно СРАЗУ, а не рефактори потом.**
+  Прежде чем создавать файл, прикинь его размер в готовом виде. Если фича
+  явно не влезет в ~300 строк одного файла — НЕ пиши один большой файл,
+  сразу раскладывай по принятым паттернам проекта:
+  - **Клиентский компонент с логикой** → тонкий контейнер `foo.tsx`
+    (состояние + вызовы server actions) + подпапка `foo/` с презентационными
+    подкомпонентами; переиспользуемая клиентская логика — в хук `use-*.ts`
+    рядом. Эталоны: `components/shared/twofa-settings.tsx` + `twofa-settings/`,
+    `components/manager/inbox-view.tsx` + `inbox/`.
+  - **Крупный модуль server actions** → сразу барель: `foo.ts` только
+    реэкспортирует из `foo-<домен>.ts`, общие хелперы — в `foo-shared.ts`
+    (НЕ `'use server'`). Эталоны: `app/actions/auth.ts` (login/twofa/shared),
+    `app/actions/admin-accounts.ts`, `app/actions/finance.ts`.
+  - **Данные/типы** → по доменам в `lib/data/*`, `lib/types/*` с барелем.
+    Общие конверты (`ActionResult`) — из `lib/types`, не локальные копии.
+  - **Повторяющийся блок** (гейт, кэш, валидация), который понадобится
+    больше чем в одном месте, — сразу в `lib/` (эталоны: `lib/cron-auth.ts`,
+    `lib/ttl-cache.ts`), а не копипастой по роутам.
+  Один файл допустим, только когда фича целиком компактна (<~300 строк) и
+  однодоменна. Порог для УЖЕ существующих файлов — кандидат на декомпозицию
+  при >~700 строк ИЛИ смешении несвязанных доменов. Рефакторинг =
+  «переставить, не менять поведение»: дословный перенос + `pnpm check`,
+  публичные импорты не ломаются (барель сохраняет пути).
+- **UI-конвенция строк фильтров:** контролы h-9, иконки `size-4 shrink-0`
   (выровнено в «Все лиды» и «Мои лиды» — поддерживай при добавлении кнопок).
 - **СТАНДАРТ UI «как у Apple» — скорость и плавность обязательны.** Любые
-  панели, шиты, оверлеи �� модалки открываются мгновенно и без единого
+  панели, шиты, оверлеи и модалки открываются мгновенно и без единого
   дёрганого кадра. Правила:
   - Боковые панели/шиты — ТОЛЬКО через общий `components/shared/slide-over.tsx`
     (панель всегда смонтирована, анимация `transition-transform` +
-    `transition-opacity` — чистый GPU-композитинг, ленивы�� mount контента).
+    `transition-opacity` — чистый GPU-композитинг, ленивый mount контента).
     Не изобретай свои оверлеи с `animate-in`.
   - **НИКОГДА не анимируй `backdrop-blur`** (и вообще избегай blur на
     полноэкранных подложках) — пере-блюривание страницы каждый кадр и есть
@@ -558,18 +575,18 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 
 | Задача | Где смотреть |
 |---|---|
-| Новая возмож��ость Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
+| Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
 | Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент co-pilot |
-| Новый кана�� / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
+| Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
 | БД-слой воркера | барели `worker/src/repo.ts` и `repo-ai.ts` |
-| Подключение ак��аунтов | барель `app/actions/admin-accounts.ts` |
+| Подключение аккаунтов | барель `app/actions/admin-accounts.ts` |
 | Лид-карточки (данные) | барель `lib/data/lead-cards.ts`; фильтры/поиск админа — `lib/data/lead-admin.ts` |
 | «Все лиды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
 | «Мои лиды» (менеджер по кадрам) | `components/curator/curator-leads-view.tsx` |
 | «Мои лиды» (менеджер) | `components/manager/manager-leads-view.tsx` |
-| Excel-выгрузки лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), к��иент — `components/admin/leads/xlsx-download.ts` |
+| Excel-выгрузки лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), клиент — `components/admin/leads/xlsx-download.ts` |
 | Realtime лидов (push) | миграция 127 + `app/api/stream/route.ts` + `lib/hooks/use-lead-events.ts` |
 | Карточка лида (куратор) | `lead-detail-panel.tsx` + `components/curator/lead-detail/*` |
 | Инбокс менеджера | `inbox-view.tsx` + `components/manager/inbox/use-inbox.ts` (+ шорткаты `use-inbox-shortcuts.ts`) |
