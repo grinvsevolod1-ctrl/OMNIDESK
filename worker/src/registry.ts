@@ -27,7 +27,9 @@ class Registry {
   private ensure(channel: repo.ChannelRecord): AnySession {
     let s = this.sessions.get(channel.id)
     if (s) return s
-    s = new TelegramSession(channel.id, channel.manager_id)
+    s = new TelegramSession(channel.id, channel.manager_id, {
+      personal: channel.type === 'telegram_personal',
+    })
     this.sessions.set(channel.id, s)
     return s
   }
@@ -61,7 +63,7 @@ class Registry {
    * everything else (WhatsApp Cloud, VK, MAX, livechat) is owned by Next.js.
    */
   private isWorkerManaged(channel: repo.ChannelRecord): boolean {
-    return channel.type === 'telegram'
+    return channel.type === 'telegram' || channel.type === 'telegram_personal'
   }
 
   async handleJob(job: repo.JobRecord): Promise<Record<string, unknown>> {
@@ -78,6 +80,29 @@ class Registry {
     }
     const session = this.ensure(channel)
     const payload = job.payload || {}
+
+    // Личные аккаунты (god-панель) управляются джобами ТОЛЬКО в части
+    // логина/жизненного цикла. Вся переписка идёт живьём через HTTP
+    // /personal/* — messaging-джоб для такого канала быть не должно, а если
+    // stale-джоба всё же пришла, это безопасный no-op, не крэш.
+    if (channel.type === 'telegram_personal') {
+      const allowed = new Set([
+        'start',
+        'start_qr',
+        'send_code',
+        'send_password',
+        'restart',
+        'stop',
+        'logout',
+      ])
+      if (!allowed.has(job.action)) {
+        logger.warn(
+          { channelId: channel.id, action: job.action },
+          'Ignoring non-lifecycle job for personal Telegram account',
+        )
+        return { skipped: `personal account: ${job.action} not allowed` }
+      }
+    }
 
     // Carry the persisted soft-pause flag into the (possibly freshly created)
     // session so a paused channel that reconnects/restarts stays paused.

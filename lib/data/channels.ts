@@ -37,8 +37,12 @@ export async function listChannels(managerId: string): Promise<Channel[]> {
 }
 
 export async function listAllChannels(): Promise<Channel[]> {
+  // Личные Telegram-аккаунты god-панели (type='telegram_personal') — часть
+  // изолированной структуры и НЕ должны появляться в обычной админке.
   const rows = await query<ChannelRow>(
-    `SELECT ${channelColumns()} FROM channels ORDER BY created_at DESC`,
+    `SELECT ${channelColumns()} FROM channels
+      WHERE type <> 'telegram_personal'
+      ORDER BY created_at DESC`,
   )
   return rows.map(toChannel)
 }

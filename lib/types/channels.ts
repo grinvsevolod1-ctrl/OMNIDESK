@@ -1,4 +1,16 @@
-export type ChannelType = 'telegram' | 'whatsapp' | 'livechat' | 'max' | 'vk'
+/**
+ * 'telegram_personal' — личный Telegram-аккаунт владельца (god-панель):
+ * изолированная структура, невидимая для обычной админки/менеджеров/мозга.
+ * Все выборки панели фильтруют по конкретным типам, поэтому personal-каналы
+ * в обычные интерфейсы не попадают (см. AGENTS.md, раздел про god-панель).
+ */
+export type ChannelType =
+  | 'telegram'
+  | 'telegram_personal'
+  | 'whatsapp'
+  | 'livechat'
+  | 'max'
+  | 'vk'
 
 export type ChannelStatus = 'connected' | 'pending' | 'error' | 'disconnected'
 

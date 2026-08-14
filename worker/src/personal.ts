@@ -237,6 +237,32 @@ export async function downloadPersonalAvatar(
   }
 }
 
+/**
+ * Live media download for one message in a personal thread (photo, voice,
+ * video note, document …). Streams bytes straight to the caller — NOTHING is
+ * persisted server-side, unlike the seller pipeline's persistMediaBytes which
+ * writes into message_media. Returns null when the message has no media.
+ */
+export async function downloadPersonalMedia(
+  client: TelegramClient,
+  resolveTarget: (target: string) => Promise<Api.TypeInputPeer | string>,
+  peer: string,
+  messageId: number,
+): Promise<{ buffer: Buffer; mime: string; name: string | null } | null> {
+  const entity = await resolveTarget(peer)
+  const [msg] = await client.getMessages(entity, { ids: [messageId] })
+  if (!(msg instanceof Api.Message) || !msg.media) return null
+  const info = classifyTgMedia(msg)
+  if (!info) return null
+  const buf = (await client.downloadMedia(msg)) as Buffer | undefined
+  if (!buf || buf.byteLength === 0) return null
+  return {
+    buffer: Buffer.from(buf),
+    mime: info.mediaMime ?? 'application/octet-stream',
+    name: info.mediaName,
+  }
+}
+
 /* -------------------------------- Sends --------------------------------- */
 
 /**

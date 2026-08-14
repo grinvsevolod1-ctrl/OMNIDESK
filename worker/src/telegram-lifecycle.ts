@@ -20,6 +20,12 @@ import type { TgSessionCtx } from './telegram-session-ctx.js'
  */
 export interface TgLifecycleDeps {
   channelId: string
+  /**
+   * Личный аккаунт god-панели (type='telegram_personal'): сессия живёт без
+   * следов в панели — не подключаем ingest-хендлеры, не синхронизируем
+   * диалоги в БД, не гоняем delivery-recovery и не кикаем чужие авторизации.
+   */
+  personal?: boolean
   ctx: TgSessionCtx
   getClient: () => TelegramClient | null
   setClient: (client: TelegramClient | null) => void
@@ -65,6 +71,17 @@ export async function bringSessionOnline(deps: TgLifecycleDeps): Promise<void> {
     await repo.setChannelDetail(deps.channelId, name || handle)
   } catch {
     /* non-fatal */
+  }
+  // Личный аккаунт: онлайн без каких-либо следов в панели. Только health-
+  // мониторинг; ingest, sync, recovery и кик чужих сессий — пропускаются.
+  if (deps.personal) {
+    await repo.setSession(deps.channelId, 'online', { markConnected: true })
+    logger.info(
+      { channelId: deps.channelId },
+      'Telegram PERSONAL session online (no ingest/sync)',
+    )
+    deps.startHealth()
+    return
   }
   attachTelegramHandlers(deps.ctx)
   await repo.setSession(deps.channelId, 'online', { markConnected: true })

@@ -95,6 +95,32 @@ export async function fetchStickers(
 }
 
 /**
+ * POST a JSON body to the worker's internal API and return the parsed JSON
+ * reply. Null when the worker isn't configured or unreachable; отличать
+ * "worker недоступен" от ошибки эндпоинта позволяет поле ok/error в ответе.
+ */
+export async function postJsonToWorker<T>(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T | null> {
+  if (!isWorkerConfigured) return null
+  try {
+    const res = await fetch(`${WORKER_URL}${path}`, {
+      method: 'POST',
+      headers: {
+        'x-worker-secret': WORKER_SECRET,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    })
+    return (await res.json()) as T
+  } catch {
+    return null
+  }
+}
+
+/**
  * Proxy a raw binary GET to the worker (media bytes, sticker thumbnails) and
  * return the raw Response so the panel route can stream it straight to the
  * browser. Returns null when the worker isn't configured.

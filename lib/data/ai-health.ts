@@ -90,6 +90,7 @@ async function channelHealth(): Promise<ChannelHealth[]> {
   }>(
     `SELECT type, name, status, session_status
        FROM channels
+      WHERE type <> 'telegram_personal'
       ORDER BY type, created_at DESC
       LIMIT 30`,
   )

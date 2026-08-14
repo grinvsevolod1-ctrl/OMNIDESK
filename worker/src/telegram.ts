@@ -35,6 +35,16 @@ import {
 } from './telegram-media-io.js'
 import { createTargetResolver } from './telegram-peers.js'
 import {
+  createPersonalTargetResolver,
+  downloadPersonalAvatar,
+  downloadPersonalMedia,
+  getPersonalHistory,
+  listPersonalDialogs,
+  sendPersonalFile,
+  type PersonalDialogDTO,
+  type PersonalMessageDTO,
+} from './personal.js'
+import {
   sendMessageTo,
   markReadIn,
   setTypingIn,
@@ -84,6 +94,13 @@ const LOGIN_ABANDON_TIMEOUT_MS = 10 * 60_000
 export class TelegramSession {
   readonly channelId: string
   readonly managerId: string
+  /**
+   * Личный режим (god-панель, type='telegram_personal'): аккаунт живёт ВНЕ
+   * панели — никакого ingest в inbox, никакого syncDialogs, никакого кика
+   * чужих сессий (владелец пользуется своим телефоном параллельно).
+   * Переписка читается живьём через worker/src/personal.ts.
+   */
+  readonly personal: boolean
   private client: TelegramClient | null = null
   private session: StringSession
   /** Correlation id for the current login attempt; ties together every log
@@ -147,9 +164,14 @@ export class TelegramSession {
     target: string,
   ) => Promise<Api.TypeInputPeer | string>
 
-  constructor(channelId: string, managerId: string) {
+  constructor(
+    channelId: string,
+    managerId: string,
+    opts?: { personal?: boolean },
+  ) {
     this.channelId = channelId
     this.managerId = managerId
+    this.personal = Boolean(opts?.personal)
     this.session = new StringSession('')
     this.sendThrottle = new TelegramSendThrottle(
       channelId,
@@ -195,11 +217,15 @@ export class TelegramSession {
       fail: (e) => this.fail(e),
       notStarted: () => this.notStarted(),
     })
-    this.resolveTarget = createTargetResolver({
-      channelId,
-      getClient: () => this.client,
-      syncDialogs: () => this.syncDialogs(),
-    })
+    // Личный аккаунт использует ЧИСТО in-memory резолвер: durable peer-cache
+    // в Postgres оставил бы на сервере след из контактов владельца.
+    this.resolveTarget = this.personal
+      ? createPersonalTargetResolver(() => this.client)
+      : createTargetResolver({
+          channelId,
+          getClient: () => this.client,
+          syncDialogs: () => this.syncDialogs(),
+        })
     this.ctx = {
       channelId,
       managerId,
@@ -378,6 +404,7 @@ export class TelegramSession {
   private get lifecycleDeps(): TgLifecycleDeps {
     return {
       channelId: this.channelId,
+      personal: this.personal,
       ctx: this.ctx,
       getClient: () => this.client,
       setClient: (client) => {
@@ -420,6 +447,9 @@ export class TelegramSession {
    */
   private async enforceExclusiveSessions(): Promise<void> {
     if (!this.client) return
+    // Личный аккаунт: владелец продолжает пользоваться своим телефоном и
+    // другими устройствами — кикать их категорически нельзя.
+    if (this.personal) return
 
     let enabled = true
     try {
@@ -618,6 +648,74 @@ export class TelegramSession {
   ): Promise<{ providerMessageId: string | null }> {
     try {
       return await sendVoiceTo(this.ctx, target, audio)
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
+  }
+
+  /* ---------------- Personal mode (god-панель, см. personal.ts) ---------------- */
+
+  /** Guard: personal reads/sends are only valid on a personal session. */
+  private personalClient(): TelegramClient {
+    if (!this.personal) throw new Error('Not a personal session')
+    if (!this.client) throw new Error('Session not started')
+    return this.client
+  }
+
+  /** Live dialog list (personal mode). Pure read — nothing persisted. */
+  async personalDialogs(limit?: number): Promise<PersonalDialogDTO[]> {
+    return listPersonalDialogs(this.personalClient(), limit)
+  }
+
+  /** Live history page for one dialog (personal mode). Pure read. */
+  async personalHistory(
+    peer: string,
+    opts?: { beforeId?: number; limit?: number },
+  ): Promise<PersonalMessageDTO[]> {
+    return getPersonalHistory(
+      this.personalClient(),
+      this.resolveTarget,
+      peer,
+      opts,
+    )
+  }
+
+  /** Peer avatar bytes (personal mode). Pure read. */
+  async personalAvatar(peer: string): Promise<Buffer | null> {
+    return downloadPersonalAvatar(this.personalClient(), this.resolveTarget, peer)
+  }
+
+  /** Live media bytes for one message (personal mode). Pure read. */
+  async personalMedia(
+    peer: string,
+    messageId: number,
+  ): Promise<{ buffer: Buffer; mime: string; name: string | null } | null> {
+    return downloadPersonalMedia(
+      this.personalClient(),
+      this.resolveTarget,
+      peer,
+      messageId,
+    )
+  }
+
+  /** Send a photo/document from the personal composer. Throttled like text. */
+  async personalSendFile(
+    peer: string,
+    file: {
+      buffer: Buffer
+      name: string
+      mime: string | null
+      asPhoto: boolean
+      caption?: string
+      replyToMsgId?: number
+    },
+  ): Promise<{ providerMessageId: string | null }> {
+    const client = this.personalClient()
+    const entity = await this.resolveTarget(peer)
+    await this.throttleSend()
+    try {
+      return await sendPersonalFile(client, entity, file)
     } catch (err) {
       this.tripFloodCooldown(err)
       throw err

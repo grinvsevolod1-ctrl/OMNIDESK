@@ -20,7 +20,7 @@ export type SessionStatus =
 export interface ChannelRecord {
   id: string
   manager_id: string
-  type: 'telegram' | 'whatsapp' | 'livechat' | 'max'
+  type: 'telegram' | 'telegram_personal' | 'whatsapp' | 'livechat' | 'max'
   name: string
   detail: string
   status: string
@@ -93,7 +93,7 @@ export async function listLiveChannels(): Promise<ChannelRecord[]> {
   return query<ChannelRecord>(
     `SELECT ${CHANNEL_COLUMNS} FROM channels
      WHERE (
-             type = 'telegram'
+             type IN ('telegram', 'telegram_personal')
              OR (type = 'max' AND config->>'mode' = 'account')
            )
        AND session_status IN ('online', 'offline', 'starting')
@@ -123,7 +123,7 @@ export async function listRevivableChannels(): Promise<ChannelRecord[]> {
      WHERE session_status IN ('offline', 'error')
        AND NOT manually_stopped
        AND (
-         (type = 'telegram' AND EXISTS (
+         (type IN ('telegram', 'telegram_personal') AND EXISTS (
             SELECT 1 FROM channel_secrets s
              WHERE s.channel_id = channels.id AND s.tg_session_enc IS NOT NULL
          ))
