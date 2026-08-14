@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { processDeadLetterQueue } from '@/lib/webhook-replay'
 import { pruneLoginBans } from '@/lib/data'
+import { runInstrumentedCron } from '@/lib/data/cron-runs'
 import { cleanupOrphanedMediaBlobs } from '@/lib/data/media-archive'
 import { pruneDeadLetters } from '@/lib/data/webhook-dead-letter'
 import { logServerError } from '@/lib/server-log'
@@ -47,30 +48,29 @@ async function handle(request: Request): Promise<Response> {
   }
 
   try {
-    const result = await processDeadLetterQueue(50)
-    // Piggyback cheap housekeeping on the same minute tick: drop expired login
-    // bans so the table doesn't accumulate dead rows.
-    const prunedBans = await pruneLoginBans()
-    // …и подчистить осиротевшие media_blobs (байты без единой ссылки из
-    // messages/message_edits/lead_card_attachments). Не критично для реплея —
-    // ошибка чистки не должна ронять весь тик.
-    const prunedBlobs = await cleanupOrphanedMediaBlobs().catch((err) => {
-      logServerError('cron.cleanup-media-blobs', err)
-      return 0
+    // Весь тик (реплей + housekeeping) учитывается одной записью в cron_runs:
+    // сбой ЛЮБОЙ обязательной части = неуспешный запуск джоба.
+    const outcome = await runInstrumentedCron('retry-dead-letters', async () => {
+      const result = await processDeadLetterQueue(50)
+      // Piggyback cheap housekeeping on the same minute tick: drop expired
+      // login bans so the table doesn't accumulate dead rows.
+      const prunedBans = await pruneLoginBans()
+      // …и подчистить осиротевшие media_blobs (байты без единой ссылки из
+      // messages/message_edits/lead_card_attachments). Не критично для реплея —
+      // ошибка чистки не должна ронять весь тик.
+      const prunedBlobs = await cleanupOrphanedMediaBlobs().catch((err) => {
+        logServerError('cron.cleanup-media-blobs', err)
+        return 0
+      })
+      // …и отработанные dead-letters: resolved старше 7 дней, failed старше
+      // 30 дней (pending не трогаются). Без этого таблица растёт вечно.
+      const prunedDeadLetters = await pruneDeadLetters().catch((err) => {
+        logServerError('cron.prune-dead-letters', err)
+        return 0
+      })
+      return { result, prunedBans, prunedBlobs, prunedDeadLetters }
     })
-    // …и отработанные dead-letters: resolved старше 7 дней, failed старше
-    // 30 дней (pending не трогаются). Без этого таблица растёт вечно.
-    const prunedDeadLetters = await pruneDeadLetters().catch((err) => {
-      logServerError('cron.prune-dead-letters', err)
-      return 0
-    })
-    return NextResponse.json({
-      ok: true,
-      result,
-      prunedBans,
-      prunedBlobs,
-      prunedDeadLetters,
-    })
+    return NextResponse.json({ ok: true, ...outcome })
   } catch (error) {
     const errorId = logServerError('cron.retry-dead-letters', error)
     return NextResponse.json(

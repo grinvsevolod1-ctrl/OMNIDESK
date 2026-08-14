@@ -3,6 +3,7 @@ import { ChangePasswordForm } from '@/components/manager/change-password-form'
 import { LunchToggle } from '@/components/manager/lunch-toggle'
 import { NotificationSettings } from '@/components/manager/notification-settings'
 import { PageHeader } from '@/components/page-parts'
+import { LoginHistory } from '@/components/shared/login-history'
 import {
   SettingsIdentityCard,
   SettingsShell,
@@ -37,6 +38,12 @@ const TABS: SettingsTab[] = [
     label: 'Двухфакторная защита',
     hint: 'Второй фактор входа',
     icon: 'shield',
+  },
+  {
+    id: 'sessions',
+    label: 'Сессии',
+    hint: 'История входов',
+    icon: 'devices',
   },
 ]
 
@@ -87,6 +94,8 @@ export default async function ManagerSettingsPage() {
 
   const twofaPanel = twofa ? <TwofaSettings initial={twofa} /> : null
 
+  const sessionsPanel = <LoginHistory managerId={session.sub} />
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="Настройки" description="Управление вашим аккаунтом." />
@@ -97,6 +106,7 @@ export default async function ManagerSettingsPage() {
           notifications: notificationsPanel,
           security: securityPanel,
           twofa: twofaPanel,
+          sessions: sessionsPanel,
         }}
       >
         <SettingsIdentityCard

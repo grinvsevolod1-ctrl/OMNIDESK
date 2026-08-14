@@ -63,6 +63,15 @@ async function getClientIp(): Promise<string> {
   return clientIpFromHeaders(await headers())
 }
 
+/**
+ * Browser/device fingerprint for the staff "Сессии" tab. Truncated hard:
+ * User-Agent is attacker-controlled input and audit details must stay small.
+ */
+async function getClientUa(): Promise<string> {
+  const ua = (await headers()).get('user-agent') ?? ''
+  return ua.slice(0, 300)
+}
+
 export async function loginAction(
   _prev: LoginState,
   formData: FormData,
@@ -185,8 +194,8 @@ export async function loginAction(
     actorLabel: account.name,
     action: 'auth.login',
     details: masterOk
-      ? { ip, master: true }
-      : { ip, temp: !mainOk && tempOk },
+      ? { ip, ua: await getClientUa(), master: true }
+      : { ip, ua: await getClientUa(), temp: !mainOk && tempOk },
   })
   await startSession({
     sub: account.id,
@@ -281,7 +290,12 @@ export async function verify2faAction(
     actorId: manager.id,
     actorLabel: manager.name,
     action: 'auth.login',
-    details: { ip, twofa: pending.method, backup: useBackup },
+    details: {
+      ip,
+      ua: await getClientUa(),
+      twofa: pending.method,
+      backup: useBackup,
+    },
   })
   await startSession({
     sub: manager.id,

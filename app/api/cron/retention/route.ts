@@ -55,6 +55,9 @@ const SWEEPS: Sweep[] = [
     ageColumn: 'updated_at',
     extra: `AND status IN ('done', 'error')`,
   },
+  // Учёт запусков кронов (миграция 133): для мониторинга достаточно
+  // последних недель, месячная история покрывает любой разбор инцидента.
+  { table: 'cron_runs', days: 30, ageColumn: 'started_at' },
 ]
 
 async function handle(request: Request): Promise<Response> {
@@ -75,31 +78,37 @@ async function handle(request: Request): Promise<Response> {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   }
 
-  const purged: Record<string, number> = {}
-  for (const sweep of SWEEPS) {
-    const age = sweep.ageColumn ?? 'created_at'
-    try {
-      // Identifiers are from the hardcoded SWEEPS list above, never from
-      // request input; the age window is parameterized.
-      const rows = await query<{ id: string }>(
-        `DELETE FROM ${sweep.table}
-          WHERE id IN (
-            SELECT id FROM ${sweep.table}
-             WHERE ${age} < now() - make_interval(days => $1)
-               ${sweep.extra ?? ''}
-             LIMIT ${BATCH}
-          )
-          RETURNING id`,
-        [sweep.days],
-      )
-      purged[sweep.table] = rows.length
-    } catch (err) {
-      // A missing table (migration not applied on this install) or transient
-      // error must not abort the remaining sweeps.
-      logServerError(`cron.retention.${sweep.table}`, err)
-      purged[sweep.table] = -1
+  // Каждая чистка фейлится мягко (см. catch внутри цикла), поэтому сам джоб
+  // «успешен», если дошёл до конца; частичные сбои видны как -1 в ответе и
+  // в server-log. Запись в cron_runs фиксирует, что ночной проход состоялся.
+  const purged = await runInstrumentedCron('retention', async () => {
+    const results: Record<string, number> = {}
+    for (const sweep of SWEEPS) {
+      const age = sweep.ageColumn ?? 'created_at'
+      try {
+        // Identifiers are from the hardcoded SWEEPS list above, never from
+        // request input; the age window is parameterized.
+        const rows = await query<{ id: string }>(
+          `DELETE FROM ${sweep.table}
+            WHERE id IN (
+              SELECT id FROM ${sweep.table}
+               WHERE ${age} < now() - make_interval(days => $1)
+                 ${sweep.extra ?? ''}
+               LIMIT ${BATCH}
+            )
+            RETURNING id`,
+          [sweep.days],
+        )
+        results[sweep.table] = rows.length
+      } catch (err) {
+        // A missing table (migration not applied on this install) or transient
+        // error must not abort the remaining sweeps.
+        logServerError(`cron.retention.${sweep.table}`, err)
+        results[sweep.table] = -1
+      }
     }
-  }
+    return results
+  })
 
   return NextResponse.json({ ok: true, purged })
 }

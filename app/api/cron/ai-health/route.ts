@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import { logAi } from '@/lib/data/ai-log'
+import { runInstrumentedCron } from '@/lib/data/cron-runs'
 import { runWithRequestContext } from '@/lib/request-context'
 import { logServerError } from '@/lib/server-log'
 
@@ -64,6 +65,17 @@ async function handle(request: Request): Promise<Response> {
   }
 
   try {
+    const payload = await runInstrumentedCron('ai-health', () => watch())
+    return NextResponse.json({ ok: true, ...payload })
+  } catch (err) {
+    logServerError('cron/ai-health failed', { err })
+    return NextResponse.json({ ok: false, error: 'internal' }, { status: 500 })
+  }
+}
+
+/** Тело вотчдога, вынесенное из handle: единый возврат payload'а для учёта. */
+async function watch(): Promise<Record<string, unknown>> {
+  {
     // One pass over the cooldown horizon: reply attempts = successful sends +
     // hard errors, both restricted to the sliding window; the alert-marker
     // count uses the longer cooldown horizon. Skips (master off, not led,
@@ -99,17 +111,10 @@ async function handle(request: Request): Promise<Response> {
     const suppressed = (stats?.recent_alerts ?? 0) > 0
 
     if (!breached) {
-      return NextResponse.json({ ok: true, alerted: false, attempts, errors, rate })
+      return { alerted: false, attempts, errors, rate }
     }
     if (suppressed) {
-      return NextResponse.json({
-        ok: true,
-        alerted: false,
-        suppressed: true,
-        attempts,
-        errors,
-        rate,
-      })
+      return { alerted: false, suppressed: true, attempts, errors, rate }
     }
 
     const pct = Math.round(rate * 100)
@@ -156,16 +161,6 @@ async function handle(request: Request): Promise<Response> {
       }
     }
 
-    return NextResponse.json({
-      ok: true,
-      alerted: true,
-      attempts,
-      errors,
-      rate,
-      telegram,
-    })
-  } catch (err) {
-    logServerError('cron/ai-health failed', { err })
-    return NextResponse.json({ ok: false, error: 'internal' }, { status: 500 })
+    return { alerted: true, attempts, errors, rate, telegram }
   }
 }

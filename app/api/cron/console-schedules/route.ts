@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { runDueSchedules } from '@/lib/admin-console/schedule-runner'
+import { runInstrumentedCron } from '@/lib/data/cron-runs'
 import { logServerError } from '@/lib/server-log'
 import { runWithRequestContext } from '@/lib/request-context'
 
@@ -39,7 +40,9 @@ async function handle(request: Request): Promise<Response> {
   }
 
   try {
-    const result = await runDueSchedules(5)
+    const result = await runInstrumentedCron('console-schedules', () =>
+      runDueSchedules(5),
+    )
     return NextResponse.json({ ok: true, result })
   } catch (error) {
     const errorId = logServerError('cron.console-schedules', error)

@@ -277,6 +277,20 @@ export async function updateManagerPassword(
   invalidateManagerAuthState(id)
 }
 
+/**
+ * «Разлогинить все устройства»: продвигает session_version, мгновенно
+ * инвалидируя каждый выданный JWT этого сотрудника. Сессия, которая вызвала
+ * действие, должна сразу перевыпустить свою cookie со свежей версией (тот же
+ * паттерн, что при смене пароля — см. changeOwnPasswordAction).
+ */
+export async function bumpSessionVersion(id: string): Promise<void> {
+  await query(
+    'UPDATE managers SET session_version = session_version + 1 WHERE id = $1',
+    [id],
+  )
+  invalidateManagerAuthState(id)
+}
+
 export async function deleteManager(id: string): Promise<void> {
   // Telegram/WhatsApp channels are bound to this manager's worker session, so
   // they should still go away with the manager. After migration 008 the FK is

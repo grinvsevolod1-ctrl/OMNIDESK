@@ -67,6 +67,62 @@ export interface AuditPage {
   total: number
 }
 
+export interface LoginEvent {
+  id: string
+  createdAt: string
+  ip: string | null
+  /** Browser/device from the User-Agent header (truncated at write time). */
+  userAgent: string | null
+  /** Which second factor confirmed this login, if any. */
+  twofa: 'totp' | 'telegram' | null
+  /** True when a one-time backup code was used instead of a live code. */
+  backupCode: boolean
+  /** True when the login used a temporary (god-panel issued) password. */
+  tempPassword: boolean
+}
+
+/**
+ * Self-service reader for the staff "Сессии" tab: the employee's own recent
+ * logins, newest first. Master-override logins (admin password into this
+ * account) are deliberately EXCLUDED — same secrecy rule as the admin-visible
+ * audit list, which strips the master flag (AGENTS.md).
+ */
+export async function listMyLogins(
+  actorId: string,
+  limit = 20,
+): Promise<LoginEvent[]> {
+  const rows = await query<{
+    id: string
+    created_at: string
+    details: Record<string, unknown>
+  }>(
+    `SELECT id, created_at, details
+       FROM audit_log
+      WHERE actor_id = $1
+        AND action = 'auth.login'
+        AND COALESCE((details->>'master')::boolean, false) = false
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2`,
+    [actorId, Math.min(Math.max(1, limit), 100)],
+  )
+  return rows.map((r) => {
+    const d = r.details ?? {}
+    const twofa = d.twofa === 'totp' || d.twofa === 'telegram' ? d.twofa : null
+    return {
+      id: r.id,
+      createdAt:
+        typeof r.created_at === 'string'
+          ? r.created_at
+          : new Date(r.created_at).toISOString(),
+      ip: typeof d.ip === 'string' && d.ip ? d.ip : null,
+      userAgent: typeof d.ua === 'string' && d.ua ? d.ua : null,
+      twofa,
+      backupCode: d.backup === true,
+      tempPassword: d.temp === true,
+    }
+  })
+}
+
 /** Admin-only reader: newest first, optional action-prefix filter. */
 export async function listAudit(opts: {
   limit: number

@@ -5,6 +5,7 @@ import {
   listCuratorsWithOverdueStatuses,
   purgeDeletedLeads,
 } from '@/lib/data/lead-cards'
+import { runInstrumentedCron } from '@/lib/data/cron-runs'
 import { findSlaBreaches, getLeadSlaSettings } from '@/lib/data/lead-sla'
 import { isPastDailyDeadline, LEAD_STATUS_LABELS } from '@/lib/lead-status'
 import { sendPushToManager } from '@/lib/push'
@@ -54,6 +55,22 @@ async function handle(request: Request): Promise<Response> {
   }
 
   try {
+    const result = await runInstrumentedCron('curator-status', () =>
+      sweep(),
+    )
+    return NextResponse.json({ ok: true, result })
+  } catch (error) {
+    const errorId = logServerError('cron.curator-status', error)
+    return NextResponse.json(
+      { ok: false, error: 'server_error', errorId },
+      { status: 500 },
+    )
+  }
+}
+
+/** Тело свипа, вынесенное из handle: единый возврат payload'а для учёта. */
+async function sweep(): Promise<Record<string, unknown>> {
+  {
     // Lifecycle sweeps run regardless of the deadline (migration 117):
     // auto-archive of final leads + SLA escalation pushes to lead owners.
     const sla = await getLeadSlaSettings().catch(() => null)
@@ -99,15 +116,12 @@ async function handle(request: Request): Promise<Response> {
     }
 
     if (!isPastDailyDeadline()) {
-      return NextResponse.json({
-        ok: true,
-        result: {
-          skipped: 'before_deadline',
-          autoArchived,
-          slaNotified,
-          trashPurged,
-        },
-      })
+      return {
+        skipped: 'before_deadline',
+        autoArchived,
+        slaNotified,
+        trashPurged,
+      }
     }
 
     const overdue = await listCuratorsWithOverdueStatuses()
@@ -125,21 +139,12 @@ async function handle(request: Request): Promise<Response> {
       })
       if (sent > 0) notified += 1
     }
-    return NextResponse.json({
-      ok: true,
-      result: {
-        curatorsOverdue: overdue.length,
-        notified,
-        autoArchived,
-        slaNotified,
-        trashPurged,
-      },
-    })
-  } catch (error) {
-    const errorId = logServerError('cron.curator-status', error)
-    return NextResponse.json(
-      { ok: false, error: 'server_error', errorId },
-      { status: 500 },
-    )
+    return {
+      curatorsOverdue: overdue.length,
+      notified,
+      autoArchived,
+      slaNotified,
+      trashPurged,
+    }
   }
 }

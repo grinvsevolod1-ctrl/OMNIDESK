@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
+import { runInstrumentedCron } from '@/lib/data/cron-runs'
 import { runFollowupSweep } from '@/lib/followup/runtime'
 import { logServerError } from '@/lib/server-log'
 import { runWithRequestContext } from '@/lib/request-context'
@@ -47,7 +48,9 @@ async function handle(request: Request): Promise<Response> {
   }
 
   try {
-    const result = await runFollowupSweep(25)
+    const result = await runInstrumentedCron('followup', () =>
+      runFollowupSweep(25),
+    )
     return NextResponse.json({ ok: true, result })
   } catch (error) {
     const errorId = logServerError('cron.followup', error)

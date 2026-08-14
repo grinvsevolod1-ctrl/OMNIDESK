@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { syncAllAdAccounts } from '@/lib/ads-yandex'
+import { runInstrumentedCron } from '@/lib/data/cron-runs'
 import { logServerError } from '@/lib/server-log'
 
 export const dynamic = 'force-dynamic'
@@ -34,7 +35,9 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   try {
-    const result = await syncAllAdAccounts()
+    const result = await runInstrumentedCron('sync-ads', () =>
+      syncAllAdAccounts(),
+    )
     return NextResponse.json({ ok: true, result })
   } catch (error) {
     const errorId = logServerError('cron.sync-ads', error)
