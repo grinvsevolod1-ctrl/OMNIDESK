@@ -1,3 +1,4 @@
+import { KeyRound } from 'lucide-react'
 import { getTwofaStatusAction } from '@/app/actions/twofa'
 import { MyGeoSettings } from '@/components/curator/my-geo-settings'
 import { ChangePasswordForm } from '@/components/manager/change-password-form'
@@ -78,12 +79,18 @@ export default async function CuratorSettingsPage() {
 
   const securityPanel = (
     <Card className="p-5">
-      <h2 className="font-medium">Смена пароля</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        После смены пароля все остальные устройства будут разлогинены —
-        текущая сессия останется активной.
-      </p>
-      <div className="mt-4">
+      <div className="flex items-start gap-3">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
+          <KeyRound className="size-5 text-muted-foreground" />
+        </div>
+        <div>
+          <h2 className="font-medium">Смена пароля</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Держите аккаунт в безопасности — используйте надёжный пароль.
+          </p>
+        </div>
+      </div>
+      <div className="mt-5">
         <ChangePasswordForm />
       </div>
     </Card>
