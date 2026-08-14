@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
+import { runInstrumentedCron } from '@/lib/data/cron-runs'
 import { query } from '@/lib/db'
 import { logServerError } from '@/lib/server-log'
 import { runWithRequestContext } from '@/lib/request-context'

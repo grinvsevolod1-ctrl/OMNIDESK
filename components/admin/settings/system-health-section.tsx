@@ -7,10 +7,12 @@ import {
   Inbox,
   MailWarning,
   ScrollText,
+  TimerReset,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { getSystemHealth } from '@/lib/data/ai-health'
+import { getCronHealth, type CronJobHealth } from '@/lib/data/cron-runs'
 import { getHealthMetrics } from '@/lib/data/health-metrics'
 
 /**
@@ -81,10 +83,19 @@ export async function SystemHealthSection({
   /** Без собственного заголовка секции — имя даёт вкладка настроек. */
   bare?: boolean
 } = {}) {
-  const [health, metrics] = await Promise.all([
+  const [health, metrics, cronJobs] = await Promise.all([
     getSystemHealth(),
     getHealthMetrics(),
+    // Fail-soft: до наката миграции 133 таблицы cron_runs нет — карточка
+    // не должна падать целиком из-за отсутствующего блока кронов.
+    getCronHealth().catch(() => [] as CronJobHealth[]),
   ])
+
+  const staleCron = cronJobs.filter((j) => j.stale)
+  const failingCron = cronJobs.filter((j) => !j.stale && j.failStreak > 0)
+  // Опорное время для «успех N назад» — момент снятия метрик, а не Date.now()
+  // в рендере (react-hooks/purity): рендер остаётся чистой функцией данных.
+  const nowMs = Date.parse(metrics.generatedAt)
 
   const { brain24h, deadLetters, queue } = metrics
   const okPct =
@@ -117,7 +128,8 @@ export async function SystemHealthSection({
     p95Tone !== 'bad' &&
     queueTone !== 'bad' &&
     dlTone !== 'bad' &&
-    health.gateway.ok
+    health.gateway.ok &&
+    staleCron.length === 0
 
   return (
     <section className="flex flex-col gap-3">
@@ -200,6 +212,74 @@ export async function SystemHealthSection({
                 {f.outcome}: {f.count}
               </Badge>
             ))}
+          </div>
+        ) : null}
+
+        {/* Cron jobs (migration 133). Absent table → пустой список → блок скрыт. */}
+        {cronJobs.length > 0 ? (
+          <div className="flex flex-col gap-2 border-t border-border pt-3">
+            <div className="flex items-center gap-1.5">
+              <TimerReset className="size-3.5 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">
+                Фоновые задачи:
+              </span>
+              {staleCron.length === 0 && failingCron.length === 0 ? (
+                <span className="text-xs font-medium text-foreground">
+                  все {cronJobs.length} отрабатывают вовремя
+                </span>
+              ) : (
+                <span className="text-xs font-medium text-destructive">
+                  {staleCron.length > 0
+                    ? `${staleCron.length} молчат`
+                    : `${failingCron.length} с ошибками`}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {cronJobs.map((j) => {
+                const tone: Tone = j.stale
+                  ? 'bad'
+                  : j.failStreak > 0
+                    ? 'warn'
+                    : 'ok'
+                const toneCls: Record<Tone, string> = {
+                  ok: 'border-border text-muted-foreground',
+                  warn: 'border-amber-500/40 bg-amber-500/5 text-amber-600 dark:text-amber-500',
+                  bad: 'border-destructive/40 bg-destructive/5 text-destructive',
+                }
+                const okAgo = j.lastOkAt
+                  ? fmtAge(
+                      Math.max(
+                        0,
+                        Math.round((nowMs - Date.parse(j.lastOkAt)) / 1000),
+                      ),
+                    )
+                  : null
+                return (
+                  <Badge
+                    key={j.job}
+                    variant="outline"
+                    className={`gap-1 font-mono text-xs ${toneCls[tone]}`}
+                    title={
+                      j.lastError
+                        ? `Последняя ошибка: ${j.lastError}`
+                        : undefined
+                    }
+                  >
+                    {j.job}
+                    {j.stale
+                      ? okAgo
+                        ? ` · успех ${okAgo} назад`
+                        : ' · ни разу'
+                      : j.failStreak > 0
+                        ? ` · ${j.failStreak} сбоев подряд`
+                        : okAgo
+                          ? ` · ${okAgo}`
+                          : ''}
+                  </Badge>
+                )
+              })}
+            </div>
           </div>
         ) : null}
 
