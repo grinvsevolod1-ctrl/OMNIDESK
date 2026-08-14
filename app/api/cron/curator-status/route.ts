@@ -1,5 +1,5 @@
-import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
+import { requireCronAuth } from '@/lib/cron-auth'
 import {
   autoArchiveFinalLeads,
   listCuratorsWithOverdueStatuses,
@@ -34,25 +34,8 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 async function handle(request: Request): Promise<Response> {
-  const secret = process.env.CRON_SECRET
-  if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: 'service_not_configured' },
-      { status: 503 },
-    )
-  }
-
-  const auth = request.headers.get('authorization') ?? ''
-  const expected = `Bearer ${secret}`
-  const authorized =
-    auth.length === expected.length &&
-    timingSafeEqual(Buffer.from(auth), Buffer.from(expected))
-  if (!authorized) {
-    return NextResponse.json(
-      { ok: false, error: 'unauthorized' },
-      { status: 401 },
-    )
-  }
+  const denied = requireCronAuth(request)
+  if (denied) return denied
 
   try {
     const result = await runInstrumentedCron('curator-status', () =>

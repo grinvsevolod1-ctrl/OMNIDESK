@@ -33,11 +33,12 @@ export async function assertConsoleOrMessenger(): Promise<void> {
 /** Path of the God panel; every action revalidates it after a mutation. */
 export const ADMIN_PATH = '/wijegniwjgwjog'
 
-/** Standard result envelope returned by mutating God-panel actions. */
-export interface ActionResult {
-  ok: boolean
-  message: string
-}
+/**
+ * Standard result envelope returned by mutating God-panel actions.
+ * Canonical definition lives in lib/types/actions.ts; re-exported here so
+ * every existing `from './shared'` import keeps working unchanged.
+ */
+export type { ActionResult } from '@/lib/types'
 
 /** Record a privileged God-panel action to the audit trail (best-effort). */
 export function audit(

@@ -1,5 +1,5 @@
-import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
+import { requireCronAuth } from '@/lib/cron-auth'
 import { runInstrumentedCron } from '@/lib/data/cron-runs'
 import { query } from '@/lib/db'
 import { logServerError } from '@/lib/server-log'
@@ -62,22 +62,8 @@ const SWEEPS: Sweep[] = [
 ]
 
 async function handle(request: Request): Promise<Response> {
-  const secret = process.env.CRON_SECRET
-  if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: 'service_not_configured' },
-      { status: 503 },
-    )
-  }
-
-  const auth = request.headers.get('authorization') ?? ''
-  const expected = `Bearer ${secret}`
-  const authorized =
-    auth.length === expected.length &&
-    timingSafeEqual(Buffer.from(auth), Buffer.from(expected))
-  if (!authorized) {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
-  }
+  const denied = requireCronAuth(request)
+  if (denied) return denied
 
   // Каждая чистка фейлится мягко (см. catch внутри цикла), поэтому сам джоб
   // «успешен», если дошёл до конца; частичные сбои видны как -1 в ответе и

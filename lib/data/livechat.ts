@@ -4,6 +4,7 @@
  * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
  */
 import { query } from '../db'
+import { TtlCache } from '../ttl-cache'
 import type { ChannelStatus, ConversationMeta, Message } from '../types'
 import {
   resolveWidgetConfig,
@@ -105,31 +106,44 @@ export async function resolveLivechatAgentId(
   return alive[0]?.id ?? null
 }
 
+/**
+ * TTL-кэш резолва «API-ключ → канал»: этот lookup стоит на КАЖДОМ публичном
+ * запросе виджета (ingest, stream, typing, presence, track, push) от каждого
+ * посетителя каждого сайта. Канал меняется только при сохранении из админки,
+ * так что 10-секундная устарелость незаметна, а N посетителей × M вкладок
+ * схлопываются максимум в один запрос к БД на ключ за окно TTL. Кэшируются и
+ * промахи (null) — перебор ключей не пробивает кэш в БД. Возвращаемый объект
+ * шарится между запросами: НЕ мутировать (то же правило, что в config-роуте).
+ */
+const channelByKeyCache = new TtlCache<LivechatChannel | null>(10_000)
+
 export async function getLivechatChannelByApiKey(
   apiKey: string,
 ): Promise<LivechatChannel | null> {
   if (!apiKey) return null
-  const rows = await query<ChannelRow>(
-    `SELECT ${channelColumns()} FROM channels
-       WHERE type = 'livechat' AND config->>'apiKey' = $1
-       LIMIT 1`,
-    [apiKey],
-  )
-  const c = rows[0]
-  if (!c) return null
-  const config = (c.config ?? {}) as {
-    domain?: string
-    apiKey?: string
-    pool?: unknown
-  }
-  return {
-    id: c.id,
-    managerId: c.manager_id,
-    domain: String(config.domain ?? ''),
-    apiKey,
-    status: c.status,
-    pool: readPool(config, c.manager_id),
-  }
+  return channelByKeyCache.getOrLoad(apiKey, async () => {
+    const rows = await query<ChannelRow>(
+      `SELECT ${channelColumns()} FROM channels
+         WHERE type = 'livechat' AND config->>'apiKey' = $1
+         LIMIT 1`,
+      [apiKey],
+    )
+    const c = rows[0]
+    if (!c) return null
+    const config = (c.config ?? {}) as {
+      domain?: string
+      apiKey?: string
+      pool?: unknown
+    }
+    return {
+      id: c.id,
+      managerId: c.manager_id,
+      domain: String(config.domain ?? ''),
+      apiKey,
+      status: c.status,
+      pool: readPool(config, c.manager_id),
+    }
+  })
 }
 
 /**

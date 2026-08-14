@@ -4,6 +4,7 @@
  * working unchanged.
  */
 export * from './accounts'
+export * from './actions'
 export * from './channels'
 export * from './proxies'
 export * from './jobs'

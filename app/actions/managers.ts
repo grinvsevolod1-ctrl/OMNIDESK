@@ -24,10 +24,11 @@ import {
 import { resolveCityOrRegion } from '@/lib/data/regions'
 import { writeAudit } from '@/lib/data/audit'
 import { isAdminIdentity } from '@/lib/data/shared'
+import type { ActionResult as BaseActionResult } from '@/lib/types'
 
-export interface ActionResult {
-  ok: boolean
-  message: string
+// Расширение канонического ActionResult (lib/types/actions.ts): экшены этого
+// модуля дополнительно возвращают выданный пароль/логин при создании учётки.
+export interface ActionResult extends BaseActionResult {
   password?: string
   username?: string
 }

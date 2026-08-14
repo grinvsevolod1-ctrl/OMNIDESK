@@ -10,6 +10,7 @@ import 'server-only'
  * missing table (fresh install mid-migration) never blanks the whole card.
  */
 import { query } from '../db'
+import { TtlCache } from '../ttl-cache'
 
 export interface BrainLatency {
   /** Calls in the window. */
@@ -142,8 +143,20 @@ async function auditWrites24h(): Promise<number> {
   return Number(row?.n ?? 0)
 }
 
+/**
+ * Кэш снапшота на 60 секунд: перцентили по суточной выборке
+ * ai_generation_metrics — самый дорогой запрос страницы настроек, и считать
+ * его заново на каждый заход/refresh незачем. Минута устарелости для
+ * обзорной карточки незаметна; generatedAt честно показывает момент снятия.
+ */
+const metricsCache = new TtlCache<HealthMetrics>(60_000, 1)
+
 /** Full metrics snapshot. Each probe fails soft to a safe zero-state. */
 export async function getHealthMetrics(): Promise<HealthMetrics> {
+  return metricsCache.getOrLoad('snapshot', loadHealthMetrics)
+}
+
+async function loadHealthMetrics(): Promise<HealthMetrics> {
   const [brain24h, deadLetters, queue, audit] = await Promise.all([
     brainLatency24h().catch(() => EMPTY_BRAIN),
     deadLetterHealth().catch(
