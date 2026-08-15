@@ -590,7 +590,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
     рядом. Эталоны: `components/shared/twofa-settings.tsx` + `twofa-settings/`,
     `components/manager/inbox-view.tsx` + `inbox/`.
   - **Крупный модуль server actions** → сразу барель: `foo.ts` только
-    ре��кспортирует из `foo-<домен>.ts`, общие хелперы — в `foo-shared.ts`
+    реэкспортирует из `foo-<домен>.ts`, общие хелперы — в `foo-shared.ts`
     (НЕ `'use server'`). Эталоны: `app/actions/auth.ts` (login/twofa/shared),
     `app/actions/admin-accounts.ts`, `app/actions/finance.ts`.
   - **Данные/типы** → по доменам в `lib/data/*`, `lib/types/*` с барелем.
@@ -650,7 +650,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   замером DOM). Не «чини» их ради галочки.
 - Сложную новую логику покрывай юнит-тестом рядом с кодом.
 
-## 11. Частые задачи — с че��о начать
+## 11. Частые задачи — с чего начать
 
 | Задача | Где смотреть |
 |---|---|

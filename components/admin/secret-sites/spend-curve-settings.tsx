@@ -1,6 +1,6 @@
 'use client'
 
-import { useId, useMemo } from 'react'
+import { useId, useMemo, useSyncExternalStore } from 'react'
 import type { AutoSpend } from '@/lib/god-sites'
 import {
   DEFAULT_DAY_JITTER,
@@ -158,6 +158,17 @@ export function SpendCurveSettings({
 
 /* ------------------------------- Preview -------------------------------- */
 
+/** Minute-resolution wall clock as an external store for the "now" marker. */
+function subscribeToMinute(onTick: () => void): () => void {
+  const t = setInterval(onTick, 60_000)
+  return () => clearInterval(t)
+}
+
+/** Snapshot floored to the minute — stable between ticks (required by uSES). */
+function currentMinuteMs(): number {
+  return Math.floor(Date.now() / 60_000) * 60_000
+}
+
 /**
  * 24-hour burn-rate curve + cumulative overlay, pure SVG. X = hour of day,
  * left Y = burn rate, thin line = cumulative share. A vertical marker shows
@@ -180,6 +191,16 @@ function CurvePreview({
   const W = 720
   const H = 120
   const PAD = 8
+
+  // Wall-clock is impure during render (React Compiler rule) — subscribe to
+  // it as an external store, floored to the minute so the snapshot is stable
+  // between ticks. The server snapshot is null: no marker in SSR output, so
+  // hydration stays deterministic.
+  const nowMs = useSyncExternalStore(
+    subscribeToMinute,
+    currentMinuteMs,
+    () => null,
+  )
 
   const { ratePath, cumPath, nowX, nowCum } = useMemo(() => {
     // Sample the cumulative curve, derive the rate as its slope — guarantees
@@ -204,7 +225,10 @@ function CurvePreview({
       .map((c, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${yCum(c).toFixed(1)}`)
       .join(' ')
 
-    const shifted = new Date(Date.now() + tzOffsetHours * 3_600_000)
+    if (nowMs === null) {
+      return { ratePath: rp, cumPath: cp, nowX: null, nowCum: null }
+    }
+    const shifted = new Date(nowMs + tzOffsetHours * 3_600_000)
     const hourFloat = shifted.getUTCHours() + shifted.getUTCMinutes() / 60
     return {
       ratePath: rp,
@@ -212,7 +236,7 @@ function CurvePreview({
       nowX: PAD + (hourFloat / 24) * (W - PAD * 2),
       nowCum: dayCurveAt(hourFloat, profile, smoothness),
     }
-  }, [profile, smoothness, tzOffsetHours])
+  }, [profile, smoothness, tzOffsetHours, nowMs])
 
   return (
     <figure className="flex flex-col gap-1.5">
@@ -266,15 +290,17 @@ function CurvePreview({
           strokeWidth="1.5"
           strokeDasharray="4 3"
         />
-        {/* "Now" marker */}
-        <line
-          x1={nowX}
-          y1={PAD}
-          x2={nowX}
-          y2={H - PAD}
-          className="stroke-success"
-          strokeWidth="1.5"
-        />
+        {/* "Now" marker — drawn after the first client tick only */}
+        {nowX !== null && (
+          <line
+            x1={nowX}
+            y1={PAD}
+            x2={nowX}
+            y2={H - PAD}
+            className="stroke-success"
+            strokeWidth="1.5"
+          />
+        )}
       </svg>
       <figcaption className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
@@ -282,16 +308,18 @@ function CurvePreview({
           <span className="text-primary">скорость расхода</span> ·{' '}
           <span>пунктир — накоплено</span>
         </span>
-        <span>
-          сейчас накоплено{' '}
-          <span className="font-mono font-medium text-foreground">
-            {Math.round(nowCum * 100)}% ≈{' '}
-            {new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(
-              nowCum * dailyBudget,
-            )}{' '}
-            {currency}
+        {nowCum !== null && (
+          <span>
+            сейчас накоплено{' '}
+            <span className="font-mono font-medium text-foreground">
+              {Math.round(nowCum * 100)}% ≈{' '}
+              {new Intl.NumberFormat('ru-RU', {
+                maximumFractionDigits: 0,
+              }).format(nowCum * dailyBudget)}{' '}
+              {currency}
+            </span>
           </span>
-        </span>
+        )}
       </figcaption>
     </figure>
   )
