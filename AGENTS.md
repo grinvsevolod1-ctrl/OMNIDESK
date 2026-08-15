@@ -96,7 +96,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    владельца для закрытой системы: каждый скачанный архив расширения обязан
    работать вечно. «Показать токен» в меню сайта отдаёт его в любой момент
    (`secretGetSiteKeyAction` / `getOrCreateSiteKey`; legacy-сайты без
-   плейнтекста получают ОДНУ финальную перевыпуску — гонк���� закрыта guard'ом
+   плейнтекста получают ОДНУ финальную перевыпуску — гонка закрыта guard'ом
    `api_key_plain IS NULL`). Единственный путь инвалидации — ручная кнопка
    «Заменить токен» (`rotateSiteKey`): умирают ВСЕ архивы сайта сразу.
    Передаётся Bearer'ом или `?token=` (SSE). Slug и токен матчатся ОДНИМ
@@ -268,7 +268,7 @@ components/admin/        UI админки
                          действий из lib/data/audit)
   finance-admin.tsx + finance/use-finance-admin.ts  финансы: контейнер +
                          хук состояния (view/диалоги/фильтрация по ресурсу)
-  lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлай��-
+  lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлайн-
                          редакторы лида; общий transition+toast флоу — в хуке
 components/shared/       кросс-ролевые компоненты; use-xlsx-export.ts — общий
                          флоу Excel-выгрузки (admin/manager/curator leads);
@@ -440,7 +440,7 @@ lib/
                          штампуется saveSiteState на переходе off→on
                          (повторное включение = новый старт, spentToDate=0);
                          autoSpend.spentToDate — кумулятивно списанное с
-                         баланса (ведёт commitAutoSpend посуточной с��муляцией,
+                         баланса (ведёт commitAutoSpend посуточной симуляцией,
                          не плоским days × budget) — капит историю завершённых
                          дней деньгами, которые реально были. Ручные
                          periodOverrides накладываются поверх и побеждают;
@@ -532,7 +532,7 @@ widget-src/livechat.js   ИСХОДНИК виджета (public/livechat.js —
 scripts/                 SQL-миграции NNN_*.sql, migrate.mjs, cron-*.mjs,
                          build-widget.mjs, backup-db.mjs
 deploy.sh                деплой на VPS (миграции ДО свапа кода)
-ecosystem.config.js      PM2: все процессы и крон-распи��ания
+ecosystem.config.js      PM2: все процессы и крон-расписания
 ```
 
 ## 6. Admin AI (co-pilot) — как расширять
@@ -630,7 +630,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   `grep -rlP '\xEF\xBF\xBD' lib components app worker/src scripts AGENTS.md`
   — должно быть пусто (битые символы уже случались).
 - **Никакого хардкода поведения продавца** — любое новое поведение это
-  настройка, директива или урок из чата, а ��е константа в коде.
+  настройка, директива или урок из чата, а не константа в коде.
 - **Не удаляй и не обходи** тест изоляции `lib/ai/isolation.test.ts`.
 - **СТРУКТУРА НОВОГО КОДА — пиши правильно СРАЗУ, а не рефактори потом.**
   Прежде чем создавать файл, прикинь его размер в готовом виде. Если фича
@@ -708,13 +708,13 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 |---|---|
 | Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
-| Изменить вход м��зга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
+| Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент co-pilot |
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
 | БД-слой воркера | барели `worker/src/repo.ts` и `repo-ai.ts` |
 | Подключение аккаунтов | барель `app/actions/admin-accounts.ts` |
 | Лид-карточки (данные) | барель `lib/data/lead-cards.ts`; фильтры/поиск админа — `lib/data/lead-admin.ts` |
-| «Все ��иды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
+| «Все лиды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
 | «Мои лиды» (менеджер по кадрам) | `components/curator/curator-leads-view.tsx` |
 | «Мои лиды» (менеджер) | `components/manager/manager-leads-view.tsx` |
 | Excel-выгрузки лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), клиент — `components/admin/leads/xlsx-download.ts` |

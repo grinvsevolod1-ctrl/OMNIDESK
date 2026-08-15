@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * behavior under test.
  */
 
-vi.mock('telegram', () => ({
+vi.mock('teleproto', () => ({
   TelegramClient: class {},
   Api: {},
 }))

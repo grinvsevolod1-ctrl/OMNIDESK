@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  *
  * The worker's most dangerous code path (phone login → code → 2FA) had no
  * test coverage because it talks to live Telegram. Here the network edge is
- * replaced entirely: `client.invoke`/`sendCode` are `vi.fn()`s, the `telegram`
+ * replaced entirely: `client.invoke`/`sendCode` are `vi.fn()`s, the `teleproto`
  * package is mocked with minimal stand-in classes, and repo/env are stubbed.
  * What IS real is the TelegramPhoneLogin state machine itself — every status
  * transition, callback hand-off and error branch runs the production code.
@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ---- module mocks (hoisted by vitest; factories must be self-contained) ----
 
-vi.mock('telegram', () => {
+vi.mock('teleproto', () => {
   class SignIn {
     constructor(public args: Record<string, unknown>) {}
   }
@@ -30,13 +30,13 @@ vi.mock('telegram', () => {
   }
 })
 
-vi.mock('telegram/sessions/index.js', () => ({
+vi.mock('teleproto/sessions/index.js', () => ({
   StringSession: class {
     constructor(public saved: string) {}
   },
 }))
 
-vi.mock('telegram/Password.js', () => ({
+vi.mock('teleproto/Password.js', () => ({
   computeCheck: vi.fn(async () => ({ srp: 'check' })),
 }))
 

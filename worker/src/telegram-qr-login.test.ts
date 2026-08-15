@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * scan finalize, DC migration, and the 2FA hand-off.
  */
 
-vi.mock('telegram', () => {
+vi.mock('teleproto', () => {
   class LoginToken {
     token: Buffer
     expires: number
