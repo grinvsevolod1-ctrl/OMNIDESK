@@ -13,22 +13,28 @@ import {
   type GodSite,
   type SitePeriod,
 } from './god-sites'
+import {
+  DEFAULT_DAY_JITTER,
+  DEFAULT_WEEKEND_DIP,
+  jitter,
+  round2,
+  weekdayFactor,
+} from './god-sites-sim'
 
 /**
- * AI report generator for the god-panel "Сайты" tab: turns the FULL current
- * state of every managed site into a free-form analytical report via the AI
- * Gateway. The operator types any request («отчёт за день», «за 3 часа»,
- * «сравни кабинеты за неделю») — the model gets complete context and answers.
+ * AI report generator for the god-panel "Сайты" tab.
  *
- * SACRED INVARIANT (AGENTS.md §4): god-panel only. This module imports the
- * SHARED gateway plumbing from lib/ai/brain/core (allowed direction); nothing
- * under lib/ai-console/ may ever import THIS file.
+ * SACRED INVARIANT (AGENTS.md §4): god-panel only. Imports the SHARED gateway
+ * plumbing from lib/ai/brain/core (allowed direction); nothing under
+ * lib/ai-console/ may ever import THIS file.
  *
- * Context strategy — «чтобы у него было полное представление»: the raw site
- * state is serialized VERBATIM (JSON.stringify of the whole state object),
- * so any field added to SiteState in the future automatically reaches the
- * model without touching this file. Period aggregates are layered on top as
- * pre-computed views so the model doesn't have to re-derive the simulation.
+ * PRESENTATION INVARIANT: the model must believe (and write) that the data
+ * came from the Yandex Direct API. NOTHING here may leak internal mechanics —
+ * no autoSpend, no profiles/curves, no "панель", no raw internal JSON. The
+ * context is rebuilt as a Direct-style export: cabinet header, money
+ * movement with dates, per-day spend statistics, per-campaign metrics by
+ * period. The daily series uses the exact same per-day math the balance
+ * engine commits with, so the report always agrees with the vitrine.
  */
 
 const REPORT_PERIODS: SitePeriod[] = ['today', 'yesterday', 'week', 'month']
@@ -36,74 +42,152 @@ const REPORT_PERIODS: SitePeriod[] = ['today', 'yesterday', 'week', 'month']
 const PERIOD_LABELS: Record<SitePeriod, string> = {
   today: 'Сегодня',
   yesterday: 'Вчера',
-  week: 'Неделя',
-  month: 'Месяц',
+  week: 'Последние 7 дней',
+  month: 'Последние 30 дней',
   all: 'Всё время',
 }
 
-/** Compact per-period aggregate rows the model can quote without math. */
-function periodSummary(site: GodSite, now: Date): string {
-  const lines: string[] = []
-  for (const p of REPORT_PERIODS) {
-    const s = stateForPeriod(site.state, p, now)
-    const running = s.campaigns.filter((c) => c.status === 'running')
-    const cost = running.reduce((a, c) => a + c.cost, 0)
-    const shows = running.reduce((a, c) => a + c.shows, 0)
-    const clicks = running.reduce((a, c) => a + c.clicks, 0)
-    const goals = running.reduce((a, c) => a + c.goals, 0)
-    const revenue = running.reduce((a, c) => a + c.revenue, 0)
+/* --------------------------- Direct-style context ------------------------ */
+
+function dayKeyAt(now: Date, tz: number, minusDays: number): string {
+  const shifted = new Date(now.getTime() + tz * 3_600_000 - minusDays * 86_400_000)
+  return shifted.toISOString().slice(0, 10)
+}
+
+function fmtMoney(n: number, currency: string): string {
+  return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(n)} ${currency}`
+}
+
+/**
+ * Per-day spend history (completed days only), reconstructed with the SAME
+ * per-day formula the balance engine commits with — budget × weekday factor ×
+ * deterministic day jitter. Presented as plain Direct statistics.
+ */
+function dailySpendRows(site: GodSite, now: Date): string[] {
+  const auto = site.state.autoSpend
+  if (!auto?.enabled || !auto.startDay) return []
+  const tz = auto.tzOffsetHours ?? 3
+  const dip = auto.weekendDip ?? DEFAULT_WEEKEND_DIP
+  const spread = auto.dayJitter ?? DEFAULT_DAY_JITTER
+  const today = dayKeyAt(now, tz, 0)
+
+  const rows: string[] = []
+  // Walk back up to 14 completed days, never earlier than the campaign start.
+  for (let back = 14; back >= 1; back--) {
+    const day = dayKeyAt(now, tz, back)
+    if (day < auto.startDay || day >= today) continue
+    const spend = round2(
+      auto.dailyBudget * weekdayFactor(day, dip) * jitter(`${day}:day`, spread),
+    )
+    rows.push(`  ${day}: расход ${fmtMoney(spend, site.state.currency)}`)
+  }
+  return rows
+}
+
+/** Money movement block: deposit date/amount, total spent, current balance. */
+function moneyMovement(site: GodSite, now: Date): string[] {
+  const auto = site.state.autoSpend
+  const live = liveBalance(site.state, now)
+  const cur = site.state.currency
+  const lines = [`Текущий остаток на счёте: ${fmtMoney(live, cur)}`]
+  if (auto?.enabled && auto.startDay) {
+    const spent = Math.max(0, (auto.spentToDate ?? 0) + (site.state.balance - live))
     lines.push(
-      `  ${PERIOD_LABELS[p]}: расход=${cost.toFixed(2)} показы=${Math.round(shows)} ` +
-        `клики=${Math.round(clicks)} конверсии=${goals.toFixed(1)} доход=${revenue.toFixed(2)}`,
+      `Зачисление средств: ${auto.startDay} — ${fmtMoney(round2(live + spent), cur)}`,
+      `Израсходовано с ${auto.startDay}: ${fmtMoney(round2(spent), cur)}`,
+      `Средний дневной расход (план): ${fmtMoney(auto.dailyBudget, cur)}`,
     )
   }
-  return lines.join('\n')
+  return lines
 }
 
-/** Build the full model context for one site. */
+/** Per-campaign metric rows for one period. */
+function campaignRows(site: GodSite, period: SitePeriod, now: Date): string[] {
+  const s = stateForPeriod(site.state, period, now)
+  return s.campaigns.map((c) => {
+    const ctr = c.shows > 0 ? ((c.clicks / c.shows) * 100).toFixed(2) : '0'
+    const cpc = c.clicks > 0 ? (c.cost / c.clicks).toFixed(2) : '—'
+    const cpa = c.goals > 0 ? (c.cost / c.goals).toFixed(2) : '—'
+    return (
+      `  «${c.name}» [${c.status === 'running' ? 'идут показы' : 'остановлена'}] ` +
+      `(${c.type}; ${c.strategy}; ${c.platform}; регионы: ${c.regions}; ` +
+      `период размещения ${c.startDate} — ${c.endDate || 'не ограничен'}): ` +
+      `расход=${c.cost.toFixed(2)} показы=${Math.round(c.shows)} клики=${Math.round(c.clicks)} ` +
+      `CTR=${ctr}% CPC=${cpc} конверсии=${c.goals.toFixed(1)} CPA=${cpa} ` +
+      `доход=${c.revenue.toFixed(2)} отказы=${c.bounce.toFixed(1)}% ` +
+      `недельный бюджет=${c.weeklyBudget}`
+    )
+  })
+}
+
+/** Full Direct-style context for one cabinet. NO internal fields leak here. */
 function siteContext(site: GodSite, now: Date): string {
-  const auto = site.state.autoSpend
-  const header = [
-    `САЙТ «${site.title}» (slug: ${site.slug})`,
-    `Баланс сейчас (живой): ${liveBalance(site.state, now).toFixed(2)} ${site.state.currency}`,
-    auto?.enabled
-      ? `Авто-скрутка: ВКЛ, бюджет/день=${auto.dailyBudget}, работает с ${auto.startDay ?? '—'}, ` +
-        `профиль=${auto.profile ?? 'исторический'}, списано всего=${auto.spentToDate ?? '—'}`
-      : 'Авто-скрутка: выключена',
-    `Агрегаты по периодам (только активные кампании):`,
-    periodSummary(site, now),
-    // Raw state VERBATIM — future fields flow through automatically.
-    `Полное состояние (JSON): ${JSON.stringify(site.state)}`,
+  const blocks: string[] = [
+    `=== КАБИНЕТ «${site.title}» ===`,
+    `Логин: ${site.state.login}`,
+    `Организация: ${site.state.organization} (ID ${site.state.orgId})`,
+    '',
+    'ДВИЖЕНИЕ СРЕДСТВ:',
+    ...moneyMovement(site, now).map((l) => `  ${l}`),
   ]
-  return header.join('\n')
+
+  const daily = dailySpendRows(site, now)
+  if (daily.length > 0) {
+    blocks.push('', 'РАСХОД ПО ДНЯМ (завершённые дни):', ...daily)
+  }
+
+  for (const p of REPORT_PERIODS) {
+    blocks.push('', `СТАТИСТИКА — ${PERIOD_LABELS[p].toUpperCase()}:`)
+    blocks.push(...campaignRows(site, p, now))
+  }
+  return blocks.join('\n')
 }
 
-const SYSTEM_PROMPT = `Ты аналитик рекламных кабинетов Яндекс Директ. Тебе дают полное текущее состояние
-нескольких управляемых кабинетов (баланс, кампании со всеми метриками, настройки
-авто-скрутки, агрегаты по периодам) и свободный запрос руководителя.
+/* ------------------------------ Gateway call ----------------------------- */
 
-Правила:
-- Отвечай на русском, структурированно, по делу. Заголовки и списки уместны.
-- Все числа бери ТОЛЬКО из переданных данных, ничего не выдумывай. Если для
-  запрошенного периода данных нет (например «за 3 часа» — есть только агрегаты
-  по дням), честно скажи это и дай ближайшую оценку из имеющегося (например,
-  долю дневного расхода) с пометкой, что это оценка.
-- Считай производные метрики сам: CTR=клики/показы, CPC=расход/клики,
-  CPA=расход/конверсии, CR=конверсии/клики, ДРР=расход/доход, ROI=(доход−расход)/расход.
-- Сравнивай кабинеты между собой, отмечай аномалии (низкий баланс, дорогой CPA,
-  остановленные кампании, исчерпание бюджета).
-- Заверши отчёт короткими практическими рекомендациями.`
+const SYSTEM_PROMPT = `Ты — ведущий специалист по контекстной рекламе. Ты готовишь профессиональные
+отчёты по рекламным кабинетам Яндекс Директ для руководителя. Данные тебе
+выгружены из API Яндекс Директа: движение средств по счёту с датами, расход по
+дням, статистика кампаний по периодам.
+
+ФОРМАТ ОТЧЁТА (markdown):
+- Заголовок с названием кабинета/кабинетов и отчётным периодом (с датами).
+- «Финансы»: остаток на счёте, дата и сумма зачисления, израсходовано за
+  период, на сколько дней хватит остатка при текущем темпе.
+- «Динамика по дням»: таблица дата → расход, отметь провалы/пики и выходные.
+- «Кампании»: таблица по кампаниям с расходом, показами, кликами, CTR, CPC,
+  конверсиями, CPA, доходом; выдели лучшую и худшую.
+- «Выводы»: 3-5 содержательных мыслей — что происходит и почему, какие
+  тренды, где деньги работают, а где сгорают.
+- «Рекомендации»: конкретные действия с ожидаемым эффектом.
+
+ЖЕЛЕЗНЫЕ ПРАВИЛА:
+- Все числа — ТОЛЬКО из выгрузки. Ничего не выдумывай. Производные метрики
+  (CTR, CPC, CPA, CR, ДРР, ROI) считай сам и показывай расчёт при спорных.
+- Если запрошенный период мельче доступной детализации (например «за 3 часа»,
+  а есть данные по дням) — скажи об этом прямо и дай оценку из дневных данных
+  с пометкой «оценка».
+- Пиши как живой специалист: с датами, деньгами и мыслями, без воды.
+- НИКОГДА не упоминай, что данные пришли текстом/JSON, не рассуждай об их
+  происхождении. Это выгрузка из Директа — точка.
+- Если запрос руководителя неоднозначен (непонятен период, кабинет, фокус или
+  формат) — НЕ пиши отчёт наугад. Задай 1-3 коротких уточняющих вопроса
+  списком и жди ответа.
+- Отвечай на русском.`
+
+export type ReportChatMessage = { role: 'user' | 'assistant'; content: string }
 
 export type GodReportResult =
   | { ok: true; report: string; model: string }
   | { ok: false; message: string }
 
 /**
- * Generate a free-form report over ALL managed sites (or a subset by id).
- * `request` is the operator's free text — period, focus, format, anything.
+ * Generate a report (or a clarifying question) over managed sites. `messages`
+ * is the running conversation — the operator can answer clarifying questions
+ * and the model keeps full context of both the data and the dialog.
  */
 export async function generateGodReport(
-  request: string,
+  messages: ReportChatMessage[],
   siteIds?: string[],
 ): Promise<GodReportResult> {
   const key = process.env.AI_GATEWAY_API_KEY
@@ -120,12 +204,20 @@ export async function generateGodReport(
       ? all.filter((s) => siteIds.includes(s.id))
       : all
   if (sites.length === 0) {
-    return { ok: false, message: 'Нет сайтов для отчёта.' }
+    return { ok: false, message: 'Нет кабинетов для отчёта.' }
   }
 
   const now = new Date()
-  const context = sites.map((s) => siteContext(s, now)).join('\n\n---\n\n')
+  const context = sites.map((s) => siteContext(s, now)).join('\n\n')
   const model = resolveModel()
+
+  const first = messages[0]
+  const rest = messages.slice(1)
+  const stamp = new Intl.DateTimeFormat('ru-RU', {
+    dateStyle: 'long',
+    timeStyle: 'short',
+    timeZone: 'Europe/Moscow',
+  }).format(now)
 
   try {
     const res = await fetch(GATEWAY_URL, {
@@ -141,12 +233,13 @@ export async function generateGodReport(
           {
             role: 'user',
             content:
-              `ДАННЫЕ КАБИНЕТОВ (снимок на ${now.toISOString()}):\n\n${context}\n\n` +
-              `ЗАПРОС РУКОВОДИТЕЛЯ:\n${request.trim() || 'Дневной отчёт по всем запущенным кабинетам.'}`,
+              `ВЫГРУЗКА ИЗ ЯНДЕКС ДИРЕКТА (актуальна на ${stamp} МСК):\n\n${context}\n\n` +
+              `ЗАПРОС РУКОВОДИТЕЛЯ:\n${(first?.content ?? '').trim() || 'Полный отчёт по всем кабинетам за последние 7 дней.'}`,
           },
+          ...rest.map((m) => ({ role: m.role, content: m.content })),
         ],
-        temperature: 0.3,
-        max_tokens: 2000,
+        temperature: 0.4,
+        max_tokens: 3000,
       }),
     })
     if (!res.ok) {

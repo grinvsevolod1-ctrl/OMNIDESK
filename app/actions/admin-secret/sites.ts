@@ -332,13 +332,14 @@ export async function secretDownloadExtensionAction(
 
 /**
  * Free-form AI report over the managed sites («Сформировать отчёт» button).
- * The operator's text goes to the model together with the FULL state of every
- * site (raw JSON — future fields flow through automatically) plus period
- * aggregates. Optional siteIds narrows the report to specific cabinets.
- * Rate-limited: each report is a full-context gateway call.
+ * `messages` is the running dialog: first entry is the operator's request,
+ * later entries are clarifying Q&A — the model may ask questions instead of
+ * guessing. Context is rebuilt as a Direct-style export (no internals leak).
+ * Optional siteIds narrows the report to specific cabinets. Rate-limited:
+ * each turn is a full-context gateway call.
  */
 export async function secretGenerateReportAction(
-  request: string,
+  messages: { role: 'user' | 'assistant'; content: string }[],
   siteIds?: string[],
 ): Promise<ActionResult & { report?: string; model?: string }> {
   await requireGod()
@@ -346,7 +347,17 @@ export async function secretGenerateReportAction(
   const rl = await rateLimit('god-sites-report', 6, 60_000)
   if (!rl.allowed) return { ok: false, message: 'Слишком часто, подождите' }
 
-  const res = await generateGodReport(request.slice(0, 2000), siteIds)
+  const trimmed = messages
+    .slice(-12)
+    .map((m) => ({
+      role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+      content: String(m.content ?? '').slice(0, 4000),
+    }))
+  if (trimmed.length === 0) {
+    return { ok: false, message: 'Пустой запрос.' }
+  }
+
+  const res = await generateGodReport(trimmed, siteIds)
   if (!res.ok) return { ok: false, message: res.message }
   return { ok: true, message: 'Отчёт готов', report: res.report, model: res.model }
 }
