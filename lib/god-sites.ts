@@ -852,3 +852,48 @@ export async function renameSite(
   )
   return Boolean(rows[0])
 }
+
+/* ----------------------- Extension generator (beta) --------------------- */
+
+/** Where the "яндекс N" numbering starts (see migration 136). */
+export const EXT_LABEL_SEQ_START = 11
+
+/**
+ * Assign this site its permanent "яндекс N" number on first download, as
+ * MAX(ext_label_seq)+1 across all sites (floor EXT_LABEL_SEQ_START). Once set
+ * it never changes — subsequent downloads reuse it. Done in a single
+ * statement so two concurrent first-downloads can't collide (the unique
+ * partial index would reject a duplicate anyway, but COALESCE on the current
+ * row makes the common path idempotent without an error).
+ */
+export async function assignExtLabelSeq(id: string): Promise<number | null> {
+  const rows = await query<{ ext_label_seq: number }>(
+    `UPDATE god_sites AS g
+        SET ext_label_seq = COALESCE(
+              g.ext_label_seq,
+              GREATEST(
+                $2::int,
+                COALESCE((SELECT MAX(ext_label_seq) FROM god_sites), $2::int - 1) + 1
+              )
+            ),
+            updated_at = now()
+      WHERE g.id = $1
+      RETURNING ext_label_seq`,
+    [id, EXT_LABEL_SEQ_START],
+  )
+  return rows[0] ? Number(rows[0].ext_label_seq) : null
+}
+
+/**
+ * Bump and return the per-site download counter → manifest version "1.0.K".
+ * Chrome refuses to reload an unpacked extension whose version didn't change,
+ * so every download must produce a strictly greater K.
+ */
+export async function bumpExtVersion(id: string): Promise<number | null> {
+  const rows = await query<{ ext_version: number }>(
+    `UPDATE god_sites SET ext_version = ext_version + 1, updated_at = now()
+      WHERE id = $1 RETURNING ext_version`,
+    [id],
+  )
+  return rows[0] ? Number(rows[0].ext_version) : null
+}
