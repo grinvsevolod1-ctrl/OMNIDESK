@@ -36,11 +36,13 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `136`.
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `139`.
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
-- **Worker** (`worker/`) — отдельный Node-процесс: GramJS (Telegram), боты
-  VK/MAX, обработка джобов. Запускается через PM2.
+- **Worker** (`worker/`) — отдельный Node-процесс: teleproto (Telegram
+  MTProto; поддерживаемый форк GramJS, сам GramJS deprecated — мигрировали
+  drop-in, импорты `teleproto`/`teleproto/*`), боты VK/MAX, обработка
+  джобов. Запускается через PM2.
 - **PM2** (`ecosystem.config.js`) — 12 процессов: panel, worker, крон-джобы
   (sync-ads, retry-dead-letters, followup, curator-status, console-schedules,
   ai-health, retention), backup-db, db-vacuum, auto-deploy.
@@ -94,7 +96,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    владельца для закрытой системы: каждый скачанный архив расширения обязан
    работать вечно. «Показать токен» в меню сайта отдаёт его в любой момент
    (`secretGetSiteKeyAction` / `getOrCreateSiteKey`; legacy-сайты без
-   плейнтекста получают ОДНУ финальную перевыпуску — гонк�� закрыта guard'ом
+   плейнтекста получают ОДНУ финальную перевыпуску — гонк���� закрыта guard'ом
    `api_key_plain IS NULL`). Единственный путь инвалидации — ручная кнопка
    «Заменить токен» (`rotateSiteKey`): умирают ВСЕ архивы сайта сразу.
    Передаётся Bearer'ом или `?token=` (SSE). Slug и токен матчатся ОДНИМ
@@ -151,7 +153,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    (`components/admin/secret-sites/report-dialog.tsx`).
 6. **Личные Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
    миграция 135) — каналы `type='telegram_personal'` в `channels`, живут
-   на воркере (`worker/src/personal.ts`, GramJS). Все admin-видимые выборки
+   на воркере (`worker/src/personal.ts`, teleproto). Все admin-видимые выборки
    каналов ОБЯЗАНЫ исключать их фильтром `type <> 'telegram_personal'`
    (закреплено в `lib/ai/isolation.test.ts`). Переписка читается напрямую
    из Telegram через worker HTTP и НЕ сохраняется в БД панели. Actions —
@@ -266,7 +268,7 @@ components/admin/        UI админки
                          действий из lib/data/audit)
   finance-admin.tsx + finance/use-finance-admin.ts  финансы: контейнер +
                          хук состояния (view/диалоги/фильтрация по ресурсу)
-  lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлайн-
+  lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлай��-
                          редакторы лида; общий transition+toast флоу — в хуке
 components/shared/       кросс-ролевые компоненты; use-xlsx-export.ts — общий
                          флоу Excel-выгрузки (admin/manager/curator leads);
@@ -438,7 +440,7 @@ lib/
                          штампуется saveSiteState на переходе off→on
                          (повторное включение = новый старт, spentToDate=0);
                          autoSpend.spentToDate — кумулятивно списанное с
-                         баланса (ведёт commitAutoSpend посуточной симуляцией,
+                         баланса (ведёт commitAutoSpend посуточной с��муляцией,
                          не плоским days × budget) — капит историю завершённых
                          дней деньгами, которые реально были. Ручные
                          periodOverrides накладываются поверх и побеждают;
@@ -523,7 +525,7 @@ worker/src/              воркер каналов
   hosting/               автономный DevOps-агент: agent.ts (петля инструментов),
                          agent-prompts.ts (toolDefs + системный промпт), ssh.ts,
                          pipeline.ts, agent-safety.ts (блок опасных команд)
-  telegram-*.test.ts     тест-харнесс на моках GramJS: phone-login (resume/
+  telegram-*.test.ts     тест-харнесс на моках teleproto: phone-login (resume/
                          code/2FA/рестарт), qr-login (токен, DC-миграция,
                          2FA hand-off), recovery (дедуп, OFFLINE-маркер)
 widget-src/livechat.js   ИСХОДНИК виджета (public/livechat.js — генерат)
@@ -628,7 +630,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   `grep -rlP '\xEF\xBF\xBD' lib components app worker/src scripts AGENTS.md`
   — должно быть пусто (битые символы уже случались).
 - **Никакого хардкода поведения продавца** — любое новое поведение это
-  настройка, директива или урок из чата, а не константа в коде.
+  настройка, директива или урок из чата, а ��е константа в коде.
 - **Не удаляй и не обходи** тест изоляции `lib/ai/isolation.test.ts`.
 - **СТРУКТУРА НОВОГО КОДА — пиши правильно СРАЗУ, а не рефактори потом.**
   Прежде чем создавать файл, прикинь его размер в готовом виде. Если фича
@@ -706,7 +708,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 |---|---|
 | Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
-| Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
+| Изменить вход м��зга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент co-pilot |
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
 | БД-слой воркера | барели `worker/src/repo.ts` и `repo-ai.ts` |
