@@ -23,12 +23,14 @@ import {
 } from '@/app/actions/admin-secret'
 import { downloadBase64Zip } from '@/components/admin/secret-sites/download-zip'
 import type {
+  AutoSpend,
   GodSite,
   SiteCampaign,
   SiteRecommendation,
   SiteState,
 } from '@/lib/god-sites'
-import { autoDayFraction } from '@/lib/god-sites-sim'
+import { autoDayFraction, dayCurveFraction } from '@/lib/god-sites-sim'
+import { SpendCurveSettings } from '@/components/admin/secret-sites/spend-curve-settings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -116,12 +118,15 @@ function derived(c: SiteCampaign): { label: string; value: string }[] {
 }
 
 /**
- * "К этому часу скручено ~N%" preview — the SAME curve the server simulation
- * uses (lib/god-sites-sim.ts is pure and shared), so the preview can never
- * silently drift from what the vitrine actually shows.
+ * "К этому часу скручено ~N%" preview — the SAME curve dispatch the server
+ * uses (profile → smoothed S-curve, no profile → historical step curve), so
+ * the preview can never silently drift from what the vitrine actually shows.
  */
-function previewDayFraction(tzOffsetHours: number): number {
-  return autoDayFraction(new Date(), tzOffsetHours)
+function previewDayFraction(auto: AutoSpend | undefined): number {
+  const tz = auto?.tzOffsetHours ?? 3
+  return auto?.profile
+    ? dayCurveFraction(new Date(), tz, auto.profile, auto.smoothness ?? 0.6)
+    : autoDayFraction(new Date(), tz)
 }
 
 export function SiteEditor({
@@ -148,8 +153,8 @@ export function SiteEditor({
   const running = state.campaigns.filter((c) => c.status === 'running').length
   const autoEnabled = state.autoSpend?.enabled === true
   const autoPreviewFraction = useMemo(
-    () => previewDayFraction(state.autoSpend?.tzOffsetHours ?? 3),
-    [state.autoSpend?.tzOffsetHours],
+    () => previewDayFraction(state.autoSpend),
+    [state.autoSpend],
   )
   const [topUpAmount, setTopUpAmount] = useState('')
   // Balance the vitrine shows right now: stored minus today's partial burn.
@@ -648,6 +653,23 @@ export function SiteEditor({
                 </p>
               </div>
             </div>
+            {/* Spend-curve settings: profile presets, S-curve smoothing,
+                weekend dip, day jitter + a live 24h preview drawn from the
+                same shared math the server burns by. */}
+            {state.autoSpend && (
+              <SpendCurveSettings
+                auto={state.autoSpend}
+                currency={state.currency}
+                onChange={(patch) =>
+                  setState((s) => ({
+                    ...s,
+                    autoSpend: s.autoSpend
+                      ? { ...s.autoSpend, ...patch }
+                      : s.autoSpend,
+                  }))
+                }
+              />
+            )}
             {state.autoSpend?.startDay && (
               <p className="text-xs text-muted-foreground">
                 Работает с{' '}
@@ -671,8 +693,8 @@ export function SiteEditor({
               Расход распределяется по активным кампаниям пропорционально их
               базовому расходу, а показы, клики, конверсии и доход
               масштабируются от их собственных пропорций (базовые числа
-              кампании = её «профиль»). Ночью скрутка медленная, днём быстрее,
-              пик вечером. Баланс уменьшается вживую; завершённые дни
+              кампании = её «профиль»). Темп внутри дня задаёт выбранный
+              профиль и сглаживание выше. Баланс уменьшается вживую; завершённые дни
               списываются с баланса насовсем при первом чтении нового дня —
               витриной или этой панелью, — так что скрутка накапливается день
               за днём и ничего не сбрасывается. Кампании со статусом

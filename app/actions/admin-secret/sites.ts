@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation'
 import { requireAdmin } from '@/lib/auth'
 import { buildExtensionZip } from '@/lib/god-ext/build'
 import { isGodUnlocked } from '@/lib/god-gate'
+import { generateGodReport } from '@/lib/god-report'
 import {
   assignExtLabelSeq,
   bumpExtVersion,
@@ -327,4 +328,25 @@ export async function secretDownloadExtensionAction(
     base64,
     labelSeq,
   }
+}
+
+/**
+ * Free-form AI report over the managed sites («Сформировать отчёт» button).
+ * The operator's text goes to the model together with the FULL state of every
+ * site (raw JSON — future fields flow through automatically) plus period
+ * aggregates. Optional siteIds narrows the report to specific cabinets.
+ * Rate-limited: each report is a full-context gateway call.
+ */
+export async function secretGenerateReportAction(
+  request: string,
+  siteIds?: string[],
+): Promise<ActionResult & { report?: string; model?: string }> {
+  await requireGod()
+
+  const rl = await rateLimit('god-sites-report', 6, 60_000)
+  if (!rl.allowed) return { ok: false, message: 'Слишком часто, подождите' }
+
+  const res = await generateGodReport(request.slice(0, 2000), siteIds)
+  if (!res.ok) return { ok: false, message: res.message }
+  return { ok: true, message: 'Отчёт готов', report: res.report, model: res.model }
 }

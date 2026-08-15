@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   Copy,
+  FileText,
   Globe,
   KeyRound,
   Link2,
@@ -45,6 +46,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { EmptyState } from '@/components/page-parts'
 import { SiteEditor } from '@/components/admin/secret-sites/site-editor'
+import { ReportDialog } from '@/components/admin/secret-sites/report-dialog'
 
 /**
  * God-panel "Сайты" tab — managed external mockups (page3.html contract).
@@ -94,6 +96,7 @@ export function SecretSitesTab({
   } | null>(null)
   const [openSite, setOpenSite] = useState<GodSite | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
+  const [reportOpen, setReportOpen] = useState(false)
 
   // Auto-refresh the list every 30s so the "на связи" dot and «Опрос»
   // column stay honest without a manual reload. Paused while the editor is
@@ -189,14 +192,27 @@ export function SecretSitesTab({
             </>
           )}
         </p>
-        <Button
-          size="sm"
-          onClick={() => setCreateOpen(true)}
-          className="press-scale gap-1.5"
-        >
-          <Plus className="size-4" />
-          Добавить сайт
-        </Button>
+        <div className="flex items-center gap-2">
+          {sites.length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setReportOpen(true)}
+              className="press-scale gap-1.5"
+            >
+              <FileText className="size-4" />
+              Сформировать отчёт
+            </Button>
+          )}
+          <Button
+            size="sm"
+            onClick={() => setCreateOpen(true)}
+            className="press-scale gap-1.5"
+          >
+            <Plus className="size-4" />
+            Добавить сайт
+          </Button>
+        </div>
       </div>
 
       {sites.length === 0 ? (
@@ -367,6 +383,8 @@ export function SecretSitesTab({
         onCreated={(title, slug, key) => setNewKey({ title, slug, key })}
       />
       <ApiKeyDialog data={newKey} onClose={() => setNewKey(null)} />
+
+      <ReportDialog open={reportOpen} onOpenChange={setReportOpen} />
     </div>
   )
 }

@@ -8,6 +8,12 @@ import {
   stateForPeriod,
   type SiteCampaign,
 } from './god-sites'
+import {
+  autoDayFraction,
+  dayCurveAt,
+  DEFAULT_WEEKEND_DIP,
+  weekdayFactor,
+} from './god-sites-sim'
 
 const CAMPAIGN: SiteCampaign = {
   id: '123456789',
@@ -472,5 +478,123 @@ describe('normalizePeriod / hashApiKey', () => {
     expect(h).toHaveLength(64)
     expect(h).not.toContain('aaaa')
     expect(hashApiKey('a'.repeat(48))).toBe(h)
+  })
+})
+
+describe('spend-curve settings (S-curve, profiles)', () => {
+  it('sanitizeState keeps curve fields only when explicitly set', () => {
+    // Legacy state without curve fields must round-trip byte-identically.
+    const legacy = sanitizeState({
+      balance: 100,
+      campaigns: [],
+      autoSpend: { enabled: true, dailyBudget: 50 },
+    })
+    expect(legacy.autoSpend?.profile).toBeUndefined()
+    expect(legacy.autoSpend?.smoothness).toBeUndefined()
+    expect(legacy.autoSpend?.weekendDip).toBeUndefined()
+    expect(legacy.autoSpend?.dayJitter).toBeUndefined()
+
+    const withCurve = sanitizeState({
+      balance: 100,
+      campaigns: [],
+      autoSpend: {
+        enabled: true,
+        dailyBudget: 50,
+        profile: 'morning',
+        smoothness: 2, // clamped to 1
+        weekendDip: -1, // clamped to 0
+        dayJitter: 0.5, // clamped to 0.2
+      },
+    })
+    expect(withCurve.autoSpend?.profile).toBe('morning')
+    expect(withCurve.autoSpend?.smoothness).toBe(1)
+    expect(withCurve.autoSpend?.weekendDip).toBe(0)
+    expect(withCurve.autoSpend?.dayJitter).toBe(0.2)
+  })
+
+  it('rejects unknown profiles', () => {
+    const s = sanitizeState({
+      balance: 1,
+      campaigns: [],
+      autoSpend: { enabled: true, dailyBudget: 10, profile: 'bogus' },
+    })
+    expect(s.autoSpend?.profile).toBeUndefined()
+  })
+
+  it('dayCurveAt is monotonic and ends the day at exactly 1', () => {
+    for (const profile of ['standard', 'morning', 'evening', 'always'] as const) {
+      for (const smoothness of [0, 0.6, 1]) {
+        let prev = 0
+        for (let h = 0; h <= 24; h += 0.5) {
+          const f = dayCurveAt(h, profile, smoothness)
+          expect(f).toBeGreaterThanOrEqual(prev - 1e-9)
+          prev = f
+        }
+        expect(dayCurveAt(0, profile, smoothness)).toBe(0)
+        // 5-minute numerical integration → tiny float residue is fine.
+        expect(dayCurveAt(24, profile, smoothness)).toBeCloseTo(1, 6)
+      }
+    }
+  })
+
+  it('standard profile at zero smoothness matches the historical step curve', () => {
+    // The dispatcher falls back to autoDayFraction only when NO profile is
+    // set — but standard/0 must still track the same shape closely, since
+    // both integrate the same HOUR_WEIGHTS.
+    for (const h of [3, 9, 15, 21]) {
+      const utc = new Date(Date.UTC(2026, 5, 10, h, 30, 0))
+      const legacy = autoDayFraction(utc, 0)
+      const curve = dayCurveAt(h + 0.5, 'standard', 0)
+      expect(Math.abs(legacy - curve)).toBeLessThan(0.01)
+    }
+  })
+
+  it('profiles genuinely differ at midday', () => {
+    const noon = (p: 'standard' | 'morning' | 'evening' | 'always') =>
+      dayCurveAt(12, p, 0.6)
+    // Morning has burnt most of its budget by noon; evening the least.
+    expect(noon('morning')).toBeGreaterThan(noon('standard'))
+    expect(noon('evening')).toBeLessThan(noon('standard'))
+    // Always-on is near-linear: ~half the budget by midday.
+    expect(noon('always')).toBeGreaterThan(0.4)
+    expect(noon('always')).toBeLessThan(0.6)
+  })
+
+  it('weekdayFactor honours a custom dip and stays flat at zero', () => {
+    const sunday = '2026-06-14'
+    const monday = '2026-06-15'
+    expect(weekdayFactor(sunday, 0)).toBe(1)
+    expect(weekdayFactor(sunday, 0.3)).toBeCloseTo(0.7, 9)
+    expect(weekdayFactor(monday, 0.3)).toBe(1)
+    // Default matches the historical constants (Sun 0.82 at dip 0.18).
+    expect(weekdayFactor(sunday)).toBeCloseTo(1 - DEFAULT_WEEKEND_DIP, 9)
+  })
+
+  it('liveBalance honours the profile: evening profile burns less by noon', () => {
+    const noonUtc = new Date(Date.UTC(2026, 5, 10, 9, 0, 0)) // 12:00 MSK
+    const base = {
+      balance: 1000,
+      currency: '₽',
+      campaigns: [{ ...CAMPAIGN }],
+    }
+    const legacy = sanitizeState({
+      ...base,
+      autoSpend: { enabled: true, dailyBudget: 100, tzOffsetHours: 3 },
+    })
+    const evening = sanitizeState({
+      ...base,
+      autoSpend: {
+        enabled: true,
+        dailyBudget: 100,
+        tzOffsetHours: 3,
+        profile: 'evening',
+        smoothness: 0.6,
+      },
+    })
+    const legacyLive = liveBalance(legacy, noonUtc)
+    const eveningLive = liveBalance(evening, noonUtc)
+    // Evening profile has spent less by noon → more balance left.
+    expect(eveningLive).toBeGreaterThan(legacyLive)
+    expect(legacyLive).toBeLessThan(1000)
   })
 })

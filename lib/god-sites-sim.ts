@@ -125,12 +125,16 @@ export function dayCurveAt(
   const weights = SPEND_PROFILES[profile] ?? SPEND_PROFILES.standard
   const s = Math.max(0, Math.min(1, smoothness))
   const target = Math.max(0, Math.min(24, hourFloat))
-  const STEP = 1 / 12 // 5 minutes
+  // Integer step indexing (t = i/12), NOT `t += 1/12` accumulation — float
+  // drift over 288 additions pushes the last step into the partial branch
+  // and the day would end at ≈0.9987 instead of exactly 1.
+  const STEPS = 288 // 5-minute grid
+  const STEP = 24 / STEPS
   let total = 0
   let upTo = 0
-  for (let t = 0; t < 24; t += STEP) {
-    const mid = t + STEP / 2
-    const r = blendedRate(weights, mid, s)
+  for (let i = 0; i < STEPS; i++) {
+    const t = i * STEP
+    const r = blendedRate(weights, t + STEP / 2, s)
     total += r
     if (t + STEP <= target) {
       upTo += r
