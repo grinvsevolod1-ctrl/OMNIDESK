@@ -8,6 +8,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const queryMock = vi.fn<(sql: string, params?: unknown[]) => Promise<unknown[]>>()
 vi.mock('../db', () => ({
   query: (sql: string, params?: unknown[]) => queryMock(sql, params),
+  // setCuratorCities now runs inside a transaction; the mock routes the
+  // transactional executor's queries through the same queryMock so the
+  // assertions on SQL shape and parameters stay unchanged.
+  withTransaction: async (
+    operation: (db: {
+      query: (sql: string, params?: unknown[]) => Promise<unknown[]>
+    }) => Promise<unknown>,
+  ) =>
+    operation({
+      query: (sql: string, params?: unknown[]) => queryMock(sql, params),
+    }),
 }))
 
 import {

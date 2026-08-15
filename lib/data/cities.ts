@@ -6,7 +6,7 @@
  * canonical display name per key so «Москва», «москва » and «МОСКВА» are the
  * same city everywhere (matching, suggestions, curator auto-pick).
  */
-import { query } from '../db'
+import { query, withTransaction } from '../db'
 
 /** Collapse whitespace, trim. Display form (keeps case as typed). */
 export function normalizeCityName(raw: string): string {
@@ -87,35 +87,41 @@ export async function setCuratorCities(
     throw new Error('Укажите хотя бы один город')
   }
 
-  // Batch: remember every city in one round-trip (instead of one per city)
-  // and read back the canonical spellings keyed by name_norm.
-  const keys = names.map((n) => n.toLowerCase())
-  const dictRows = await query<{ name: string; name_norm: string }>(
-    `INSERT INTO cities (name, name_norm)
-     SELECT n, k FROM unnest($1::text[], $2::text[]) AS t(n, k)
-     ON CONFLICT (name_norm) DO UPDATE SET name_norm = EXCLUDED.name_norm
-     RETURNING name, name_norm`,
-    [names, keys],
-  )
-  const canonicalByKey = new Map(dictRows.map((r) => [r.name_norm, r.name]))
-  const canonical = names.map(
-    (n) => canonicalByKey.get(n.toLowerCase()) ?? n,
-  )
+  // Атомарность: DELETE + INSERT + UPDATE идут в одной транзакции, иначе
+  // падение между DELETE и INSERT оставляло куратора вообще без городов.
+  return withTransaction(async (db) => {
+    // Batch: remember every city in one round-trip (instead of one per city)
+    // and read back the canonical spellings keyed by name_norm.
+    const keys = names.map((n) => n.toLowerCase())
+    const dictRows = await db.query<{ name: string; name_norm: string }>(
+      `INSERT INTO cities (name, name_norm)
+       SELECT n, k FROM unnest($1::text[], $2::text[]) AS t(n, k)
+       ON CONFLICT (name_norm) DO UPDATE SET name_norm = EXCLUDED.name_norm
+       RETURNING name, name_norm`,
+      [names, keys],
+    )
+    const canonicalByKey = new Map(dictRows.map((r) => [r.name_norm, r.name]))
+    const canonical = names.map(
+      (n) => canonicalByKey.get(n.toLowerCase()) ?? n,
+    )
 
-  await query(`DELETE FROM curator_cities WHERE curator_id = $1`, [curatorId])
-  await query(
-    `INSERT INTO curator_cities (curator_id, city, city_norm)
-     SELECT $1, c, lower(c) FROM unnest($2::text[]) AS t(c)
-     ON CONFLICT (curator_id, city_norm) DO NOTHING`,
-    [curatorId, canonical],
-  )
-  // ВАЖНО: у managers НЕТ колонки updated_at — не добавлять её сюда
-  // (ошибка «column updated_at does not exist» роняла сохранение городов).
-  await query(`UPDATE managers SET city = $2 WHERE id = $1`, [
-    curatorId,
-    canonical[0],
-  ])
-  return canonical
+    await db.query(`DELETE FROM curator_cities WHERE curator_id = $1`, [
+      curatorId,
+    ])
+    await db.query(
+      `INSERT INTO curator_cities (curator_id, city, city_norm)
+       SELECT $1, c, lower(c) FROM unnest($2::text[]) AS t(c)
+       ON CONFLICT (curator_id, city_norm) DO NOTHING`,
+      [curatorId, canonical],
+    )
+    // ВАЖНО: у managers НЕТ колонки updated_at — не добавлять её сюда
+    // (ошибка «column updated_at does not exist» роняла сохранение городов).
+    await db.query(`UPDATE managers SET city = $2 WHERE id = $1`, [
+      curatorId,
+      canonical[0],
+    ])
+    return canonical
+  })
 }
 
 /** Parse a comma/semicolon-separated city list from a form field. */

@@ -200,7 +200,17 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('[db] Query failed:', message)
-    throw new Error(`Database error: ${message}`)
+    // Preserve the Postgres error code (and the original error as `cause`)
+    // on the wrapped error: callers rely on `.code` for control flow —
+    // e.g. 23505 unique-violation retries (lib/god-sites.ts) and 42P01
+    // missing-table detection (app/actions/managers.ts). A bare
+    // `new Error(...)` silently broke those checks.
+    const wrapped = new Error(`Database error: ${message}`, { cause: err })
+    const code = (err as { code?: unknown })?.code
+    if (typeof code === 'string') {
+      ;(wrapped as Error & { code?: string }).code = code
+    }
+    throw wrapped
   }
 }
 
