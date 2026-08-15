@@ -102,6 +102,9 @@ export function usePersonalMessenger(channelId: string | null) {
     setThreadLoading(true)
     setMessages([])
     setHasMore(true)
+    // Сброс на случай, если предыдущий тред закрыли посреди loadOlder —
+    // иначе флаг остаётся true и пагинация нового треда блокируется.
+    setLoadingOlder(false)
     void personalHistoryAction(channelId, peer).then((res) => {
       if (threadKeyRef.current !== key) return
       setThreadLoading(false)
@@ -133,8 +136,8 @@ export function usePersonalMessenger(channelId: string | null) {
     setLoadingOlder(true)
     const key = threadKeyRef.current
     const res = await personalHistoryAction(channelId, peer, beforeId)
-    if (threadKeyRef.current !== key) return
     setLoadingOlder(false)
+    if (threadKeyRef.current !== key) return
     if (res.ok) {
       if (res.messages.length === 0) setHasMore(false)
       else {
