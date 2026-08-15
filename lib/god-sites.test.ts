@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   hashApiKey,
+  liveBalance,
   normalizePeriod,
   sanitizeCampaign,
   sanitizeState,
@@ -325,6 +326,38 @@ describe('auto-spend projection', () => {
 function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
+
+describe('liveBalance', () => {
+  it('equals the today-period balance the vitrine shows', () => {
+    const evening = new Date('2026-08-15T18:00:00+03:00')
+    const state = sanitizeState({
+      balance: 1000,
+      campaigns: [CAMPAIGN],
+      autoSpend: { enabled: true, dailyBudget: 100, tzOffsetHours: 3 },
+    })
+    expect(liveBalance(state, evening)).toBe(
+      stateForPeriod(state, 'today', evening).balance,
+    )
+    // By evening a meaningful share of the daily budget is burnt.
+    expect(liveBalance(state, evening)).toBeLessThan(1000)
+    expect(liveBalance(state, evening)).toBeGreaterThan(900)
+  })
+
+  it('returns the stored balance untouched when auto-spend is off', () => {
+    const state = sanitizeState({ balance: 500, campaigns: [CAMPAIGN] })
+    expect(liveBalance(state)).toBe(500)
+  })
+
+  it('never goes below zero when the budget exceeds the balance', () => {
+    const evening = new Date('2026-08-15T23:00:00+03:00')
+    const state = sanitizeState({
+      balance: 10,
+      campaigns: [CAMPAIGN],
+      autoSpend: { enabled: true, dailyBudget: 10_000, tzOffsetHours: 3 },
+    })
+    expect(liveBalance(state, evening)).toBe(0)
+  })
+})
 
 describe('normalizePeriod / hashApiKey', () => {
   it('falls back to today for unknown periods', () => {

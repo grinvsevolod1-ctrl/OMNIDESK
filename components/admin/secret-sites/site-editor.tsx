@@ -17,6 +17,7 @@ import {
 import {
   secretGetSiteAction,
   secretSaveSiteStateAction,
+  secretTopUpSiteAction,
 } from '@/app/actions/admin-secret'
 import type {
   GodSite,
@@ -144,6 +145,20 @@ export function SiteEditor({
     () => previewDayFraction(state.autoSpend?.tzOffsetHours ?? 3),
     [state.autoSpend?.tzOffsetHours],
   )
+  const [topUpAmount, setTopUpAmount] = useState('')
+  // Balance the vitrine shows right now: stored minus today's partial burn.
+  // Same curve as the server (god-sites-sim is shared) — an estimate only in
+  // the rare capped case when the balance runs out mid-day.
+  const vitrineBalance = autoEnabled
+    ? Math.max(
+        0,
+        state.balance -
+          Math.min(
+            autoPreviewFraction * (state.autoSpend?.dailyBudget ?? 0),
+            state.balance,
+          ),
+      )
+    : state.balance
 
   const recommendations = state.recommendations ?? []
 
@@ -185,6 +200,46 @@ export function SiteEditor({
           if (res.conflict) setConflict(true)
           toast.error(res.message)
         }
+      } catch {
+        toast.error('Внутренняя ошибка сервера')
+      }
+    })
+  }
+
+  /**
+   * Top-up: the server atomically ADDS to the stored balance (after banking
+   * pending rollover days), then we adopt the fresh balance + revision in
+   * place — other unsaved edits survive, and the next save won't conflict.
+   */
+  function topUp() {
+    const amount = Number(topUpAmount.replace(',', '.'))
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error('Введите сумму пополнения больше нуля')
+      return
+    }
+    startTransition(async () => {
+      try {
+        const res = await secretTopUpSiteAction(site.id, amount)
+        if (!res.ok || res.balance === undefined || res.revision === undefined) {
+          toast.error(res.message)
+          return
+        }
+        setRevision(res.revision)
+        setState((s) => ({ ...s, balance: res.balance as number }))
+        // The new balance is already persisted — sync the snapshot so the
+        // top-up alone doesn't flag the editor as dirty.
+        setSavedSnapshot((snap) => {
+          try {
+            const parsed = JSON.parse(snap) as SiteState
+            return JSON.stringify({ ...parsed, balance: res.balance })
+          } catch {
+            return snap
+          }
+        })
+        setTopUpAmount('')
+        toast.success(
+          `Баланс пополнен: ${nf.format(res.balance)} ${state.currency}`,
+        )
       } catch {
         toast.error('Внутренняя ошибка сервера')
       }
@@ -312,7 +367,7 @@ export function SiteEditor({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="site-balance">Баланс</Label>
+            <Label htmlFor="site-balance">Баланс (задать точно)</Label>
             <Input
               id="site-balance"
               type="number"
@@ -324,6 +379,15 @@ export function SiteEditor({
               }
               className="font-mono"
             />
+            {autoEnabled && (
+              <p className="text-xs text-muted-foreground">
+                Сейчас на витрине ≈{' '}
+                <span className="font-mono font-medium text-foreground">
+                  {nf.format(vitrineBalance)} {state.currency}
+                </span>{' '}
+                — с учётом скрутки за сегодня
+              </p>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="site-currency">Валюта</Label>
@@ -335,6 +399,51 @@ export function SiteEditor({
             />
           </div>
         </div>
+        {/* Top-up: adds to the CURRENT balance server-side (atomic increment,
+            applied instantly — no "Сохранить всё" needed). The plain input
+            above stays for setting an exact value. */}
+        <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3">
+          <Label htmlFor="site-topup">Пополнить баланс</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              id="site-topup"
+              type="number"
+              min={0}
+              step="0.01"
+              value={topUpAmount}
+              placeholder={`Сумма, ${state.currency}`}
+              onChange={(e) => setTopUpAmount(e.target.value)}
+              onKeyDown={(e) => {
+                if (
+                  e.key === 'Enter' &&
+                  !e.nativeEvent.isComposing &&
+                  e.keyCode !== 229
+                ) {
+                  e.preventDefault()
+                  topUp()
+                }
+              }}
+              className="max-w-40 font-mono"
+            />
+            <Button
+              size="sm"
+              onClick={topUp}
+              disabled={pending || Number(topUpAmount.replace(',', '.')) <= 0}
+              className="press-scale gap-1.5"
+            >
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Plus className="size-4" />
+              )}
+              Пополнить
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              прибавится к текущему балансу и применится сразу
+            </span>
+          </div>
+        </div>
+
         {/* Organization card — окно по клику на аватар на витрине. Пустые
             поля не отправляются, страница показывает свой прочерк. */}
         <div className="grid grid-cols-1 gap-3 border-t pt-4 sm:grid-cols-3">
@@ -484,9 +593,12 @@ export function SiteEditor({
               базовому расходу, а показы, клики, конверсии и доход
               масштабируются от их собственных пропорций (базовые числа
               кампании = её «профиль»). Ночью скрутка медленная, днём быстрее,
-              пик вечером. Баланс уменьшается вживую; в полночь день
-              фиксируется и списывается с баланса насовсем. Кампании со
-              статусом «Остановлена» не тратят.
+              пик вечером. Баланс уменьшается вживую; завершённые дни
+              списываются с баланса насовсем при первом чтении нового дня —
+              витриной или этой панелью, — так что скрутка накапливается день
+              за днём и ничего не сбрасывается. Кампании со статусом
+              «Остановлена» не тратят. Пополняйте баланс кнопкой «Пополнить» —
+              она прибавляет к текущему, а не перезаписывает его.
             </p>
           </div>
         )}

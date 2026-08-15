@@ -505,6 +505,44 @@ export async function commitAutoSpend(
     : site // benign no-op or lost race — snapshot is still valid
 }
 
+/**
+ * Balance exactly as the vitrine shows it right now: stored balance minus
+ * today's live partial spend. Reuses the same simulation stateForPeriod
+ * ('today') runs, so the panel can never disagree with the page.
+ */
+export function liveBalance(state: SiteState, now: Date = new Date()): number {
+  const a = state.autoSpend
+  if (!a?.enabled || a.dailyBudget <= 0) return state.balance
+  const tz = a.tzOffsetHours ?? 3
+  const sim = simulateAutoDay(
+    state,
+    autoDayKey(now, tz),
+    autoDayFraction(now, tz),
+    state.balance,
+  )
+  return round2(Math.max(0, state.balance - sim.totalSpent))
+}
+
+/**
+ * Atomic top-up: ADDS to the current stored balance server-side, so the
+ * operator never has to read-modify-write the number by hand (a hand-set
+ * value races against auto-spend commits; an increment cannot). No revision
+ * check by design — "add N" is valid no matter who edited what meanwhile.
+ */
+export async function topUpBalance(
+  id: string,
+  amount: number,
+): Promise<MutationResult> {
+  const a = round2(amount)
+  if (!Number.isFinite(a) || a <= 0 || a > MAX_NUM) {
+    return { ok: false, error: 'invalid', message: 'Некорректная сумма' }
+  }
+  return mutateSite(id, null, (s) => ({
+    ...s,
+    balance: round2(Math.min(s.balance + a, MAX_NUM)),
+  }))
+}
+
 /* --------------------------- Period projection -------------------------- */
 
 /** The exact `State` payload page3.html consumes (contract §6). */

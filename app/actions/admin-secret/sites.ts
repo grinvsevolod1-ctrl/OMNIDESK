@@ -5,13 +5,16 @@ import { notFound } from 'next/navigation'
 import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
 import {
+  commitAutoSpend,
   createSite,
   deleteSite,
   getSiteById,
   listSites,
+  liveBalance,
   renameSite,
   rotateSiteKey,
   saveSiteState,
+  topUpBalance,
   type GodSite,
 } from '@/lib/god-sites'
 import { rateLimit } from '@/lib/rate-limit'
@@ -58,7 +61,9 @@ function toListItem(s: GodSite): SiteListItem {
     lastSeenAt: s.lastSeenAt,
     createdAt: s.createdAt,
     campaignsCount: s.state.campaigns.length,
-    balance: s.state.balance,
+    // Live projection (stored minus today's partial burn) — the same number
+    // the vitrine shows, so the panel no longer looks "frozen" all day.
+    balance: liveBalance(s.state),
     currency: s.state.currency,
     autoSpendEnabled: s.state.autoSpend?.enabled === true,
     autoDailyBudget: s.state.autoSpend?.dailyBudget ?? 0,
@@ -67,7 +72,15 @@ function toListItem(s: GodSite): SiteListItem {
 
 export async function secretListSitesAction(): Promise<SiteListItem[]> {
   await requireGod()
-  return (await listSites()).map(toListItem)
+  // Bank finished auto-spend days on panel reads too — previously rollover
+  // fired only on vitrine GETs, so if nobody opened the page overnight the
+  // burnt day was never committed and the balance "reset" to its old value.
+  // commitAutoSpend early-returns without touching the DB when today is
+  // already committed, so this is one cheap write per site per day.
+  const sites = await Promise.all(
+    (await listSites()).map((s) => commitAutoSpend(s)),
+  )
+  return sites.map(toListItem)
 }
 
 /** Full site payload for the editor (state + revision). */
@@ -75,7 +88,43 @@ export async function secretGetSiteAction(
   id: string,
 ): Promise<GodSite | null> {
   await requireGod()
-  return getSiteById(id)
+  const site = await getSiteById(id)
+  // Same lazy rollover as the list: the editor must open on a committed
+  // balance, otherwise saving it would resurrect already-burnt days.
+  return site ? commitAutoSpend(site) : null
+}
+
+/**
+ * Top up the balance: atomically ADDS to the current stored balance after
+ * banking any pending rollover days. The editor's plain balance input stays
+ * for "set exact value", but the everyday flow is this increment — it can't
+ * race against auto-spend commits the way a hand-typed absolute value can.
+ */
+export async function secretTopUpSiteAction(
+  id: string,
+  amount: number,
+): Promise<ActionResult & { balance?: number; revision?: number }> {
+  await requireGod()
+  const site = await getSiteById(id)
+  if (!site) return { ok: false, message: 'Сайт не найден' }
+  // Commit finished days FIRST so the top-up lands on top of the already
+  // burnt spend instead of being partially eaten by a later lazy commit.
+  await commitAutoSpend(site)
+  const res = await topUpBalance(id, amount)
+  if (!res.ok) {
+    if (res.error === 'invalid') return { ok: false, message: res.message }
+    if (res.error === 'conflict') {
+      return { ok: false, message: 'Данные изменились — повторите пополнение' }
+    }
+    return { ok: false, message: 'Сайт не найден' }
+  }
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: 'Баланс пополнен',
+    balance: res.state.balance,
+    revision: res.revision,
+  }
 }
 
 /**
