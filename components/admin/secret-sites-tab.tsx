@@ -19,6 +19,7 @@ import {
   secretCreateSiteAction,
   secretDeleteSiteAction,
   secretGetSiteAction,
+  secretGetSiteKeyAction,
   secretRotateSiteKeyAction,
   type SiteListItem,
 } from '@/app/actions/admin-secret'
@@ -132,6 +133,20 @@ export function SecretSitesTab({
     })
   }
 
+  /** Show the permanent token (migration 137) — re-showable any time. */
+  function showKey(id: string, title: string, slug: string) {
+    startTransition(async () => {
+      try {
+        const res = await secretGetSiteKeyAction(id)
+        if (res.ok && res.apiKey) {
+          setNewKey({ title, slug, key: res.apiKey })
+        } else toast.error(res.message)
+      } catch {
+        toast.error('Внутренняя ошибка сервера')
+      }
+    })
+  }
+
   function removeSite(id: string) {
     startTransition(async () => {
       try {
@@ -188,7 +203,7 @@ export function SecretSitesTab({
         <EmptyState
           icon={Globe}
           title="Нет управляемых сайтов"
-          description="Создайте сайт — получите одноразовый токен и подключите витрину за минуту."
+          description="Создайте сайт — получите постоянный токен и подключите витрину за минуту."
         />
       ) : (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -244,7 +259,21 @@ export function SecretSitesTab({
                     />
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem
-                        onClick={() => rotateKey(s.id, s.title, s.slug)}
+                        onClick={() => showKey(s.id, s.title, s.slug)}
+                        className="gap-2"
+                      >
+                        <Copy className="size-4" />
+                        Показать токен
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `Заменить токен «${s.title}»? ВСЕ скачанные расширения этого сайта перестанут работать — их придётся перекачать.`,
+                            )
+                          )
+                            rotateKey(s.id, s.title, s.slug)
+                        }}
                         className="gap-2"
                       >
                         <KeyRound className="size-4" />
@@ -385,8 +414,9 @@ function CreateSiteDialog({
         <DialogHeader>
           <DialogTitle>Новый управляемый сайт</DialogTitle>
           <DialogDescription>
-            После создания вы получите токен и готовую ссылку для витрины.
-            Токен показывается один раз — хранится только его отпечаток.
+            После создания вы получите постоянный токен и готовую строку
+            параметров для витрины. Токен можно посмотреть в любой момент
+            через меню сайта.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
@@ -449,7 +479,7 @@ function ApiKeyDialog({
           <DialogTitle>Подключение витрины</DialogTitle>
           <DialogDescription>
             {data?.title}
-            {' — токен показывается только один раз. Сохраните его сейчас.'}
+            {' — постоянный токен этого сайта. Все скачанные расширения используют его же.'}
           </DialogDescription>
         </DialogHeader>
         {data && (

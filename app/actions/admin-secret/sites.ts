@@ -12,7 +12,7 @@ import {
   commitAutoSpend,
   createSite,
   deleteSite,
-  generateSiteApiKey,
+  getOrCreateSiteKey,
   getSiteById,
   listSites,
   liveBalance,
@@ -133,8 +133,8 @@ export async function secretTopUpSiteAction(
 }
 
 /**
- * Create a site. The returned apiKey is displayed ONCE — only its SHA-256
- * hash is stored, recovery is impossible (rotate instead).
+ * Create a site. The key is permanent (migration 137) and can be re-shown
+ * any time via secretGetSiteKeyAction.
  */
 export async function secretCreateSiteAction(
   slug: string,
@@ -176,7 +176,11 @@ export async function secretDeleteSiteAction(
     : { ok: false, message: 'Сайт не найден' }
 }
 
-/** Rotate the API key; the old one dies immediately, the new shows once. */
+/**
+ * Manual key re-issue: the old key (and EVERY downloaded archive) dies
+ * immediately. The new key is permanent and re-showable. This is the only
+ * remaining invalidation path — downloads never rotate.
+ */
 export async function secretRotateSiteKeyAction(
   id: string,
 ): Promise<ActionResult & { apiKey?: string }> {
@@ -250,13 +254,27 @@ async function panelOrigin(): Promise<string> {
 }
 
 /**
+ * Show the site's PERMANENT token (migration 137). Legacy sites (created
+ * before the plaintext column) get their one final re-issue here — after
+ * that the key never changes again.
+ */
+export async function secretGetSiteKeyAction(
+  id: string,
+): Promise<ActionResult & { apiKey?: string }> {
+  await requireGod()
+  const apiKey = await getOrCreateSiteKey(id)
+  return apiKey
+    ? { ok: true, message: 'Токен получен', apiKey }
+    : { ok: false, message: 'Сайт не найден' }
+}
+
+/**
  * Build a ready-to-load browser extension for this site: assigns the permanent
- * "яндекс N" label on first download, ROTATES the API key (so the freshly
- * baked token is embedded and every earlier archive stops working — the
- * plaintext token exists only inside the zip, never in the DB), bumps the
- * manifest version so Chrome reloads, and returns the archive as base64.
- *
- * Beta feature: the classic manual-token flow ("Сайты" tab) is untouched.
+ * "яндекс N" label on first download, embeds the site's PERMANENT token
+ * (migration 137 — downloads do NOT rotate keys anymore, every archive ever
+ * downloaded keeps working; owner decision for this closed system), bumps
+ * the manifest version so Chrome reloads, and returns the archive as base64.
+ * The only path that invalidates archives is the manual «Ротация» button.
  */
 export async function secretDownloadExtensionAction(
   id: string,
@@ -275,37 +293,31 @@ export async function secretDownloadExtensionAction(
     return { ok: false, message: 'Не удалось определить адрес панели' }
   }
 
-  // Order matters for atomicity: the zip is built FIRST with a candidate
-  // token, and the key rotation commits LAST — only after the archive
-  // actually exists. A failed build therefore leaves the previous key (and
-  // every earlier archive) fully working, instead of killing them all and
-  // handing back an error. Label (permanent) and version bump (a skipped K
-  // is harmless — Chrome only needs strictly-greater) are safe to do first.
   const labelSeq = await assignExtLabelSeq(id)
   if (labelSeq == null) return { ok: false, message: 'Сайт не найден' }
 
   const version = await bumpExtVersion(id)
   if (version == null) return { ok: false, message: 'Сайт не найден' }
 
-  const candidateKey = generateSiteApiKey()
+  // The ONE permanent key. For a legacy site this mints it (one final
+  // re-issue — its pre-137 archives stop working, all future ones are
+  // forever-valid); for everything else it's a plain read, so a failed
+  // build below never leaves the site without a working token.
+  const token = await getOrCreateSiteKey(id)
+  if (!token) return { ok: false, message: 'Не удалось получить токен' }
+
   let base64: string
   try {
     base64 = await buildExtensionZip({
       origin,
       slug: site.slug,
-      token: candidateKey,
+      token,
       labelSeq,
       downloadCount: version,
     })
   } catch {
-    // Old key untouched — earlier archives keep working.
     return { ok: false, message: 'Не удалось собрать расширение' }
   }
-
-  // Archive is ready — commit the rotation. From here the freshly baked
-  // token is the only working one; the plaintext lives only inside the zip.
-  const rotated = await rotateSiteKey(id, candidateKey)
-  if (!rotated) return { ok: false, message: 'Не удалось выдать токен' }
 
   revalidatePath(ADMIN_PATH)
   return {

@@ -5,9 +5,14 @@ import { query } from './db'
 import {
   autoDayFraction,
   autoDayKey,
+  DEFAULT_DAY_JITTER,
+  DEFAULT_WEEKEND_DIP,
+  dayCurveFraction,
   daysBetween,
   jitter,
   round2,
+  SPEND_PROFILES,
+  type SpendProfile,
   weekdayFactor,
 } from './god-sites-sim'
 
@@ -104,6 +109,18 @@ export interface AutoSpend {
   spentToDate?: number
   /** Day boundary timezone, hours east of UTC. Default +3 (Moscow). */
   tzOffsetHours?: number
+  /* ---- Curve settings (all optional; defaults = historical behaviour) ---- */
+  /**
+   * Day shape preset. Absent → the historical step curve via autoDayFraction
+   * (bit-exact backwards compatibility for existing sites).
+   */
+  profile?: SpendProfile
+  /** S-curve smoothing 0..1 (0 = stepped hourly rate, 1 = fully smooth). */
+  smoothness?: number
+  /** Weekend dip strength 0..0.5 (Sun −dip, Sat −dip·0.75, Fri −dip·0.25). */
+  weekendDip?: number
+  /** Deterministic day-to-day budget jitter amplitude 0..0.2. */
+  dayJitter?: number
 }
 
 /**
@@ -301,6 +318,8 @@ export function sanitizeState(raw: unknown): SiteState {
     const lastCommittedDay = str(a.lastCommittedDay).trim()
     const startDay = str(a.startDay).trim()
     const tz = typeof a.tzOffsetHours === 'number' ? a.tzOffsetHours : 3
+    const clamp01 = (v: unknown, max: number) =>
+      Math.max(0, Math.min(max, num(v)))
     state.autoSpend = {
       enabled: a.enabled === true && dailyBudget > 0,
       dailyBudget,
@@ -312,6 +331,20 @@ export function sanitizeState(raw: unknown): SiteState {
         ? { spentToDate: round2(num(a.spentToDate)) }
         : {}),
       tzOffsetHours: Math.max(-12, Math.min(14, Math.trunc(tz))),
+      // Curve settings — kept ONLY when explicitly set, so legacy states
+      // stay byte-identical after a sanitize round-trip.
+      ...(typeof a.profile === 'string' && a.profile in SPEND_PROFILES
+        ? { profile: a.profile as SpendProfile }
+        : {}),
+      ...(a.smoothness !== undefined
+        ? { smoothness: clamp01(a.smoothness, 1) }
+        : {}),
+      ...(a.weekendDip !== undefined
+        ? { weekendDip: clamp01(a.weekendDip, 0.5) }
+        : {}),
+      ...(a.dayJitter !== undefined
+        ? { dayJitter: clamp01(a.dayJitter, 0.2) }
+        : {}),
     }
   }
   return state
@@ -415,6 +448,17 @@ export async function getSiteBySlugAndKey(
 const DEFAULT_PROFILE = { shows: 320, clicks: 11, goals: 0.4, revenue: 0 }
 
 /**
+ * Share of the daily budget burnt by `now`, honouring the curve settings:
+ * with a profile set — the smoothed S-curve; without — the historical step
+ * curve (bit-exact backwards compatibility for pre-existing sites).
+ */
+function curveFraction(cfg: AutoSpend, now: Date, tz: number): number {
+  return cfg.profile
+    ? dayCurveFraction(now, tz, cfg.profile, cfg.smoothness ?? 0.6)
+    : autoDayFraction(now, tz)
+}
+
+/**
  * Simulate the auto-spend day: distribute `budget × fraction` across running
  * campaigns (weight = their base cost, else weekly budget, else equal) and
  * derive shows/clicks/goals/revenue from each campaign's own per-$ profile.
@@ -436,9 +480,12 @@ function simulateAutoDay(
 
   // Effective budget follows a weekly rhythm (weekends dip) plus a small
   // per-date jitter, so aggregate curves look alive instead of identical
-  // days. Deterministic from the date — every reader agrees.
+  // days. Deterministic from the date — every reader agrees. Dip and jitter
+  // amplitudes come from the curve settings (defaults = historical values).
   const effectiveBudget =
-    cfg.dailyBudget * weekdayFactor(dayKey) * jitter(`${dayKey}:day`, 0.06)
+    cfg.dailyBudget *
+    weekdayFactor(dayKey, cfg.weekendDip ?? DEFAULT_WEEKEND_DIP) *
+    jitter(`${dayKey}:day`, cfg.dayJitter ?? DEFAULT_DAY_JITTER)
   const totalSpent = round2(
     Math.min(effectiveBudget * fraction, Math.max(0, budgetCap)),
   )
@@ -553,7 +600,7 @@ export function liveBalance(state: SiteState, now: Date = new Date()): number {
   const sim = simulateAutoDay(
     state,
     autoDayKey(now, tz),
-    autoDayFraction(now, tz),
+    curveFraction(a, now, tz),
     state.balance,
   )
   return round2(Math.max(0, state.balance - sim.totalSpent))
@@ -690,7 +737,7 @@ function aggregateAutoPeriod(
   const todaySim = simulateAutoDay(
     state,
     todayKey,
-    autoDayFraction(now, tz),
+    curveFraction(auto, now, tz),
     state.balance,
   )
   for (const c of todaySim.campaigns) if (c.status === 'running') add(c)
@@ -744,7 +791,7 @@ export function stateForPeriod(
     const todaySim = simulateAutoDay(
       state,
       autoDayKey(now, tz),
-      autoDayFraction(now, tz),
+      curveFraction(auto, now, tz),
       state.balance,
     )
     balance = round2(Math.max(0, state.balance - todaySim.totalSpent))
@@ -859,7 +906,12 @@ export async function getSiteById(id: string): Promise<GodSite | null> {
   return rows[0] ? toSite(rows[0]) : null
 }
 
-/** Create a site; the returned apiKey is shown ONCE and never recoverable. */
+/**
+ * Create a site. The key is PERMANENT (migration 137): plaintext is stored
+ * alongside the hash by owner decision — this is a closed system and every
+ * downloaded extension archive must keep working forever, which beats
+ * hash-only storage here.
+ */
 export async function createSite(
   slug: string,
   title: string,
@@ -874,36 +926,64 @@ export async function createSite(
     new Date(),
   )
   const rows = await query<SiteRow>(
-    `INSERT INTO god_sites (slug, title, api_key_hash, state)
-     VALUES ($1, $2, $3, $4::jsonb)
+    `INSERT INTO god_sites (slug, title, api_key_hash, api_key_plain, state)
+     VALUES ($1, $2, $3, $4, $5::jsonb)
      RETURNING *`,
-    [slug, title, hashApiKey(apiKey), JSON.stringify(state)],
+    [slug, title, hashApiKey(apiKey), apiKey, JSON.stringify(state)],
   )
   return { site: toSite(rows[0]), apiKey }
 }
 
 /**
- * Rotate the API key — the old key stops working immediately. `presetKey`
- * lets the extension generator bake a key into the archive FIRST and commit
- * the rotation only after the build succeeded (never leave a site with zero
- * working tokens because a build failed halfway).
+ * The ONE permanent key for a site. Normal path: return the stored plaintext.
+ * Legacy path (site created before migration 137 — plaintext is not
+ * recoverable from the hash): mint a key ONCE, persist plaintext + hash
+ * atomically-guarded (`api_key_plain IS NULL` in WHERE makes a concurrent
+ * double-mint impossible — the loser re-reads the winner's key), and from
+ * then on the key never changes. Old archives of a legacy site work until
+ * this one final re-issue; after it, every archive is forever-valid.
+ */
+export async function getOrCreateSiteKey(id: string): Promise<string | null> {
+  const existing = await query<{ api_key_plain: string | null }>(
+    `SELECT api_key_plain FROM god_sites WHERE id = $1`,
+    [id],
+  )
+  if (!existing[0]) return null
+  if (existing[0].api_key_plain) return existing[0].api_key_plain
+
+  const candidate = generateApiKey()
+  const updated = await query<{ api_key_plain: string }>(
+    `UPDATE god_sites
+        SET api_key_plain = $2, api_key_hash = $3, updated_at = now()
+      WHERE id = $1 AND api_key_plain IS NULL
+      RETURNING api_key_plain`,
+    [id, candidate, hashApiKey(candidate)],
+  )
+  if (updated[0]) return updated[0].api_key_plain
+  // Lost the race — another request minted first; use theirs.
+  const winner = await query<{ api_key_plain: string | null }>(
+    `SELECT api_key_plain FROM god_sites WHERE id = $1`,
+    [id],
+  )
+  return winner[0]?.api_key_plain ?? null
+}
+
+/**
+ * Manual re-issue from the UI («Ротация» button) — the ONLY path that changes
+ * the permanent key. All previously downloaded archives die at once; the
+ * extension download flow deliberately does NOT call this anymore.
  */
 export async function rotateSiteKey(
   id: string,
-  presetKey?: string,
 ): Promise<{ apiKey: string } | null> {
-  const apiKey = presetKey ?? generateApiKey()
+  const apiKey = generateApiKey()
   const rows = await query<{ id: string }>(
-    `UPDATE god_sites SET api_key_hash = $2, updated_at = now()
+    `UPDATE god_sites
+        SET api_key_hash = $2, api_key_plain = $3, updated_at = now()
       WHERE id = $1 RETURNING id`,
-    [id, hashApiKey(apiKey)],
+    [id, hashApiKey(apiKey), apiKey],
   )
   return rows[0] ? { apiKey } : null
-}
-
-/** Generate a fresh key WITHOUT storing it — pair with rotateSiteKey(id, key). */
-export function generateSiteApiKey(): string {
-  return generateApiKey()
 }
 
 export async function deleteSite(id: string): Promise<boolean> {

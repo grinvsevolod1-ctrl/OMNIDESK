@@ -7,7 +7,6 @@ import { toast } from 'sonner'
 import {
   Antenna,
   ArrowLeftRight,
-  FlaskConical,
   Globe,
   MessagesSquare,
   Send,
@@ -49,7 +48,6 @@ type SectionId =
   | 'telegram'
   | 'ads'
   | 'sites'
-  | 'sites-beta'
 
 const SECTIONS: {
   id: SectionId
@@ -94,18 +92,13 @@ const SECTIONS: {
     desc: 'Рекламные кабинеты и метрики',
   },
   {
+    // The former «Сайты бета» promoted to the one and only sites tab: the
+    // classic manual-token flow lives inside the editor's key dialog now.
     id: 'sites',
     label: 'Сайты',
     short: 'Сайты',
     icon: Globe,
-    desc: 'Управляемые внешние страницы-макеты',
-  },
-  {
-    id: 'sites-beta',
-    label: 'Сайты бета',
-    short: 'Бета',
-    icon: FlaskConical,
-    desc: 'Те же сайты + сборка готового расширения в один клик',
+    desc: 'Управляемые страницы-макеты и сборка расширения в один клик',
   },
 ]
 
@@ -308,10 +301,7 @@ export function SecretDashboard({
           )}
           {section === 'telegram' && <SecretTelegramTab />}
           {section === 'ads' && <SecretAdsTab accounts={adAccounts} />}
-          {section === 'sites' && <SecretSitesTab sites={sites} />}
-          {section === 'sites-beta' && (
-            <SecretSitesTab sites={sites} beta />
-          )}
+          {section === 'sites' && <SecretSitesTab sites={sites} beta />}
         </main>
       </div>
 
