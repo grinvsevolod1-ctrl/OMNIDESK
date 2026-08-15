@@ -94,7 +94,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    владельца для закрытой системы: каждый скачанный архив расширения обязан
    работать вечно. «Показать токен» в меню сайта отдаёт его в любой момент
    (`secretGetSiteKeyAction` / `getOrCreateSiteKey`; legacy-сайты без
-   плейнтекста получают ОДНУ финальную перевыпуску — гонка закрыта guard'ом
+   плейнтекста получают ОДНУ финальную перевыпуску — гонк�� закрыта guard'ом
    `api_key_plain IS NULL`). Единственный путь инвалидации — ручная кнопка
    «Заменить токен» (`rotateSiteKey`): умирают ВСЕ архивы сайта сразу.
    Передаётся Bearer'ом или `?token=` (SSE). Slug и токен матчатся ОДНИМ
@@ -165,13 +165,20 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    api.getmytg.com, заголовок `x-api-key`); actions —
    `app/actions/admin-secret/gmt.ts` (гейт requireGod, без audit()); UI —
    `components/admin/secret-gmt-tab.tsx` (SWR по actions, автоопрос 15с пока
-   есть PENDING-покупки). Ключ живёт ТОЛЬКО в env `GMT_API_KEY` (как
-   SECRET_PANEL_PASSWORD, не в БД); без ключа вкладка показывает инструкцию,
-   actions отвечают ошибкой. Жизненный цикл покупки (из доков): PENDING
+   есть PENDING-покупки). **Ключ назначается ИЗ ПАНЕЛИ (миграция 139):**
+   хранится в godовой таблице `god_settings` (key `gmt_api_key`, плейнтекст —
+   осознанное решение владельца, прецедент — api_key_plain сайтов из 137);
+   env `GMT_API_KEY` остаётся fallback'ом, БД имеет приоритет. Кнопка «Ключ»
+   в шапке вкладки — смена/удаление; перед сохранением ключ проверяется
+   живым запросом к /v1/profile/ (secretGmtSetKeyAction), опечатка не
+   затирает рабочий ключ. Наружу ключ не отдаётся — только маска (последние
+   4 символа). Без ключа вкладка показывает форму ввода, actions отвечают
+   ошибкой. Жизненный цикл покупки (из доков): PENDING
    (деньги списаны) → request-code → SUCCESS (креды: код+пароль, повторный
    request-code даёт conflict — креды читать из GET /purchases/:id) или
-   ERROR; PENDING старше 20 минут без кода можно вернуть (REFUND). НИЧЕГО не
-   сохраняется в БД панели — все данные читаются из API напрямую.
+   ERROR; PENDING старше 20 минут без кода можно вернуть (REFUND). Кроме
+   ключа, НИЧЕГО не сохраняется в БД панели — данные читаются из API
+   напрямую.
    Расширения: чекаут-диалог тянет разбивку цены (GET /accounts/:code —
    base_price + discount%) перед покупкой; оптовые закупки (POST
    /purchases/bulk, 1..100 акк., ZIP-архив с session+json) — статус
@@ -523,7 +530,7 @@ widget-src/livechat.js   ИСХОДНИК виджета (public/livechat.js —
 scripts/                 SQL-миграции NNN_*.sql, migrate.mjs, cron-*.mjs,
                          build-widget.mjs, backup-db.mjs
 deploy.sh                деплой на VPS (миграции ДО свапа кода)
-ecosystem.config.js      PM2: все процессы и крон-расписания
+ecosystem.config.js      PM2: все процессы и крон-распи��ания
 ```
 
 ## 6. Admin AI (co-pilot) — как расширять
@@ -705,7 +712,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 | БД-слой воркера | барели `worker/src/repo.ts` и `repo-ai.ts` |
 | Подключение аккаунтов | барель `app/actions/admin-accounts.ts` |
 | Лид-карточки (данные) | барель `lib/data/lead-cards.ts`; фильтры/поиск админа — `lib/data/lead-admin.ts` |
-| «Все лиды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
+| «Все ��иды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
 | «Мои лиды» (менеджер по кадрам) | `components/curator/curator-leads-view.tsx` |
 | «Мои лиды» (менеджер) | `components/manager/manager-leads-view.tsx` |
 | Excel-выгрузки лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), клиент — `components/admin/leads/xlsx-download.ts` |

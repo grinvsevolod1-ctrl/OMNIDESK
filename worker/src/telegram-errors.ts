@@ -1,6 +1,6 @@
 /**
  * Telegram error classification, extracted from telegram.ts and re-exported
- * from it for backward compatibility. Normalizes raw GramJS/MTProto errors into
+ * from it for backward compatibility. Normalizes raw teleproto/MTProto errors into
  * short human reasons (incl. the user-facing send-failure reason and coarse
  * error categories). Pure string helpers with no runtime dependencies.
  */
@@ -152,6 +152,10 @@ export function classifyError(msg: string): string {
   if (m.includes('PHONE_CODE_EXPIRED')) return 'code_expired'
   if (m.includes('PHONE_CODE_EMPTY')) return 'code_empty'
   if (m.includes('SESSION_PASSWORD_NEEDED')) return '2fa_required'
+  // teleproto (в отличие от GramJS) бросает типизированные SessionRevokedError/
+  // AuthKeyUnregisteredError при старте с отозванной сессией — вместо краха.
+  if (m.includes('SESSION_REVOKED') || m.includes('AUTH_KEY_UNREGISTERED'))
+    return 'session_revoked'
   if (m.includes('PASSWORD_HASH_INVALID')) return 'password_invalid'
   if (m.includes('PHONE_MIGRATE') || m.includes('NETWORK_MIGRATE')) return 'dc_migrate'
   if (m.includes('API_ID') || m.includes('API_HASH')) return 'api_credentials'

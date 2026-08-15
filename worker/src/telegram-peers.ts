@@ -1,5 +1,5 @@
-import { Api, type TelegramClient } from 'telegram'
-import { returnBigInt } from 'telegram/Helpers.js'
+import { Api, type TelegramClient } from 'teleproto'
+import { returnBigInt } from 'teleproto/Helpers.js'
 import { logger } from './logger.js'
 import * as repo from './repo.js'
 import { errMessage } from './telegram-errors.js'

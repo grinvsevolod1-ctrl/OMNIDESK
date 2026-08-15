@@ -1,4 +1,4 @@
-import { TelegramClient, Api } from 'telegram'
+import { TelegramClient, Api } from 'teleproto'
 import { logger } from './logger.js'
 import { errMessage } from './telegram-errors.js'
 

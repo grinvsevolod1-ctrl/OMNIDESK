@@ -1,5 +1,5 @@
-import { Api } from 'telegram'
-import { returnBigInt } from 'telegram/Helpers.js'
+import { Api } from 'teleproto'
+import { returnBigInt } from 'teleproto/Helpers.js'
 import * as repo from './repo.js'
 
 // Tunables and pure peer <-> record helpers for the Telegram session, split out

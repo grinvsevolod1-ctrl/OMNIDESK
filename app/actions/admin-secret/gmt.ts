@@ -16,7 +16,10 @@ import {
   gmtPurchases,
   gmtRefund,
   gmtRequestCode,
+  clearGmtApiKey,
+  getGmtKeyInfo,
   isGmtConfigured,
+  setGmtApiKey,
   type GmtBulkPurchase,
   type GmtCodeRequest,
   type GmtCountry,
@@ -67,11 +70,10 @@ export interface GmtActionResult<T> {
 /** Единая обёртка: гейт → вызов → человекочитаемая ошибка (без утечки ключа). */
 async function runGmt<T>(fn: () => Promise<T>): Promise<GmtActionResult<T>> {
   await requireGod()
-  if (!isGmtConfigured()) {
+  if (!(await isGmtConfigured())) {
     return {
       ok: false,
-      message:
-        'GMT_API_KEY не настроен. Добавьте ключ в env на VPS и перезапустите панель.',
+      message: 'Ключ Get My TG не настроен. Укажите его во вкладке «API TG».',
     }
   }
   try {
@@ -89,14 +91,22 @@ export async function secretGmtStatusAction(): Promise<
   GmtActionResult<{
     configured: boolean
     health: 'ok' | 'degraded' | 'unreachable'
+    keySource: 'db' | 'env' | null
+    keyMasked: string | null
   }>
 > {
   await requireGod()
-  if (!isGmtConfigured()) {
+  const keyInfo = await getGmtKeyInfo()
+  if (!keyInfo.source) {
     return {
       ok: true,
       message: 'OK',
-      data: { configured: false, health: 'unreachable' },
+      data: {
+        configured: false,
+        health: 'unreachable',
+        keySource: null,
+        keyMasked: null,
+      },
     }
   }
   try {
@@ -104,15 +114,71 @@ export async function secretGmtStatusAction(): Promise<
     return {
       ok: true,
       message: 'OK',
-      data: { configured: true, health: h.status },
+      data: {
+        configured: true,
+        health: h.status,
+        keySource: keyInfo.source,
+        keyMasked: keyInfo.masked,
+      },
     }
   } catch {
     return {
       ok: true,
       message: 'OK',
-      data: { configured: true, health: 'unreachable' },
+      data: {
+        configured: true,
+        health: 'unreachable',
+        keySource: keyInfo.source,
+        keyMasked: keyInfo.masked,
+      },
     }
   }
+}
+
+/**
+ * Назначить ключ Get My TG из панели (хранится в god_settings, миграция 139).
+ * Перед сохранением ключ проверяется живым запросом к профилю — опечатка
+ * не затирает рабочий ключ. Как и всё в этом модуле — без audit()-следов.
+ */
+export async function secretGmtSetKeyAction(
+  key: string,
+): Promise<GmtActionResult<{ keyMasked: string }>> {
+  await requireGod()
+  const trimmed = key.trim()
+  if (!trimmed || trimmed.length < 8 || trimmed.length > 200) {
+    return { ok: false, message: 'Ключ: строка от 8 до 200 символов' }
+  }
+  // Проверяем ключ ДО сохранения — прямым запросом к API, минуя кэш.
+  try {
+    const res = await fetch('https://api.getmytg.com/v1/profile/', {
+      headers: { 'x-api-key': trimmed },
+      signal: AbortSignal.timeout(15_000),
+      cache: 'no-store',
+    })
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, message: 'Get My TG отверг ключ (401/403) — проверьте его' }
+    }
+    if (!res.ok) {
+      return { ok: false, message: `Get My TG недоступен (HTTP ${res.status}) — попробуйте позже` }
+    }
+  } catch {
+    return { ok: false, message: 'Не удалось проверить ключ: сеть недоступна' }
+  }
+  await setGmtApiKey(trimmed)
+  return {
+    ok: true,
+    message: 'Ключ сохранён',
+    data: { keyMasked: `••••${trimmed.slice(-4)}` },
+  }
+}
+
+/** Удалить ключ из БД (env-fallback, если задан, продолжит действовать). */
+export async function secretGmtClearKeyAction(): Promise<
+  GmtActionResult<null>
+> {
+  await requireGod()
+  await clearGmtApiKey()
+  return { ok: true, message: 'Ключ удалён из панели', data: null }
 }
 
 export async function secretGmtProfileAction(): Promise<

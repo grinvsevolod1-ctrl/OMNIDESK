@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { Api } from 'telegram'
-import type { TelegramClient } from 'telegram'
+import { Api } from 'teleproto'
+import type { TelegramClient } from 'teleproto'
 import type { Logger } from 'pino'
 
 import { env } from './env.js'

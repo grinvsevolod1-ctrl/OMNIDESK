@@ -1,4 +1,4 @@
-import { Api, TelegramClient } from 'telegram'
+import { Api, TelegramClient } from 'teleproto'
 import { logger } from './logger.js'
 import * as repo from './repo.js'
 import {

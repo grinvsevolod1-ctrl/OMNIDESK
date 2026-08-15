@@ -8,9 +8,11 @@ import 'server-only'
  * Документация: docs.getmytg.com/sdk-reference (OpenAPI 1.1.4).
  * Аутентификация: заголовок `x-api-key` (ключ выдаёт Telegram-бот сервиса).
  *
- * FAIL-CLOSED: ключ живёт ТОЛЬКО в env `GMT_API_KEY` (как SECRET_PANEL_PASSWORD)
- * — не в БД, чтобы дамп базы не содержал доступа к балансу. Без ключа вкладка
- * показывает инструкцию по настройке, все actions отвечают ошибкой.
+ * Ключ назначается ИЗ ПАНЕЛИ (вкладка «API TG») и хранится в БД
+ * (god_settings, миграция 139) — по решению владельца, прецедент —
+ * api_key_plain god-сайтов (миграция 137). Env `GMT_API_KEY` остаётся
+ * fallback'ом: БД имеет приоритет. Без ключа вкладка показывает форму
+ * ввода, все actions отвечают ошибкой.
  *
  * Ключевые факты API (из доков), на которые опирается UI:
  * - Покупка PENDING → SUCCESS только после POST /purchases/:id/request-code;
@@ -19,7 +21,87 @@ import 'server-only'
  * - Цены — строки с 2 знаками; у пользователя есть персональная скидка.
  */
 
+import { query } from './db'
+
 const GMT_BASE_URL = 'https://api.getmytg.com'
+
+/* --------------------------- Хранение ключа ----------------------------- */
+
+const GMT_KEY_SETTING = 'gmt_api_key'
+
+/**
+ * Кэш ключа в памяти процесса: server actions дёргают API пачками (SWR),
+ * запрос к БД на каждый fetch не нужен. Инвалидируется при set/clear и по
+ * TTL — чтобы несколько PM2-процессов сходились после смены ключа.
+ */
+let keyCache: { value: string | null; at: number } | null = null
+const KEY_CACHE_TTL_MS = 15_000
+
+/** Ключ из БД (приоритет) или env (fallback); null — не настроен. */
+export async function getGmtApiKey(): Promise<string | null> {
+  if (keyCache && Date.now() - keyCache.at < KEY_CACHE_TTL_MS) {
+    return keyCache.value
+  }
+  let dbKey: string | null = null
+  try {
+    const rows = await query<{ value: string }>(
+      `SELECT value FROM god_settings WHERE key = $1`,
+      [GMT_KEY_SETTING],
+    )
+    dbKey = rows[0]?.value?.trim() || null
+  } catch {
+    // Таблицы ещё нет (миграция не применена) — работаем через env.
+  }
+  const value = dbKey || process.env.GMT_API_KEY?.trim() || null
+  keyCache = { value, at: Date.now() }
+  return value
+}
+
+/** Сохранить ключ в БД (upsert) и сбросить кэш. Пустой ключ не принимается. */
+export async function setGmtApiKey(key: string): Promise<void> {
+  const trimmed = key.trim()
+  if (!trimmed) throw new Error('Пустой ключ')
+  await query(
+    `INSERT INTO god_settings (key, value, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [GMT_KEY_SETTING, trimmed],
+  )
+  keyCache = null
+}
+
+/** Удалить ключ из БД (остаётся только env-fallback, если он задан). */
+export async function clearGmtApiKey(): Promise<void> {
+  await query(`DELETE FROM god_settings WHERE key = $1`, [GMT_KEY_SETTING])
+  keyCache = null
+}
+
+/**
+ * Откуда взят действующий ключ и его маска для UI. Сам ключ наружу не
+ * отдаётся — только последние 4 символа.
+ */
+export async function getGmtKeyInfo(): Promise<{
+  source: 'db' | 'env' | null
+  masked: string | null
+}> {
+  let dbKey: string | null = null
+  try {
+    const rows = await query<{ value: string }>(
+      `SELECT value FROM god_settings WHERE key = $1`,
+      [GMT_KEY_SETTING],
+    )
+    dbKey = rows[0]?.value?.trim() || null
+  } catch {
+    /* таблицы нет — env-only режим */
+  }
+  const envKey = process.env.GMT_API_KEY?.trim() || null
+  const active = dbKey || envKey
+  if (!active) return { source: null, masked: null }
+  return {
+    source: dbKey ? 'db' : 'env',
+    masked: `••••${active.slice(-4)}`,
+  }
+}
 
 /* ------------------------------- Типы API ------------------------------- */
 
@@ -130,8 +212,8 @@ export interface GmtHealth {
 
 /* ------------------------------ Транспорт ------------------------------- */
 
-export function isGmtConfigured(): boolean {
-  return Boolean(process.env.GMT_API_KEY)
+export async function isGmtConfigured(): Promise<boolean> {
+  return Boolean(await getGmtApiKey())
 }
 
 export class GmtApiError extends Error {
@@ -151,8 +233,8 @@ async function gmtFetch<T>(
   path: string,
   init?: { method?: 'GET' | 'POST'; body?: unknown },
 ): Promise<T> {
-  const apiKey = process.env.GMT_API_KEY
-  if (!apiKey) throw new GmtApiError(0, 'GMT_API_KEY не настроен')
+  const apiKey = await getGmtApiKey()
+  if (!apiKey) throw new GmtApiError(0, 'Ключ Get My TG не настроен')
 
   let res: Response
   try {
@@ -291,7 +373,7 @@ export function gmtBulkStatus(purchaseId: number): Promise<GmtBulkPurchase> {
 export async function gmtBulkDownload(
   purchaseId: number,
 ): Promise<Response | null> {
-  const apiKey = process.env.GMT_API_KEY
+  const apiKey = await getGmtApiKey()
   if (!apiKey) return null
   try {
     const res = await fetch(

@@ -1,5 +1,5 @@
-import type { TelegramClient, Api } from 'telegram'
-import type { Dialog } from 'telegram/tl/custom/dialog.js'
+import type { TelegramClient, Api } from 'teleproto'
+import type { Dialog } from 'teleproto/tl/custom/dialog.js'
 import { logger } from './logger.js'
 import * as repo from './repo.js'
 import { classifyTgMedia } from './telegram-media.js'

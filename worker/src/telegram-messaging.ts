@@ -1,4 +1,4 @@
-import { Api, type TelegramClient } from 'telegram'
+import { Api, type TelegramClient } from 'teleproto'
 
 /**
  * Outgoing message operations (send / read / typing / react / delete / edit /

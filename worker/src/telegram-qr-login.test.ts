@@ -58,7 +58,7 @@ vi.mock('./repo.js', () => ({
   setSession: vi.fn(async () => {}),
 }))
 
-import { Api } from 'telegram'
+import { Api } from 'teleproto'
 import { TelegramQrLogin, type QrLoginDeps } from './telegram-qr-login.js'
 import * as repo from './repo.js'
 

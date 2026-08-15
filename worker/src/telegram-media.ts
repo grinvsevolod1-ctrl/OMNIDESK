@@ -1,4 +1,4 @@
-import { Api } from 'telegram'
+import { Api } from 'teleproto'
 
 /**
  * Telegram media classification, extracted from telegram.ts and re-exported

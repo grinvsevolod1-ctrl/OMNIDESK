@@ -1,4 +1,4 @@
-import type { TelegramClient, Api } from 'telegram'
+import type { TelegramClient, Api } from 'teleproto'
 import type { SenderSession } from './autopilot.js'
 
 /**
