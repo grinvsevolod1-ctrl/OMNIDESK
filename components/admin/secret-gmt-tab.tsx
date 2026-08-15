@@ -372,6 +372,22 @@ function ProfileHeader({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Пополнение — только через официального бота: у API Get My TG нет
+              платёжных эндпоинтов (см. sdk-reference), баланс живёт в боте. */}
+          <Button
+            size="sm"
+            className="h-8 gap-1.5"
+            onClick={() =>
+              window.open(
+                'https://t.me/GetMyTGrobot',
+                '_blank',
+                'noopener,noreferrer',
+              )
+            }
+          >
+            <Wallet className="size-3.5" />
+            Пополнить
+          </Button>
           <Button
             variant="outline"
             size="sm"
