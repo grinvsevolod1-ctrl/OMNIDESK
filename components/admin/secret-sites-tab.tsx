@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState, useTransition } from 'react'
+import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
+import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
   Copy,
@@ -21,6 +22,7 @@ import {
   secretDeleteSiteAction,
   secretGetSiteAction,
   secretGetSiteKeyAction,
+  secretListSitesAction,
   secretRotateSiteKeyAction,
   type SiteListItem,
 } from '@/app/actions/admin-secret'
@@ -79,7 +81,7 @@ function isOnline(lastSeenAt: string | null): boolean {
 }
 
 export function SecretSitesTab({
-  sites,
+  sites: initialSites,
   beta = false,
 }: {
   sites: SiteListItem[]
@@ -99,13 +101,20 @@ export function SecretSitesTab({
   const [reportOpen, setReportOpen] = useState(false)
 
   // Auto-refresh the list every 30s so the "на связи" dot and «Опрос»
-  // column stay honest without a manual reload. Paused while the editor is
-  // open — a refresh there would be useless churn (the editor owns its copy).
-  useEffect(() => {
-    if (openSite) return
-    const t = setInterval(() => router.refresh(), 30_000)
-    return () => clearInterval(t)
-  }, [openSite, router])
+  // column stay honest without a manual reload. Точечный SWR-запрос только
+  // за списком сайтов вместо прежнего router.refresh(): полный refresh
+  // перерендеривал ВСЁ server-дерево god-панели каждые 30 секунд.
+  // Paused while the editor is open — the editor owns its copy.
+  const { data: sites = initialSites, mutate: mutateSites } = useSWR(
+    openSite ? null : 'god-sites-list',
+    () => secretListSitesAction(),
+    {
+      fallbackData: initialSites,
+      refreshInterval: 30_000,
+      revalidateOnFocus: true,
+      keepPreviousData: true,
+    },
+  )
 
   function openEditor(id: string) {
     setLoadingId(id)
@@ -132,7 +141,7 @@ export function SecretSitesTab({
       } catch {
         toast.error('Внутренняя ошибка сервера')
       }
-      router.refresh()
+      void mutateSites()
     })
   }
 
@@ -159,7 +168,7 @@ export function SecretSitesTab({
       } catch {
         toast.error('Внутренняя ошибка сервера')
       }
-      router.refresh()
+      void mutateSites()
     })
   }
 
@@ -380,7 +389,12 @@ export function SecretSitesTab({
       <CreateSiteDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(title, slug, key) => setNewKey({ title, slug, key })}
+        onCreated={(title, slug, key) => {
+          setNewKey({ title, slug, key })
+          // Список теперь живёт в SWR — router.refresh() внутри диалога его
+          // не обновит, ревалидируем явно, чтобы новый сайт появился сразу.
+          void mutateSites()
+        }}
       />
       <ApiKeyDialog data={newKey} onClose={() => setNewKey(null)} />
 

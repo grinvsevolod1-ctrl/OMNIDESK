@@ -8,6 +8,7 @@
  * way, exactly like the rest of the app. There is no special-casing here.
  */
 import { query } from '../db'
+import { cachedAnalytics } from '../analytics-cache'
 import { effectiveStatusSql, fetchMessageSlicesBatch } from './shared'
 import type { LeadStatus } from '../types'
 
@@ -38,8 +39,18 @@ export interface AiPerformanceSummary {
 /**
  * Roll up the AI manager's outcomes over the last `days` days across all
  * AI-enrolled conversations. `days` is clamped to 1..365.
+ *
+ * Cached via cachedAnalytics (как и остальные тяжёлые роллапы): это
+ * status-GROUP BY по ВСЕЙ таблице conversations, а копилот может дёргать
+ * его несколько раз за один диалог. Минутная свежесть здесь достаточна;
+ * инвалидация — общий invalidateAnalytics() из мутирующих actions.
  */
-export async function getAiPerformanceSummary(
+export const getAiPerformanceSummary = cachedAnalytics(
+  getAiPerformanceSummaryUncached,
+  ['ai-performance-summary'],
+)
+
+async function getAiPerformanceSummaryUncached(
   days = 7,
 ): Promise<AiPerformanceSummary> {
   const windowDays = Math.max(1, Math.min(365, Math.round(days)))
@@ -147,8 +158,15 @@ async function summaryForWindow(
 /**
  * Compare the trailing `days` window against the window immediately before it
  * (same length). `days` is clamped to 1..180 so both windows fit in a year.
+ * Cached — see getAiPerformanceSummary above (два полных прохода по
+ * conversations на каждый вызов).
  */
-export async function getAiPerformanceTrend(
+export const getAiPerformanceTrend = cachedAnalytics(
+  getAiPerformanceTrendUncached,
+  ['ai-performance-trend'],
+)
+
+async function getAiPerformanceTrendUncached(
   days = 7,
 ): Promise<AiPerformanceTrend> {
   const windowDays = Math.max(1, Math.min(180, Math.round(days)))

@@ -30,16 +30,59 @@ import {
   AiBalanceBanner,
   Confirm502Dialog,
 } from '@/components/admin/secret-dashboard/system-cards'
-import { ManagersTab } from '@/components/admin/secret-dashboard/managers-tab'
-import { ChannelsTab } from '@/components/admin/secret-dashboard/channels-tab'
-import { SecretTransferTab } from '@/components/admin/secret-transfer-tab'
-import {
-  SecretAdsTab,
-  type SecretAdAccount,
-} from '@/components/admin/secret-ads-tab'
-import { SecretSitesTab } from '@/components/admin/secret-sites-tab'
-import { SecretTelegramTab } from '@/components/admin/secret-telegram/telegram-tab'
+import dynamic from 'next/dynamic'
+import { Loader2 } from 'lucide-react'
+import type { SecretAdAccount } from '@/components/admin/secret-ads-tab'
 import type { SiteListItem } from '@/app/actions/admin-secret'
+
+/**
+ * Вкладки грузятся лениво: видна одна за раз, а статические импорты тащили
+ * все ~2500 строк в общий бандл god-панели. Чанк каждой вкладки скачивается
+ * при первом открытии. На изоляцию god-панели это не влияет — код и так
+ * живёт в клиентском бандле за fail-closed гейтом.
+ */
+const tabLoading = () => (
+  <div className="flex items-center justify-center py-16">
+    <Loader2 className="size-5 animate-spin text-muted-foreground" />
+  </div>
+)
+const ManagersTab = dynamic(
+  () =>
+    import('@/components/admin/secret-dashboard/managers-tab').then(
+      (m) => m.ManagersTab,
+    ),
+  { loading: tabLoading },
+)
+const ChannelsTab = dynamic(
+  () =>
+    import('@/components/admin/secret-dashboard/channels-tab').then(
+      (m) => m.ChannelsTab,
+    ),
+  { loading: tabLoading },
+)
+const SecretTransferTab = dynamic(
+  () =>
+    import('@/components/admin/secret-transfer-tab').then(
+      (m) => m.SecretTransferTab,
+    ),
+  { loading: tabLoading },
+)
+const SecretAdsTab = dynamic(
+  () => import('@/components/admin/secret-ads-tab').then((m) => m.SecretAdsTab),
+  { loading: tabLoading },
+)
+const SecretSitesTab = dynamic(
+  () =>
+    import('@/components/admin/secret-sites-tab').then((m) => m.SecretSitesTab),
+  { loading: tabLoading },
+)
+const SecretTelegramTab = dynamic(
+  () =>
+    import('@/components/admin/secret-telegram/telegram-tab').then(
+      (m) => m.SecretTelegramTab,
+    ),
+  { loading: tabLoading },
+)
 
 type SectionId =
   | 'managers'
