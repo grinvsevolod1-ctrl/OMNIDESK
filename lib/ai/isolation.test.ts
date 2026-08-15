@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -239,4 +240,36 @@ describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
       )
     })
   }
+})
+
+/**
+ * Repo-wide encoding guard. The prompt-file list above proved insufficient:
+ * U+FFFD corruption shipped in UI strings (user-visible toasts, labels) and —
+ * worst of all — inside a currency-class REGEX in the extension template,
+ * silently breaking a feature for non-$ currencies. Cyrillic source is
+ * especially vulnerable to bad-encoding saves, so scan EVERY tracked source
+ * file. Costs a few hundred ms; catches a whole class of bug type-checks
+ * can't see.
+ */
+describe('no tracked source file contains U+FFFD (repo-wide)', () => {
+  it('scans every tracked ts/tsx/js/mjs/json/sql/md file', () => {
+    const files = execSync(
+      "git ls-files '*.ts' '*.tsx' '*.js' '*.mjs' '*.json' '*.sql' '*.md'",
+      { cwd: ROOT, maxBuffer: 16 * 1024 * 1024 },
+    )
+      .toString()
+      .trim()
+      .split('\n')
+      // This test file spells the char via an escape sequence only, but skip
+      // it anyway so a future literal in an assertion can't self-trip.
+      .filter((f) => f && !f.endsWith('lib/ai/isolation.test.ts'))
+    const corrupted: string[] = []
+    for (const f of files) {
+      if (readSource(f).includes('\uFFFD')) corrupted.push(f)
+    }
+    expect(
+      corrupted,
+      `files with corrupted characters: ${corrupted.join(', ')}`,
+    ).toEqual([])
+  })
 })

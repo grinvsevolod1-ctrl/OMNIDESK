@@ -648,6 +648,25 @@ export function SiteEditor({
                 </p>
               </div>
             </div>
+            {state.autoSpend?.startDay && (
+              <p className="text-xs text-muted-foreground">
+                Работает с{' '}
+                <span className="font-mono text-foreground">
+                  {state.autoSpend.startDay}
+                </span>
+                {typeof state.autoSpend.spentToDate === 'number' && (
+                  <>
+                    {' '}
+                    · списано с баланса всего{' '}
+                    <span className="font-mono text-foreground">
+                      {nf.format(state.autoSpend.spentToDate)} {state.currency}
+                    </span>
+                  </>
+                )}{' '}
+                — агрегаты «Неделя / Месяц / Всё время» на витрине начинаются с
+                этой даты. Повторное включение = новый старт.
+              </p>
+            )}
             <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
               Расход распределяется по активным кампаниям пропорционально их
               базовому расходу, а показы, клики, конверсии и доход
