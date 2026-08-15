@@ -302,7 +302,7 @@ export function MetaRows({ meta }: { meta: ConversationMeta }) {
   if (device || meta.screen)
     rows.push({
       icon: Monitor,
-      label: 'Устро��ство',
+      label: 'Устройство',
       value: [device, meta.screen].filter(Boolean).join(', '),
     })
   if (meta.language)

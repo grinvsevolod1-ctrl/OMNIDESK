@@ -12,6 +12,7 @@ import {
   commitAutoSpend,
   createSite,
   deleteSite,
+  generateSiteApiKey,
   getSiteById,
   listSites,
   liveBalance,
@@ -138,7 +139,7 @@ export async function secretTopUpSiteAction(
 export async function secretCreateSiteAction(
   slug: string,
   title: string,
-): Promise<ActionResult & { apiKey?: string; id?: string }> {
+): Promise<ActionResult & { apiKey?: string; id?: string; slug?: string }> {
   await requireGod()
   const s = slug.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 60)
   const t = title.trim().slice(0, 120)
@@ -150,7 +151,15 @@ export async function secretCreateSiteAction(
   try {
     const { site, apiKey } = await createSite(s, t)
     revalidatePath(ADMIN_PATH)
-    return { ok: true, message: 'Сайт создан', apiKey, id: site.id }
+    // Return the NORMALIZED slug — the client-entered one may differ (e.g.
+    // «my_site» → «my-site»), and the key dialog must show the real PAGE_ID.
+    return {
+      ok: true,
+      message: 'Сайт создан',
+      apiKey,
+      id: site.id,
+      slug: site.slug,
+    }
   } catch {
     return { ok: false, message: 'Slug уже занят' }
   }
@@ -266,28 +275,37 @@ export async function secretDownloadExtensionAction(
     return { ok: false, message: 'Не удалось определить адрес панели' }
   }
 
-  // Permanent label (idempotent) + fresh token + new version, in that order.
+  // Order matters for atomicity: the zip is built FIRST with a candidate
+  // token, and the key rotation commits LAST — only after the archive
+  // actually exists. A failed build therefore leaves the previous key (and
+  // every earlier archive) fully working, instead of killing them all and
+  // handing back an error. Label (permanent) and version bump (a skipped K
+  // is harmless — Chrome only needs strictly-greater) are safe to do first.
   const labelSeq = await assignExtLabelSeq(id)
   if (labelSeq == null) return { ok: false, message: 'Сайт не найден' }
-
-  const rotated = await rotateSiteKey(id)
-  if (!rotated) return { ok: false, message: 'Не удалось выдать токен' }
 
   const version = await bumpExtVersion(id)
   if (version == null) return { ok: false, message: 'Сайт не найден' }
 
+  const candidateKey = generateSiteApiKey()
   let base64: string
   try {
     base64 = await buildExtensionZip({
       origin,
       slug: site.slug,
-      token: rotated.apiKey,
+      token: candidateKey,
       labelSeq,
       downloadCount: version,
     })
   } catch {
+    // Old key untouched — earlier archives keep working.
     return { ok: false, message: 'Не удалось собрать расширение' }
   }
+
+  // Archive is ready — commit the rotation. From here the freshly baked
+  // token is the only working one; the plaintext lives only inside the zip.
+  const rotated = await rotateSiteKey(id, candidateKey)
+  if (!rotated) return { ok: false, message: 'Не удалось выдать токен' }
 
   revalidatePath(ADMIN_PATH)
   return {

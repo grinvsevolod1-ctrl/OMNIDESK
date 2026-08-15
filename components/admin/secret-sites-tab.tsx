@@ -366,7 +366,9 @@ function CreateSiteDialog({
           onOpenChange(false)
           setSlug('')
           setTitle('')
-          onCreated(title, slug.trim().toLowerCase(), res.apiKey)
+          // Use the server-NORMALIZED slug («my_site» → «my-site»), not the
+          // raw input — the key dialog must show the real PAGE_ID.
+          onCreated(title, res.slug ?? slug.trim().toLowerCase(), res.apiKey)
         } else {
           toast.error(res.message)
         }
@@ -474,19 +476,22 @@ function ApiKeyDialog({
               <button
                 type="button"
                 onClick={() =>
+                  // Copy the SAME absolute string shown on screen: the vitrine
+                  // lives on a foreign domain, so a relative `?api=/api/ext`
+                  // would point at the vitrine's own host, not the panel.
                   copy(
-                    `?api=/api/ext&page=${data.slug}&token=${data.key}`,
+                    `?api=${window.location.origin}/api/ext&page=${data.slug}&token=${data.key}`,
                     'Строка параметров скопирована',
                   )
                 }
                 title="Скопировать строку параметров"
                 className="rounded-md border bg-muted/50 p-2.5 text-left font-mono text-xs leading-relaxed break-all transition-colors hover:bg-muted"
               >
-                {`?api=<адрес панели>/api/ext&page=${data.slug}&token=${data.key}`}
+                {`?api=${typeof window !== 'undefined' ? window.location.origin : ''}/api/ext&page=${data.slug}&token=${data.key}`}
               </button>
               <p className="text-xs text-muted-foreground">
-                Нажмите, чтобы скопировать. Добавьте к адресу витрины,
-                подставив адрес панели.
+                Нажмите, чтобы скопировать готовую строку и добавьте её к
+                адресу витрины.
               </p>
             </div>
           </div>

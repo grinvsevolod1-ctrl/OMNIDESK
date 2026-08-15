@@ -284,7 +284,7 @@ export function SiteEditor({
           `Баланс пополнен: ${nf.format(res.balance)} ${state.currency}`,
         )
       } catch {
-        toast.error('Внутрення�� ошибка сервера')
+        toast.error('Внутренняя ошибка сервера')
       }
     })
   }
@@ -504,7 +504,7 @@ export function SiteEditor({
           </div>
         </div>
 
-        {/* Organization card — окно по клику на ��ватар на витрине. Пустые
+        {/* Organization card — окно по клику на аватар на витрине. Пустые
             поля не отправляются, страница показывает свой прочерк. */}
         <div className="grid grid-cols-1 gap-3 border-t pt-4 sm:grid-cols-3">
           <div className="flex flex-col gap-1.5">

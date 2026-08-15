@@ -8,6 +8,7 @@ import {
   daysBetween,
   jitter,
   round2,
+  weekdayFactor,
 } from './god-sites-sim'
 
 // Re-exported so existing consumers (tests, routes) keep importing the curve
@@ -88,10 +89,19 @@ export interface AutoSpend {
    */
   lastCommittedDay?: string
   /**
-   * Day (YYYY-MM-DD in panel TZ) auto-spend was first enabled — the anchor
-   * for the «Всё время» period aggregate. Maintained by commitAutoSpend.
+   * Day (YYYY-MM-DD in panel TZ) auto-spend was enabled — the anchor for ALL
+   * aggregate periods (week/month/all are clamped to it, so a site enabled
+   * yesterday never shows «7 × дневной бюджет» for the week). Stamped by
+   * saveSiteState on the off→on transition (re-enable = fresh start);
+   * commitAutoSpend backfills it for legacy sites.
    */
   startDay?: string
+  /**
+   * Cumulative amount actually committed (deducted from the balance) since
+   * startDay. Lets aggregates cap simulated history by the money that really
+   * existed. Maintained by commitAutoSpend; absent on legacy sites (no cap).
+   */
+  spentToDate?: number
   /** Day boundary timezone, hours east of UTC. Default +3 (Moscow). */
   tzOffsetHours?: number
 }
@@ -263,6 +273,9 @@ export function sanitizeState(raw: unknown): SiteState {
   if (r.periodOverrides && typeof r.periodOverrides === 'object') {
     const out: NonNullable<SiteState['periodOverrides']> = {}
     for (const p of SITE_PERIODS) {
+      // `today` overrides are never applied by stateForPeriod (today is always
+      // the live view) — drop them instead of storing dead data.
+      if (p === 'today') continue
       const perPeriod = (r.periodOverrides as Record<string, unknown>)[p]
       if (!perPeriod || typeof perPeriod !== 'object') continue
       const byId: Record<string, PeriodOverride> = {}
@@ -295,6 +308,9 @@ export function sanitizeState(raw: unknown): SiteState {
         ? { lastCommittedDay }
         : {}),
       ...(/^\d{4}-\d{2}-\d{2}$/.test(startDay) ? { startDay } : {}),
+      ...(a.spentToDate !== undefined
+        ? { spentToDate: round2(num(a.spentToDate)) }
+        : {}),
       tzOffsetHours: Math.max(-12, Math.min(14, Math.trunc(tz))),
     }
   }
@@ -418,8 +434,13 @@ function simulateAutoDay(
   const running = state.campaigns.filter((c) => c.status === 'running')
   if (running.length === 0) return { campaigns: state.campaigns, totalSpent: 0 }
 
+  // Effective budget follows a weekly rhythm (weekends dip) plus a small
+  // per-date jitter, so aggregate curves look alive instead of identical
+  // days. Deterministic from the date — every reader agrees.
+  const effectiveBudget =
+    cfg.dailyBudget * weekdayFactor(dayKey) * jitter(`${dayKey}:day`, 0.06)
   const totalSpent = round2(
-    Math.min(cfg.dailyBudget * fraction, Math.max(0, budgetCap)),
+    Math.min(effectiveBudget * fraction, Math.max(0, budgetCap)),
   )
 
   // Budget shares: base cost → weekly budget → equal, jittered ±8% per day.
@@ -487,16 +508,31 @@ export async function commitAutoSpend(
     const days = cfg.lastCommittedDay
       ? Math.min(daysBetween(cfg.lastCommittedDay, t), 366)
       : 0 // first enable: start the clock, nothing to commit yet
-    const spent = Math.min(days * cfg.dailyBudget, s.balance)
+    // Sum the SAME per-day simulations the vitrine showed for each finished
+    // day (weekday rhythm + jitter included) — the deduction always matches
+    // what the page displayed, instead of a flat days × dailyBudget.
+    let owed = 0
+    if (days > 0 && cfg.lastCommittedDay) {
+      const startMs = Date.parse(`${cfg.lastCommittedDay}T12:00:00Z`)
+      for (let j = 0; j < days; j++) {
+        const dayKey = new Date(startMs + j * 86_400_000)
+          .toISOString()
+          .slice(0, 10)
+        owed += simulateAutoDay(s, dayKey, 1, Number.POSITIVE_INFINITY)
+          .totalSpent
+      }
+    }
+    const spent = round2(Math.min(owed, s.balance))
     return {
       ...s,
       balance: round2(s.balance - spent),
       autoSpend: {
         ...cfg,
         lastCommittedDay: t,
-        // Anchor «Всё время»: the first commit after enabling stamps the
-        // start day; existing sites adopt the earliest day we know about.
+        // Anchor for aggregates: normally stamped by saveSiteState at enable;
+        // legacy sites adopt the earliest day we know about.
         startDay: cfg.startDay ?? cfg.lastCommittedDay ?? t,
+        spentToDate: round2((cfg.spentToDate ?? 0) + spent),
       },
     }
   })
@@ -563,21 +599,24 @@ export interface PageStatePayload {
   campaigns: SiteCampaign[]
 }
 
-/** How many calendar days each aggregate period spans (including today). */
+/**
+ * How many calendar days each aggregate period spans (including today).
+ * EVERY period is clamped by the auto-spend start anchor: a site whose
+ * auto-spend was enabled yesterday shows «Неделя» = yesterday + today's
+ * partial (~1 × дневной бюджет + текущий частичный), NOT 7 × бюджет — the
+ * simulation cannot have history older than the day it was switched on.
+ * No anchor yet (legacy site before its first commit): today only — better
+ * to under-report than to invent phantom history. The 365 cap keeps a stale
+ * anchor from turning one GET into thousands of day simulations.
+ */
 function periodDayCount(
   period: SitePeriod,
   auto: AutoSpend,
   todayKey: string,
 ): number {
-  if (period === 'week') return 7
-  if (period === 'month') return 30
-  // «Всё время»: anchored at the day auto-spend was enabled; capped so a
-  // stale anchor can't turn one GET into thousands of day simulations.
-  // Fallback (no anchor yet — first day of a fresh site): month-sized.
-  const anchored = auto.startDay
-    ? daysBetween(auto.startDay, todayKey) + 1
-    : 30
-  return Math.max(1, Math.min(anchored, 365))
+  const anchored = auto.startDay ? daysBetween(auto.startDay, todayKey) + 1 : 1
+  const span = period === 'week' ? 7 : period === 'month' ? 30 : 365
+  return Math.max(1, Math.min(span, anchored))
 }
 
 /**
@@ -621,10 +660,31 @@ function aggregateAutoPeriod(
     totals.set(c.id, t)
   }
 
+  let finishedCost = 0
   for (let i = days - 1; i >= 1; i--) {
     const dayKey = autoDayKey(new Date(now.getTime() - i * 86_400_000), tz)
-    const sim = simulateAutoDay(state, dayKey, 1, auto.dailyBudget)
+    const sim = simulateAutoDay(state, dayKey, 1, Number.POSITIVE_INFINITY)
+    finishedCost += sim.totalSpent
     for (const c of sim.campaigns) if (c.status === 'running') add(c)
+  }
+  // Cap finished-day history by the money that actually existed: spentToDate
+  // is what commitAutoSpend really deducted (already balance-capped), so the
+  // simulated history can never claim more spend than there was cash. When
+  // the sim overshoots, all metrics scale down proportionally — ratios (CPC,
+  // CR, ДРР) stay intact. Legacy sites without the counter keep the old
+  // uncapped behaviour.
+  if (typeof auto.spentToDate === 'number' && finishedCost > 0) {
+    const factor = Math.min(1, auto.spentToDate / finishedCost)
+    if (factor < 1) {
+      for (const t of totals.values()) {
+        t.cost *= factor
+        t.shows *= factor
+        t.clicks *= factor
+        t.goals *= factor
+        t.revenue *= factor
+        t.bounceWeighted *= factor
+      }
+    }
   }
   // Today's live partial — same numbers the `today` period shows right now.
   const todaySim = simulateAutoDay(
@@ -692,9 +752,12 @@ export function stateForPeriod(
     if (period === 'today') {
       campaigns = todaySim.campaigns
     } else if (period === 'yesterday') {
-      // Finished day: full curve, seeded with yesterday's date.
+      // Finished day: full curve, seeded with yesterday's date. Uncapped —
+      // the weekday rhythm/jitter may push the effective budget slightly
+      // above the nominal dailyBudget, and that's the point.
       const y = autoDayKey(new Date(now.getTime() - 86_400_000), tz)
-      campaigns = simulateAutoDay(state, y, 1, auto.dailyBudget).campaigns
+      campaigns = simulateAutoDay(state, y, 1, Number.POSITIVE_INFINITY)
+        .campaigns
     } else {
       // week / month / all: sum of per-day simulations.
       campaigns = aggregateAutoPeriod(state, period, now)
@@ -803,7 +866,13 @@ export async function createSite(
   initialState?: unknown,
 ): Promise<{ site: GodSite; apiKey: string }> {
   const apiKey = generateApiKey()
-  const state = sanitizeState(initialState)
+  // A brand-new site with auto-spend already on gets its anchor immediately
+  // (prev = empty state → off→on transition).
+  const state = stampAutoSpendStart(
+    sanitizeState(initialState),
+    sanitizeState(undefined),
+    new Date(),
+  )
   const rows = await query<SiteRow>(
     `INSERT INTO god_sites (slug, title, api_key_hash, state)
      VALUES ($1, $2, $3, $4::jsonb)
@@ -813,17 +882,28 @@ export async function createSite(
   return { site: toSite(rows[0]), apiKey }
 }
 
-/** Rotate the API key — the old key stops working immediately. */
+/**
+ * Rotate the API key — the old key stops working immediately. `presetKey`
+ * lets the extension generator bake a key into the archive FIRST and commit
+ * the rotation only after the build succeeded (never leave a site with zero
+ * working tokens because a build failed halfway).
+ */
 export async function rotateSiteKey(
   id: string,
+  presetKey?: string,
 ): Promise<{ apiKey: string } | null> {
-  const apiKey = generateApiKey()
+  const apiKey = presetKey ?? generateApiKey()
   const rows = await query<{ id: string }>(
     `UPDATE god_sites SET api_key_hash = $2, updated_at = now()
       WHERE id = $1 RETURNING id`,
     [id, hashApiKey(apiKey)],
   )
   return rows[0] ? { apiKey } : null
+}
+
+/** Generate a fresh key WITHOUT storing it — pair with rotateSiteKey(id, key). */
+export function generateSiteApiKey(): string {
+  return generateApiKey()
 }
 
 export async function deleteSite(id: string): Promise<boolean> {
@@ -835,6 +915,35 @@ export async function deleteSite(id: string): Promise<boolean> {
 }
 
 /**
+ * Stamp the auto-spend anchor on the off→on transition. Re-enabling is a
+ * FRESH START by design: new startDay (= today), commit clock reset to today
+ * (today's partial is live-projected, tomorrow's first read commits it) and
+ * the spent counter zeroed — aggregates begin from the moment of the switch,
+ * never from stale history of a previous run.
+ */
+function stampAutoSpendStart(
+  next: SiteState,
+  prev: SiteState,
+  now: Date,
+): SiteState {
+  const a = next.autoSpend
+  if (!a?.enabled || a.dailyBudget <= 0) return next
+  const wasEnabled =
+    prev.autoSpend?.enabled === true && (prev.autoSpend?.dailyBudget ?? 0) > 0
+  if (wasEnabled) return next // already running — keep its anchor untouched
+  const today = autoDayKey(now, a.tzOffsetHours ?? 3)
+  return {
+    ...next,
+    autoSpend: {
+      ...a,
+      startDay: today,
+      lastCommittedDay: today,
+      spentToDate: 0,
+    },
+  }
+}
+
+/**
  * God-panel full-state save (the "Сайты" tab editor). Same optimistic locking
  * as page mutations so a panel edit can't silently clobber a page edit.
  */
@@ -843,7 +952,10 @@ export async function saveSiteState(
   rawState: unknown,
   expected: number | null,
 ): Promise<MutationResult> {
-  return mutateSite(id, expected, () => sanitizeState(rawState))
+  const now = new Date()
+  return mutateSite(id, expected, (prev) =>
+    stampAutoSpendStart(sanitizeState(rawState), prev, now),
+  )
 }
 
 export async function renameSite(
@@ -868,27 +980,37 @@ export const EXT_LABEL_SEQ_START = 11
 /**
  * Assign this site its permanent "яндекс N" number on first download, as
  * MAX(ext_label_seq)+1 across all sites (floor EXT_LABEL_SEQ_START). Once set
- * it never changes — subsequent downloads reuse it. Done in a single
- * statement so two concurrent first-downloads can't collide (the unique
- * partial index would reject a duplicate anyway, but COALESCE on the current
- * row makes the common path idempotent without an error).
+ * it never changes — subsequent downloads reuse it (COALESCE on the current
+ * row makes the common path idempotent). Two CONCURRENT first-downloads of
+ * different sites can still compute the same MAX+1 — the unique partial index
+ * rejects the loser, so we retry once with a recomputed MAX instead of
+ * bubbling a raw constraint violation to the UI.
  */
 export async function assignExtLabelSeq(id: string): Promise<number | null> {
-  const rows = await query<{ ext_label_seq: number }>(
-    `UPDATE god_sites AS g
-        SET ext_label_seq = COALESCE(
-              g.ext_label_seq,
-              GREATEST(
-                $2::int,
-                COALESCE((SELECT MAX(ext_label_seq) FROM god_sites), $2::int - 1) + 1
-              )
-            ),
-            updated_at = now()
-      WHERE g.id = $1
-      RETURNING ext_label_seq`,
-    [id, EXT_LABEL_SEQ_START],
-  )
-  return rows[0] ? Number(rows[0].ext_label_seq) : null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const rows = await query<{ ext_label_seq: number }>(
+        `UPDATE god_sites AS g
+            SET ext_label_seq = COALESCE(
+                  g.ext_label_seq,
+                  GREATEST(
+                    $2::int,
+                    COALESCE((SELECT MAX(ext_label_seq) FROM god_sites), $2::int - 1) + 1
+                  )
+                ),
+                updated_at = now()
+          WHERE g.id = $1
+          RETURNING ext_label_seq`,
+        [id, EXT_LABEL_SEQ_START],
+      )
+      return rows[0] ? Number(rows[0].ext_label_seq) : null
+    } catch (e) {
+      // 23505 = unique_violation: a concurrent first-download won the number.
+      const code = (e as { code?: string })?.code
+      if (code !== '23505' || attempt === 1) throw e
+    }
+  }
+  return null
 }
 
 /**

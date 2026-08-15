@@ -60,6 +60,21 @@ export function autoDayFraction(now: Date, tzOffsetHours: number): number {
   return Math.min(1, prev + (HOUR_CUM[h] - prev) * minuteShare)
 }
 
+/**
+ * Weekly rhythm multiplier for a day's effective budget: real ad traffic dips
+ * on weekends and eases off on Friday. Deterministic from the date alone so
+ * every reader agrees. Sun ≈ 0.80, Sat ≈ 0.85, Fri ≈ 0.95, Mon–Thu = 1.
+ */
+export function weekdayFactor(dayKey: string): number {
+  const t = Date.parse(`${dayKey}T00:00:00Z`)
+  if (!Number.isFinite(t)) return 1
+  const dow = new Date(t).getUTCDay() // 0 = Sunday … 6 = Saturday
+  if (dow === 0) return 0.8
+  if (dow === 6) return 0.85
+  if (dow === 5) return 0.95
+  return 1
+}
+
 /** Whole days between two YYYY-MM-DD keys (0 when equal or unparsable). */
 export function daysBetween(fromKey: string, toKey: string): number {
   const from = Date.parse(`${fromKey}T00:00:00Z`)

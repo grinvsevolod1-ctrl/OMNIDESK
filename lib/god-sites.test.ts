@@ -123,6 +123,19 @@ describe('sanitizeState', () => {
       (s.periodOverrides as Record<string, unknown> | undefined)?.bogusPeriod,
     ).toBeUndefined()
   })
+
+  it('drops periodOverrides.today — the projection never applies them', () => {
+    const s = sanitizeState({
+      balance: 1,
+      campaigns: [CAMPAIGN],
+      periodOverrides: {
+        today: { [CAMPAIGN.id]: { cost: 555 } },
+        week: { [CAMPAIGN.id]: { cost: 777 } },
+      },
+    })
+    expect(s.periodOverrides?.today).toBeUndefined()
+    expect(s.periodOverrides?.week?.[CAMPAIGN.id]).toEqual({ cost: 777 })
+  })
 })
 
 describe('sanitizeCampaign patch semantics', () => {
@@ -202,7 +215,13 @@ describe('auto-spend projection', () => {
       CAMPAIGN,
       { ...CAMPAIGN, id: '987654321', name: 'Стоп', status: 'stopped' },
     ],
-    autoSpend: { enabled: true, dailyBudget: 100, tzOffsetHours: 3 },
+    // startDay far in the past so week/month windows are fully available.
+    autoSpend: {
+      enabled: true,
+      dailyBudget: 100,
+      tzOffsetHours: 3,
+      startDay: '2026-07-01',
+    },
   })
   // 20:30 Moscow time — most of the day's curve is behind.
   const evening = new Date('2026-08-13T17:30:00Z')
@@ -317,7 +336,12 @@ describe('auto-spend projection', () => {
     const curated = sanitizeState({
       balance: 1000,
       campaigns: [CAMPAIGN],
-      autoSpend: { enabled: true, dailyBudget: 100, tzOffsetHours: 3 },
+      autoSpend: {
+        enabled: true,
+        dailyBudget: 100,
+        tzOffsetHours: 3,
+        startDay: '2026-07-01',
+      },
       periodOverrides: { week: { [CAMPAIGN.id]: { cost: 777 } } },
     })
     const week = stateForPeriod(curated, 'week', evening)
@@ -325,6 +349,60 @@ describe('auto-spend projection', () => {
     expect(week.campaigns[0].shows).toBeGreaterThan(
       CAMPAIGN.shows, // non-overridden fields still come from the aggregate
     )
+  })
+
+  it('clamps ALL aggregate periods at startDay (the «50×7» bug)', () => {
+    // Auto-spend switched on YESTERDAY: the week must show ~1 finished day
+    // plus today's partial — NOT 7 × dailyBudget.
+    const freshStart = sanitizeState({
+      balance: 10_000,
+      campaigns: [CAMPAIGN],
+      autoSpend: {
+        enabled: true,
+        dailyBudget: 100,
+        tzOffsetHours: 3,
+        startDay: '2026-08-12', // yesterday relative to `evening` (13 Aug)
+      },
+    })
+    const live = (p: 'week' | 'month' | 'all') =>
+      stateForPeriod(freshStart, p, evening).campaigns[0]
+    // ~1 full day (±jitter/weekday) + evening partial — far below 700.
+    expect(live('week').cost).toBeLessThan(250)
+    expect(live('week').cost).toBeGreaterThan(120)
+    // The clamp binds before the window size does: all periods agree.
+    expect(live('month').cost).toBe(live('week').cost)
+    expect(live('all').cost).toBe(live('week').cost)
+  })
+
+  it('caps finished-day history by spentToDate (money that really existed)', () => {
+    const drained = sanitizeState({
+      balance: 0, // nothing left → today's partial is zero
+      campaigns: [CAMPAIGN],
+      autoSpend: {
+        enabled: true,
+        dailyBudget: 100,
+        tzOffsetHours: 3,
+        startDay: '2026-08-03', // 10 days of simulated history
+        spentToDate: 150, // …but only 150 was ever deducted
+      },
+    })
+    const week = stateForPeriod(drained, 'week', evening)
+    // Uncapped sim would claim ~6 × 100; the cap holds it at what was spent.
+    expect(week.campaigns[0].cost).toBeLessThanOrEqual(150.01)
+    expect(week.campaigns[0].cost).toBeGreaterThan(100)
+  })
+
+  it('weekday rhythm: weekend days burn less than weekdays', () => {
+    // 2026-08-09 is a Sunday, 2026-08-12 a Wednesday. Compare finished days
+    // via `yesterday` projections anchored the morning after each.
+    const afterSunday = new Date('2026-08-10T17:00:00Z')
+    const afterWednesday = new Date('2026-08-13T17:00:00Z')
+    const y = (now: Date) =>
+      stateForPeriod(autoState, 'yesterday', now).campaigns[0].cost
+    expect(y(afterSunday)).toBeLessThan(y(afterWednesday))
+    // Both stay in a plausible band around the daily budget.
+    expect(y(afterSunday)).toBeGreaterThan(60)
+    expect(y(afterWednesday)).toBeLessThan(110)
   })
 })
 

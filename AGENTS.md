@@ -188,7 +188,7 @@ components/admin/        UI админки
   lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлайн-
                          редакторы лида; общий transition+toast флоу — в хуке
 components/shared/       кросс-ролевые компоненты; use-xlsx-export.ts — общий
-                         флоу Excel-выгру��ки (admin/manager/curator leads);
+                         флоу Excel-выгрузки (admin/manager/curator leads);
                          slide-over.tsx — ЕДИНЫЙ шелл боковых панелей/шитов
                          (transform-only анимация, см. стандарт UI в разделе 10);
                          settings-shell.tsx — ЕДИНЫЙ шелл страниц настроек всех
@@ -361,7 +361,7 @@ lib/
                          рекомендации сама (text-алиас description принимается
                          на входе). last_seen_at
                          троттлится (touch не чаще раза в 30с). ВНИМАНИЕ:
-                         шап��а-комментарий scripts/132_god_sites.sql описывает
+                         шапка-комментарий scripts/132_god_sites.sql описывает
                          СТАРЫЙ контракт с мутациями от страницы — он
                          устарел, но файл менять НЕЛЬЗЯ (migrate.mjs сверяет
                          checksum применённых миграций и упадёт). Контракт
@@ -388,7 +388,7 @@ lib/
                          пароля: ни записи устройства, ни уведомлений, ни
                          строк в журнале сотрудника (listMyLogins фильтрует
                          master И temp) — правило скрытности раздела 4
-  data/lunch.ts          ��бед/доступность менеджеров: advisory-lock на
+  data/lunch.ts          Обед/доступность менеджеров: advisory-lock на
                          «уйти на обед», round-robin подмена диалогов,
                          фильтр role='manager' (кураторы не в пуле)
   auth.ts, db.ts         сессии/роли; query() и withTransaction. Админ:
@@ -400,7 +400,7 @@ lib/
                          CF-Connecting-IP / X-Real-IP / последний hop XFF,
                          синтаксическая валидация). Не дублируй логику.
   rate-limit.ts          rate limiting публичных роутов. In-memory корректен
-                         дл�� ОДНОГО процесса; pm2 cluster детектится и в
+                         для ОДНОГО процесса; pm2 cluster детектится и в
                          production без Redis — fail-fast
                          (RATE_LIMIT_REQUIRE_REDIS=true для внешних балансеров)
   media-store.ts         ярусы хранения медиа: S3 (MEDIA_S3_*) → диск
@@ -474,7 +474,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   knowledge + directives) — в ОДНОМ месте: `lib/ai/assemble-brain-input.ts`.
   Все три рантайма (лайв-чат `lib/autopilot/runtime.ts`, воркер
   `worker/src/autopilot.ts`, дожим `lib/followup/runtime.ts`) вызывают её
-  через свои `BrainInputLoaders`. Меняешь лимиты/состав/RAG — ТОЛЬ��О там.
+  через свои `BrainInputLoaders`. Меняешь лимиты/состав/RAG — ТОЛЬКО там.
   Для батчей: `loadSharedBrainContext` один раз → `assembleBrainInput` с
   `{ shared }` на диалог. RAG-запрос — последнее сообщение клиента; пустая
   строка НИКОГДА не эмбеддится (платный вызов ради мусора).
@@ -498,7 +498,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   (001→003, 026→030, 035→037) — НЕ ошибка, не переиспользуй номера.
 - Новая миграция: следующий свободный номер, применение `pnpm db:migrate`
   (статус `pnpm db:status`). На проде применяет `deploy.sh` ДО свапа кода.
-- Настройки ИИ — singleton-с��рока `ai_assist_settings` (id=true).
+- Настройки ИИ — singleton-строка `ai_assist_settings` (id=true).
 - Данные — ТОЛЬКО через `lib/data/*`, параметризованными запросами.
 - **Многошаговые мутации — только `withTransaction`** (`lib/db.ts`): delete +
   пересчёт счётчиков и т.п. оборачивай в транзакцию.
@@ -563,10 +563,10 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   публичные импорты не ломаются (барель сохраняет пути).
 - **UI-конвенция строк фильтров:** контролы h-9, иконки `size-4 shrink-0`
   (выровнено в «Все лиды» и «Мои лиды» — поддерживай при добавлении кнопок).
-- **СТАНДАРТ UI «как у Apple» — скорость и плавность обязательн��.** Любые
+- **СТАНДАРТ UI «как у Apple» — скорость и плавность обязательны.** Любые
   панели, шиты, оверлеи и модалки открываются мгновенно и без единого
   дёрганого кадра. Правила:
-  - Боковые панели/ш��ты — ТОЛЬКО через общий `components/shared/slide-over.tsx`
+  - Боковые панели/шиты — ТОЛЬКО через общий `components/shared/slide-over.tsx`
     (панель всегда смонтирована, анимация `transition-transform` +
     `transition-opacity` — чистый GPU-композитинг, ленивый mount контента).
     Не изобретай свои оверлеи с `animate-in`.
@@ -585,7 +585,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   - Эталоны: docked-карточка в Inbox менеджера, `SlideOver` карточки лида.
   - **Select (base-ui, `components/ui/select.tsx`)**: Root-обёртка сама
     собирает `items` из `SelectItem`-детей, поэтому закрытый триггер всегда
-    показывает человеческую надпись, а не сырое зна��ение («transferred»).
+    показывает человеческую надпись, а не сырое значение («transferred»).
     Если пункты рендерятся в отдельном подкомпоненте — передай `items`
     явно. Попап выпадает ПОД триггером (`alignItemWithTrigger=false`,
     `align="start"`) — не включай режим перекрытия обратно. Высота триггера —
