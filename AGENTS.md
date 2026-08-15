@@ -160,6 +160,18 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    `components/admin/secret-telegram/` (telegram-tab → accounts-list /
    account-connect / personal-messenger + use-personal-messenger);
    медиа/аватары — `app/wijegniwjgwjog/api/personal-media`.
+7. **Вкладка «API TG»** — покупка Telegram-аккаунтов через сервис Get My TG
+   (docs.getmytg.com/sdk-reference). Клиент — `lib/god-gmt.ts` (plain fetch к
+   api.getmytg.com, заголовок `x-api-key`); actions —
+   `app/actions/admin-secret/gmt.ts` (гейт requireGod, без audit()); UI —
+   `components/admin/secret-gmt-tab.tsx` (SWR по actions, автоопрос 15с пока
+   есть PENDING-покупки). Ключ живёт ТОЛЬКО в env `GMT_API_KEY` (как
+   SECRET_PANEL_PASSWORD, не в БД); без ключа вкладка показывает инструкцию,
+   actions отвечают ошибкой. Жизненный цикл покупки (из доков): PENDING
+   (деньги списаны) → request-code → SUCCESS (креды: код+пароль, повторный
+   request-code даёт conflict — креды читать из GET /purchases/:id) или
+   ERROR; PENDING старше 20 минут без кода можно вернуть (REFUND). НИЧЕГО не
+   сохраняется в БД панели — все данные читаются из API напрямую.
 
 ## 5. Карта директорий
 

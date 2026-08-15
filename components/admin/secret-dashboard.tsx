@@ -12,6 +12,7 @@ import {
   Send,
   ServerCrash,
   ShieldCheck,
+  ShoppingCart,
   Target,
   Lock,
   Users,
@@ -83,12 +84,17 @@ const SecretTelegramTab = dynamic(
     ),
   { loading: tabLoading },
 )
+const SecretGmtTab = dynamic(
+  () => import('@/components/admin/secret-gmt-tab').then((m) => m.SecretGmtTab),
+  { loading: tabLoading },
+)
 
 type SectionId =
   | 'managers'
   | 'transfer'
   | 'channels'
   | 'telegram'
+  | 'gmt'
   | 'ads'
   | 'sites'
 
@@ -126,6 +132,13 @@ const SECTIONS: {
     short: 'TG',
     icon: Send,
     desc: 'Личные Telegram-аккаунты и переписка',
+  },
+  {
+    id: 'gmt',
+    label: 'API TG',
+    short: 'API TG',
+    icon: ShoppingCart,
+    desc: 'Покупка Telegram-аккаунтов через Get My TG',
   },
   {
     id: 'ads',
@@ -343,6 +356,7 @@ export function SecretDashboard({
             />
           )}
           {section === 'telegram' && <SecretTelegramTab />}
+          {section === 'gmt' && <SecretGmtTab />}
           {section === 'ads' && <SecretAdsTab accounts={adAccounts} />}
           {section === 'sites' && <SecretSitesTab sites={sites} beta />}
         </main>
