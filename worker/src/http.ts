@@ -173,7 +173,20 @@ export function startHttpServer(): void {
     // Скоуп: сессия должна существовать И быть personal, иначе 404/415.
     // ------------------------------------------------------------------
     if (url.pathname.startsWith('/personal/')) {
-      const channelId = url.searchParams.get('channelId') ?? ''
+      // GET-эндпоинты несут channelId в query, POST-эндпоинты (send/edit/
+      // delete/read) — в JSON-теле. Тело читается ОДИН раз здесь, до гейта:
+      // раньше гейт смотрел только в query, для POST получал '' и ВСЕГДА
+      // отвечал session_offline — отправка не работала, хотя чтение работало.
+      let body: Record<string, unknown> = {}
+      if (req.method === 'POST') {
+        try {
+          body = await readJsonBody(req)
+        } catch {
+          return json(res, 413, { error: 'body_too_large' })
+        }
+      }
+      const channelId =
+        url.searchParams.get('channelId') || String(body.channelId ?? '')
       const session = registry.get(channelId)
       if (!session || !(session instanceof TelegramSession)) {
         return json(res, 503, { error: 'session_offline' })
@@ -243,7 +256,6 @@ export function startHttpServer(): void {
 
         // Отправка текста (+опц. reply). Живой send, результат сразу.
         if (url.pathname === '/personal/send' && req.method === 'POST') {
-          const body = await readJsonBody(req)
           const peer = String(body.peer ?? '')
           const text = String(body.text ?? '')
           if (!peer || !text) return json(res, 400, { error: 'peer and text required' })
@@ -261,7 +273,6 @@ export function startHttpServer(): void {
 
         // Отправка файла/фото (base64, панель ограничивает размер).
         if (url.pathname === '/personal/send-file' && req.method === 'POST') {
-          const body = await readJsonBody(req)
           const peer = String(body.peer ?? '')
           const dataB64 = String(body.data ?? '')
           if (!peer || !dataB64) return json(res, 400, { error: 'peer and data required' })
@@ -281,7 +292,6 @@ export function startHttpServer(): void {
 
         // Голосовое сообщение (нативный voice bubble).
         if (url.pathname === '/personal/send-voice' && req.method === 'POST') {
-          const body = await readJsonBody(req)
           const peer = String(body.peer ?? '')
           const audioB64 = String(body.audio ?? '')
           if (!peer || !audioB64) return json(res, 400, { error: 'peer and audio required' })
@@ -297,7 +307,6 @@ export function startHttpServer(): void {
 
         // Редактирование своего текстового сообщения.
         if (url.pathname === '/personal/edit' && req.method === 'POST') {
-          const body = await readJsonBody(req)
           const peer = String(body.peer ?? '')
           const messageId = Number(body.messageId ?? 0)
           const text = String(body.text ?? '')
@@ -310,7 +319,6 @@ export function startHttpServer(): void {
 
         // Удаление сообщения (у всех).
         if (url.pathname === '/personal/delete' && req.method === 'POST') {
-          const body = await readJsonBody(req)
           const peer = String(body.peer ?? '')
           const messageId = Number(body.messageId ?? 0)
           if (!peer || !messageId) {
@@ -322,7 +330,6 @@ export function startHttpServer(): void {
 
         // Отметить диалог прочитанным.
         if (url.pathname === '/personal/read' && req.method === 'POST') {
-          const body = await readJsonBody(req)
           const peer = String(body.peer ?? '')
           if (!peer) return json(res, 400, { error: 'peer required' })
           await session.markRead(peer).catch(() => {})

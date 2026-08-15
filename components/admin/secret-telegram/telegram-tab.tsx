@@ -51,14 +51,20 @@ export function SecretTelegramTab() {
   }, [])
 
   useEffect(() => {
-    void refresh({ silent: true })
+    // Первый рефреш через макротаск: setState синхронно внутри эффекта даёт
+    // каскадный рендер (правило React Compiler) — а данные всё равно едут
+    // по сети, один тик ничего не меняет.
+    const kick = setTimeout(() => void refresh({ silent: true }), 0)
     // Поллинг статусов: авторизация (QR/код/2FA) меняет статус на воркере,
     // список должен подхватывать это без ручного «Обновить».
     const t = setInterval(() => {
       if (document.hidden) return
       void refresh({ silent: true })
     }, 8_000)
-    return () => clearInterval(t)
+    return () => {
+      clearTimeout(kick)
+      clearInterval(t)
+    }
   }, [refresh])
 
   if (loading) {

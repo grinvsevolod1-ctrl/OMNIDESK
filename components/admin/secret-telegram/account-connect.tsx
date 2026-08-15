@@ -65,8 +65,12 @@ export function AccountConnectDialog({
   useEffect(() => stopPolling, [stopPolling])
 
   useEffect(() => {
-    if (!open) {
-      stopPolling()
+    if (open) return
+    stopPolling()
+    // Сброс отложен на длительность анимации закрытия: нет синхронного
+    // setState в эффекте (каскадные рендеры) и форма не мигает пустой,
+    // пока диалог ещё виден.
+    const t = setTimeout(() => {
       setStep('method')
       setName('')
       setPhone('')
@@ -77,7 +81,8 @@ export function AccountConnectDialog({
       setLastError(null)
       setCodeDelivery(null)
       qrTextRef.current = ''
-    }
+    }, 200)
+    return () => clearTimeout(t)
   }, [open, stopPolling])
 
   /** Поллинг статуса + (для QR) живого deep link. */

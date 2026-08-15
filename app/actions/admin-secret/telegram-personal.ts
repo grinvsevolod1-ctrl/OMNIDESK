@@ -351,6 +351,21 @@ export async function personalDeleteAction(
 
 /* ----------------------------- Мессенджер ----------------------------- */
 
+/** Машинные коды worker'а → человеческий текст для тостов мессенджера. */
+function humanizeWorkerError(code: string | undefined, fallback: string): string {
+  switch (code) {
+    case 'session_offline':
+      return 'Аккаунт не в сети — запустите его на вкладке Telegram.'
+    case 'body_too_large':
+      return 'Файл слишком большой для отправки.'
+    case undefined:
+    case '':
+      return fallback
+    default:
+      return code
+  }
+}
+
 /** Живой список диалогов аккаунта. Ничего не пишется в БД. */
 export async function personalDialogsAction(
   channelId: string,
@@ -402,7 +417,10 @@ export async function personalSendTextAction(
     },
   )
   if (!data?.sent) {
-    return { ok: false, message: data?.error || 'Не удалось отправить.' }
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось отправить.'),
+    }
   }
   return { ok: true, message: 'Отправлено' }
 }
@@ -444,7 +462,10 @@ export async function personalSendFileAction(
     },
   )
   if (!data?.sent) {
-    return { ok: false, message: data?.error || 'Не удалось отправить файл.' }
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось отправить файл.'),
+    }
   }
   return { ok: true, message: 'Отправлено' }
 }
@@ -467,7 +488,13 @@ export async function personalSendVoiceAction(
     { channelId, peer, audio: audioB64, durationSec },
   )
   if (!data?.sent) {
-    return { ok: false, message: data?.error || 'Не удалось отправить голосовое.' }
+    return {
+      ok: false,
+      message: humanizeWorkerError(
+        data?.error,
+        'Не удалось отправить голосовое.',
+      ),
+    }
   }
   return { ok: true, message: 'Отправлено' }
 }
@@ -488,7 +515,10 @@ export async function personalEditMessageAction(
     { channelId, peer, messageId, text: body },
   )
   if (!data?.edited) {
-    return { ok: false, message: data?.error || 'Не удалось изменить.' }
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось изменить.'),
+    }
   }
   return { ok: true, message: 'Изменено' }
 }
@@ -506,7 +536,10 @@ export async function personalDeleteMessageAction(
     { channelId, peer, messageId },
   )
   if (!data?.deleted) {
-    return { ok: false, message: data?.error || 'Не удалось удалить.' }
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось удалить.'),
+    }
   }
   return { ok: true, message: 'Удалено' }
 }

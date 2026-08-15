@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { CheckCheck, Inbox, MessageCircle, Plug, Plus, Users } from 'lucide-react'
-import { channelIcon, type BrandIconComponent } from '@/components/channel-icons'
+import { channelIcon } from '@/components/channel-icons'
 import { ManagerActivityChart } from '@/components/analytics/manager-activity-chart'
 import { LeadStatusBoard } from '@/components/manager/lead-status-board'
 import {
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { requireManager } from '@/lib/auth'
 import { getLeadAnalytics, getManagerStats, listChannels } from '@/lib/data'
-import { getChannelMeta, type ChannelType } from '@/lib/types'
+import { getChannelMeta } from '@/lib/types'
 
 
 

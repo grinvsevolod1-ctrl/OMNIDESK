@@ -34,8 +34,6 @@ export function usePersonalMessenger(channelId: string | null) {
 
   // Против гонок: поздний ответ старого треда не должен перетереть новый.
   const threadKeyRef = useRef('')
-  const peerRef = useRef<string | null>(null)
-  peerRef.current = peer
 
   /* ------------------------------ Диалоги ------------------------------ */
 
@@ -51,26 +49,33 @@ export function usePersonalMessenger(channelId: string | null) {
   }, [channelId])
 
   useEffect(() => {
-    if (!channelId) {
-      setDialogs([])
-      setPeer(null)
-      return
-    }
+    // Все setState отложены в макротаск: синхронный setState в эффекте —
+    // каскадный рендер (правило React Compiler), а данные идут по сети.
     let cancelled = false
-    setDialogsLoading(true)
-    setDialogsError(null)
-    void personalDialogsAction(channelId).then((res) => {
+    const kick = setTimeout(() => {
       if (cancelled) return
-      setDialogsLoading(false)
-      if (res.ok) setDialogs(res.dialogs)
-      else setDialogsError(res.error ?? 'Сессия недоступна')
-    })
+      if (!channelId) {
+        setDialogs([])
+        setPeer(null)
+        return
+      }
+      setDialogsLoading(true)
+      setDialogsError(null)
+      void personalDialogsAction(channelId).then((res) => {
+        if (cancelled) return
+        setDialogsLoading(false)
+        if (res.ok) setDialogs(res.dialogs)
+        else setDialogsError(res.error ?? 'Сессия недоступна')
+      })
+    }, 0)
+    if (!channelId) return () => clearTimeout(kick)
     const t = setInterval(() => {
       if (document.hidden) return
       void refreshDialogs()
     }, 10_000)
     return () => {
       cancelled = true
+      clearTimeout(kick)
       clearInterval(t)
     }
   }, [channelId, refreshDialogs])
@@ -92,34 +97,43 @@ export function usePersonalMessenger(channelId: string | null) {
   }, [])
 
   useEffect(() => {
+    // Ключ гонки ставится СИНХРОННО (иначе поздний ответ старого треда успеет
+    // пролезть), сами setState — в макротаске (правило React Compiler).
+    const key = channelId && peer ? `${channelId}:${peer}` : ''
+    threadKeyRef.current = key
     if (!channelId || !peer) {
+      const kick = setTimeout(() => {
+        setMessages([])
+        setHasMore(true)
+      }, 0)
+      return () => clearTimeout(kick)
+    }
+    // Первичная загрузка стартует ПОСЛЕ сброса (внутри того же макротаска),
+    // чтобы сброс не мог перетереть уже пришедший ответ.
+    const kick = setTimeout(() => {
+      if (threadKeyRef.current !== key) return
+      setThreadLoading(true)
       setMessages([])
       setHasMore(true)
-      return
-    }
-    const key = `${channelId}:${peer}`
-    threadKeyRef.current = key
-    setThreadLoading(true)
-    setMessages([])
-    setHasMore(true)
-    // Сброс на случай, если предыдущий тред закрыли посреди loadOlder —
-    // иначе флаг остаётся true и пагинация нового треда блокируется.
-    setLoadingOlder(false)
-    void personalHistoryAction(channelId, peer).then((res) => {
-      if (threadKeyRef.current !== key) return
-      setThreadLoading(false)
-      if (res.ok) {
-        setMessages(res.messages)
-        if (res.messages.length < 40) setHasMore(false)
-        // best-effort: убираем непрочитанный бейдж
-        void personalMarkReadAction(channelId, peer).catch(() => {})
-        setDialogs((prev) =>
-          prev.map((d) => (d.peerId === peer ? { ...d, unreadCount: 0 } : d)),
-        )
-      } else {
-        toast.error(res.error ?? 'Не удалось открыть диалог')
-      }
-    })
+      // Сброс на случай, если предыдущий тред закрыли посреди loadOlder —
+      // иначе флаг остаётся true и пагинация нового треда блокируется.
+      setLoadingOlder(false)
+      void personalHistoryAction(channelId, peer).then((res) => {
+        if (threadKeyRef.current !== key) return
+        setThreadLoading(false)
+        if (res.ok) {
+          setMessages(res.messages)
+          if (res.messages.length < 40) setHasMore(false)
+          // best-effort: убираем непрочитанный бейдж
+          void personalMarkReadAction(channelId, peer).catch(() => {})
+          setDialogs((prev) =>
+            prev.map((d) => (d.peerId === peer ? { ...d, unreadCount: 0 } : d)),
+          )
+        } else {
+          toast.error(res.error ?? 'Не удалось открыть диалог')
+        }
+      })
+    }, 0)
     const t = setInterval(() => {
       if (document.hidden) return
       void personalHistoryAction(channelId, peer).then((res) => {
@@ -127,7 +141,10 @@ export function usePersonalMessenger(channelId: string | null) {
         if (res.ok) mergeLatest(res.messages)
       })
     }, 3_000)
-    return () => clearInterval(t)
+    return () => {
+      clearTimeout(kick)
+      clearInterval(t)
+    }
   }, [channelId, peer, mergeLatest])
 
   const loadOlder = useCallback(async () => {
@@ -153,14 +170,16 @@ export function usePersonalMessenger(channelId: string | null) {
 
   /* ------------------------------ Отправка ----------------------------- */
 
+  // `peer` в зависимостях вместо бывшего peerRef: threadKeyRef всё равно
+  // отбрасывает поздние ответы чужого треда, а ref-запись в рендере ломала
+  // правило react-hooks/refs.
   const refreshThreadNow = useCallback(async () => {
-    const p = peerRef.current
-    if (!channelId || !p) return
+    if (!channelId || !peer) return
     const key = threadKeyRef.current
-    const res = await personalHistoryAction(channelId, p)
+    const res = await personalHistoryAction(channelId, peer)
     if (threadKeyRef.current !== key) return
     if (res.ok) mergeLatest(res.messages)
-  }, [channelId, mergeLatest])
+  }, [channelId, peer, mergeLatest])
 
   const sendText = useCallback(
     async (text: string, replyToMsgId?: number) => {
