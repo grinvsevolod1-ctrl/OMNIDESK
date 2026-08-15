@@ -31,6 +31,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  CheckCircle2,
   KeyRound,
   Loader2,
   Package,
@@ -38,6 +39,7 @@ import {
   RotateCcw,
   Search,
   ShoppingCart,
+  Sparkles,
   TriangleAlert,
   Users,
   Wallet,
@@ -49,6 +51,7 @@ import {
   secretGmtBuyAction,
   secretGmtCountriesAction,
   secretGmtCountryDetailsAction,
+  secretGmtImportedPhonesAction,
   secretGmtProfileAction,
   secretGmtPurchasesAction,
   secretGmtRefundAction,
@@ -61,6 +64,10 @@ import {
   type GmtPurchase,
   type GmtPurchaseStatus,
 } from '@/app/actions/admin-secret'
+import {
+  useAutoImport,
+  type ImportState,
+} from '@/components/admin/secret-gmt/use-auto-import'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -91,6 +98,12 @@ function fmtDate(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+/** `+7999…` из любого формата — ключ для сверки с импортированными номерами. */
+function normalizePhoneKey(raw: string): string {
+  const digits = raw.replace(/[^\d]/g, '')
+  return digits ? `+${digits}` : ''
 }
 
 /** Сколько минут осталось до права на возврат (PENDING > 20 мин, из доков). */
@@ -216,6 +229,23 @@ export function SecretGmtTab() {
     { revalidateOnFocus: false },
   )
 
+  // Номера, уже заведённые как god-аккаунты — для бейджей «в god-аккаунтах».
+  const { data: importedPhones, mutate: mutateImported } = useSWR(
+    configured ? 'gmt-imported-phones' : null,
+    () => secretGmtImportedPhonesAction(),
+    { revalidateOnFocus: false },
+  )
+  const importedSet = useMemo(
+    () => new Set(importedPhones ?? []),
+    [importedPhones],
+  )
+
+  // Оркестратор автоимпорта живёт в корне вкладки: прогресс переживает
+  // переключение секций «Каталог» ↔ «Покупки».
+  const autoImport = useAutoImport(() => {
+    void mutateImported()
+  })
+
   if (status && !status.configured) {
     return (
       <Card className="p-6">
@@ -280,9 +310,11 @@ pm2 restart panel`}
       {section === 'catalog' ? (
         <CatalogSection
           balance={profile?.balance ?? null}
-          onPurchased={() => {
+          onPurchased={(purchase) => {
             void mutateProfile()
             setSection('purchases')
+            // Автоимпорт: сразу дожимаем купленный номер до god-аккаунта.
+            if (purchase?.id) void autoImport.run(purchase.id)
           }}
           onBulkCreated={() => {
             void mutateProfile()
@@ -291,9 +323,16 @@ pm2 restart panel`}
         />
       ) : null}
       {section === 'purchases' ? (
-        <PurchasesSection onBalanceChanged={() => void mutateProfile()} />
+        <PurchasesSection
+          onBalanceChanged={() => void mutateProfile()}
+          importedSet={importedSet}
+          onImport={(id) => void autoImport.run(id)}
+          importState={autoImport.state}
+        />
       ) : null}
       {section === 'bulk' ? <BulkSection /> : null}
+
+      <ImportProgressDialog state={autoImport.state} onClose={autoImport.reset} />
     </div>
   )
 }
@@ -422,7 +461,7 @@ function CatalogSection({
   onBulkCreated,
 }: {
   balance: GmtMoney | null
-  onPurchased: () => void
+  onPurchased: (purchase: GmtPurchase) => void
   onBulkCreated: () => void
 }) {
   const [countryFilter, setCountryFilter] = useState('')
@@ -616,7 +655,7 @@ function CheckoutDialog({
   country: GmtCountry | null
   balance: GmtMoney | null
   onClose: () => void
-  onPurchased: () => void
+  onPurchased: (purchase: GmtPurchase) => void
   onBulkCreated: () => void
 }) {
   const [mode, setMode] = useState<'single' | 'bulk'>('single')
@@ -648,10 +687,10 @@ function CheckoutDialog({
         const res = await secretGmtBuyAction(target.country_code)
         if (res.ok && res.data) {
           toast.success(
-            `Куплен номер ${res.data.phone_number ?? '—'} (${fmtMoney(res.data.price)}) — запросите код`,
+            `Куплен номер ${res.data.phone_number ?? '—'} — импортируем в god-аккаунты`,
           )
           onClose()
-          onPurchased()
+          onPurchased(res.data)
         } else {
           toast.error(res.message)
         }
@@ -842,8 +881,14 @@ const FILTERS: { id: GmtPurchaseStatus | 'ALL'; label: string }[] = [
 
 function PurchasesSection({
   onBalanceChanged,
+  importedSet,
+  onImport,
+  importState,
 }: {
   onBalanceChanged: () => void
+  importedSet: Set<string>
+  onImport: (purchaseId: number) => void
+  importState: ImportState
 }) {
   const [filter, setFilter] = useState<GmtPurchaseStatus | 'ALL'>('ALL')
   const [page, setPage] = useState(1)
@@ -935,6 +980,13 @@ function PurchasesSection({
                 void mutate()
                 onBalanceChanged()
               }}
+              imported={
+                p.phone_number
+                  ? importedSet.has(normalizePhoneKey(p.phone_number))
+                  : false
+              }
+              onImport={onImport}
+              importState={importState}
             />
           ))}
         </div>
