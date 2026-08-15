@@ -380,6 +380,29 @@ function humanizeWorkerError(code: string | undefined, fallback: string): string
     case '':
       return fallback
     default:
+      // Сырые коды Telegram → человекочитаемый текст (профиль / диалог).
+      if (code.includes('USERNAME_OCCUPIED'))
+        return 'Этот @username уже занят.'
+      if (code.includes('USERNAME_INVALID'))
+        return 'Недопустимый @username (5–32 символа, латиница, цифры, _).'
+      if (code.includes('USERNAME_NOT_MODIFIED'))
+        return 'Этот @username уже стоит у аккаунта.'
+      if (code.includes('USERNAME_PURCHASE_AVAILABLE'))
+        return 'Этот @username свободен только за Telegram-фрагмент.'
+      if (code.includes('PHONE_NOT_ON_TELEGRAM') || code.includes('PHONE_NOT_OCCUPIED'))
+        return 'На этом номере нет аккаунта Telegram.'
+      if (code.includes('NOT_A_USER'))
+        return 'Это не пользователь — писать можно только людям.'
+      if (code.includes('No user has') || code.includes('Cannot find any entity') || code.includes('USERNAME_NOT_FOUND'))
+        return 'Пользователь с таким @username не найден.'
+      if (code.includes('PEER_FLOOD'))
+        return 'Telegram временно ограничил отправку новым людям (антиспам).'
+      if (code.includes('FLOOD_WAIT'))
+        return 'Слишком часто — подождите немного и повторите.'
+      if (code.includes('USER_PRIVACY_RESTRICTED'))
+        return 'Настройки приватности собеседника запрещают писать первым.'
+      if (code.includes('TARGET_REQUIRED'))
+        return 'Укажите @username или номер телефона.'
       return code
   }
 }
@@ -461,7 +484,7 @@ export async function personalSendFileAction(
 ): Promise<PersonalActionResult> {
   await requireGod()
   await requirePersonalChannel(channelId)
-  if (!file.dataB64) return { ok: false, message: 'Пустой файл.' }
+  if (!file.dataB64) return { ok: false, message: 'Пустой фа��л.' }
   // base64 ≈ 4/3 исходника: 20 МБ строки ≈ 15 МБ файла.
   if (file.dataB64.length > 20 * 1024 * 1024) {
     return { ok: false, message: 'Файл больше 15 МБ — отправьте с телефона.' }
@@ -570,6 +593,141 @@ export async function personalMarkReadAction(
   await requireGod()
   await requirePersonalChannel(channelId)
   await postJsonToWorker('/personal/read', { channelId, peer })
+}
+
+/* --------------------- Профиль аккаунта / новый диалог ------------------ */
+
+export interface PersonalProfile {
+  firstName: string
+  lastName: string
+  username: string | null
+  phone: string | null
+  about: string
+}
+
+/** Живой снимок собственного профиля аккаунта (из Telegram, не из БД). */
+export async function personalGetProfileAction(
+  channelId: string,
+): Promise<{ ok: boolean; profile?: PersonalProfile; error?: string }> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  const data = await postJsonToWorkerSafeGet<{ profile: PersonalProfile }>(
+    `/personal/profile?channelId=${encodeURIComponent(channelId)}`,
+  )
+  if (!data?.profile) {
+    return { ok: false, error: 'Аккаунт не в сети — запустите его и повторите.' }
+  }
+  return { ok: true, profile: data.profile }
+}
+
+/**
+ * Меняет имя/фамилию/«о себе» аккаунта прямо в Telegram. Это НАСТОЯЩЕЕ
+ * изменение профиля (в отличие от personalRenameAction, который правит только
+ * подпись карточки в панели).
+ */
+export async function personalUpdateProfileAction(
+  channelId: string,
+  patch: { firstName: string; lastName: string; about?: string },
+): Promise<PersonalActionResult> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  const firstName = patch.firstName.trim()
+  const lastName = patch.lastName.trim()
+  const about = (patch.about ?? '').trim()
+  if (!firstName) return { ok: false, message: 'Имя не может быть пустым.' }
+  if (firstName.length > 64 || lastName.length > 64) {
+    return { ok: false, message: 'Имя и фамилия — до 64 символов.' }
+  }
+  if (about.length > 70) {
+    return { ok: false, message: '«О себе» — до 70 символов.' }
+  }
+  const data = await postJsonToWorker<{ updated?: boolean; error?: string }>(
+    '/personal/profile',
+    { channelId, firstName, lastName, about },
+  )
+  if (!data?.updated) {
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось обновить профиль.'),
+    }
+  }
+  return { ok: true, message: 'Профиль обновлён в Telegram.' }
+}
+
+/** Меняет @username аккаунта в Telegram. Пустая строка снимает username. */
+export async function personalSetUsernameAction(
+  channelId: string,
+  rawUsername: string,
+): Promise<PersonalActionResult> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  const username = rawUsername.trim().replace(/^@/, '')
+  // Пустой — валиден (снятие). Иначе правила Telegram: 5–32, [A-Za-z0-9_].
+  if (username && !/^[A-Za-z0-9_]{5,32}$/.test(username)) {
+    return {
+      ok: false,
+      message: '@username: 5–32 символа, латиница, цифры и _.',
+    }
+  }
+  const data = await postJsonToWorker<{ updated?: boolean; error?: string }>(
+    '/personal/username',
+    { channelId, username },
+  )
+  if (!data?.updated) {
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось изменить username.'),
+    }
+  }
+  return {
+    ok: true,
+    message: username ? `@username обновлён: @${username}` : '@username снят.',
+  }
+}
+
+/**
+ * Пишет первым новому собеседнику по @username или номеру телефона.
+ * Возвращает peerId — UI открывает созданный диалог в мессенджере.
+ */
+export async function personalStartDialogAction(
+  channelId: string,
+  target: string,
+  text: string,
+): Promise<
+  PersonalActionResult & {
+    peer?: { peerId: string; title: string; username: string | null }
+  }
+> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  const trimmedTarget = target.trim()
+  const body = text.trim()
+  if (!trimmedTarget) {
+    return { ok: false, message: 'Укажите @username или номер телефона.' }
+  }
+  if (!body) return { ok: false, message: 'Введите текст первого сообщения.' }
+  const data = await postJsonToWorker<{
+    started?: boolean
+    peerId?: string
+    title?: string
+    username?: string | null
+    error?: string
+  }>('/personal/start-dialog', { channelId, target: trimmedTarget, text: body })
+  if (!data?.started || !data.peerId) {
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось начать диалог.'),
+    }
+  }
+  return {
+    ok: true,
+    message: 'Сообщение отправлено.',
+    peer: {
+      peerId: data.peerId,
+      title: data.title ?? trimmedTarget,
+      username: data.username ?? null,
+    },
+  }
 }
 
 /**

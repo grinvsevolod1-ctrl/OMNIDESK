@@ -175,7 +175,7 @@ export function startHttpServer(): void {
     if (url.pathname.startsWith('/personal/')) {
       // GET-эндпоинты несут channelId в query, POST-эндпоинты (send/edit/
       // delete/read) — в JSON-теле. Тело читается ОДИН раз здесь, до гейта:
-      // раньше гейт смотрел только в query, для POST получал '' и ВСЕГДА
+      // раньше гейт смотрел только в query, для POST п��лучал '' и ВСЕГДА
       // отвечал session_offline — отправка не работала, хотя чтение работало.
       let body: Record<string, unknown> = {}
       if (req.method === 'POST') {
@@ -334,6 +334,40 @@ export function startHttpServer(): void {
           if (!peer) return json(res, 400, { error: 'peer required' })
           await session.markRead(peer).catch(() => {})
           return json(res, 200, { read: true })
+        }
+
+        // Собственный профиль аккаунта (имя/фамилия/@username/телефон).
+        if (url.pathname === '/personal/profile' && req.method === 'GET') {
+          const profile = await session.personalProfile()
+          return json(res, 200, { profile })
+        }
+
+        // Изменить имя/фамилию/«о себе» в самом Telegram.
+        if (url.pathname === '/personal/profile' && req.method === 'POST') {
+          await session.personalUpdateProfile({
+            firstName:
+              body.firstName != null ? String(body.firstName) : undefined,
+            lastName: body.lastName != null ? String(body.lastName) : undefined,
+            about: body.about != null ? String(body.about) : undefined,
+          })
+          return json(res, 200, { updated: true })
+        }
+
+        // Изменить @username (пустая строка снимает username).
+        if (url.pathname === '/personal/username' && req.method === 'POST') {
+          await session.personalSetUsername(String(body.username ?? ''))
+          return json(res, 200, { updated: true })
+        }
+
+        // Написать первым новому собеседнику (@username или телефон).
+        if (url.pathname === '/personal/start-dialog' && req.method === 'POST') {
+          const target = String(body.target ?? '')
+          const text = String(body.text ?? '')
+          if (!target || !text) {
+            return json(res, 400, { error: 'target and text required' })
+          }
+          const result = await session.personalStartDialog(target, text)
+          return json(res, 200, { started: true, ...result })
         }
 
         return json(res, 404, { error: 'not_found' })

@@ -297,3 +297,126 @@ export async function sendPersonalFile(
   })
   return { providerMessageId: sent?.id != null ? String(sent.id) : null }
 }
+
+/* ----------------------- Профиль аккаунта (own) ------------------------ */
+
+export interface PersonalProfileDTO {
+  firstName: string
+  lastName: string
+  username: string | null
+  phone: string | null
+  about: string
+}
+
+/** Живой снимок собственного профиля аккаунта. Pure read. */
+export async function getPersonalProfile(
+  client: TelegramClient,
+): Promise<PersonalProfileDTO> {
+  const me = (await client.getMe()) as Api.User
+  let about = ''
+  try {
+    const full = await client.invoke(
+      new Api.users.GetFullUser({ id: new Api.InputUserSelf() }),
+    )
+    about = full.fullUser.about ?? ''
+  } catch {
+    /* about необязателен — не рушим чтение профиля из-за него */
+  }
+  return {
+    firstName: me.firstName ?? '',
+    lastName: me.lastName ?? '',
+    username: me.username ?? null,
+    phone: me.phone ? `+${me.phone.replace(/[^\d]/g, '')}` : null,
+    about,
+  }
+}
+
+/**
+ * Меняет имя/фамилию/«о себе» в самом Telegram (account.updateProfile).
+ * Передаются только заданные поля — undefined Telegram игнорирует.
+ */
+export async function updatePersonalProfile(
+  client: TelegramClient,
+  patch: { firstName?: string; lastName?: string; about?: string },
+): Promise<void> {
+  await client.invoke(
+    new Api.account.UpdateProfile({
+      firstName: patch.firstName,
+      lastName: patch.lastName,
+      about: patch.about,
+    }),
+  )
+}
+
+/**
+ * Меняет @username (account.updateUsername). Пустая строка снимает username.
+ * Бросает USERNAME_OCCUPIED / USERNAME_INVALID / USERNAME_NOT_MODIFIED —
+ * server action переводит их в человекочитаемый текст.
+ */
+export async function updatePersonalUsername(
+  client: TelegramClient,
+  username: string,
+): Promise<void> {
+  await client.invoke(new Api.account.UpdateUsername({ username }))
+}
+
+/* --------------------- Инициация нового диалога ------------------------ */
+
+export interface StartDialogResult {
+  peerId: string
+  title: string
+  username: string | null
+}
+
+/**
+ * Первым пишет новому собеседнику по @username или номеру телефона.
+ * Телефон импортируется как временный контакт (contacts.importContacts) —
+ * иначе Telegram не даст InputPeer для незнакомого номера. Возвращает peerId,
+ * чтобы UI сразу открыл созданный диалог.
+ */
+export async function startPersonalDialog(
+  client: TelegramClient,
+  rawTarget: string,
+  text: string,
+): Promise<StartDialogResult> {
+  const target = rawTarget.trim()
+  if (!target) throw new Error('TARGET_REQUIRED')
+
+  const looksLikePhone = /^\+?[\d][\d\s\-()]{5,}$/.test(target)
+  let entity: Api.User
+
+  if (looksLikePhone) {
+    const phone = `+${target.replace(/[^\d]/g, '')}`
+    const imported = await client.invoke(
+      new Api.contacts.ImportContacts({
+        contacts: [
+          new Api.InputPhoneContact({
+            clientId: returnBigInt(Date.now()),
+            phone,
+            firstName: 'Lead',
+            lastName: '',
+          }),
+        ],
+      }),
+    )
+    const user = imported.users.find((u): u is Api.User => u instanceof Api.User)
+    if (!user) throw new Error('PHONE_NOT_ON_TELEGRAM')
+    entity = user
+  } else {
+    const handle = target.replace(/^@/, '').replace(/^https?:\/\/t\.me\//, '')
+    const resolved = (await client.getEntity(`@${handle}`)) as Api.User
+    if (!(resolved instanceof Api.User)) throw new Error('NOT_A_USER')
+    entity = resolved
+  }
+
+  await client.sendMessage(entity, { message: text })
+  const title =
+    [entity.firstName, entity.lastName].filter(Boolean).join(' ') ||
+    entity.username ||
+    'Без имени'
+  return {
+    peerId: String(entity.id),
+    title,
+    username: entity.username ?? null,
+  }
+}

@@ -39,10 +39,16 @@ import {
   downloadPersonalAvatar,
   downloadPersonalMedia,
   getPersonalHistory,
+  getPersonalProfile,
   listPersonalDialogs,
   sendPersonalFile,
+  startPersonalDialog,
+  updatePersonalProfile,
+  updatePersonalUsername,
   type PersonalDialogDTO,
   type PersonalMessageDTO,
+  type PersonalProfileDTO,
+  type StartDialogResult,
 } from './personal.js'
 import {
   sendMessageTo,
@@ -697,6 +703,40 @@ export class TelegramSession {
       peer,
       messageId,
     )
+  }
+
+  /** Own profile snapshot (personal mode). Pure read. */
+  async personalProfile(): Promise<PersonalProfileDTO> {
+    return getPersonalProfile(this.personalClient())
+  }
+
+  /** Update own first/last name / about in Telegram (personal mode). */
+  async personalUpdateProfile(patch: {
+    firstName?: string
+    lastName?: string
+    about?: string
+  }): Promise<void> {
+    return updatePersonalProfile(this.personalClient(), patch)
+  }
+
+  /** Update own @username (empty string removes it). Personal mode. */
+  async personalSetUsername(username: string): Promise<void> {
+    return updatePersonalUsername(this.personalClient(), username)
+  }
+
+  /** Message a brand-new peer first, by @username or phone. Throttled. */
+  async personalStartDialog(
+    target: string,
+    text: string,
+  ): Promise<StartDialogResult> {
+    const client = this.personalClient()
+    await this.throttleSend()
+    try {
+      return await startPersonalDialog(client, target, text)
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
   }
 
   /** Send a photo/document from the personal composer. Throttled like text. */

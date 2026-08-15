@@ -75,15 +75,36 @@ export async function secretGmtImportStartAction(
     return { ok: false, message: humanizeGmtError(err) }
   }
 
-  if (purchase.status !== 'SUCCESS') {
+  // Терминальные неудачи импортировать нельзя.
+  if (purchase.status === 'ERROR' || purchase.status === 'REFUND') {
     return {
       ok: false,
-      message: 'Покупка ещё не готова — номер появится после подтверждения.',
+      message:
+        purchase.status === 'REFUND'
+          ? 'Покупка возвращена — импорт невозможен.'
+          : 'Покупка завершилась ошибкой — импорт невозможен.',
     }
   }
-  const phone = normalizePhone(purchase.phone_number)
+  // PENDING и SUCCESS импортируем одинаково: номер выдаётся сразу при покупке,
+  // а код (переход в SUCCESS) прилетает позже — его дожимает сам флоу через
+  // request-code. Требовать SUCCESS здесь было дедлоком: SUCCESS наступает
+  // только ПОСЛЕ request-code, а request-code идёт шагом позже импорта.
+  // У PENDING номер иногда появляется с задержкой в пару секунд — коротко ждём.
+  let phone = normalizePhone(purchase.phone_number)
+  for (let i = 0; i < 5 && !phone; i++) {
+    await new Promise((r) => setTimeout(r, 2_000))
+    try {
+      purchase = await gmtPurchaseDetails(purchaseId)
+    } catch {
+      /* сеть моргнула — повторим на следующей итерации */
+    }
+    phone = normalizePhone(purchase.phone_number)
+  }
   if (!phone) {
-    return { ok: false, message: 'У покупки нет корректного номера телефона.' }
+    return {
+      ok: false,
+      message: 'Сервис ещё не назначил номер. Повторите импорт через минуту.',
+    }
   }
 
   // Дедуп по номеру: канал уже заведён — не создаём второй.
