@@ -42,7 +42,7 @@ const TABS: SettingsTab[] = [
   {
     id: 'sessions',
     label: 'Сессии',
-    hint: 'История входов',
+    hint: 'Устройства и выход',
     icon: 'devices',
   },
 ]
