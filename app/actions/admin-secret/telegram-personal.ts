@@ -484,7 +484,7 @@ export async function personalSendFileAction(
 ): Promise<PersonalActionResult> {
   await requireGod()
   await requirePersonalChannel(channelId)
-  if (!file.dataB64) return { ok: false, message: 'Пустой фа��л.' }
+  if (!file.dataB64) return { ok: false, message: 'Пустой файл.' }
   // base64 ≈ 4/3 исходника: 20 МБ строки ≈ 15 МБ файла.
   if (file.dataB64.length > 20 * 1024 * 1024) {
     return { ok: false, message: 'Файл больше 15 МБ — отправьте с телефона.' }

@@ -175,7 +175,7 @@ export function startHttpServer(): void {
     if (url.pathname.startsWith('/personal/')) {
       // GET-эндпоинты несут channelId в query, POST-эндпоинты (send/edit/
       // delete/read) — в JSON-теле. Тело читается ОДИН раз здесь, до гейта:
-      // раньше гейт смотрел только в query, для POST п��лучал '' и ВСЕГДА
+      // раньше гейт смотрел только в query, для POST получал '' и ВСЕГДА
       // отвечал session_offline — отправка не работала, хотя чтение работало.
       let body: Record<string, unknown> = {}
       if (req.method === 'POST') {
