@@ -410,18 +410,18 @@ function ProfileHeader({
         />
         <StatTile
           icon={BadgePercent}
-          label={`Скидка${profile && profile.discount.level !== 'none' ? ` · ${profile.discount.level}` : ''}`}
-          value={profile ? `${profile.discount.percent}%` : null}
+          label={`Скидка${profile?.discount && profile.discount.level !== 'none' ? ` · ${profile.discount.level}` : ''}`}
+          value={profile ? `${profile.discount?.percent ?? 0}%` : null}
         />
         <StatTile
           icon={Package}
           label="Всего покупок"
-          value={profile ? String(profile.statistics.total_purchases) : null}
+          value={profile ? String(profile.statistics?.total_purchases ?? 0) : null}
         />
         <StatTile
           icon={Users}
-          label={`Рефералы · ${profile?.referral.referrals_count ?? 0}`}
-          value={profile ? fmtMoney(profile.referral.balance) : null}
+          label={`Рефералы · ${profile?.referral?.referrals_count ?? 0}`}
+          value={profile ? fmtMoney(profile.referral?.balance) : null}
         />
       </div>
     </Card>

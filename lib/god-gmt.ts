@@ -110,15 +110,20 @@ export interface GmtMoney {
   currency_code: string
 }
 
+/**
+ * Профиль по докам содержит balance/statistics/discount/referral, но реальный
+ * API отдаёт вложенные блоки не всегда (у свежих аккаунтов referral может
+ * отсутствовать) — поэтому они опциональны, UI обязан рендерить с фолбэками.
+ */
 export interface GmtProfile {
   id: string
   telegram_id: string | null
   telegram_username: string | null
   login: string | null
-  balance: GmtMoney
-  statistics: { total_purchases: number }
-  discount: { level: string; percent: number }
-  referral: {
+  balance?: GmtMoney
+  statistics?: { total_purchases: number }
+  discount?: { level: string; percent: number }
+  referral?: {
     level: string
     percent: number
     referrals_count: number
