@@ -1026,14 +1026,24 @@ function PurchasesSection({
 function PurchaseRow({
   purchase: p,
   onChanged,
+  imported,
+  onImport,
+  importState,
 }: {
   purchase: GmtPurchase
   onChanged: () => void
+  imported: boolean
+  onImport: (purchaseId: number) => void
+  importState: ImportState
 }) {
   const [pending, startTransition] = useTransition()
   const [revealed, setRevealed] = useState(false)
   const eta = refundEtaMinutes(p)
   const canRefund = p.status === 'PENDING' && !p.verification && eta === 0
+  // Импорт этой покупки прямо сейчас ведёт оркестратор?
+  const importingThis =
+    importState.purchaseId === p.id && importState.phase !== 'idle'
+  const importBusy = importState.phase !== 'idle' && importState.phase !== 'done' && importState.phase !== 'error'
 
   function requestCode() {
     startTransition(async () => {
@@ -1083,6 +1093,23 @@ function PurchaseRow({
             Опт
           </Badge>
         ) : null}
+        {imported ? (
+          <Badge
+            variant="outline"
+            className="gap-1 border-success/40 text-success"
+          >
+            <CheckCircle2 className="size-3" />В god-аккаунтах
+          </Badge>
+        ) : null}
+        {importingThis && importBusy ? (
+          <Badge
+            variant="outline"
+            className="gap-1 border-primary/40 text-primary"
+          >
+            <Loader2 className="size-3 animate-spin" />
+            Импорт…
+          </Badge>
+        ) : null}
         <span className="text-xs text-muted-foreground">
           {p.display_name.ru} · {fmtMoney(p.price)} · {fmtDate(p.created_at)}
         </span>
@@ -1128,8 +1155,24 @@ function PurchaseRow({
           <Button
             size="sm"
             className="h-7 gap-1.5 px-2.5 text-xs"
-            disabled={pending}
+            disabled={pending || importBusy}
+            onClick={() => onImport(p.id)}
+            title="Панель сама создаст god-аккаунт, получит код и войдёт"
+          >
+            {importingThis && importBusy ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Sparkles className="size-3" />
+            )}
+            Импортировать в god-аккаунты
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1.5 bg-transparent px-2.5 text-xs"
+            disabled={pending || importBusy}
             onClick={requestCode}
+            title="Только запросить код, без автоимпорта"
           >
             {pending ? (
               <Loader2 className="size-3 animate-spin" />
@@ -1152,6 +1195,25 @@ function PurchaseRow({
           >
             <RotateCcw className="size-3" />
             {canRefund ? 'Вернуть средства' : `Возврат через ${eta} мин`}
+          </Button>
+        </div>
+      ) : null}
+
+      {p.status === 'SUCCESS' && !imported ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            className="h-7 gap-1.5 px-2.5 text-xs"
+            disabled={importBusy}
+            onClick={() => onImport(p.id)}
+            title="Аккаунт куплен, но ещё не заведён в панель — импортировать"
+          >
+            {importingThis && importBusy ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Sparkles className="size-3" />
+            )}
+            Импортировать в god-аккаунты
           </Button>
         </div>
       ) : null}
@@ -1312,5 +1374,120 @@ function BulkCard({ id }: { id: number }) {
         </p>
       ) : null}
     </div>
+  )
+}
+
+/* --------------------------- Автоимпорт: прогресс ------------------------ */
+
+/** Порядок фаз для прогресс-индикатора. */
+const IMPORT_STEPS: { phase: ImportState['phase']; label: string }[] = [
+  { phase: 'creating', label: 'Создание god-аккаунта' },
+  { phase: 'requesting_code', label: 'Запрос кода у Get My TG' },
+  { phase: 'waiting_code', label: 'Ожидание SMS-кода' },
+  { phase: 'submitting_code', label: 'Ввод кода' },
+  { phase: 'submitting_password', label: 'Ввод пароля 2FA' },
+  { phase: 'finalizing', label: 'Подключение к Telegram' },
+]
+
+/**
+ * Живой прогресс автоимпорта: какая фаза идёт, какие пройдены. Открыт, пока
+ * оркестратор работает; при успехе/ошибке остаётся до явного закрытия, чтобы
+ * итог не мелькнул незамеченным.
+ */
+function ImportProgressDialog({
+  state,
+  onClose,
+}: {
+  state: ImportState
+  onClose: () => void
+}) {
+  const open = state.phase !== 'idle'
+  const finished = state.phase === 'done' || state.phase === 'error'
+  const activeIdx = IMPORT_STEPS.findIndex((s) => s.phase === state.phase)
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && finished && onClose()}>
+      <DialogContent className="sm:max-w-sm" showCloseButton={finished}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles className="size-4 text-primary" aria-hidden />
+            Импорт в god-аккаунты
+          </DialogTitle>
+          <DialogDescription>
+            {state.phone ? (
+              <span className="font-mono">{state.phone}</span>
+            ) : (
+              'Автоматическое подключение купленного номера'
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        {state.phase === 'done' ? (
+          <div className="flex flex-col items-center gap-2 py-4 text-center">
+            <CheckCircle2 className="size-10 text-success" aria-hidden />
+            <p className="text-sm font-medium">Аккаунт подключён</p>
+            <p className="text-xs text-muted-foreground">
+              Номер уже во вкладке «Telegram» — переписка доступна сразу.
+            </p>
+          </div>
+        ) : state.phase === 'error' ? (
+          <div className="flex flex-col items-center gap-2 py-4 text-center">
+            <TriangleAlert className="size-10 text-destructive" aria-hidden />
+            <p className="text-sm font-medium">Импорт не завершён</p>
+            <p className="text-xs text-muted-foreground">{state.error}</p>
+            <p className="text-xs text-muted-foreground">
+              Покупка не потеряна: откройте её в «Покупках» и нажмите
+              «Импортировать» ещё раз.
+            </p>
+          </div>
+        ) : (
+          <ol className="flex flex-col gap-2 py-2">
+            {IMPORT_STEPS.map((step, i) => {
+              const isActive = i === activeIdx
+              const isDone = activeIdx > i
+              return (
+                <li
+                  key={step.phase}
+                  className="flex items-center gap-2.5 text-sm"
+                >
+                  {isDone ? (
+                    <CheckCircle2
+                      className="size-4 shrink-0 text-success"
+                      aria-hidden
+                    />
+                  ) : isActive ? (
+                    <Loader2
+                      className="size-4 shrink-0 animate-spin text-primary"
+                      aria-hidden
+                    />
+                  ) : (
+                    <span
+                      className="size-4 shrink-0 rounded-full border border-border"
+                      aria-hidden
+                    />
+                  )}
+                  <span
+                    className={
+                      isActive
+                        ? 'font-medium'
+                        : isDone
+                          ? 'text-muted-foreground'
+                          : 'text-muted-foreground/60'
+                    }
+                  >
+                    {step.label}
+                  </span>
+                  {isActive && state.detail ? (
+                    <span className="text-xs text-muted-foreground">
+                      {state.detail}
+                    </span>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ol>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }

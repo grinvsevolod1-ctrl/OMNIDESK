@@ -32,15 +32,19 @@ export type ImportPhase =
   | 'idle'
   | 'creating' // создаём канал + стартуем логин
   | 'requesting_code' // просим GMT прислать код
+  | 'waiting_code' // ждём доставки кода от GMT
   | 'submitting_code' // отправляем код в Telegram
   | 'submitting_password' // отправляем 2FA-пароль
-  | 'waiting' // ждём онлайн
+  | 'finalizing' // ждём онлайн
   | 'done'
   | 'error'
 
 export interface ImportState {
   phase: ImportPhase
-  message: string
+  /** Какую покупку импортируем — для бейджа «Импорт…» на нужной строке. */
+  purchaseId: number | null
+  /** Короткая подпись под активным шагом (напр. «код 12345»). */
+  detail: string
   channelId: string | null
   phone: string | null
   error: string | null
@@ -48,7 +52,8 @@ export interface ImportState {
 
 const IDLE: ImportState = {
   phase: 'idle',
-  message: '',
+  purchaseId: null,
+  detail: '',
   channelId: null,
   phone: null,
   error: null,
@@ -114,12 +119,13 @@ export function useAutoImport(onImported?: () => void) {
       abortRef.current = signal
 
       const fail = (error: string) =>
-        setState((s) => ({ ...s, phase: 'error', error, message: '' }))
+        setState((s) => ({ ...s, phase: 'error', error, detail: '' }))
 
       // 1. Канал + старт логина по номеру.
       setState({
         phase: 'creating',
-        message: 'Создаём аккаунт и запрашиваем вход…',
+        purchaseId,
+        detail: '',
         channelId: null,
         phone: null,
         error: null,
@@ -127,6 +133,7 @@ export function useAutoImport(onImported?: () => void) {
       const start = await secretGmtImportStartAction(purchaseId).catch(
         () => null,
       )
+      if (signal.aborted) return
       if (!start) return fail('Сеть недоступна. Повторите импорт.')
       if (!start.ok) return fail(start.message)
 
@@ -135,28 +142,21 @@ export function useAutoImport(onImported?: () => void) {
 
       // Уже онлайн (переиспользованный канал) — готово.
       if (start.data.sessionStatus === 'online') {
-        setState((s) => ({ ...s, phase: 'done', message: 'Уже подключён' }))
+        setState((s) => ({ ...s, phase: 'done', detail: 'Уже подключён' }))
         onImported?.()
         return
       }
 
       // 2. Просим GMT прислать код в приложение купленного аккаунта.
-      setState((s) => ({
-        ...s,
-        phase: 'requesting_code',
-        message: 'Запрашиваем код у Get My TG…',
-      }))
+      setState((s) => ({ ...s, phase: 'requesting_code', detail: '' }))
       // Небольшая пауза — worker должен успеть дойти до code_pending.
       await sleep(1_500)
-      const codeReq = await secretGmtRequestCodeAction(purchaseId).catch(
-        () => null,
-      )
-      // conflict (код уже запрашивали) — не фатально, креды прочитаем из GET.
-      if (codeReq && !codeReq.ok && !/already|conflict|запрош/i.test(codeReq.message)) {
-        // мягкая ошибка: продолжаем, вдруг код всё же придёт
-      }
+      if (signal.aborted) return
+      await secretGmtRequestCodeAction(purchaseId).catch(() => null)
+      // conflict (код уже запрашивали) не фатален — креды прочитаем из GET.
 
       // 3. Ждём креды (код + пароль) у покупки.
+      setState((s) => ({ ...s, phase: 'waiting_code', detail: '' }))
       const creds = await waitForCredentials(purchaseId, signal)
       if (signal.aborted) return
       if (!creds) {
@@ -173,17 +173,14 @@ export function useAutoImport(onImported?: () => void) {
       setState((s) => ({
         ...s,
         phase: 'submitting_code',
-        message: 'Вводим код в Telegram…',
+        detail: `код ${creds.code}`,
       }))
       const codeRes = await personalSubmitCodeAction(channelId, creds.code)
+      if (signal.aborted) return
       if (!codeRes.ok) return fail(codeRes.message)
 
       // 5. Ждём: либо сразу онлайн, либо потребуется 2FA-пароль.
-      setState((s) => ({
-        ...s,
-        phase: 'waiting',
-        message: 'Проверяем код…',
-      }))
+      setState((s) => ({ ...s, phase: 'finalizing', detail: 'проверяем код' }))
       const afterCode = await waitForSession(
         channelId,
         ['online', 'password_pending'],
@@ -197,18 +194,19 @@ export function useAutoImport(onImported?: () => void) {
             'Аккаунт защищён паролем 2FA, но пароль не пришёл. Введите его вручную.',
           )
         }
-        setState((s) => ({
-          ...s,
-          phase: 'submitting_password',
-          message: 'Вводим пароль 2FA…',
-        }))
+        setState((s) => ({ ...s, phase: 'submitting_password', detail: '' }))
         const pwRes = await personalSubmitPasswordAction(
           channelId,
           creds.password,
         )
+        if (signal.aborted) return
         if (!pwRes.ok) return fail(pwRes.message)
 
-        setState((s) => ({ ...s, phase: 'waiting', message: 'Завершаем вход…' }))
+        setState((s) => ({
+          ...s,
+          phase: 'finalizing',
+          detail: 'завершаем вход',
+        }))
         const afterPw = await waitForSession(channelId, ['online'], signal)
         if (signal.aborted) return
         if (afterPw !== 'online') {
@@ -221,11 +219,7 @@ export function useAutoImport(onImported?: () => void) {
       }
 
       // Готово — аккаунт онлайн.
-      setState((s) => ({
-        ...s,
-        phase: 'done',
-        message: 'Аккаунт добавлен в god-аккаунты',
-      }))
+      setState((s) => ({ ...s, phase: 'done', detail: '' }))
       onImported?.()
     },
     [onImported],

@@ -181,6 +181,22 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    localStorage (`god_gmt_bulk_ids`, максимум 20) + ручной поиск по ID.
    История покупок — серверная пагинация (25/стр) с фильтром по статусу,
    у PENDING-карточек живой обратный отсчёт до права на возврат (20 мин).
+   **Автоимпорт в god-аккаунты:** купленный номер сам заводится как личный
+   telegram_personal-канал (вкладка «Telegram») без ручного копирования кода.
+   Мост — `app/actions/admin-secret/gmt-import.ts` (`secretGmtImportStartAction`
+   создаёт/переиспользует канал по номеру + start-джоба;
+   `secretGmtImportedPhonesAction` — номера уже заведённых каналов для бейджа
+   «В god-аккаунтах»; гейт requireGod, без audit()). Оркестрацией дирижирует
+   КЛИЕНТ (по решению владельца) — хук `components/admin/secret-gmt/`
+   `use-auto-import.ts`, пока открыта вкладка: creating → requesting_code
+   (request-code у GMT) → waiting_code (креды из GET /purchases/:id) →
+   submitting_code → submitting_password (2FA, если нужен) → finalizing
+   (поллинг session_status до 'online'), переиспользуя personal*-actions
+   вкладки Telegram. Всё идемпотентно: канал дедуплится по номеру (E.164),
+   креды перечитываются из GET (повторный request-code = conflict, не
+   фатально). Single-покупка стартует импорт автоматически; на любой
+   SUCCESS/PENDING-карточке есть кнопка «Импортировать» для ручного повтора.
+   Прогресс — `ImportProgressDialog` в secret-gmt-tab.tsx.
 
 ## 5. Карта директорий
 
