@@ -247,7 +247,10 @@ describe('auto-spend projection', () => {
     const live = y.campaigns.find((c) => c.id === CAMPAIGN.id)!
     expect(live.cost).toBeGreaterThan(80) // ~dailyBudget minus jitter share
     expect(live.cost).toBeLessThanOrEqual(100)
-    expect(y.balance).toBe(1000) // committed already — untouched
+    // Balance is the live current balance, NOT the raw stored one — the
+    // number a real cabinet shows regardless of the stats period.
+    expect(y.balance).toBe(liveBalance(autoState, evening))
+    expect(y.balance).toBeLessThan(1000)
   })
 
   it('never exposes autoSpend to the page payload', () => {
@@ -286,8 +289,10 @@ describe('auto-spend projection', () => {
     // Stopped campaigns keep their hand-edited numbers in aggregates too.
     const stopped = week.campaigns.find((c) => c.id === '987654321')
     expect(stopped?.cost).toBe(CAMPAIGN.cost)
-    // Balance shows the live one — aggregate periods don't re-spend it.
-    expect(week.balance).toBe(1000)
+    // Balance shows the live current one — identical across all periods,
+    // aggregate periods don't re-spend it and don't leak the raw stored value.
+    expect(week.balance).toBe(liveBalance(autoState, evening))
+    expect(week.balance).toBe(today.balance)
   })
 
   it('anchors «all» at autoSpend.startDay when present', () => {
@@ -356,6 +361,24 @@ describe('liveBalance', () => {
       autoSpend: { enabled: true, dailyBudget: 10_000, tzOffsetHours: 3 },
     })
     expect(liveBalance(state, evening)).toBe(0)
+  })
+})
+
+describe('stateForPeriod balance is period-independent', () => {
+  it('shows the same live balance for every period (only stats differ)', () => {
+    const evening = new Date('2026-08-15T18:00:00+03:00')
+    const state = sanitizeState({
+      balance: 105,
+      campaigns: [CAMPAIGN],
+      autoSpend: { enabled: true, dailyBudget: 20, tzOffsetHours: 3 },
+    })
+    const live = liveBalance(state, evening)
+    // The reported bug: yesterday/week/month/all used to echo the raw 105.
+    for (const p of ['today', 'yesterday', 'week', 'month', 'all'] as const) {
+      expect(stateForPeriod(state, p, evening).balance).toBe(live)
+    }
+    // And it genuinely reflects spend — not the untouched 105.
+    expect(live).toBeLessThan(105)
   })
 })
 

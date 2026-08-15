@@ -674,18 +674,25 @@ export function stateForPeriod(
   const auto = state.autoSpend
   if (auto?.enabled && auto.dailyBudget > 0) {
     const tz = auto.tzOffsetHours ?? 3
+    // Balance is a single "money in the account right now" figure — a real
+    // ad cabinet never changes it when you switch the stats period, only the
+    // campaign statistics below change. So the balance is ALWAYS today's live
+    // balance (stored minus today's partial burn), for every period. This is
+    // what the `today` view always showed; previously yesterday/week/month/all
+    // leaked the raw stored balance (no spend deducted), which looked like the
+    // balance "jumped back up" when you filtered by yesterday.
+    const todaySim = simulateAutoDay(
+      state,
+      autoDayKey(now, tz),
+      autoDayFraction(now, tz),
+      state.balance,
+    )
+    balance = round2(Math.max(0, state.balance - todaySim.totalSpent))
+
     if (period === 'today') {
-      const sim = simulateAutoDay(
-        state,
-        autoDayKey(now, tz),
-        autoDayFraction(now, tz),
-        state.balance,
-      )
-      campaigns = sim.campaigns
-      balance = round2(Math.max(0, state.balance - sim.totalSpent))
+      campaigns = todaySim.campaigns
     } else if (period === 'yesterday') {
-      // Finished day: full curve, seeded with yesterday's date. Balance is
-      // already committed for that day — show the live one untouched.
+      // Finished day: full curve, seeded with yesterday's date.
       const y = autoDayKey(new Date(now.getTime() - 86_400_000), tz)
       campaigns = simulateAutoDay(state, y, 1, auto.dailyBudget).campaigns
     } else {
