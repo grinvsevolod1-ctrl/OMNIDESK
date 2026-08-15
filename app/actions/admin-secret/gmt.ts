@@ -5,7 +5,10 @@ import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
 import {
   GmtApiError,
+  gmtBulkStatus,
   gmtCountries,
+  gmtCountryDetails,
+  gmtCreateBulkPurchase,
   gmtCreatePurchase,
   gmtHealth,
   gmtProfile,
@@ -14,8 +17,11 @@ import {
   gmtRefund,
   gmtRequestCode,
   isGmtConfigured,
+  type GmtBulkPurchase,
   type GmtCodeRequest,
   type GmtCountry,
+  type GmtCountryDetails,
+  type GmtPagination,
   type GmtProfile,
   type GmtPurchase,
   type GmtPurchaseStatus,
@@ -29,9 +35,12 @@ import {
 // 'use server'-ограничение на экспорты функций не нарушает — тот же
 // паттерн, что SiteListItem в sites.ts).
 export type {
+  GmtBulkPurchase,
   GmtCodeRequest,
   GmtCountry,
+  GmtCountryDetails,
   GmtMoney,
+  GmtPagination,
   GmtProfile,
   GmtPurchase,
   GmtPurchaseStatus,
@@ -123,11 +132,46 @@ export async function secretGmtCountriesAction(
 
 export async function secretGmtPurchasesAction(
   status?: GmtPurchaseStatus,
-): Promise<GmtActionResult<GmtPurchase[]>> {
-  return runGmt(async () => {
-    const res = await gmtPurchases({ status, pageSize: 50 })
-    return res.items
-  })
+  page?: number,
+): Promise<
+  GmtActionResult<{ items: GmtPurchase[]; pagination: GmtPagination }>
+> {
+  const safePage =
+    Number.isInteger(page) && (page as number) >= 1 ? (page as number) : 1
+  return runGmt(() => gmtPurchases({ status, page: safePage, pageSize: 25 }))
+}
+
+/** Разбивка цены со скидкой для диалога подтверждения покупки. */
+export async function secretGmtCountryDetailsAction(
+  countryCode: string,
+): Promise<GmtActionResult<GmtCountryDetails>> {
+  if (!/^[A-Z]{2}$/.test(countryCode)) {
+    return { ok: false, message: 'Некорректный код страны' }
+  }
+  return runGmt(() => gmtCountryDetails(countryCode))
+}
+
+/** Оптовая закупка: quantity ограничен 1..100 — защита от опечатки на 4 нуля. */
+export async function secretGmtBulkBuyAction(
+  countryCode: string,
+  quantity: number,
+): Promise<GmtActionResult<GmtBulkPurchase>> {
+  if (!/^[A-Z]{2}$/.test(countryCode)) {
+    return { ok: false, message: 'Некорректный код страны' }
+  }
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) {
+    return { ok: false, message: 'Количество: целое число от 1 до 100' }
+  }
+  return runGmt(() => gmtCreateBulkPurchase(countryCode, quantity))
+}
+
+export async function secretGmtBulkStatusAction(
+  purchaseId: number,
+): Promise<GmtActionResult<GmtBulkPurchase>> {
+  if (!Number.isInteger(purchaseId) || purchaseId < 1) {
+    return { ok: false, message: 'Некорректный ID закупки' }
+  }
+  return runGmt(() => gmtBulkStatus(purchaseId))
 }
 
 export async function secretGmtBuyAction(

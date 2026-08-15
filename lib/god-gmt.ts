@@ -91,6 +91,36 @@ export interface GmtCodeRequest {
   retry_after: number | null
 }
 
+/** Разбивка цены по стране: финальная цена + база и процент скидки. */
+export interface GmtCountryDetails {
+  country_code: string
+  emoji: string
+  display_name: { ru: string; en: string }
+  price: GmtMoney
+  discount: { base_price: string; percent: number }
+  available: boolean
+  tags: string[]
+}
+
+/** Оптовая закупка: архив с сессиями появляется в item при SUCCESS. */
+export interface GmtBulkPurchase {
+  bulk_purchase_id: number
+  country_code: string
+  quantity: number
+  total_price: GmtMoney
+  price_per_account: GmtMoney
+  item: {
+    export_id: string
+    archive_url: string
+    quantity: number
+    status: GmtPurchaseStatus
+    created_at: string
+  } | null
+  status: GmtPurchaseStatus
+  created_at: string
+  updated_at: string
+}
+
 export interface GmtHealth {
   status: 'ok' | 'degraded'
   checks?: { database: boolean; redis: boolean }
@@ -227,4 +257,53 @@ export function gmtRefund(purchaseId: number): Promise<{
   return gmtFetch(`/v1/purchases/${purchaseId}/refund`, {
     method: 'POST',
   })
+}
+
+/** Разбивка цены со скидкой — для чекаута перед покупкой. */
+export function gmtCountryDetails(
+  countryCode: string,
+): Promise<GmtCountryDetails> {
+  return gmtFetch<GmtCountryDetails>(`/v1/accounts/${countryCode}`)
+}
+
+/**
+ * Оптовая закупка: баланс списывается сразу, архив готовится асинхронно.
+ * Без callback_url — панель опрашивает статус сама (как и с request-code).
+ */
+export function gmtCreateBulkPurchase(
+  countryCode: string,
+  quantity: number,
+): Promise<GmtBulkPurchase> {
+  return gmtFetch<GmtBulkPurchase>('/v1/purchases/bulk', {
+    method: 'POST',
+    body: { country_code: countryCode, quantity },
+  })
+}
+
+export function gmtBulkStatus(purchaseId: number): Promise<GmtBulkPurchase> {
+  return gmtFetch<GmtBulkPurchase>(`/v1/purchases/bulk/${purchaseId}`)
+}
+
+/**
+ * Скачивание ZIP-архива оптовой закупки — сырой Response для проксирования
+ * через god-роут (ключ x-api-key не должен попадать в браузер).
+ */
+export async function gmtBulkDownload(
+  purchaseId: number,
+): Promise<Response | null> {
+  const apiKey = process.env.GMT_API_KEY
+  if (!apiKey) return null
+  try {
+    const res = await fetch(
+      `${GMT_BASE_URL}/v1/purchases/bulk/${purchaseId}/download`,
+      {
+        headers: { 'x-api-key': apiKey },
+        signal: AbortSignal.timeout(120_000),
+        cache: 'no-store',
+      },
+    )
+    return res.ok ? res : null
+  } catch {
+    return null
+  }
 }
