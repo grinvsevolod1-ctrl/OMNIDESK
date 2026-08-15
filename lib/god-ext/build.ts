@@ -4,7 +4,7 @@
 // manifest.json (unique name + version + the panel origin in
 // host_permissions). Everything else is a static template shipped in
 // lib/god-ext/templates/ and copied verbatim into the zip:
-//   content.js, page3.app.js, page3.html, rules.json, icon32.png
+//   content.js, page3.app.js, page3.html, rules.json, icon{32,48,128}.png
 //
 // The bundled page3.html means the extension works fully offline — config.js
 // leaves pageUrl empty so content.js loads the packaged copy.
@@ -22,6 +22,8 @@ const STATIC_FILES = [
   'page3.html',
   'rules.json',
   'icon32.png',
+  'icon48.png',
+  'icon128.png',
 ] as const
 
 export interface ExtensionParams {
@@ -79,7 +81,7 @@ export function renderManifest(p: {
     name: p.name,
     version: p.version,
     description: 'Yandex direct',
-    icons: { '32': 'icon32.png' },
+    icons: { '32': 'icon32.png', '48': 'icon48.png', '128': 'icon128.png' },
     content_scripts: [
       {
         matches: ['https://direct.yandex.ru/*', 'https://direct.yandex.com/*'],

@@ -53,6 +53,11 @@ describe('renderManifest', () => {
       'page3.app.js',
       'content.js',
     ])
+    expect(m.icons).toEqual({
+      '32': 'icon32.png',
+      '48': 'icon48.png',
+      '128': 'icon128.png',
+    })
   })
 })
 
@@ -107,6 +112,8 @@ describe('assembleExtensionZip', () => {
         'page3.html',
         'rules.json',
         'icon32.png',
+        'icon48.png',
+        'icon128.png',
       ]) {
         expect(readFileSync(join(dir, f)).length).toBeGreaterThan(0)
       }

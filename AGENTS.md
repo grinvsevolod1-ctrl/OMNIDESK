@@ -102,7 +102,8 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    «Скачать расширение» (`secretDownloadExtensionAction`). Она собирает
    готовый `.zip` браузерного расширения под конкретный сайт: статические
    шаблоны из `lib/god-ext/templates/` (page3.html/app.js/content.js/rules.json/
-   icon32.png) + сгенерированные `config.js` (api-origin из запроса, slug,
+   icon{32,48,128}.png — растровый Yandex-логотип) + сгенерированные
+   `config.js` (api-origin из запроса, slug,
    токен) и `manifest.json`. Сборка — `lib/god-ext/build.ts`, ZIP без
    зависимостей — `lib/god-ext/zip.ts` (zlib deflate + CRC32, ручной local/
    central-dir). Каждое скачивание РОТИРУЕТ api-ключ (плейнтекст живёт только
@@ -187,7 +188,7 @@ components/admin/        UI админки
   lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлайн-
                          редакторы лида; общий transition+toast флоу — в хуке
 components/shared/       кросс-ролевые компоненты; use-xlsx-export.ts — общий
-                         флоу Excel-выгрузки (admin/manager/curator leads);
+                         флоу Excel-выгру��ки (admin/manager/curator leads);
                          slide-over.tsx — ЕДИНЫЙ шелл боковых панелей/шитов
                          (transform-only анимация, см. стандарт UI в разделе 10);
                          settings-shell.tsx — ЕДИНЫЙ шелл страниц настроек всех
@@ -360,7 +361,7 @@ lib/
                          рекомендации сама (text-алиас description принимается
                          на входе). last_seen_at
                          троттлится (touch не чаще раза в 30с). ВНИМАНИЕ:
-                         шапка-комментарий scripts/132_god_sites.sql описывает
+                         шап��а-комментарий scripts/132_god_sites.sql описывает
                          СТАРЫЙ контракт с мутациями от страницы — он
                          устарел, но файл менять НЕЛЬЗЯ (migrate.mjs сверяет
                          checksum применённых миграций и упадёт). Контракт
