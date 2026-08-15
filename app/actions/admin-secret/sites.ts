@@ -1,10 +1,14 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { headers } from 'next/headers'
 import { notFound } from 'next/navigation'
 import { requireAdmin } from '@/lib/auth'
+import { buildExtensionZip } from '@/lib/god-ext/build'
 import { isGodUnlocked } from '@/lib/god-gate'
 import {
+  assignExtLabelSeq,
+  bumpExtVersion,
   commitAutoSpend,
   createSite,
   deleteSite,
@@ -214,4 +218,83 @@ export async function secretSaveSiteStateAction(
   }
   if (res.error === 'invalid') return { ok: false, message: res.message }
   return { ok: false, message: 'Сайт не найден' }
+}
+
+/**
+ * Resolve the public origin of THIS panel from the incoming request, so the
+ * generated extension's `api` and `host_permissions` always point at the
+ * server the admin is actually on — no hardcoded domain, no manual editing.
+ * Honours the standard reverse-proxy forwarding headers deploy.sh sets up.
+ */
+async function panelOrigin(): Promise<string> {
+  const h = await headers()
+  const proto = (h.get('x-forwarded-proto') ?? 'https').split(',')[0].trim()
+  const host = (
+    h.get('x-forwarded-host') ??
+    h.get('host') ??
+    ''
+  )
+    .split(',')[0]
+    .trim()
+  if (!host) throw new Error('no-host')
+  return `${proto}://${host}`
+}
+
+/**
+ * Build a ready-to-load browser extension for this site: assigns the permanent
+ * "яндекс N" label on first download, ROTATES the API key (so the freshly
+ * baked token is embedded and every earlier archive stops working — the
+ * plaintext token exists only inside the zip, never in the DB), bumps the
+ * manifest version so Chrome reloads, and returns the archive as base64.
+ *
+ * Beta feature: the classic manual-token flow ("Сайты" tab) is untouched.
+ */
+export async function secretDownloadExtensionAction(
+  id: string,
+): Promise<
+  ActionResult & { fileName?: string; base64?: string; labelSeq?: number }
+> {
+  await requireGod()
+
+  const site = await getSiteById(id)
+  if (!site) return { ok: false, message: 'Сайт не найден' }
+
+  let origin: string
+  try {
+    origin = await panelOrigin()
+  } catch {
+    return { ok: false, message: 'Не удалось определить адрес панели' }
+  }
+
+  // Permanent label (idempotent) + fresh token + new version, in that order.
+  const labelSeq = await assignExtLabelSeq(id)
+  if (labelSeq == null) return { ok: false, message: 'Сайт не найден' }
+
+  const rotated = await rotateSiteKey(id)
+  if (!rotated) return { ok: false, message: 'Не удалось выдать токен' }
+
+  const version = await bumpExtVersion(id)
+  if (version == null) return { ok: false, message: 'Сайт не найден' }
+
+  let base64: string
+  try {
+    base64 = await buildExtensionZip({
+      origin,
+      slug: site.slug,
+      token: rotated.apiKey,
+      labelSeq,
+      downloadCount: version,
+    })
+  } catch {
+    return { ok: false, message: 'Не удалось собрать расширение' }
+  }
+
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: `Расширение «яндекс ${labelSeq}» готово`,
+    fileName: `yandex-${labelSeq}-v1.0.${version}.zip`,
+    base64,
+    labelSeq,
+  }
 }

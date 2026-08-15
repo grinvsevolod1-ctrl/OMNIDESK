@@ -36,7 +36,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `135`.
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `136`.
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: GramJS (Telegram), боты
@@ -97,6 +97,20 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    только из вкладки «Сайты» (optimistic locking по revision). Server actions
    вкладки (`app/actions/admin-secret/sites.ts`) требуют god-cookie поверх
    requireAdmin и НЕ пишут в admin-видимый журнал аудита.
+   **Генератор расширений (вкладка «Сайты бета», миграция 136):** та же
+   вкладка `SecretSitesTab` с пропом `beta`, но в редакторе появляется кнопка
+   «Скачать расширение» (`secretDownloadExtensionAction`). Она собирает
+   готовый `.zip` браузерного расширения под конкретный сайт: статические
+   шаблоны из `lib/god-ext/templates/` (page3.html/app.js/content.js/rules.json/
+   icon32.png) + сгенерированные `config.js` (api-origin из запроса, slug,
+   токен) и `manifest.json`. Сборка — `lib/god-ext/build.ts`, ZIP без
+   зависимостей — `lib/god-ext/zip.ts` (zlib deflate + CRC32, ручной local/
+   central-dir). Каждое скачивание РОТИРУЕТ api-ключ (плейнтекст живёт только
+   внутри архива, в БД — хэш; прежние архивы сразу умирают, fail-closed),
+   бампит `ext_version` → `manifest.version = 1.0.K` (Chrome требует новую
+   версию), и присваивает постоянный `ext_label_seq` → `name = «яндекс N»`
+   (сквозная нумерация с 11, MAX+1, идемпотентно). Классическая вкладка
+   «Сайты» с ручным токеном НЕ трогается — beta живёт рядом.
 6. **Личные Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
    миграция 135) — каналы `type='telegram_personal'` в `channels`, живут
    на воркере (`worker/src/personal.ts`, GramJS). Все admin-видимые выборки
@@ -459,7 +473,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   knowledge + directives) — в ОДНОМ месте: `lib/ai/assemble-brain-input.ts`.
   Все три рантайма (лайв-чат `lib/autopilot/runtime.ts`, воркер
   `worker/src/autopilot.ts`, дожим `lib/followup/runtime.ts`) вызывают её
-  через свои `BrainInputLoaders`. Меняешь лимиты/состав/RAG — ТОЛЬКО там.
+  через свои `BrainInputLoaders`. Меняешь лимиты/состав/RAG — ТОЛЬ��О там.
   Для батчей: `loadSharedBrainContext` один раз → `assembleBrainInput` с
   `{ shared }` на диалог. RAG-запрос — последнее сообщение клиента; пустая
   строка НИКОГДА не эмбеддится (платный вызов ради мусора).
@@ -548,10 +562,10 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   публичные импорты не ломаются (барель сохраняет пути).
 - **UI-конвенция строк фильтров:** контролы h-9, иконки `size-4 shrink-0`
   (выровнено в «Все лиды» и «Мои лиды» — поддерживай при добавлении кнопок).
-- **СТАНДАРТ UI «как у Apple» — скорость и плавность обязательны.** Любые
+- **СТАНДАРТ UI «как у Apple» — скорость и плавность обязательн��.** Любые
   панели, шиты, оверлеи и модалки открываются мгновенно и без единого
   дёрганого кадра. Правила:
-  - Боковые панели/шиты — ТОЛЬКО через общий `components/shared/slide-over.tsx`
+  - Боковые панели/ш��ты — ТОЛЬКО через общий `components/shared/slide-over.tsx`
     (панель всегда смонтирована, анимация `transition-transform` +
     `transition-opacity` — чистый GPU-композитинг, ленивый mount контента).
     Не изобретай свои оверлеи с `animate-in`.

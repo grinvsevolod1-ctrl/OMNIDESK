@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft,
   CircleDot,
+  Download,
   Lightbulb,
   Loader2,
   Plus,
@@ -15,10 +16,12 @@ import {
   Zap,
 } from 'lucide-react'
 import {
+  secretDownloadExtensionAction,
   secretGetSiteAction,
   secretSaveSiteStateAction,
   secretTopUpSiteAction,
 } from '@/app/actions/admin-secret'
+import { downloadBase64Zip } from '@/components/admin/secret-sites/download-zip'
 import type {
   GodSite,
   SiteCampaign,
@@ -124,9 +127,12 @@ function previewDayFraction(tzOffsetHours: number): number {
 export function SiteEditor({
   site,
   onClose,
+  beta = false,
 }: {
   site: GodSite
   onClose: () => void
+  /** Beta "Сайты бета" tab: enables the one-click extension download. */
+  beta?: boolean
 }) {
   const [pending, startTransition] = useTransition()
   const [state, setState] = useState<SiteState>(site.state)
@@ -188,6 +194,43 @@ export function SiteEditor({
     onClose()
   }
 
+  /**
+   * Build & download the browser extension for THIS site. Warn first: the
+   * server rotates the API key, so any previously downloaded archive stops
+   * working the moment this one is generated. Unsaved edits are flagged too —
+   * the extension bakes in the CURRENT saved state, not the dirty draft.
+   */
+  function downloadExtension() {
+    if (
+      dirty &&
+      !window.confirm(
+        'Есть несохранённые изменения — расширение соберётся по последнему сохранённому состоянию. Продолжить?',
+      )
+    ) {
+      return
+    }
+    if (
+      !window.confirm(
+        'Скачивание выдаст новый токен: все ранее скачанные архивы этого сайта перестанут работать. Продолжить?',
+      )
+    ) {
+      return
+    }
+    startTransition(async () => {
+      try {
+        const res = await secretDownloadExtensionAction(site.id)
+        if (res.ok && res.base64 && res.fileName) {
+          downloadBase64Zip(res.base64, res.fileName)
+          toast.success(res.message)
+        } else {
+          toast.error(res.message)
+        }
+      } catch {
+        toast.error('Не удалось собрать расширение')
+      }
+    })
+  }
+
   function save() {
     startTransition(async () => {
       try {
@@ -241,7 +284,7 @@ export function SiteEditor({
           `Баланс пополнен: ${nf.format(res.balance)} ${state.currency}`,
         )
       } catch {
-        toast.error('Внутренняя ошибка сервера')
+        toast.error('Внутрення�� ошибка сервера')
       }
     })
   }
@@ -303,6 +346,23 @@ export function SiteEditor({
           >
             {dirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены'}
           </span>
+          {beta && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={downloadExtension}
+              disabled={pending}
+              className="press-scale gap-1.5"
+              title="Собрать и скачать готовое расширение под этот сайт"
+            >
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
+              Скачать расширение
+            </Button>
+          )}
           <Button
             size="sm"
             onClick={save}
@@ -444,7 +504,7 @@ export function SiteEditor({
           </div>
         </div>
 
-        {/* Organization card — окно по клику на аватар на витрине. Пустые
+        {/* Organization card — окно по клику на ��ватар на витрине. Пустые
             поля не отправляются, страница показывает свой прочерк. */}
         <div className="grid grid-cols-1 gap-3 border-t pt-4 sm:grid-cols-3">
           <div className="flex flex-col gap-1.5">

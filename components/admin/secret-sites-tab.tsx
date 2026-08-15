@@ -75,7 +75,14 @@ function isOnline(lastSeenAt: string | null): boolean {
   return Date.now() - new Date(lastSeenAt).getTime() < 60_000
 }
 
-export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
+export function SecretSitesTab({
+  sites,
+  beta = false,
+}: {
+  sites: SiteListItem[]
+  /** Beta tab: unlocks the one-click extension download in the editor. */
+  beta?: boolean
+}) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const [createOpen, setCreateOpen] = useState(false)
@@ -142,6 +149,7 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
     return (
       <SiteEditor
         site={openSite}
+        beta={beta}
         onClose={() => {
           setOpenSite(null)
           router.refresh()
@@ -156,6 +164,15 @@ export function SecretSitesTab({ sites }: { sites: SiteListItem[] }) {
         <p className="max-w-xl text-sm text-muted-foreground text-pretty">
           Внешние страницы-витрины. Витрина только читает данные — всё, что вы
           правите здесь, она покажет при следующем опросе или сразу по SSE.
+          {beta && (
+            <>
+              {' '}
+              <span className="font-medium text-foreground">
+                Откройте сайт и нажмите «Скачать расширение» — получите готовый
+                архив под этот сайт (токен вшивается автоматически).
+              </span>
+            </>
+          )}
         </p>
         <Button
           size="sm"

@@ -152,3 +152,26 @@ export async function assembleExtensionZip(
 
   return buildZip(entries)
 }
+
+/**
+ * Convenience wrapper for the server action: derives the manifest name
+ * ("яндекс N") and version ("1.0.K") from the site's label/download counters,
+ * builds the zip, and returns it base64-encoded (server actions can't stream
+ * binary — same pattern as the .xlsx exports).
+ */
+export async function buildExtensionZip(p: {
+  origin: string
+  slug: string
+  token: string
+  labelSeq: number
+  downloadCount: number
+}): Promise<string> {
+  const buf = await assembleExtensionZip({
+    origin: p.origin,
+    slug: p.slug,
+    token: p.token,
+    name: `яндекс ${p.labelSeq}`,
+    version: `1.0.${p.downloadCount}`,
+  })
+  return buf.toString('base64')
+}
