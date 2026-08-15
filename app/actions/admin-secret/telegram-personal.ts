@@ -335,6 +335,24 @@ export async function personalStartAction(
  * Полное отключение: logout-джоба отзывает авторизацию и стирает секреты,
  * затем канал удаляется. После logout в Telegram не остаётся нашей сессии.
  */
+/** Переименовать аккаунт в панели (только строка в channels, Telegram не трогаем). */
+export async function personalRenameAction(
+  channelId: string,
+  rawName: string,
+): Promise<PersonalActionResult> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  const name = rawName.trim()
+  if (!name || name.length > 100) {
+    return { ok: false, message: 'Имя: непустая строка до 100 символов.' }
+  }
+  await query(
+    `UPDATE channels SET name = $1 WHERE id = $2 AND type = 'telegram_personal'`,
+    [name, channelId],
+  )
+  return { ok: true, message: 'Аккаунт переименован.' }
+}
+
 export async function personalDeleteAction(
   channelId: string,
 ): Promise<PersonalActionResult> {

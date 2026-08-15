@@ -6,6 +6,7 @@ import {
   MessageCircle,
   MoreVertical,
   Pause,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -16,14 +17,23 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import {
   personalDeleteAction,
+  personalRenameAction,
   personalStartAction,
   personalStopAction,
   type PersonalAccountItem,
@@ -60,6 +70,7 @@ export function AccountsList({
 }) {
   const [connectOpen, setConnectOpen] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState<PersonalAccountItem | null>(null)
   const [, startTransition] = useTransition()
 
   const run = (id: string, fn: () => Promise<{ ok: boolean; message: string }>) => {
@@ -169,6 +180,10 @@ export function AccountsList({
                           Подключить
                         </DropdownMenuItem>
                       )}
+                      <DropdownMenuItem onClick={() => setRenaming(a)}>
+                        <Pencil className="size-4" />
+                        Переименовать
+                      </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         variant="destructive"
@@ -217,6 +232,86 @@ export function AccountsList({
         onOpenChange={setConnectOpen}
         onConnected={onRefresh}
       />
+
+      <RenameDialog
+        key={renaming?.id ?? 'closed'}
+        account={renaming}
+        onOpenChange={(open) => {
+          if (!open) setRenaming(null)
+        }}
+        onRenamed={onRefresh}
+      />
     </div>
+  )
+}
+
+/** Диалог переименования аккаунта — меняет только имя карточки в панели. */
+function RenameDialog({
+  account,
+  onOpenChange,
+  onRenamed,
+}: {
+  account: PersonalAccountItem | null
+  onOpenChange: (open: boolean) => void
+  onRenamed: () => void
+}) {
+  // Компонент пересоздаётся по key={account.id} — стейт стартует с текущего имени.
+  const [name, setName] = useState(account?.name ?? '')
+  const [pending, startTransition] = useTransition()
+
+  const submit = () => {
+    if (!account) return
+    const trimmed = name.trim()
+    if (!trimmed) return
+    startTransition(async () => {
+      const res = await personalRenameAction(account.id, trimmed)
+      if (res.ok) {
+        toast.success(res.message)
+        onRenamed()
+        onOpenChange(false)
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }
+
+  return (
+    <Dialog open={account !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Переименовать аккаунт</DialogTitle>
+          <DialogDescription>
+            Имя отображается только в панели — профиль в Telegram не меняется.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === 'Enter' &&
+                !e.nativeEvent.isComposing &&
+                e.keyCode !== 229
+              )
+                submit()
+            }}
+            placeholder={account?.name ?? 'Название аккаунта'}
+            maxLength={100}
+            autoFocus
+            aria-label="Новое имя аккаунта"
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" className="bg-transparent" onClick={() => onOpenChange(false)}>
+              Отмена
+            </Button>
+            <Button onClick={submit} disabled={pending || !name.trim()}>
+              {pending && <Loader2 className="size-4 animate-spin" />}
+              Сохранить
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
