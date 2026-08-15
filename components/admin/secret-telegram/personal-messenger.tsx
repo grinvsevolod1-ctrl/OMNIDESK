@@ -626,7 +626,7 @@ export function PersonalMessenger({
                                   <div className={cn(msg.text && 'mb-1.5')}>
                                     <MessageMediaBlock
                                       channelId={channelId}
-                                      peer={m.peer}
+                                      peer={activeDialog.peerId}
                                       message={msg}
                                     />
                                   </div>
@@ -773,17 +773,19 @@ export function PersonalMessenger({
               )}
               <div className="flex items-end gap-2">
                 <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-9 shrink-0"
-                      aria-label="Прикрепить"
-                      disabled={Boolean(editing)}
-                    >
-                      <Paperclip className="size-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-9 shrink-0"
+                        aria-label="Прикрепить"
+                        disabled={Boolean(editing)}
+                      >
+                        <Paperclip className="size-4" />
+                      </Button>
+                    }
+                  />
                   <DropdownMenuContent align="start" side="top">
                     <DropdownMenuItem onClick={() => handlePickFile(true)}>
                       <ImageIcon className="size-4" />

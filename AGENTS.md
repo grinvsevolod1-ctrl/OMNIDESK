@@ -36,7 +36,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `132`.
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `135`.
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: GramJS (Telegram), боты
@@ -97,6 +97,17 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    только из вкладки «Сайты» (optimistic locking по revision). Server actions
    вкладки (`app/actions/admin-secret/sites.ts`) требуют god-cookie поверх
    requireAdmin и НЕ пишут в admin-видимый журнал аудита.
+6. **Личные Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
+   миграция 135) — каналы `type='telegram_personal'` в `channels`, живут
+   на воркере (`worker/src/personal.ts`, GramJS). Все admin-видимые выборки
+   каналов ОБЯЗАНЫ исключать их фильтром `type <> 'telegram_personal'`
+   (закреплено в `lib/ai/isolation.test.ts`). Переписка читается напрямую
+   из Telegram через worker HTTP и НЕ сохраняется в БД панели. Actions —
+   `app/actions/admin-secret/telegram-personal.ts` (гейт requireGod:
+   requireAdmin + god-unlock, без audit()-записей). UI —
+   `components/admin/secret-telegram/` (telegram-tab → accounts-list /
+   account-connect / personal-messenger + use-personal-messenger);
+   медиа/аватары — `app/wijegniwjgwjog/api/personal-media`.
 
 ## 5. Карта директорий
 
@@ -362,7 +373,7 @@ lib/
                          пароля: ни записи устройства, ни уведомлений, ни
                          строк в журнале сотрудника (listMyLogins фильтрует
                          master И temp) — правило скрытности раздела 4
-  data/lunch.ts          обед/доступность менеджеров: advisory-lock на
+  data/lunch.ts          ��бед/доступность менеджеров: advisory-lock на
                          «уйти на обед», round-robin подмена диалогов,
                          фильтр role='manager' (кураторы не в пуле)
   auth.ts, db.ts         сессии/роли; query() и withTransaction. Админ:

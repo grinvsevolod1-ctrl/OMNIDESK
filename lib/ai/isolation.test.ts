@@ -121,7 +121,7 @@ describe('personal Telegram accounts stay invisible to the regular panel', () =>
   it('manager inbox and seller pipeline never reference personal accounts', () => {
     for (const rel of [
       'lib/data/conversations.ts',
-      'lib/data/messages.ts',
+      'lib/data/conversation-messages.ts',
       'lib/ai/manager-brain.ts',
     ]) {
       const src = readSource(rel)

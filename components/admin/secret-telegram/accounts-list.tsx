@@ -136,21 +136,23 @@ export function AccountsList({
                     </p>
                   </div>
                   <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 shrink-0"
-                        aria-label="Действия"
-                        disabled={busy}
-                      >
-                        {busy ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <MoreVertical className="size-4" />
-                        )}
-                      </Button>
-                    </DropdownMenuTrigger>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 shrink-0"
+                          aria-label="Действия"
+                          disabled={busy}
+                        >
+                          {busy ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <MoreVertical className="size-4" />
+                          )}
+                        </Button>
+                      }
+                    />
                     <DropdownMenuContent align="end">
                       {a.sessionStatus === 'online' ? (
                         <DropdownMenuItem

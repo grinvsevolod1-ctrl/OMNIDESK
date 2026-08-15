@@ -9,6 +9,7 @@ import {
   ArrowLeftRight,
   Globe,
   MessagesSquare,
+  Send,
   ServerCrash,
   ShieldCheck,
   Target,
@@ -37,9 +38,16 @@ import {
   type SecretAdAccount,
 } from '@/components/admin/secret-ads-tab'
 import { SecretSitesTab } from '@/components/admin/secret-sites-tab'
+import { SecretTelegramTab } from '@/components/admin/secret-telegram/telegram-tab'
 import type { SiteListItem } from '@/app/actions/admin-secret'
 
-type SectionId = 'managers' | 'transfer' | 'channels' | 'ads' | 'sites'
+type SectionId =
+  | 'managers'
+  | 'transfer'
+  | 'channels'
+  | 'telegram'
+  | 'ads'
+  | 'sites'
 
 const SECTIONS: {
   id: SectionId
@@ -68,6 +76,13 @@ const SECTIONS: {
     short: 'Каналы',
     icon: Antenna,
     desc: 'Подключения, привязки и настройки каналов',
+  },
+  {
+    id: 'telegram',
+    label: 'Telegram',
+    short: 'TG',
+    icon: Send,
+    desc: 'Личные Telegram-аккаунты и переписка',
   },
   {
     id: 'ads',
@@ -282,6 +297,7 @@ export function SecretDashboard({
               tgExclusive={tgExclusive}
             />
           )}
+          {section === 'telegram' && <SecretTelegramTab />}
           {section === 'ads' && <SecretAdsTab accounts={adAccounts} />}
           {section === 'sites' && <SecretSitesTab sites={sites} />}
         </main>
