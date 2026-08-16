@@ -15,6 +15,7 @@ import {
   extIpGuard,
   readToken,
 } from '../shared'
+import { subscribeSite } from './poller'
 
 /**
  * GET /api/ext/pages/{PAGE_ID}/stream?period=<p>&token=<t> — the OPTIONAL
@@ -29,7 +30,6 @@ import {
 
 export const dynamic = 'force-dynamic'
 
-const DB_POLL_MS = 3_000
 const HEARTBEAT_MS = 25_000
 
 /**
@@ -99,41 +99,39 @@ export async function GET(
       // Initial snapshot so the page renders immediately.
       send(stateForPeriod(site.state, period))
 
-      const poll = setInterval(() => {
-        // Re-resolving by slug+key each tick doubles as live revocation:
-        // a rotated/deleted key kills the stream on the next poll.
-        void getSiteBySlugAndKey(page, token, { touch: true })
-          .then((found) => (found ? commitAutoSpend(found) : null))
-          .then((fresh) => {
-            if (!fresh) {
-              cleanup()
-              controller.close()
-              return
-            }
-            // Auto-spend makes `today` — and the aggregates that include
-            // today's partial (week/month/all) — a function of the clock, so
-            // the payload changes every tick even at the same revision;
-            // resend continuously while it's on. `yesterday` is a finished
-            // day (fraction = 1, deterministic): identical every tick, so
-            // only real edits (revision bumps) resend it.
-            const autoTicking =
-              fresh.state.autoSpend?.enabled === true && period !== 'yesterday'
-            if (fresh.revision !== lastRevision || autoTicking) {
-              lastRevision = fresh.revision
-              send(stateForPeriod(fresh.state, period))
-            }
-          })
-          .catch(() => {
-            /* transient DB error — keep the stream, retry next tick */
-          })
-      }, DB_POLL_MS)
+      // Subscribe to the shared per-(slug, token) poller instead of running
+      // our own DB loop, so many viewers of one vitrine share a single poll.
+      const unsubscribe = subscribeSite(page, token, (fresh) => {
+        if (!fresh) {
+          // Key rotated/deleted — the shared poll no longer resolves it.
+          cleanup()
+          try {
+            controller.close()
+          } catch {
+            /* already closed */
+          }
+          return
+        }
+        // Auto-spend makes `today` — and the aggregates that include today's
+        // partial (week/month/all) — a function of the clock, so the payload
+        // changes every tick even at the same revision; resend continuously
+        // while it's on. `yesterday` is a finished day (fraction = 1,
+        // deterministic): identical every tick, so only real edits (revision
+        // bumps) resend it.
+        const autoTicking =
+          fresh.state.autoSpend?.enabled === true && period !== 'yesterday'
+        if (fresh.revision !== lastRevision || autoTicking) {
+          lastRevision = fresh.revision
+          send(stateForPeriod(fresh.state, period))
+        }
+      })
 
       const heartbeat = setInterval(() => {
         controller.enqueue(enc.encode(`: hb\n\n`))
       }, HEARTBEAT_MS)
 
       const cleanup = () => {
-        clearInterval(poll)
+        unsubscribe()
         clearInterval(heartbeat)
         if (!released) {
           released = true
