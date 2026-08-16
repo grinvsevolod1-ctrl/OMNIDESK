@@ -7,7 +7,6 @@ import {
   ArrowDown,
   ArrowLeft,
   Check,
-  CheckCheck,
   FileText,
   ImageIcon,
   Loader2,
@@ -16,8 +15,6 @@ import {
   Reply,
   Search,
   Send,
-  Trash2,
-  Users,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -33,166 +30,13 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
 import { usePersonalMessenger } from './use-personal-messenger'
-import type {
-  PersonalDialog,
-  PersonalMessage,
-} from '@/app/actions/admin-secret/telegram-personal'
-
-/* ------------------------------- Утилиты -------------------------------- */
-
-function formatTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function formatDialogTime(ts: number | null): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-  }
-  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
-}
-
-function dayLabel(ts: number): string {
-  const d = new Date(ts * 1000)
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) return 'Сегодня'
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-  if (d.toDateString() === yesterday.toDateString()) return 'Вчера'
-  return d.toLocaleDateString('ru-RU', {
-    day: 'numeric',
-    month: 'long',
-    ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
-  })
-}
-
-function mediaUrl(channelId: string, peer: string, messageId: string): string {
-  const p = new URLSearchParams({ channelId, peer, messageId })
-  return `/wijegniwjgwjog/api/personal-media?${p.toString()}`
-}
-
-function avatarUrl(channelId: string, peer: string): string {
-  const p = new URLSearchParams({ channelId, peer, avatar: '1' })
-  return `/wijegniwjgwjog/api/personal-media?${p.toString()}`
-}
-
-/** Детерминированный оттенок для заглушки аватара. */
-const AVATAR_HUES = [
-  'bg-sky-600',
-  'bg-emerald-600',
-  'bg-violet-600',
-  'bg-amber-600',
-  'bg-rose-600',
-  'bg-cyan-600',
-]
-function avatarHue(peerId: string): string {
-  let h = 0
-  for (let i = 0; i < peerId.length; i++) h = (h * 31 + peerId.charCodeAt(i)) | 0
-  return AVATAR_HUES[Math.abs(h) % AVATAR_HUES.length]
-}
-
-/* ------------------------------- Аватар --------------------------------- */
-
-function DialogAvatar({
-  channelId,
-  dialog,
-  size = 'md',
-}: {
-  channelId: string
-  dialog: PersonalDialog
-  size?: 'md' | 'sm'
-}) {
-  const [failed, setFailed] = useState(false)
-  const dim = size === 'md' ? 'size-11' : 'size-9'
-  const initial = (dialog.title || '?').trim().charAt(0).toUpperCase()
-  if (!dialog.hasAvatar || failed) {
-    return (
-      <div
-        className={cn(
-          'flex shrink-0 items-center justify-center rounded-full font-semibold text-white',
-          dim,
-          avatarHue(dialog.peerId),
-        )}
-      >
-        {dialog.kind === 'user' ? initial : <Users className="size-4" />}
-      </div>
-    )
-  }
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={avatarUrl(channelId, dialog.peerId) || "/placeholder.svg"}
-      alt=""
-      className={cn('shrink-0 rounded-full object-cover', dim)}
-      onError={() => setFailed(true)}
-    />
-  )
-}
-
-/* ---------------------------- Медиа сообщения ---------------------------- */
-
-function MessageMediaBlock({
-  channelId,
-  peer,
-  message,
-}: {
-  channelId: string
-  peer: string
-  message: PersonalMessage
-}) {
-  const url = mediaUrl(channelId, peer, message.id)
-  switch (message.mediaType) {
-    case 'image':
-    case 'sticker':
-      return (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={url || "/placeholder.svg"}
-          alt={message.mediaName ?? 'Изображение'}
-          loading="lazy"
-          className={cn(
-            'max-h-72 rounded-lg object-contain',
-            message.mediaType === 'sticker' ? 'max-w-36 bg-transparent' : 'max-w-full',
-          )}
-        />
-      )
-    case 'video':
-    case 'video_note':
-      return (
-        <video
-          src={url}
-          controls
-          preload="metadata"
-          className={cn(
-            'max-h-72 rounded-lg',
-            message.mediaType === 'video_note' && 'aspect-square max-w-56 rounded-full',
-          )}
-        />
-      )
-    case 'voice':
-    case 'audio':
-      return <audio src={url} controls preload="none" className="h-10 w-60 max-w-full" />
-    case 'document':
-      return (
-        <a
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-sm hover:bg-background/70"
-        >
-          <FileText className="size-4 shrink-0 text-muted-foreground" />
-          <span className="truncate">{message.mediaName ?? 'Файл'}</span>
-        </a>
-      )
-    default:
-      return null
-  }
-}
+import {
+  DialogAvatar,
+  dayLabel,
+  formatDialogTime,
+} from './messenger-shared'
+import { MessageBubble } from './message-bubble'
+import type { PersonalMessage } from '@/app/actions/admin-secret/telegram-personal'
 
 /* ------------------------------ Мессенджер ------------------------------ */
 
@@ -589,120 +433,25 @@ export function PersonalMessenger({
                         </span>
                       </div>
                       <div className="flex flex-col gap-1.5">
-                        {group.items.map((msg) => {
-                          const reply = repliedTo(msg.replyToId)
-                          return (
-                            <div
-                              key={msg.id}
-                              className={cn(
-                                'group flex',
-                                msg.outgoing ? 'justify-end' : 'justify-start',
-                              )}
-                            >
-                              <div
-                                className={cn(
-                                  'relative max-w-[78%] rounded-2xl px-3 py-2',
-                                  msg.outgoing
-                                    ? 'rounded-br-sm bg-primary text-primary-foreground'
-                                    : 'rounded-bl-sm bg-muted text-foreground',
-                                )}
-                              >
-                                {reply && (
-                                  <div
-                                    className={cn(
-                                      'mb-1.5 rounded-md border-l-2 px-2 py-1 text-xs',
-                                      msg.outgoing
-                                        ? 'border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/90'
-                                        : 'border-primary/60 bg-background/50 text-muted-foreground',
-                                    )}
-                                  >
-                                    <p className="line-clamp-2">
-                                      {reply.text ||
-                                        (reply.mediaType ? 'Вложение' : '…')}
-                                    </p>
-                                  </div>
-                                )}
-                                {msg.mediaType && (
-                                  <div className={cn(msg.text && 'mb-1.5')}>
-                                    <MessageMediaBlock
-                                      channelId={channelId}
-                                      peer={activeDialog.peerId}
-                                      message={msg}
-                                    />
-                                  </div>
-                                )}
-                                {msg.text && (
-                                  <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                                    {msg.text}
-                                  </p>
-                                )}
-                                <div
-                                  className={cn(
-                                    'mt-0.5 flex items-center justify-end gap-1 text-[10px]',
-                                    msg.outgoing
-                                      ? 'text-primary-foreground/70'
-                                      : 'text-muted-foreground',
-                                  )}
-                                >
-                                  <span>{formatTime(msg.date)}</span>
-                                  {msg.outgoing &&
-                                    (msg.editable ? (
-                                      <CheckCheck className="size-3" />
-                                    ) : (
-                                      <Check className="size-3" />
-                                    ))}
-                                </div>
-
-                                {/* Действия над сообщением */}
-                                <div
-                                  className={cn(
-                                    'absolute top-0 hidden items-center gap-0.5 rounded-lg border border-border bg-popover p-0.5 shadow-sm group-hover:flex',
-                                    msg.outgoing ? '-left-2 -translate-x-full' : '-right-2 translate-x-full',
-                                  )}
-                                >
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="size-6"
-                                    aria-label="Ответить"
-                                    onClick={() => {
-                                      setReplyTo(msg)
-                                      setEditing(null)
-                                    }}
-                                  >
-                                    <Reply className="size-3.5" />
-                                  </Button>
-                                  {msg.outgoing && msg.editable && !msg.mediaType && (
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="size-6"
-                                      aria-label="Редактировать"
-                                      onClick={() => startEdit(msg)}
-                                    >
-                                      <Pencil className="size-3.5" />
-                                    </Button>
-                                  )}
-                                  {msg.outgoing && (
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="size-6 text-destructive hover:text-destructive"
-                                      aria-label="Удалить"
-                                      onClick={() => {
-                                        if (confirm('Удалить сообщение у всех?')) {
-                                          void m.deleteMessage(Number(msg.id))
-                                        }
-                                      }}
-                                    >
-                                      <Trash2 className="size-3.5" />
-                                    </Button>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
+                        {group.items.map((msg) => (
+                          <MessageBubble
+                            key={msg.id}
+                            msg={msg}
+                            reply={repliedTo(msg.replyToId)}
+                            channelId={channelId}
+                            peerId={activeDialog.peerId}
+                            onReply={(target) => {
+                              setReplyTo(target)
+                              setEditing(null)
+                            }}
+                            onEdit={startEdit}
+                            onDelete={(target) => {
+                              if (confirm('Удалить сообщение у всех?')) {
+                                void m.deleteMessage(Number(target.id))
+                              }
+                            }}
+                          />
+                        ))}
                       </div>
                     </div>
                   ))}
