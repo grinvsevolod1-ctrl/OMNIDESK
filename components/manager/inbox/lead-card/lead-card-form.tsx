@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, MapPin } from 'lucide-react'
+import { Landmark, Loader2, MapPin } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CityInput } from '@/components/shared/city-input'
@@ -10,7 +10,15 @@ import type { LeadCardState } from './use-lead-card'
 
 /** Поля карточки лида + подбор менеджера по кадрам по городу. */
 export function LeadCardForm({ state }: { state: LeadCardState }) {
-  const { fields, curators, searching, curatorId, setCuratorId } = state
+  const {
+    fields,
+    curators,
+    searching,
+    curatorId,
+    pickCurator,
+    autoPicked,
+    cityRegion,
+  } = state
   return (
     <>
       <Field label="ФИО" required>
@@ -59,10 +67,20 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
           value={fields.city}
           onValueChange={(v) => {
             fields.setCity(v)
-            setCuratorId(null)
+            pickCurator(null)
           }}
           placeholder="Москва"
         />
+        {cityRegion?.region ? (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Landmark className="size-3 shrink-0" />
+            {cityRegion.isRegion ? (
+              <span>{cityRegion.region} — весь регион</span>
+            ) : (
+              <span>Область: {cityRegion.region}</span>
+            )}
+          </p>
+        ) : null}
       </Field>
       <Field label="Адрес">
         <Input
@@ -102,7 +120,7 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
                 <button
                   key={c.id}
                   type="button"
-                  onClick={() => setCuratorId(c.id)}
+                  onClick={() => pickCurator(c.id)}
                   className={cn(
                     // min-w-0 по всей цепочке обязателен: без него длинный
                     // список городов растягивал кнопку шире панели и появлялся
@@ -113,7 +131,14 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
                       : 'border-border hover:bg-muted',
                   )}
                 >
-                  <span className="shrink-0 font-medium">{c.name}</span>
+                  <span className="flex shrink-0 items-center gap-1.5 font-medium">
+                    {c.name}
+                    {autoPicked && curatorId === c.id ? (
+                      <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-normal text-primary">
+                        авто
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                     <span className="flex min-w-0 items-center gap-1">
                       <MapPin className="size-3 shrink-0" />

@@ -9,7 +9,11 @@ import {
   getCuratorDiscipline,
   listLeadCardsForCurator,
 } from '@/lib/data/lead-cards'
-import { searchCitiesWithRegions } from '@/lib/data/regions'
+import {
+  getRegionForCity,
+  resolveCityOrRegion,
+  searchCitiesWithRegions,
+} from '@/lib/data/regions'
 import { addVacancy, listVacancies } from '@/lib/data/vacancies'
 import {
   getLeadCardStats,
@@ -53,6 +57,25 @@ export async function searchCityAction(q: string) {
   if (!session) throw new Error('Unauthorized')
   if (!q || q.trim().length < 1) return []
   return searchCitiesWithRegions(q, 12)
+}
+
+/**
+ * Область (регион) введённого города — для автоподтяжки в карточке лида.
+ * Если введено само название области (или её алиас, «Чечня»), возвращаем
+ * каноническое имя области с isRegion=true. Для города не из справочника —
+ * null (менеджер увидит подсказку указать область вручную).
+ */
+export async function getCityRegionAction(
+  q: string,
+): Promise<{ region: string | null; isRegion: boolean }> {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+  const raw = q?.trim()
+  if (!raw) return { region: null, isRegion: false }
+  const resolved = await resolveCityOrRegion(raw).catch(() => null)
+  if (resolved?.isRegion) return { region: resolved.value, isRegion: true }
+  const region = await getRegionForCity(raw).catch(() => null)
+  return { region, isRegion: false }
 }
 
 /** Список должностей из справочника. */

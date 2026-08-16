@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import {
   addLeadCommentAction,
   findCuratorsByCityAction,
+  getCityRegionAction,
   getLeadCardAction,
   getLeadCardDetailAction,
   saveLeadCardAction,
@@ -42,6 +43,8 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
   const [vacancy, setVacancy] = useState('')
   const [curatorId, setCuratorId] = useState<string | null>(null)
   const [transferredAt, setTransferredAt] = useState<string | null>(null)
+  // true — куратор подставлен автоматически по городу/области (не кликом).
+  const [autoPicked, setAutoPicked] = useState(false)
 
   const load = useCallback(async () => {
     const card = await getLeadCardAction(conversationId)
@@ -93,6 +96,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     setVacancy('')
     setCuratorId(null)
     setTransferredAt(null)
+    setAutoPicked(false)
   }
 
   function toggleOpen() {
@@ -146,6 +150,37 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
   )
   const curators: CuratorWithLoad[] =
     cityQuery.length >= 2 ? (curatorsData ?? []) : []
+
+  // Область введённого города (миграция 124): подтягивается автоматически и
+  // показывается менеджеру под полем «Город» — видно, по какой области
+  // подобрался куратор («Химки» → «Московская область»).
+  const { data: cityRegionData } = useSWR(
+    cityQuery.length >= 2 ? ['city-region', cityQuery.toLowerCase()] : null,
+    () => getCityRegionAction(cityQuery),
+    { revalidateOnFocus: false, keepPreviousData: true, dedupingInterval: 300 },
+  )
+  const cityRegion =
+    cityQuery.length >= 2 ? (cityRegionData ?? null) : null
+
+  // Автовыбор куратора: как только по городу/области нашлись кураторы и
+  // менеджер ещё никого не выбрал — подставляем первого (наименее
+  // загруженного; сортировка приходит с сервера). Ручной клик по другому
+  // куратору перекрывает автовыбор; смена города сбрасывает выбор и
+  // автоподбор срабатывает заново. State adjustment during render — тот же
+  // паттерн, что и сброс полей при смене диалога выше (без setState в эффекте).
+  const autoCandidate =
+    open && !transferredAt && curatorId === null
+      ? (curatorsData?.[0] ?? null)
+      : null
+  if (autoCandidate) {
+    setCuratorId(autoCandidate.id)
+    setAutoPicked(true)
+  }
+
+  function pickCurator(id: string | null) {
+    setCuratorId(id)
+    setAutoPicked(false)
+  }
 
   // Детали карточки (статусы/комментарии менеджера по кадрам + вложения) — после сохранения.
   const { data: detail, mutate: mutateDetail } = useSWR(
@@ -277,6 +312,9 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     searching,
     curatorId,
     setCuratorId,
+    pickCurator,
+    autoPicked,
+    cityRegion,
     // card / detail
     cardId,
     detail,
