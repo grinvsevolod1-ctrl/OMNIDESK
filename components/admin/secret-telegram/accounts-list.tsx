@@ -190,7 +190,7 @@ export function AccountsList({
                       )}
                       <DropdownMenuItem onClick={() => setRenaming(a)}>
                         <Pencil className="size-4" />
-                        Переименоват�� в панели
+                        Переименовать в панели
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
