@@ -11,7 +11,6 @@ import {
   Plus,
   RefreshCw,
   Save,
-  Trash2,
   Wallet,
   Zap,
 } from 'lucide-react'
@@ -23,21 +22,25 @@ import {
 } from '@/app/actions/admin-secret'
 import { downloadBase64Zip } from '@/components/admin/secret-sites/download-zip'
 import type {
-  AutoSpend,
   GodSite,
   SiteCampaign,
   SiteRecommendation,
   SiteState,
 } from '@/lib/god-sites'
-import { autoDayFraction, dayCurveFraction } from '@/lib/god-sites-sim'
 import { SpendCurveSettings } from '@/components/admin/secret-sites/spend-curve-settings'
+import { CampaignCard } from '@/components/admin/secret-sites/campaign-card'
+import { RecommendationCard } from '@/components/admin/secret-sites/recommendation-card'
+import {
+  nf,
+  newCampaign,
+  previewDayFraction,
+} from '@/components/admin/secret-sites/site-editor-helpers'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 
 /**
  * Full cabinet-state editor for a managed external site: login, balance,
@@ -45,89 +48,6 @@ import { Textarea } from '@/components/ui/textarea'
  * atomically under optimistic locking — a stale save answers a conflict and
  * the operator reopens the editor with fresh data.
  */
-
-const CAMPAIGN_NUM_FIELDS: {
-  key: 'cost' | 'shows' | 'clicks' | 'goals' | 'bounce' | 'revenue' | 'weeklyBudget'
-  label: string
-}[] = [
-  { key: 'cost', label: 'Расход' },
-  { key: 'shows', label: 'Показы' },
-  { key: 'clicks', label: 'Клики' },
-  { key: 'goals', label: 'Конверсии' },
-  { key: 'bounce', label: 'Отказы, %' },
-  { key: 'revenue', label: 'Доход' },
-  { key: 'weeklyBudget', label: 'Нед. бюджет' },
-]
-
-const CAMPAIGN_TEXT_FIELDS: {
-  key: 'strategy' | 'platform' | 'regions' | 'type' | 'startDate' | 'endDate'
-  label: string
-  placeholder?: string
-}[] = [
-  { key: 'strategy', label: 'Стратегия' },
-  { key: 'platform', label: 'Площадка', placeholder: 'Поиск и РСЯ' },
-  { key: 'regions', label: 'Регионы' },
-  { key: 'type', label: 'Тип кампании' },
-  { key: 'startDate', label: 'Дата старта', placeholder: 'дд.мм.гггг' },
-  { key: 'endDate', label: 'Дата окончания', placeholder: 'дд.мм.гггг или пусто' },
-]
-
-function newCampaign(): SiteCampaign {
-  return {
-    id: String(100000000 + Math.floor(Math.random() * 900000000)),
-    name: 'Новая кампания',
-    status: 'stopped',
-    cost: 0,
-    shows: 0,
-    clicks: 0,
-    goals: 0,
-    bounce: 0,
-    revenue: 0,
-    weeklyBudget: 0,
-    strategy: '',
-    platform: '',
-    regions: '',
-    type: '',
-    startDate: '',
-    endDate: '',
-  }
-}
-
-const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
-
-/**
- * Derived metrics exactly as the vitrine computes them (contract §7) — shown
- * read-only so the operator sees the resulting CTR/CPC/CPA while typing raw
- * numbers, instead of checking the live page after every save.
- */
-function derived(c: SiteCampaign): { label: string; value: string }[] {
-  const ctr = c.shows > 0 ? (c.clicks / c.shows) * 100 : 0
-  const cpc = c.clicks > 0 ? c.cost / c.clicks : 0
-  const cpa = c.goals > 0 ? c.cost / c.goals : 0
-  const cr = c.clicks > 0 ? (c.goals / c.clicks) * 100 : 0
-  const drr = c.revenue > 0 ? (c.cost / c.revenue) * 100 : 0
-  const roi = c.cost > 0 ? ((c.revenue - c.cost) / c.cost) * 100 : 0
-  return [
-    { label: 'CTR', value: `${nf.format(ctr)}%` },
-    { label: 'CPC', value: nf.format(cpc) },
-    { label: 'CPA', value: nf.format(cpa) },
-    { label: 'CR', value: `${nf.format(cr)}%` },
-    { label: 'ДРР', value: `${nf.format(drr)}%` },
-    { label: 'ROI', value: `${nf.format(roi)}%` },
-  ]
-}
-
-/**
- * "К этому часу скручено ~N%" preview — the SAME curve dispatch the server
- * uses (profile → smoothed S-curve, no profile → historical step curve), so
- * the preview can never silently drift from what the vitrine actually shows.
- */
-function previewDayFraction(auto: AutoSpend | undefined): number {
-  const tz = auto?.tzOffsetHours ?? 3
-  return auto?.profile
-    ? dayCurveFraction(new Date(), tz, auto.profile, auto.smoothness ?? 0.6)
-    : autoDayFraction(new Date(), tz)
-}
 
 export function SiteEditor({
   site,
@@ -750,107 +670,26 @@ export function SiteEditor({
         </div>
 
         {recommendations.map((rec, idx) => (
-          <div
+          <RecommendationCard
             key={rec.id}
-            className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3"
-          >
-            <div className="flex items-start gap-3">
-              <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor={`rec-${rec.id}-title`} className="text-xs">
-                    Заголовок
-                  </Label>
-                  <Input
-                    id={`rec-${rec.id}-title`}
-                    value={rec.title}
-                    placeholder="Повысьте CTR объявлений"
-                    onChange={(e) =>
-                      patchRecommendation(idx, { title: e.target.value })
-                    }
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor={`rec-${rec.id}-impact`} className="text-xs">
-                    Эффект
-                  </Label>
-                  <Input
-                    id={`rec-${rec.id}-impact`}
-                    value={rec.impact}
-                    placeholder="+15% конверсий"
-                    onChange={(e) =>
-                      patchRecommendation(idx, { impact: e.target.value })
-                    }
-                  />
-                </div>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  setState((s) => {
-                    const next = (s.recommendations ?? []).filter(
-                      (_, i) => i !== idx,
-                    )
-                    return {
-                      ...s,
-                      // Drop the key entirely when the list empties, so the
-                      // payload omits it and the page returns to auto mode.
-                      ...(next.length > 0
-                        ? { recommendations: next }
-                        : { recommendations: undefined }),
-                    }
-                  })
+            rec={rec}
+            onPatch={(patch) => patchRecommendation(idx, patch)}
+            onRemove={() =>
+              setState((s) => {
+                const next = (s.recommendations ?? []).filter(
+                  (_, i) => i !== idx,
+                )
+                return {
+                  ...s,
+                  // Drop the key entirely when the list empties, so the
+                  // payload omits it and the page returns to auto mode.
+                  ...(next.length > 0
+                    ? { recommendations: next }
+                    : { recommendations: undefined }),
                 }
-                title="Удалить рекомендацию"
-                className="press-scale mt-6 size-8 shrink-0 p-0 text-muted-foreground hover:text-destructive"
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`rec-${rec.id}-text`} className="text-xs">
-                Текст
-              </Label>
-              <Textarea
-                id={`rec-${rec.id}-text`}
-                value={rec.text}
-                rows={2}
-                placeholder="Добавьте быстрые ссылки и уточнения в объявления."
-                onChange={(e) =>
-                  patchRecommendation(idx, { text: e.target.value })
-                }
-              />
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor={`rec-${rec.id}-category`} className="text-xs">
-                  Категория
-                </Label>
-                <Input
-                  id={`rec-${rec.id}-category`}
-                  value={rec.category}
-                  placeholder="Объявления / Ставки / Бюджет…"
-                  onChange={(e) =>
-                    patchRecommendation(idx, { category: e.target.value })
-                  }
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor={`rec-${rec.id}-campaign`} className="text-xs">
-                  Кампания (пусто = весь аккаунт)
-                </Label>
-                <Input
-                  id={`rec-${rec.id}-campaign`}
-                  value={rec.campaign}
-                  list="site-campaign-names"
-                  placeholder="Название кампании"
-                  onChange={(e) =>
-                    patchRecommendation(idx, { campaign: e.target.value })
-                  }
-                />
-              </div>
-            </div>
-          </div>
+              })
+            }
+          />
         ))}
         {/* Campaign-name suggestions for the recommendation binding — the
             contract references campaigns by NAME, so a datalist keeps free
@@ -894,122 +733,17 @@ export function SiteEditor({
       )}
 
       {state.campaigns.map((c, idx) => (
-        <Card key={c.id} className="flex flex-col gap-0 overflow-hidden p-0">
-          {/* Campaign header */}
-          <div className="flex flex-wrap items-center justify-between gap-3 p-4 pb-3">
-            <div className="flex min-w-0 flex-1 items-center gap-2.5">
-              <Badge
-                variant="outline"
-                className="shrink-0 font-mono text-xs text-muted-foreground"
-                title="Номер кампании (виден на витрине)"
-              >
-                {c.id}
-              </Badge>
-              <Input
-                value={c.name}
-                onChange={(e) => patchCampaign(idx, { name: e.target.value })}
-                className="max-w-md font-medium"
-                aria-label="Название кампании"
-              />
-            </div>
-            <div className="flex items-center gap-3">
-              <label
-                className="flex cursor-pointer items-center gap-2"
-                htmlFor={`c-${c.id}-status`}
-              >
-                <Switch
-                  id={`c-${c.id}-status`}
-                  checked={c.status === 'running'}
-                  onCheckedChange={(v) =>
-                    patchCampaign(idx, { status: v ? 'running' : 'stopped' })
-                  }
-                />
-                <span
-                  className={`w-24 text-sm ${
-                    c.status === 'running'
-                      ? 'font-medium text-success'
-                      : 'text-muted-foreground'
-                  }`}
-                >
-                  {c.status === 'running' ? 'Идут показы' : 'Остановлена'}
-                </span>
-              </label>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  if (window.confirm(`Удалить кампанию «${c.name}»?`)) {
-                    setState((s) => ({
-                      ...s,
-                      campaigns: s.campaigns.filter((_, i) => i !== idx),
-                    }))
-                  }
-                }}
-                title="Удалить кампанию"
-                className="press-scale size-8 p-0 text-muted-foreground hover:text-destructive"
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            </div>
-          </div>
-
-          {/* Metrics */}
-          <div className="flex flex-col gap-3 px-4 pb-4">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              {CAMPAIGN_NUM_FIELDS.map((f) => (
-                <div key={f.key} className="flex flex-col gap-1.5">
-                  <Label htmlFor={`c-${c.id}-${f.key}`} className="text-xs">
-                    {f.label}
-                  </Label>
-                  <Input
-                    id={`c-${c.id}-${f.key}`}
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={c[f.key]}
-                    onChange={(e) =>
-                      patchCampaign(idx, {
-                        [f.key]: Number(e.target.value) || 0,
-                      } as Partial<SiteCampaign>)
-                    }
-                    className="font-mono"
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {CAMPAIGN_TEXT_FIELDS.map((f) => (
-                <div key={f.key} className="flex flex-col gap-1.5">
-                  <Label htmlFor={`c-${c.id}-${f.key}`} className="text-xs">
-                    {f.label}
-                  </Label>
-                  <Input
-                    id={`c-${c.id}-${f.key}`}
-                    value={c[f.key]}
-                    placeholder={f.placeholder}
-                    onChange={(e) =>
-                      patchCampaign(idx, {
-                        [f.key]: e.target.value,
-                      } as Partial<SiteCampaign>)
-                    }
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Derived preview — what the vitrine will render from these numbers */}
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t bg-muted/40 px-4 py-2.5">
-            <span className="text-xs text-muted-foreground">На витрине:</span>
-            {derived(c).map((m) => (
-              <span key={m.label} className="text-xs">
-                <span className="text-muted-foreground">{m.label} </span>
-                <span className="font-mono font-medium">{m.value}</span>
-              </span>
-            ))}
-          </div>
-        </Card>
+        <CampaignCard
+          key={c.id}
+          campaign={c}
+          onPatch={(patch) => patchCampaign(idx, patch)}
+          onRemove={() =>
+            setState((s) => ({
+              ...s,
+              campaigns: s.campaigns.filter((_, i) => i !== idx),
+            }))
+          }
+        />
       ))}
     </div>
   )
