@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { DeltaBadge } from './delta-badge'
 
 function pct(part: number, whole: number): string {
   if (whole <= 0) return '0%'
@@ -40,15 +41,21 @@ function FunnelStep({
   value,
   conversion,
   last,
+  prev,
 }: {
   label: string
   value: number
   conversion?: string
   last?: boolean
+  /** Значение за прошлый период — покажет дельту «к прошлому периоду». */
+  prev?: number
 }) {
   return (
     <div className="relative flex-1 min-w-32 rounded-lg border border-border bg-card p-3">
-      <p className="text-2xl font-semibold tabular-nums">{value}</p>
+      <p className="flex items-baseline gap-1.5">
+        <span className="text-2xl font-semibold tabular-nums">{value}</span>
+        <DeltaBadge current={value} prev={prev} />
+      </p>
       <p className="text-xs text-muted-foreground">{label}</p>
       {conversion ? (
         <p className="mt-1 text-[11px] font-medium text-primary/80">
@@ -88,16 +95,18 @@ export function SourceDetail({
   const [newName, setNewName] = useState('')
   const [pending, startTransition] = useTransition()
 
-  const { data, isValidating } = useSWR(
+  const { data: payload, isValidating } = useSWR(
     ['source-detail', sourceId, fromISO, toISO],
     async () => {
       const tz = new Date().getTimezoneOffset()
       const res = await getSourceDetailAction(sourceId, fromISO, toISO, tz)
       if (!res.ok) throw new Error(res.message)
-      return res.data ?? null
+      return { detail: res.data ?? null, prev: res.prev }
     },
     { keepPreviousData: true, revalidateOnFocus: false },
   )
+  const data = payload?.detail
+  const prev = payload?.prev
 
   function submitRename() {
     startTransition(async () => {
@@ -204,7 +213,11 @@ export function SourceDetail({
           Воронка за период
         </h3>
         <div className="flex flex-wrap gap-3 sm:gap-5">
-          <FunnelStep label="Написали" value={data.funnel.people} />
+          <FunnelStep
+            label="Написали"
+            value={data.funnel.people}
+            prev={prev?.people}
+          />
           <FunnelStep
             label="Передан человеку"
             value={data.funnel.handoff}
@@ -214,6 +227,7 @@ export function SourceDetail({
             label="Ликвид"
             value={data.funnel.liquid}
             conversion={pct(data.funnel.liquid, data.funnel.handoff)}
+            prev={prev?.liquid}
           />
           <FunnelStep
             label="Передан"
@@ -234,14 +248,24 @@ export function SourceDetail({
         </h3>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-lg border border-border p-3">
-            <p className="text-lg font-semibold tabular-nums text-success">
-              +{money(data.finance.income, data.finance.currency)}
+            <p className="flex items-baseline gap-1.5">
+              <span className="text-lg font-semibold tabular-nums text-success">
+                +{money(data.finance.income, data.finance.currency)}
+              </span>
+              <DeltaBadge current={data.finance.income} prev={prev?.income} />
             </p>
             <p className="text-xs text-muted-foreground">Пополнено за период</p>
           </div>
           <div className="rounded-lg border border-border p-3">
-            <p className="text-lg font-semibold tabular-nums">
-              −{money(data.finance.expense, data.finance.currency)}
+            <p className="flex items-baseline gap-1.5">
+              <span className="text-lg font-semibold tabular-nums">
+                −{money(data.finance.expense, data.finance.currency)}
+              </span>
+              <DeltaBadge
+                current={data.finance.expense}
+                prev={prev?.expense}
+                invert
+              />
             </p>
             <p className="text-xs text-muted-foreground">Потрачено за период</p>
           </div>

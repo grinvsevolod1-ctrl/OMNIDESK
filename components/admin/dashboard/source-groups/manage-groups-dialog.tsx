@@ -2,10 +2,9 @@
 
 import { useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, Layers, Loader2, Plus, Trash2 } from 'lucide-react'
+import { Check, Layers, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  createSourceGroupAction,
   deleteSourceGroupAction,
   updateSourceGroupAction,
 } from '@/app/actions/groups'
@@ -72,11 +71,12 @@ export function ManageGroupsDialog({
   }
 
   function submit() {
+    // Создание источника живёт в ЕДИНОМ диалоге CreateSourceDialog
+    // (кнопка «Новый источник» на Обзоре и в Учёте). Здесь — только правка.
+    if (!editingId) return
     const ids = [...selected]
     startTransition(async () => {
-      const res = editingId
-        ? await updateSourceGroupAction(editingId, name, ids)
-        : await createSourceGroupAction(name, ids)
+      const res = await updateSourceGroupAction(editingId, name, ids)
       if (res.ok) {
         toast.success(res.message)
         resetForm()
@@ -172,13 +172,16 @@ export function ManageGroupsDialog({
                 </li>
               ))}
             </ul>
-          ) : null}
-
-          {/* Create / edit form */}
-          <div className="rounded-lg border border-border p-4">
-            <p className="mb-3 text-sm font-medium">
-              {editingId ? 'Редактирование источника' : 'Новый источник'}
+          ) : (
+            <p className="mb-5 text-sm text-muted-foreground">
+              Источников пока нет. Создайте первый кнопкой «Новый источник».
             </p>
+          )}
+
+          {/* Edit form: создание — в едином диалоге CreateSourceDialog */}
+          {editingId ? (
+          <div className="rounded-lg border border-border p-4">
+            <p className="mb-3 text-sm font-medium">Редактирование источника</p>
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="group-name" className="text-xs">
@@ -256,22 +259,17 @@ export function ManageGroupsDialog({
               </div>
 
               <div className="flex items-center justify-end gap-2">
-                {editingId ? (
-                  <Button variant="outline" onClick={resetForm} disabled={pending}>
-                    Отмена
-                  </Button>
-                ) : null}
+                <Button variant="outline" onClick={resetForm} disabled={pending}>
+                  Отмена
+                </Button>
                 <Button onClick={submit} disabled={pending || !name.trim()}>
-                  {pending ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : editingId ? null : (
-                    <Plus className="size-4" />
-                  )}
-                  {editingId ? 'Сохранить' : 'Создать источник'}
+                  {pending ? <Loader2 className="size-4 animate-spin" /> : null}
+                  Сохранить
                 </Button>
               </div>
             </div>
           </div>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>

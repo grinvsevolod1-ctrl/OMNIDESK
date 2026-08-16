@@ -27,6 +27,7 @@ import { query } from '@/lib/db'
 import { isBrainConfigured } from '@/lib/ai/brain/core'
 import {
   classifyOverviewQuery,
+  matchAllSourceNames,
   matchSourceName,
   parsePeriod,
   type OverviewIntent,
@@ -54,7 +55,16 @@ export interface OverviewAiOptions {
 /* Уровень 2: дешёвый LLM-роутер                                       */
 /* ------------------------------------------------------------------ */
 
-const ROUTABLE = ['summary', 'top_sources', 'source_stats', 'money', 'leads', 'help'] as const
+const ROUTABLE = [
+  'summary',
+  'top_sources',
+  'worst_sources',
+  'compare_sources',
+  'source_stats',
+  'money',
+  'leads',
+  'help',
+] as const
 
 const routerSchema = z.object({
   intent: z
@@ -72,7 +82,9 @@ const routerSchema = z.object({
 
 const ROUTER_INTENT_DOC = [
   'summary — общая сводка, «как дела»',
-  'top_sources — сравнение/рейтинг источников',
+  'top_sources — рейтинг источников (лучшие)',
+  'worst_sources — антирейтинг (худшие/слабые источники)',
+  'compare_sources — сравнить два+ КОНКРЕТНЫХ названных источника',
   'source_stats — цифры одного конкретного источника',
   'money — расходы, пополнения, балансы',
   'leads — лиды, воронка, передачи',
@@ -353,10 +365,12 @@ export async function runOverviewAi(
   const sources = await listSources()
   const period = parsePeriod(q) ?? opts.fallbackPeriod
   const matched = matchSourceName(q, sources)
+  const matchedAll = matchAllSourceNames(q, sources)
   const ctx: HandlerContext = {
     period,
     tzOffsetMinutes: opts.tzOffsetMinutes,
     sourceId: matched?.id ?? null,
+    sourceIds: matchedAll.map((s) => s.id),
   }
 
   // Уровень 1: детерминированная классификация — 0 токенов.
@@ -410,6 +424,7 @@ export async function runOverviewAi(
         period: routed.periodDays ? periodFromDays(routed.periodDays) : period,
         tzOffsetMinutes: opts.tzOffsetMinutes,
         sourceId: routedSource?.id ?? null,
+        sourceIds: matchedAll.map((s) => s.id),
       }
       const answer = await executeIntent(routed.intent as OverviewIntent, routedCtx)
       if (answer) return { ok: true, level: 2, answer }

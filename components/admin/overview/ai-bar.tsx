@@ -61,9 +61,50 @@ export function AiBar({
   const [applying, setApplying] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // История вопросов (в памяти, как в шелле): ↑ — назад, ↓ — вперёд.
+  // historyIdx === null — свободный ввод; черновик сохраняется при первом ↑.
+  const historyRef = useRef<string[]>([])
+  const [historyIdx, setHistoryIdx] = useState<number | null>(null)
+  const draftRef = useRef('')
+
+  function pushHistory(q: string) {
+    const h = historyRef.current
+    if (h[h.length - 1] !== q) {
+      h.push(q)
+      if (h.length > 30) h.shift()
+    }
+    setHistoryIdx(null)
+  }
+
+  function historyUp() {
+    const h = historyRef.current
+    if (h.length === 0) return
+    if (historyIdx === null) {
+      draftRef.current = value
+      setHistoryIdx(h.length - 1)
+      setValue(h[h.length - 1])
+    } else if (historyIdx > 0) {
+      setHistoryIdx(historyIdx - 1)
+      setValue(h[historyIdx - 1])
+    }
+  }
+
+  function historyDown() {
+    const h = historyRef.current
+    if (historyIdx === null) return
+    if (historyIdx < h.length - 1) {
+      setHistoryIdx(historyIdx + 1)
+      setValue(h[historyIdx + 1])
+    } else {
+      setHistoryIdx(null)
+      setValue(draftRef.current)
+    }
+  }
+
   async function ask() {
     const q = value.trim()
     if (!q || state.phase === 'loading') return
+    pushHistory(q)
 
     // Уровень 0: чистое имя источника — открываем карточку без сервера.
     const cls = classifyOverviewQuery(q)
@@ -140,15 +181,23 @@ export function AiBar({
           ref={inputRef}
           type="text"
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            setValue(e.target.value)
+            setHistoryIdx(null)
+          }}
           onKeyDown={(e) => {
-            if (
-              e.key === 'Enter' &&
-              !e.nativeEvent.isComposing &&
-              e.keyCode !== 229
-            ) {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return
+            if (e.key === 'Enter') {
               e.preventDefault()
               void ask()
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault()
+              historyUp()
+            }
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              historyDown()
             }
             if (e.key === 'Escape') setState({ phase: 'idle' })
           }}

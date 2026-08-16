@@ -48,7 +48,7 @@ export function OverviewTab({
     return { fromISO: from.toISOString(), toISO: to.toISOString() }
   }, [preset])
 
-  const { data: overview = initialOverview } = useSWR(
+  const { data: payload = { overview: initialOverview } } = useSWR(
     ['sources-overview', range.fromISO, range.toISO],
     async () => {
       const tz = new Date().getTimezoneOffset()
@@ -58,14 +58,16 @@ export function OverviewTab({
         tz,
       )
       if (!res.ok || !res.data) throw new Error(res.message)
-      return res.data
+      return { overview: res.data, prev: res.prev }
     },
     {
       keepPreviousData: true,
       revalidateOnFocus: false,
-      fallbackData: initialOverview,
+      fallbackData: { overview: initialOverview },
     },
   )
+  const overview = payload.overview
+  const prev = payload.prev
 
   const unassigned = overview.unassigned
   const { mutate } = useSWRConfig()
@@ -155,6 +157,7 @@ export function OverviewTab({
           overview={overview}
           activeId={activeId}
           onSelect={(id) => setActiveId((cur) => (cur === id ? null : id))}
+          prev={prev}
         />
       )}
 

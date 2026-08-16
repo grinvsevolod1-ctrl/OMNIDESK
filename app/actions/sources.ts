@@ -181,15 +181,58 @@ export async function assignChannelSourceAction(
 
 /* ------------------------------- Чтение ---------------------------------- */
 
+/** Сводка предыдущего периода для дельт «к прошлому периоду». */
+export interface PrevPeriodStats {
+  people: number
+  liquid: number
+  income: number
+  expense: number
+}
+
+/** Тот же интервал, сдвинутый назад на собственную длину: [from-len, from). */
+function previousRange(fromISO: string, toISO: string): [string, string] {
+  const from = new Date(fromISO).getTime()
+  const len = new Date(toISO).getTime() - from
+  return [new Date(from - len).toISOString(), new Date(from).toISOString()]
+}
+
 export async function getSourcesOverviewAction(
   fromISO: string,
   toISO: string,
   tzOffsetMinutes = 0,
-): Promise<{ ok: boolean; data?: SourcesOverview; message?: string }> {
+): Promise<{
+  ok: boolean
+  data?: SourcesOverview
+  /** id источника (или '__unassigned__') -> сводка прошлого периода. */
+  prev?: Record<string, PrevPeriodStats>
+  message?: string
+}> {
   await requireAdmin()
   try {
-    const data = await getSourcesOverview(fromISO, toISO, tzOffsetMinutes)
-    return { ok: true, data }
+    const [prevFrom, prevTo] = previousRange(fromISO, toISO)
+    // Оба вызова идут через 60-сек кэш агрегатов — дельты почти бесплатны.
+    const [data, prevData] = await Promise.all([
+      getSourcesOverview(fromISO, toISO, tzOffsetMinutes),
+      getSourcesOverview(prevFrom, prevTo, tzOffsetMinutes),
+    ])
+    const prev: Record<string, PrevPeriodStats> = {}
+    for (const it of prevData.items) {
+      prev[it.id] = {
+        people: it.stats.people,
+        liquid: it.stats.liquid,
+        income: it.stats.income,
+        expense: it.stats.expense,
+      }
+    }
+    if (prevData.unassigned) {
+      prev['__unassigned__'] = {
+        people: prevData.unassigned.stats.people,
+        liquid: prevData.unassigned.stats.liquid,
+        income: prevData.unassigned.stats.income,
+        expense: prevData.unassigned.stats.expense,
+      }
+    }
+    return { ok: true, data, prev }
   } catch (err) {
     console.error('[sources] overview failed:', err)
     return { ok: false, message: 'Не удалось загрузить источники.' }
@@ -201,11 +244,29 @@ export async function getSourceDetailAction(
   fromISO: string,
   toISO: string,
   tzOffsetMinutes = 0,
-): Promise<{ ok: boolean; data?: SourceDetail | null; message?: string }> {
+): Promise<{
+  ok: boolean
+  data?: SourceDetail | null
+  /** Сводка прошлого периода для дельт (undefined, если источник не найден). */
+  prev?: PrevPeriodStats
+  message?: string
+}> {
   await requireAdmin()
   try {
-    const data = await getSourceDetail(id, fromISO, toISO, tzOffsetMinutes)
-    return { ok: true, data }
+    const [prevFrom, prevTo] = previousRange(fromISO, toISO)
+    const [data, prevDetail] = await Promise.all([
+      getSourceDetail(id, fromISO, toISO, tzOffsetMinutes),
+      getSourceDetail(id, prevFrom, prevTo, tzOffsetMinutes),
+    ])
+    const prev = prevDetail
+      ? {
+          people: prevDetail.funnel.people,
+          liquid: prevDetail.funnel.liquid,
+          income: prevDetail.finance.income,
+          expense: prevDetail.finance.expense,
+        }
+      : undefined
+    return { ok: true, data, prev }
   } catch (err) {
     console.error('[sources] detail failed:', err)
     return { ok: false, message: 'Не удалось загрузить детали источника.' }

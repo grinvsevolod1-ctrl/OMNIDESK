@@ -33,10 +33,13 @@ export function SourceGrid({
   overview,
   activeId,
   onSelect,
+  prev,
 }: {
   overview: SourcesOverview
   activeId: string | null
   onSelect: (id: string) => void
+  /** id источника -> люди за прошлый период (для дельт на карточках). */
+  prev?: Record<string, { people: number }>
 }) {
   const [q, setQ] = useState('')
   const [sort, setSort] = useState<SortKey>('people')
@@ -104,6 +107,7 @@ export function SourceGrid({
             item={item}
             active={item.id === activeId}
             onSelect={onSelect}
+            prevPeople={prev?.[item.id]?.people}
           />
         ))}
 
@@ -121,6 +125,7 @@ export function SourceGrid({
             }}
             active={activeId === UNASSIGNED_ID}
             onSelect={onSelect}
+            prevPeople={prev?.[UNASSIGNED_ID]?.people}
           />
         ) : null}
       </div>

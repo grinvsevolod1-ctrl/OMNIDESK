@@ -2,6 +2,7 @@
 
 import { memo } from 'react'
 import { typeDot } from '@/components/admin/dashboard/source-groups/shared'
+import { DeltaBadge } from './delta-badge'
 import { cn } from '@/lib/utils'
 import type { SourceOverviewItem } from '@/lib/data/sources'
 
@@ -41,10 +42,13 @@ export const SourceCard = memo(function SourceCard({
   item,
   active,
   onSelect,
+  prevPeople,
 }: {
   item: SourceOverviewItem
   active: boolean
   onSelect: (id: string) => void
+  /** Люди за прошлый период (для дельты); undefined — дельту не показывать. */
+  prevPeople?: number
 }) {
   const { stats } = item
   // Уникальные типы каналов источника — цветные точки в шапке карточки.
@@ -89,7 +93,12 @@ export const SourceCard = memo(function SourceCard({
       <dl className="flex items-baseline gap-4">
         <div>
           <dt className="sr-only">Написало людей</dt>
-          <dd className="text-xl font-semibold tabular-nums">{stats.people}</dd>
+          <dd className="flex items-baseline gap-1.5">
+            <span className="text-xl font-semibold tabular-nums">
+              {stats.people}
+            </span>
+            <DeltaBadge current={stats.people} prev={prevPeople} />
+          </dd>
           <dd className="text-[11px] text-muted-foreground">людей</dd>
         </div>
         <div>

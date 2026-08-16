@@ -19,6 +19,8 @@ export interface HandlerContext {
   tzOffsetMinutes: number
   /** Источник, найденный в тексте запроса (если найден). */
   sourceId?: string | null
+  /** ВСЕ источники, упомянутые в тексте (для «сравни X и Y»). */
+  sourceIds?: string[]
 }
 
 function money(v: number): string {
@@ -100,6 +102,66 @@ async function topSourcesAnswer(ctx: HandlerContext): Promise<OverviewAnswer> {
   }
 }
 
+/** Антирейтинг: слабейшие источники по людям (с ненулевой активностью — вниз). */
+async function worstSourcesAnswer(ctx: HandlerContext): Promise<OverviewAnswer> {
+  const o = await getSourcesOverview(
+    ctx.period.fromISO,
+    ctx.period.toISO,
+    ctx.tzOffsetMinutes,
+  )
+  const rows = [...o.items]
+    .sort((a, b) => a.stats.people - b.stats.people)
+    .slice(0, 10)
+    .map((s) => [
+      s.name,
+      s.stats.people,
+      s.stats.transferred,
+      s.stats.expense > 0 ? money(s.stats.expense) : '—',
+    ])
+  return {
+    kind: 'table',
+    title: 'Слабейшие источники (по людям)',
+    periodLabel: ctx.period.label,
+    table: { columns: ['Источник', 'Людей', 'Передано', 'Расход'], rows },
+  }
+}
+
+/**
+ * Сравнение конкретных источников бок о бок. Null — в тексте упомянуто
+ * меньше двух источников, каскад поднимется выше (модель уточнит).
+ */
+async function compareSourcesAnswer(
+  ctx: HandlerContext,
+): Promise<OverviewAnswer | null> {
+  const ids = ctx.sourceIds ?? []
+  if (ids.length < 2) return null
+  const o = await getSourcesOverview(
+    ctx.period.fromISO,
+    ctx.period.toISO,
+    ctx.tzOffsetMinutes,
+  )
+  const picked = o.items.filter((s) => ids.includes(s.id))
+  if (picked.length < 2) return null
+  const rows = picked.map((s) => [
+    s.name,
+    s.stats.people,
+    s.stats.transferred,
+    s.stats.expense > 0 ? money(s.stats.expense) : '—',
+    s.stats.transferred > 0 && s.stats.expense > 0
+      ? money(Math.round((s.stats.expense / s.stats.transferred) * 100) / 100)
+      : '—',
+  ])
+  return {
+    kind: 'table',
+    title: `Сравнение: ${picked.map((s) => s.name).join(' и ')}`,
+    periodLabel: ctx.period.label,
+    table: {
+      columns: ['Источник', 'Людей', 'Передано', 'Расход', 'Цена лида'],
+      rows,
+    },
+  }
+}
+
 async function sourceStatsAnswer(
   ctx: HandlerContext,
 ): Promise<OverviewAnswer | null> {
@@ -140,6 +202,49 @@ async function sourceStatsAnswer(
 }
 
 async function moneyAnswer(ctx: HandlerContext): Promise<OverviewAnswer> {
+  // «Сколько потратили на X» — если в вопросе назван источник, отвечаем
+  // сводкой именно по нему, а не общей таблицей.
+  if (ctx.sourceId) {
+    const d = await getSourceDetail(
+      ctx.sourceId,
+      ctx.period.fromISO,
+      ctx.period.toISO,
+      ctx.tzOffsetMinutes,
+    )
+    if (d) {
+      return {
+        kind: 'summary',
+        title: `Деньги: ${d.name}`,
+        periodLabel: ctx.period.label,
+        metrics: [
+          {
+            label: 'Потрачено',
+            value: `${money(d.finance.expense)} ${d.finance.currency}`,
+          },
+          {
+            label: 'Пополнено',
+            value: `${money(d.finance.income)} ${d.finance.currency}`,
+          },
+          {
+            label: 'Баланс за всё время',
+            value: `${money(d.finance.balanceAllTime)} ${d.finance.currency}`,
+          },
+          ...(d.funnel.transferred > 0 && d.finance.expense > 0
+            ? [
+                {
+                  label: 'Цена переданного лида',
+                  value: `${money(
+                    Math.round(
+                      (d.finance.expense / d.funnel.transferred) * 100,
+                    ) / 100,
+                  )} ${d.finance.currency}`,
+                },
+              ]
+            : []),
+        ],
+      }
+    }
+  }
   const o = await getSourcesOverview(
     ctx.period.fromISO,
     ctx.period.toISO,
@@ -223,6 +328,10 @@ export async function executeIntent(
       return summaryAnswer(ctx)
     case 'top_sources':
       return topSourcesAnswer(ctx)
+    case 'worst_sources':
+      return worstSourcesAnswer(ctx)
+    case 'compare_sources':
+      return compareSourcesAnswer(ctx)
     case 'source_stats': {
       const bySource = await sourceStatsAnswer(ctx)
       // «покажи цифры» без имени источника — отвечаем общей сводкой.

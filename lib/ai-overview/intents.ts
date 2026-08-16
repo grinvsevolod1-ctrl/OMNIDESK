@@ -9,6 +9,8 @@
 export type OverviewIntent =
   | 'summary' /* «как дела», сводка по всем источникам */
   | 'top_sources' /* «топ источников», «какой источник лучший» */
+  | 'worst_sources' /* «худший источник», антирейтинг */
+  | 'compare_sources' /* «сравни X и Y» — два+ источника рядом */
   | 'source_stats' /* цифры по конкретному источнику */
   | 'money' /* расходы/пополнения/баланс */
   | 'leads' /* лиды/воронка/передано */
@@ -120,6 +122,24 @@ export function matchSourceName(
   return best
 }
 
+/**
+ * ВСЕ источники, чьи имена целиком встречаются в тексте (для «сравни X и Y»).
+ * Сильнее matchSourceName: не выбирает лучшего, а собирает всех упомянутых.
+ */
+export function matchAllSourceNames(
+  text: string,
+  sources: { id: string; name: string }[],
+): { id: string; name: string }[] {
+  const q = normalizeQuery(text)
+  if (!q) return []
+  const found: { id: string; name: string }[] = []
+  for (const s of sources) {
+    const n = normalizeQuery(s.name)
+    if (n && q.includes(n)) found.push({ id: s.id, name: s.name })
+  }
+  return found
+}
+
 /** Стемы ключевых слов интентов (нормализованный текст). */
 const INTENT_STEMS: Record<Exclude<OverviewIntent, 'unknown'>, string[]> = {
   summary: [
@@ -134,12 +154,12 @@ const INTENT_STEMS: Record<Exclude<OverviewIntent, 'unknown'>, string[]> = {
   top_sources: [
     'топ',
     'лучш',
-    'худш',
-    'сравн',
     'какой источник',
     'рейтинг',
     'эффективн',
   ],
+  worst_sources: ['худш', 'слабейш', 'провальн', 'аутсайдер', 'хуже вс'],
+  compare_sources: ['сравн', 'против', ' или ', ' vs '],
   source_stats: ['покажи', 'цифры', 'детал', 'подробн'],
   money: [
     'расход',

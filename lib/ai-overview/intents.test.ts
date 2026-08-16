@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   classifyOverviewQuery,
+  matchAllSourceNames,
   matchSourceName,
   normalizeQuery,
   parsePeriod,
@@ -84,6 +85,23 @@ describe('matchSourceName', () => {
   })
 })
 
+describe('matchAllSourceNames', () => {
+  const sources = [
+    { id: '1', name: 'Авито' },
+    { id: '2', name: 'Яндекс Директ' },
+    { id: '3', name: 'Телеграм посевы' },
+  ]
+
+  it('collects every source mentioned in the text', () => {
+    const found = matchAllSourceNames('сравни авито и яндекс директ', sources)
+    expect(found.map((s) => s.id).sort()).toEqual(['1', '2'])
+  })
+
+  it('returns empty array when nothing matches', () => {
+    expect(matchAllSourceNames('как дела', sources)).toEqual([])
+  })
+})
+
 describe('classifyOverviewQuery', () => {
   it('classifies summary questions confidently', () => {
     const c = classifyOverviewQuery('как дела за неделю')
@@ -94,6 +112,19 @@ describe('classifyOverviewQuery', () => {
   it('classifies top/comparison questions', () => {
     expect(classifyOverviewQuery('топ источников').intent).toBe('top_sources')
     expect(classifyOverviewQuery('какой источник лучший').intent).toBe('top_sources')
+  })
+
+  it('classifies worst-sources questions separately', () => {
+    expect(classifyOverviewQuery('худший источник').intent).toBe('worst_sources')
+    expect(classifyOverviewQuery('кто хуже всех работает').intent).toBe(
+      'worst_sources',
+    )
+  })
+
+  it('classifies compare questions', () => {
+    expect(classifyOverviewQuery('сравни авито и директ').intent).toBe(
+      'compare_sources',
+    )
   })
 
   it('classifies money questions', () => {
