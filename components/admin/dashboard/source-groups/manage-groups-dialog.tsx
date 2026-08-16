@@ -8,6 +8,7 @@ import {
   deleteSourceGroupAction,
   updateSourceGroupAction,
 } from '@/app/actions/groups'
+import { useMutateSources } from '@/components/admin/sources/use-mutate-sources'
 import { useChannelTypeLabels } from '@/components/dictionaries-provider'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,6 +37,7 @@ export function ManageGroupsDialog({
 }) {
   const TYPE_LABEL = useChannelTypeLabels()
   const router = useRouter()
+  const mutateSources = useMutateSources()
   const [open, setOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
@@ -80,6 +82,7 @@ export function ManageGroupsDialog({
       if (res.ok) {
         toast.success(res.message)
         resetForm()
+        void mutateSources()
         router.refresh()
       } else {
         toast.error(res.message)
@@ -99,6 +102,7 @@ export function ManageGroupsDialog({
       if (res.ok) {
         toast.success(res.message)
         if (editingId === id) resetForm()
+        void mutateSources()
         router.refresh()
       } else {
         toast.error(res.message)

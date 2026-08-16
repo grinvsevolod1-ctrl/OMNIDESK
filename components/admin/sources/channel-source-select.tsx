@@ -14,6 +14,7 @@ import {
   assignChannelSourceAction,
   listSourcesForSelectAction,
 } from '@/app/actions/sources'
+import { useMutateSources } from '@/components/admin/sources/use-mutate-sources'
 import {
   Select,
   SelectContent,
@@ -26,7 +27,8 @@ const NONE = 'none'
 
 export function ChannelSourceSelect({ channelId }: { channelId: string }) {
   const [pending, startTransition] = useTransition()
-  const { data, mutate } = useSWR(
+  const mutateSources = useMutateSources()
+  const { data } = useSWR(
     'sources-select',
     () => listSourcesForSelectAction(),
     { revalidateOnFocus: false },
@@ -44,7 +46,9 @@ export function ChannelSourceSelect({ channelId }: { channelId: string }) {
       const res = await assignChannelSourceAction(channelId, next)
       if (res.ok) toast.success(res.message)
       else toast.error(res.message)
-      void mutate()
+      // Смена канала меняет агрегаты Обзора — сбрасываем ВСЕ source-кэши,
+      // а не только собственный селект.
+      void mutateSources()
     })
   }
 

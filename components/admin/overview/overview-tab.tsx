@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
-import useSWR, { useSWRConfig } from 'swr'
+import useSWR from 'swr'
 import { getSourcesOverviewAction } from '@/app/actions/sources'
 import { ManageGroupsDialog } from '@/components/admin/dashboard/source-groups/manage-groups-dialog'
 import { CreateSourceDialog } from '@/components/admin/sources/create-source-dialog'
+import { useMutateSources } from '@/components/admin/sources/use-mutate-sources'
 import {
   rangeFromPreset,
   type ChannelOption,
@@ -63,7 +64,8 @@ export function OverviewTab({
     },
     {
       keepPreviousData: true,
-      revalidateOnFocus: false,
+      // Возврат на вкладку подтягивает свежие данные (сервер держит
+      // 60-сек кэш агрегатов, так что это дёшево).
       fallbackData: { overview: initialOverview, prev: undefined },
     },
   )
@@ -71,7 +73,7 @@ export function OverviewTab({
   const prev = payload.prev
 
   const unassigned = overview.unassigned
-  const { mutate } = useSWRConfig()
+  const mutateSources = useMutateSources()
 
   const fallbackPeriod = useMemo(
     () => ({
@@ -90,11 +92,7 @@ export function OverviewTab({
         sources={overview.items.map((s) => ({ id: s.id, name: s.name }))}
         fallbackPeriod={fallbackPeriod}
         onOpenSource={(id) => setActiveId(id)}
-        onDataChanged={() => {
-          void mutate(
-            (key) => Array.isArray(key) && key[0] === 'sources-overview',
-          )
-        }}
+        onDataChanged={() => void mutateSources()}
       />
 
       {/* Шапка: период + управление источниками */}
@@ -134,15 +132,8 @@ export function OverviewTab({
         </div>
       </div>
 
-      <CreateSourceDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onCreated={() => {
-          void mutate(
-            (key) => Array.isArray(key) && key[0] === 'sources-overview',
-          )
-        }}
-      />
+      {/* Диалог сам сбрасывает source-кэши после создания */}
+      <CreateSourceDialog open={createOpen} onOpenChange={setCreateOpen} />
 
       {/* Сетка источников */}
       {overview.items.length === 0 && !unassigned ? (

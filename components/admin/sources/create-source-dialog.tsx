@@ -15,6 +15,7 @@ import {
   createSourceAction,
   listSourcesForSelectAction,
 } from '@/app/actions/sources'
+import { useMutateSources } from '@/components/admin/sources/use-mutate-sources'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -42,6 +43,7 @@ export function CreateSourceDialog({
 }) {
   const [pending, startTransition] = useTransition()
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const mutateSources = useMutateSources()
 
   // Каналы и занятость подгружаются только при открытом диалоге; SWR
   // дедуплицирует ключ с другими потребителями (селект в настройках канала).
@@ -76,6 +78,9 @@ export function CreateSourceDialog({
         toast.success(res.message)
         setSelected(new Set())
         onOpenChange(false)
+        // Диалог сам сбрасывает все source-кэши — работает из любого места
+        // (Обзор, Учёт), не полагаясь на колбэки владельца.
+        void mutateSources()
         if (res.id) onCreated?.(res.id)
       } else {
         toast.error(res.message)

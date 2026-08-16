@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { useMutateSources } from '@/components/admin/sources/use-mutate-sources'
 import { cn } from '@/lib/utils'
 import { DeltaBadge } from './delta-badge'
 
@@ -105,6 +106,7 @@ export function SourceDetail({
 }) {
   const TYPE_LABEL = useChannelTypeLabels()
   const router = useRouter()
+  const mutateSources = useMutateSources()
   const [renameOpen, setRenameOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [pending, startTransition] = useTransition()
@@ -117,7 +119,7 @@ export function SourceDetail({
       if (!res.ok) throw new Error(res.message)
       return { detail: res.data ?? null, prev: res.prev }
     },
-    { keepPreviousData: true, revalidateOnFocus: false },
+    { keepPreviousData: true },
   )
   const data = payload?.detail
   const prev = payload?.prev
@@ -134,6 +136,7 @@ export function SourceDetail({
       if (res.ok) {
         toast.success(res.message)
         setRenameOpen(false)
+        void mutateSources()
         router.refresh()
       } else {
         toast.error(res.message)
@@ -151,6 +154,7 @@ export function SourceDetail({
       if (res.ok) {
         toast.success(res.message)
         onClose()
+        void mutateSources()
         router.refresh()
       } else {
         toast.error(res.message)
