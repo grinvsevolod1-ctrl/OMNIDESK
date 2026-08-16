@@ -76,6 +76,20 @@ export function DashboardShell({
     }
   }, [])
 
+  // Пока смонтирована оболочка дашборда, документ скроллиться не должен:
+  // прокручивается только <main>. Без этого временное переполнение при
+  // загрузке (порталы тостов, графики до гидрации) позволяло проскроллить
+  // body ниже h-dvh-оболочки — оставался «чёрный подвал» под контентом.
+  useEffect(() => {
+    const html = document.documentElement
+    const prev = html.style.overflow
+    html.style.overflow = 'clip'
+    window.scrollTo(0, 0)
+    return () => {
+      html.style.overflow = prev
+    }
+  }, [])
+
   useEffect(() => {
     const onFocusMode = (e: Event) => {
       const detail = (e as CustomEvent<{ active?: boolean }>).detail

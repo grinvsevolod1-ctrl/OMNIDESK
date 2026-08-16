@@ -574,6 +574,10 @@ export interface ManagerChannelOverviewItem {
   detail: string
   /** Написало людей за период (по первому входящему — человек один раз). */
   people: number
+  /** Из них взяли в работу: handoff, liquid или transferred (как у админа). */
+  handoff: number
+  /** Из них ликвид: liquid или transferred. */
+  liquid: number
   /** Из них передано (текущий статус диалога). */
   transferred: number
   /** Люди по дням (плотный ряд, старые -> новые) для спарклайна. */
@@ -584,7 +588,13 @@ export interface ManagerChannelsOverview {
   from: string
   to: string
   items: ManagerChannelOverviewItem[]
-  totals: { people: number; transferred: number }
+  /** Сводная воронка за период — та же семантика ступеней, что в Обзоре админа. */
+  totals: {
+    people: number
+    handoff: number
+    liquid: number
+    transferred: number
+  }
 }
 
 /** Число локальных суток в [from, to), максимум 92 (как в Обзоре админа). */
@@ -632,9 +642,17 @@ async function getManagerChannelsOverviewUncached(
         ORDER BY name ASC`,
       [managerId],
     ),
-    query<{ channel_id: string; people: string; transferred: string }>(
+    query<{
+      channel_id: string
+      people: string
+      handoff: string
+      liquid: string
+      transferred: string
+    }>(
       `SELECT f.channel_id,
               count(*)::int AS people,
+              count(*) FILTER (WHERE f.status IN ('handoff', 'liquid', 'transferred'))::int AS handoff,
+              count(*) FILTER (WHERE f.status IN ('liquid', 'transferred'))::int AS liquid,
               count(*) FILTER (WHERE f.status = 'transferred')::int AS transferred
          FROM (${FIRST_CONTACT}) f
         WHERE f.first_at >= $2 AND f.first_at < $3
@@ -689,6 +707,8 @@ async function getManagerChannelsOverviewUncached(
       status: ch.status,
       detail: ch.detail,
       people: Number(t?.people ?? 0),
+      handoff: Number(t?.handoff ?? 0),
+      liquid: Number(t?.liquid ?? 0),
       transferred: Number(t?.transferred ?? 0),
       spark:
         sparkByChannel.get(ch.id) ??
@@ -705,6 +725,8 @@ async function getManagerChannelsOverviewUncached(
     items,
     totals: {
       people: items.reduce((s, i) => s + i.people, 0),
+      handoff: items.reduce((s, i) => s + i.handoff, 0),
+      liquid: items.reduce((s, i) => s + i.liquid, 0),
       transferred: items.reduce((s, i) => s + i.transferred, 0),
     },
   }

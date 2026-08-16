@@ -3,15 +3,9 @@
 import { createElement, memo } from 'react'
 import Link from 'next/link'
 import { LayoutGrid, Plug, Plus, Rows3 } from 'lucide-react'
-import useSWR from 'swr'
-import { getManagerChannelsOverviewAction } from '@/app/actions/manager-analytics'
 import { channelIcon } from '@/components/channel-icons'
-import {
-  PeriodPicker,
-  resolvePeriod,
-} from '@/components/admin/overview/period-picker'
 import { DeltaBadge } from '@/components/admin/overview/delta-badge'
-import { useManagerOverviewPrefs } from '@/components/admin/overview/use-overview-prefs'
+import type { OverviewView } from '@/components/admin/overview/use-overview-prefs'
 import { EmptyState, StatusBadge } from '@/components/page-parts'
 import { Button } from '@/components/ui/button'
 import type { ManagerChannelOverviewItem } from '@/lib/data/analytics-groups'
@@ -251,48 +245,39 @@ function ChannelRow({
 
 /**
  * Обзор каналов менеджера — его логическая цепочка: канал → сколько людей
- * написало → сколько передано. Период и вид (карточки/список) сохраняются
- * между заходами; плотность карточек зависит от числа каналов, как в
- * админском Обзоре. Денег здесь нет — финансы видит только администратор.
+ * написало → сколько передано. Контролируемый компонент: период и данные
+ * приходят сверху (единый период всего Обзора, как у админа), вид
+ * (карточки/список) поднят родителю и сохраняется между заходами.
+ * Денег здесь нет — финансы видит только администратор.
  */
-export function ChannelsOverview() {
-  const [prefs, setPrefs] = useManagerOverviewPrefs()
-  const resolved = resolvePeriod(prefs.preset, prefs.customFrom, prefs.customTo)
-  const fromISO = resolved.from.toISOString()
-  const toISO = resolved.to.toISOString()
-
-  const { data: payload, isLoading } = useSWR(
-    ['manager-channels-overview', fromISO, toISO],
-    async () => {
-      const tz = new Date().getTimezoneOffset()
-      const res = await getManagerChannelsOverviewAction(fromISO, toISO, tz)
-      if (!res.ok || !res.data) throw new Error(res.message)
-      return { overview: res.data, prev: res.prev }
-    },
-    { keepPreviousData: true },
-  )
-
-  const items = payload?.overview.items ?? []
-  const prev = payload?.prev
-
+export function ChannelsOverview({
+  items,
+  prev,
+  isLoading,
+  view,
+  onViewChange,
+  onSelect: _onSelect,
+}: {
+  items: ManagerChannelOverviewItem[]
+  /** id канала -> люди за прошлый период (для дельт на карточках). */
+  prev?: Record<string, { people: number }>
+  isLoading?: boolean
+  view: OverviewView
+  onViewChange: (view: OverviewView) => void
+  /** Зарезервировано под панель деталей канала (как у админа). */
+  onSelect?: (id: string | null) => void
+}) {
   const variant: Variant =
     items.length === 1 ? 'hero' : items.length <= 3 ? 'wide' : 'compact'
 
   return (
     <section className="flex flex-col gap-3">
-      {/* Шапка: заголовок + период + вид */}
+      {/* Шапка: заголовок + вид */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <h2 className="text-sm font-semibold text-muted-foreground">
           Ваши каналы
         </h2>
         <div className="flex flex-wrap items-center gap-2">
-          <PeriodPicker
-            preset={prefs.preset}
-            customFrom={prefs.customFrom}
-            customTo={prefs.customTo}
-            resolved={resolved}
-            onChange={(patch) => setPrefs(patch)}
-          />
           <div
             role="group"
             aria-label="Вид"
@@ -301,14 +286,14 @@ export function ChannelsOverview() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setPrefs({ view: 'cards' })}
+              onClick={() => onViewChange('cards')}
               className={cn(
                 'h-7 rounded-md px-2',
-                prefs.view === 'cards'
+                view === 'cards'
                   ? 'bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground'
                   : 'text-muted-foreground',
               )}
-              aria-pressed={prefs.view === 'cards'}
+              aria-pressed={view === 'cards'}
               aria-label="Карточками"
             >
               <LayoutGrid className="size-3.5" />
@@ -316,14 +301,14 @@ export function ChannelsOverview() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setPrefs({ view: 'list' })}
+              onClick={() => onViewChange('list')}
               className={cn(
                 'h-7 rounded-md px-2',
-                prefs.view === 'list'
+                view === 'list'
                   ? 'bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground'
                   : 'text-muted-foreground',
               )}
-              aria-pressed={prefs.view === 'list'}
+              aria-pressed={view === 'list'}
               aria-label="Списком"
             >
               <Rows3 className="size-3.5" />
@@ -361,7 +346,7 @@ export function ChannelsOverview() {
             />
           )}
         </div>
-      ) : prefs.view === 'list' ? (
+      ) : view === 'list' ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="hidden grid-cols-[minmax(0,1.4fr)_5rem_4.5rem_4.5rem_auto] gap-x-4 border-b border-border px-4 py-2 text-[11px] uppercase tracking-wide text-muted-foreground sm:grid">
             <span>Канал</span>

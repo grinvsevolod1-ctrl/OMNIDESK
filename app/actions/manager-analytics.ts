@@ -54,6 +54,8 @@ export async function getManagerChannelsOverviewAction(
   data?: ManagerChannelsOverview
   /** id канала -> люди за прошлый период (для дельты на карточке). */
   prev?: Record<string, { people: number }>
+  /** Сводная воронка прошлого периода — для дельт на ступенях воронки. */
+  prevTotals?: ManagerChannelsOverview['totals']
   message?: string
 }> {
   const session = await requireManager()
@@ -66,7 +68,7 @@ export async function getManagerChannelsOverviewAction(
     ])
     const prev: Record<string, { people: number }> = {}
     for (const it of prevData.items) prev[it.id] = { people: it.people }
-    return { ok: true, data, prev }
+    return { ok: true, data, prev, prevTotals: prevData.totals }
   } catch (err) {
     console.error('[manager-analytics] channels overview failed:', err)
     return { ok: false, message: 'Не удалось загрузить обзор каналов.' }

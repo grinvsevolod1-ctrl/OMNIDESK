@@ -1,9 +1,8 @@
 import Link from 'next/link'
-import { CheckCheck, Inbox, MessageCircle, Users } from 'lucide-react'
-import { ManagerActivityChart } from '@/components/analytics/manager-activity-chart'
-import { ChannelsOverview } from '@/components/manager/channels-overview'
+import { Inbox } from 'lucide-react'
 import { LeadStatusBoard } from '@/components/manager/lead-status-board'
-import { PageHeader, StatCard } from '@/components/page-parts'
+import { ManagerOverviewTab } from '@/components/manager/overview-tab'
+import { PageHeader } from '@/components/page-parts'
 import { Button } from '@/components/ui/button'
 import { requireManager } from '@/lib/auth'
 import { getLeadAnalytics } from '@/lib/data'
@@ -17,7 +16,7 @@ export default async function ManagerOverviewPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title={`С возвращением, ${firstName}`}
-        description="Аналитика по вашим лидам: новые обращения, статусы и каналы."
+        description="Единый период сверху управляет всем обзором: воронка, каналы и активность."
         action={
           <Button
             render={
@@ -30,49 +29,15 @@ export default async function ManagerOverviewPage() {
         }
       />
 
-      {/* Lead KPIs — scoped to this manager, each lead counted once by first contact */}
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold text-muted-foreground">Лиды</h2>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard
-            label="Отписок"
-            value={leads.totalLeads}
-            icon={Users}
-            hint="всего написало людей"
-          />
-          <StatCard
-            label="Новых за 7 дней"
-            value={leads.newThisWeek}
-            icon={Inbox}
-            hint="первое обращение"
-          />
-          <StatCard
-            label="Ликвид"
-            value={leads.byStatus.liquid}
-            icon={MessageCircle}
-            hint="подходящая аудитория"
-          />
-          <StatCard
-            label="Передан"
-            value={leads.byStatus.transferred}
-            icon={CheckCheck}
-            hint="подошёл и передан"
-          />
-        </div>
-      </section>
+      {/* Обзор в стиле админа: один период → воронка + каналы + активность */}
+      <ManagerOverviewTab />
 
-      {/* Interactive activity chart (manager-scoped, with period controls) */}
-      <ManagerActivityChart />
-
-      {/* Interactive lead-status board with drill-down modal */}
+      {/* Доска статусов лидов за всё время с drill-down (менеджерская фишка) */}
       <LeadStatusBoard
         byStatus={leads.byStatus}
         byReason={leads.byReason}
         total={leads.totalLeads}
       />
-
-      {/* Обзор каналов: трафик за период, вид карточки/список (запоминается) */}
-      <ChannelsOverview />
     </div>
   )
 }
