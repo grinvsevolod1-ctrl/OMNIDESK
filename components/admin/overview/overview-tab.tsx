@@ -48,7 +48,8 @@ export function OverviewTab({
     return { fromISO: from.toISOString(), toISO: to.toISOString() }
   }, [preset])
 
-  const { data: payload = { overview: initialOverview } } = useSWR(
+  const { data: payload = { overview: initialOverview, prev: undefined } } =
+    useSWR(
     ['sources-overview', range.fromISO, range.toISO],
     async () => {
       const tz = new Date().getTimezoneOffset()
@@ -63,7 +64,7 @@ export function OverviewTab({
     {
       keepPreviousData: true,
       revalidateOnFocus: false,
-      fallbackData: { overview: initialOverview },
+      fallbackData: { overview: initialOverview, prev: undefined },
     },
   )
   const overview = payload.overview

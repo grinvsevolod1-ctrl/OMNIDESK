@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { Loader2, Pencil, Trash2, X } from 'lucide-react'
@@ -42,6 +43,7 @@ function FunnelStep({
   conversion,
   last,
   prev,
+  href,
 }: {
   label: string
   value: number
@@ -49,11 +51,23 @@ function FunnelStep({
   last?: boolean
   /** Значение за прошлый период — покажет дельту «к прошлому периоду». */
   prev?: number
+  /** Drill-down: делает цифру ссылкой (например, в базу контактов). */
+  href?: string
 }) {
   return (
     <div className="relative flex-1 min-w-32 rounded-lg border border-border bg-card p-3">
       <p className="flex items-baseline gap-1.5">
-        <span className="text-2xl font-semibold tabular-nums">{value}</span>
+        {href ? (
+          <Link
+            href={href}
+            className="text-2xl font-semibold tabular-nums underline-offset-4 hover:underline"
+            title="Открыть в базе контактов"
+          >
+            {value}
+          </Link>
+        ) : (
+          <span className="text-2xl font-semibold tabular-nums">{value}</span>
+        )}
         <DeltaBadge current={value} prev={prev} />
       </p>
       <p className="text-xs text-muted-foreground">{label}</p>
@@ -107,6 +121,12 @@ export function SourceDetail({
   )
   const data = payload?.detail
   const prev = payload?.prev
+
+  // Drill-down в базу контактов, отфильтрованную по каналам источника.
+  // Для виртуальной карточки «Без источника» фильтра нет — ведём без него.
+  const drillHref = sourceId.startsWith('__')
+    ? '/admin/contacts'
+    : `/admin/contacts?source=${encodeURIComponent(sourceId)}`
 
   function submitRename() {
     startTransition(async () => {
@@ -217,6 +237,7 @@ export function SourceDetail({
             label="Написали"
             value={data.funnel.people}
             prev={prev?.people}
+            href={drillHref}
           />
           <FunnelStep
             label="Передан человеку"

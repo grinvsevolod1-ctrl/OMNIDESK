@@ -54,8 +54,16 @@ function toContact(r: ContactRow): ContactRecord {
  * List every contact across all channels, grouped by channel type. Ordered by
  * most recent activity within each group. One query + in-memory grouping keeps
  * this simple; the contacts table is admin-facing and not hot-path.
+ *
+ * `channelIds` — опциональный фильтр для drill-down «контакты одного
+ * источника» (Обзор → детали → лиды): показываются только диалоги
+ * перечисленных каналов.
  */
-export async function listContactsByChannel(): Promise<ContactChannelGroup[]> {
+export async function listContactsByChannel(
+  channelIds?: string[],
+): Promise<ContactChannelGroup[]> {
+  const filter =
+    channelIds && channelIds.length > 0 ? `WHERE c.channel_id = ANY($1)` : ''
   const rows = await query<ContactRow>(
     `SELECT c.id,
             c.channel_type,
@@ -70,7 +78,9 @@ export async function listContactsByChannel(): Promise<ContactChannelGroup[]> {
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers m ON m.id = c.manager_id
+       ${filter}
       ORDER BY c.last_message_at DESC`,
+    filter ? [channelIds] : [],
   )
 
   const byType = new Map<ChannelType, ContactRecord[]>()
@@ -99,6 +109,10 @@ export async function listContactsByChannel(): Promise<ContactChannelGroup[]> {
   }
   for (const type of CHANNEL_ORDER) pushGroup(type)
   for (const type of byType.keys()) pushGroup(type)
+
+  // В режиме фильтра по источнику пустые типы каналов — шум: скрываем их.
+  if (channelIds && channelIds.length > 0)
+    return groups.filter((g) => g.count > 0)
 
   return groups
 }
