@@ -7,29 +7,21 @@ import { getSourcesOverviewAction } from '@/app/actions/sources'
 import { ManageGroupsDialog } from '@/components/admin/dashboard/source-groups/manage-groups-dialog'
 import { CreateSourceDialog } from '@/components/admin/sources/create-source-dialog'
 import { useMutateSources } from '@/components/admin/sources/use-mutate-sources'
-import {
-  rangeFromPreset,
-  type ChannelOption,
-  type Preset,
-} from '@/components/admin/dashboard/source-groups/shared'
+import type { ChannelOption } from '@/components/admin/dashboard/source-groups/shared'
 import { Button } from '@/components/ui/button'
 import type { SourceGroup } from '@/lib/data'
 import type { SourcesOverview } from '@/lib/data/sources'
-import { cn } from '@/lib/utils'
 import { AiBar } from './ai-bar'
+import { PeriodPicker, resolvePeriod } from './period-picker'
 import { SourceDetail, UnassignedDetail } from './source-detail'
 import { SourceGrid, UNASSIGNED_ID } from './source-grid'
-
-const PRESETS: { id: Exclude<Preset, 'custom'>; label: string }[] = [
-  { id: 'today', label: 'Сегодня' },
-  { id: '7d', label: '7 дней' },
-  { id: '30d', label: '30 дней' },
-]
+import { useOverviewPrefs } from './use-overview-prefs'
 
 /**
  * Вкладка «Обзор»: источники как единая сущность проекта.
- * Сверху — период, сетка карточек источников; клик по карточке раскрывает
- * панель деталей (трафик + воронка лидов + деньги).
+ * Сверху — период (пресеты + произвольные даты), сетка/список источников;
+ * клик раскрывает панель деталей (трафик + воронка лидов + деньги).
+ * Вид и период запоминаются между заходами.
  */
 export function OverviewTab({
   initialOverview,
@@ -40,35 +32,42 @@ export function OverviewTab({
   groups: SourceGroup[]
   channels: ChannelOption[]
 }) {
-  const [preset, setPreset] = useState<Exclude<Preset, 'custom'>>('7d')
+  const [prefs, updatePrefs] = useOverviewPrefs()
   const [activeId, setActiveId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
 
-  const range = useMemo(() => {
-    const { from, to } = rangeFromPreset(preset)
-    return { fromISO: from.toISOString(), toISO: to.toISOString() }
-  }, [preset])
+  const resolved = useMemo(
+    () => resolvePeriod(prefs.preset, prefs.customFrom, prefs.customTo),
+    [prefs.preset, prefs.customFrom, prefs.customTo],
+  )
+  const range = useMemo(
+    () => ({
+      fromISO: resolved.from.toISOString(),
+      toISO: resolved.to.toISOString(),
+    }),
+    [resolved],
+  )
 
   const { data: payload = { overview: initialOverview, prev: undefined } } =
     useSWR(
-    ['sources-overview', range.fromISO, range.toISO],
-    async () => {
-      const tz = new Date().getTimezoneOffset()
-      const res = await getSourcesOverviewAction(
-        range.fromISO,
-        range.toISO,
-        tz,
-      )
-      if (!res.ok || !res.data) throw new Error(res.message)
-      return { overview: res.data, prev: res.prev }
-    },
-    {
-      keepPreviousData: true,
-      // Возврат на вкладку подтягивает свежие данные (сервер держит
-      // 60-сек кэш агрегатов, так что это дёшево).
-      fallbackData: { overview: initialOverview, prev: undefined },
-    },
-  )
+      ['sources-overview', range.fromISO, range.toISO],
+      async () => {
+        const tz = new Date().getTimezoneOffset()
+        const res = await getSourcesOverviewAction(
+          range.fromISO,
+          range.toISO,
+          tz,
+        )
+        if (!res.ok || !res.data) throw new Error(res.message)
+        return { overview: res.data, prev: res.prev }
+      },
+      {
+        keepPreviousData: true,
+        // Возврат на вкладку подтягивает свежие данные (сервер держит
+        // 60-сек кэш агрегатов, так что это дёшево).
+        fallbackData: { overview: initialOverview, prev: undefined },
+      },
+    )
   const overview = payload.overview
   const prev = payload.prev
 
@@ -79,10 +78,9 @@ export function OverviewTab({
     () => ({
       fromISO: range.fromISO,
       toISO: range.toISO,
-      label:
-        PRESETS.find((p) => p.id === preset)?.label.toLowerCase() ?? 'за период',
+      label: resolved.label.toLowerCase(),
     }),
-    [range, preset],
+    [range, resolved.label],
   )
 
   return (
@@ -97,29 +95,13 @@ export function OverviewTab({
 
       {/* Шапка: период + управление источниками */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div
-          role="group"
-          aria-label="Период"
-          className="flex items-center rounded-lg border border-border p-0.5"
-        >
-          {PRESETS.map((p) => (
-            <Button
-              key={p.id}
-              variant="ghost"
-              size="sm"
-              onClick={() => setPreset(p.id)}
-              className={cn(
-                'h-7 rounded-md px-3 text-xs',
-                preset === p.id
-                  ? 'bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground'
-                  : 'text-muted-foreground',
-              )}
-              aria-pressed={preset === p.id}
-            >
-              {p.label}
-            </Button>
-          ))}
-        </div>
+        <PeriodPicker
+          preset={prefs.preset}
+          customFrom={prefs.customFrom}
+          customTo={prefs.customTo}
+          resolved={resolved}
+          onChange={(patch) => updatePrefs(patch)}
+        />
         <div className="flex items-center gap-2">
           <Button
             size="sm"
@@ -150,6 +132,8 @@ export function OverviewTab({
           activeId={activeId}
           onSelect={(id) => setActiveId((cur) => (cur === id ? null : id))}
           prev={prev}
+          view={prefs.view}
+          onViewChange={(view) => updatePrefs({ view })}
         />
       )}
 
