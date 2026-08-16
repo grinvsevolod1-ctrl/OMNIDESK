@@ -42,6 +42,7 @@ import {
   TYPE_ICON,
   proxyLabelText,
 } from '@/components/admin/account-shared'
+import { ChannelSourceSelect } from '@/components/admin/sources/channel-source-select'
 
 export function AccountsTable({
   channels,
@@ -194,6 +195,10 @@ function AccountRow({
           {SESSION_LABEL[channel.sessionStatus] ?? channel.sessionStatus}
         </span>
         <StatusBadge status={channel.status} />
+      </div>
+
+      <div className="min-w-0 sm:w-44">
+        <ChannelSourceSelect channelId={channel.id} />
       </div>
 
       <div className="flex min-w-0 items-center gap-2 sm:w-72">

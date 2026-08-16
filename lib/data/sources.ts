@@ -36,6 +36,40 @@ export const createSource = createSourceGroup
 export const updateSource = updateSourceGroup
 export const deleteSource = deleteSourceGroup
 
+/** Все панельные каналы (личные telegram-аккаунты владельца исключены). */
+export async function listPanelChannels(): Promise<
+  { id: string; name: string; type: ChannelType }[]
+> {
+  return query<{ id: string; name: string; type: ChannelType }>(
+    `SELECT id, name, type FROM channels
+      WHERE type <> 'telegram_personal'
+      ORDER BY type ASC, name ASC`,
+  )
+}
+
+/**
+ * Привязка ОДНОГО канала к источнику (или отвязка при null) — для селекта
+ * «Источник» в настройках канала. Канал принадлежит максимум одному
+ * источнику: upsert по channel_id перетягивает его из прежнего источника.
+ */
+export async function assignChannelSource(
+  channelId: string,
+  sourceId: string | null,
+): Promise<void> {
+  if (sourceId === null) {
+    await query(`DELETE FROM source_channels WHERE channel_id = $1`, [
+      channelId,
+    ])
+    return
+  }
+  await query(
+    `INSERT INTO source_channels (resource_id, channel_id)
+     VALUES ($1, $2)
+     ON CONFLICT (channel_id) DO UPDATE SET resource_id = EXCLUDED.resource_id`,
+    [sourceId, channelId],
+  )
+}
+
 /* --------------------------- Карточки обзора ----------------------------- */
 
 export interface SourceCardStats {

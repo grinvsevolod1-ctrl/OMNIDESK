@@ -1,9 +1,11 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { Plus } from 'lucide-react'
 import useSWR, { useSWRConfig } from 'swr'
 import { getSourcesOverviewAction } from '@/app/actions/sources'
 import { ManageGroupsDialog } from '@/components/admin/dashboard/source-groups/manage-groups-dialog'
+import { CreateSourceDialog } from '@/components/admin/sources/create-source-dialog'
 import {
   rangeFromPreset,
   type ChannelOption,
@@ -39,6 +41,7 @@ export function OverviewTab({
 }) {
   const [preset, setPreset] = useState<Exclude<Preset, 'custom'>>('7d')
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
 
   const range = useMemo(() => {
     const { from, to } = rangeFromPreset(preset)
@@ -116,8 +119,27 @@ export function OverviewTab({
             </Button>
           ))}
         </div>
-        <ManageGroupsDialog groups={groups} channels={channels} />
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            className="h-8 gap-1.5"
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus className="size-4" /> Новый источник
+          </Button>
+          <ManageGroupsDialog groups={groups} channels={channels} />
+        </div>
       </div>
+
+      <CreateSourceDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={() => {
+          void mutate(
+            (key) => Array.isArray(key) && key[0] === 'sources-overview',
+          )
+        }}
+      />
 
       {/* Сетка источников */}
       {overview.items.length === 0 && !unassigned ? (

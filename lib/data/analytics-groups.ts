@@ -102,14 +102,15 @@ async function setGroupChannels(
 export async function createSourceGroup(
   name: string,
   channelIds: string[],
+  description = '',
 ): Promise<SourceGroup> {
   // Creating a source in «Обзор» creates the SAME finance_resource that «Учёт»
   // uses — one entity, visible in both places. Currency is unified to USD
   // (the canonical default: «Учёт» forces USD and the DB default is USD too).
   const rows = await query<{ id: string }>(
     `INSERT INTO finance_resources (name, description, currency)
-     VALUES ($1, '', 'USD') RETURNING id`,
-    [name.trim() || 'Источник'],
+     VALUES ($1, $2, 'USD') RETURNING id`,
+    [name.trim() || 'Источник', description.trim()],
   )
   const id = rows[0].id
   await setGroupChannels(id, channelIds)

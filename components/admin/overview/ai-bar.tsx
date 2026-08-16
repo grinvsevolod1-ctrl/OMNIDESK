@@ -28,6 +28,23 @@ type BarState =
   | { phase: 'error'; message: string }
   | { phase: 'applied'; message: string }
 
+/**
+ * Клиентский кэш повторных идентичных вопросов (module-scope, живёт до
+ * перезагрузки страницы). Кэшируются только read-only ответы — «confirm»
+ * (мутации) всегда идут на сервер заново. TTL короткий: данные Обзора
+ * меняются, устаревший ответ хуже лишнего запроса.
+ */
+const ANSWER_CACHE_TTL_MS = 120_000
+const ANSWER_CACHE_MAX = 30
+const answerCache = new Map<
+  string,
+  { answer: OverviewAnswer; level: 1 | 2 | 3; at: number }
+>()
+
+function cacheKey(q: string, period: ParsedPeriod): string {
+  return `${q.toLowerCase().replace(/\s+/g, ' ').trim()}|${period.fromISO}|${period.toISO}`
+}
+
 export function AiBar({
   sources,
   fallbackPeriod,
@@ -58,6 +75,15 @@ export function AiBar({
       return
     }
 
+    // Кэш: тот же вопрос за тот же период — ответ без похода на сервер.
+    const key = cacheKey(q, fallbackPeriod)
+    const cached = answerCache.get(key)
+    if (cached && Date.now() - cached.at < ANSWER_CACHE_TTL_MS) {
+      setState({ phase: 'answer', answer: cached.answer, level: cached.level })
+      return
+    }
+    if (cached) answerCache.delete(key)
+
     setState({ phase: 'loading' })
     const res = await askOverviewAiAction(q, {
       fallbackPeriod,
@@ -73,6 +99,14 @@ export function AiBar({
       setState({ phase: 'idle' })
       return
     }
+    // Мутации (confirm) не кэшируем — их всегда решает сервер заново.
+    if (res.answer.kind !== 'confirm') {
+      if (answerCache.size >= ANSWER_CACHE_MAX) {
+        const oldest = answerCache.keys().next().value
+        if (oldest) answerCache.delete(oldest)
+      }
+      answerCache.set(key, { answer: res.answer, level: res.level, at: Date.now() })
+    }
     setState({ phase: 'answer', answer: res.answer, level: res.level })
   }
 
@@ -86,6 +120,8 @@ export function AiBar({
         : { phase: 'error', message: res.message },
     )
     if (res.ok) {
+      // Мутация меняет данные — все закэшированные ответы устарели.
+      answerCache.clear()
       setValue('')
       onDataChanged()
     }

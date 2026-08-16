@@ -74,6 +74,7 @@ import {
   StatDialog,
   TopupDialog,
 } from '@/components/admin/finance/finance-dialogs'
+import { CreateSourceDialog } from '@/components/admin/sources/create-source-dialog'
 import { useFinanceAdmin } from '@/components/admin/finance/use-finance-admin'
 import { ExpensesPanel } from '@/components/admin/finance/expenses-panel'
 import { AdsPanel } from '@/components/admin/finance/ads-panel'
@@ -180,15 +181,9 @@ export function FinanceAdmin({
               </Button>
             }
           />
-          <ResourceDialog
-            state={resourceDialog}
-            pending={pending}
-            onClose={() => setResourceDialog(null)}
-            onSubmit={(fd) =>
-              run(() => createResourceAction(fd), () => setResourceDialog(null))
-            }
-            onUpdate={() => {}}
-            onDelete={() => {}}
+          <CreateSourceDialog
+            open={resourceDialog?.mode === 'create'}
+            onOpenChange={(o) => !o && setResourceDialog(null)}
           />
         </div>
       </RatesContext.Provider>
@@ -212,15 +207,9 @@ export function FinanceAdmin({
             }}
             onCreateResource={() => setResourceDialog({ mode: 'create' })}
           />
-          <ResourceDialog
-            state={resourceDialog}
-            pending={pending}
-            onClose={() => setResourceDialog(null)}
-            onSubmit={(fd) =>
-              run(() => createResourceAction(fd), () => setResourceDialog(null))
-            }
-            onUpdate={() => {}}
-            onDelete={() => {}}
+          <CreateSourceDialog
+            open={resourceDialog?.mode === 'create'}
+            onOpenChange={(o) => !o && setResourceDialog(null)}
           />
         </div>
       </RatesContext.Provider>

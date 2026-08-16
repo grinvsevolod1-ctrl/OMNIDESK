@@ -10,10 +10,13 @@ import { revalidatePath } from 'next/cache'
 import { invalidateAnalytics } from '@/lib/analytics-cache'
 import { requireAdmin } from '@/lib/auth'
 import {
+  assignChannelSource,
   createSource,
   deleteSource,
   getSourceDetail,
   getSourcesOverview,
+  listPanelChannels,
+  listSources,
   updateSource,
   type SourceDetail,
   type SourcesOverview,
@@ -35,12 +38,13 @@ function revalidateSourceSurfaces(): void {
 export async function createSourceAction(
   name: string,
   channelIds: string[] = [],
+  description = '',
 ): Promise<SourceActionResult> {
   await requireAdmin()
   const clean = name.trim()
   if (!clean) return { ok: false, message: 'Введите название источника.' }
   try {
-    const created = await createSource(clean, channelIds)
+    const created = await createSource(clean, channelIds, description)
     revalidateSourceSurfaces()
     return { ok: true, message: 'Источник создан.', id: created.id }
   } catch (err) {
@@ -92,6 +96,86 @@ export async function deleteSourceAction(
   } catch (err) {
     console.error('[sources] delete failed:', err)
     return { ok: false, message: 'Не удалось удалить источник.' }
+  }
+}
+
+/* --------------------- Источник отдельного канала ------------------------ */
+
+export interface SourceSelectItem {
+  id: string
+  name: string
+  channelIds: string[]
+}
+
+export interface ChannelSelectItem {
+  id: string
+  name: string
+  type: string
+  /** Источник, которому канал принадлежит сейчас (null — свободен). */
+  sourceId: string | null
+}
+
+/**
+ * Источники + все панельные каналы для селекта «Источник» в настройках
+ * канала и единого диалога создания. SWR на клиенте дедуплицирует вызов
+ * между строками таблицы аккаунтов.
+ */
+export async function listSourcesForSelectAction(): Promise<{
+  ok: boolean
+  data?: { sources: SourceSelectItem[]; channels: ChannelSelectItem[] }
+  message?: string
+}> {
+  await requireAdmin()
+  try {
+    const [sources, channelRows] = await Promise.all([
+      listSources(),
+      listPanelChannels(),
+    ])
+    const ownerByChannel = new Map<string, string>()
+    for (const s of sources)
+      for (const c of s.channels) ownerByChannel.set(c.id, s.id)
+    return {
+      ok: true,
+      data: {
+        sources: sources.map((s) => ({
+          id: s.id,
+          name: s.name,
+          channelIds: s.channels.map((c) => c.id),
+        })),
+        channels: channelRows.map((c) => ({
+          id: c.id,
+          name: c.name,
+          type: c.type,
+          sourceId: ownerByChannel.get(c.id) ?? null,
+        })),
+      },
+    }
+  } catch (err) {
+    console.error('[sources] list for select failed:', err)
+    return { ok: false, message: 'Не удалось загрузить источники.' }
+  }
+}
+
+/** Привязать канал к источнику (null — отвязать). Канал ∈ максимум одному. */
+export async function assignChannelSourceAction(
+  channelId: string,
+  sourceId: string | null,
+): Promise<SourceActionResult> {
+  await requireAdmin()
+  if (!channelId) return { ok: false, message: 'Канал не найден.' }
+  try {
+    await assignChannelSource(channelId, sourceId)
+    revalidateSourceSurfaces()
+    revalidatePath('/admin/accounts')
+    return {
+      ok: true,
+      message: sourceId
+        ? 'Канал привязан к источнику.'
+        : 'Канал отвязан от источника.',
+    }
+  } catch (err) {
+    console.error('[sources] assign channel failed:', err)
+    return { ok: false, message: 'Не удалось изменить источник канала.' }
   }
 }
 
