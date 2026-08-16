@@ -31,6 +31,15 @@ export function normalizeQuery(text: string): string {
     .trim()
 }
 
+/**
+ * Границы слова для кириллицы: JS-`\b` опирается на `\w` (только латиница),
+ * поэтому `/\bсегодня\b/` НИКОГДА не совпадает. Используем lookaround
+ * по кириллическим буквам.
+ */
+function cyrWord(pattern: string): RegExp {
+  return new RegExp(`(?<![а-яё])(?:${pattern})(?![а-яё])`)
+}
+
 function dayStart(d: Date): Date {
   const x = new Date(d)
   x.setHours(0, 0, 0, 0)
@@ -54,9 +63,9 @@ function makePeriod(daysBack: number, label: string, now: Date): ParsedPeriod {
 export function parsePeriod(text: string, now = new Date()): ParsedPeriod | null {
   const q = normalizeQuery(text)
 
-  if (/\bсегодня\b/.test(q)) return makePeriod(0, 'сегодня', now)
+  if (cyrWord('сегодня').test(q)) return makePeriod(0, 'сегодня', now)
 
-  if (/\bвчера\b/.test(q)) {
+  if (cyrWord('вчера').test(q)) {
     const todayStart = dayStart(now)
     const from = new Date(todayStart)
     from.setDate(from.getDate() - 1)
@@ -67,15 +76,17 @@ export function parsePeriod(text: string, now = new Date()): ParsedPeriod | null
     }
   }
 
-  const nDays = q.match(/\b(?:за|последние)\s+(\d{1,3})\s*(?:дней|дня|день|д)\b/)
+  const nDays = q.match(
+    /(?<![а-яё])(?:за|последние)\s+(\d{1,3})\s*(?:дней|дня|день|д)(?![а-яё])/,
+  )
   if (nDays) {
     const n = Math.min(365, Math.max(1, Number(nDays[1])))
     return makePeriod(n - 1, `за ${n} дн.`, now)
   }
 
-  if (/\bнедел/.test(q)) return makePeriod(6, 'за неделю', now)
-  if (/\bмесяц/.test(q)) return makePeriod(29, 'за месяц', now)
-  if (/\bквартал|90 дней\b/.test(q)) return makePeriod(89, 'за 90 дней', now)
+  if (/(?<![а-яё])недел/.test(q)) return makePeriod(6, 'за неделю', now)
+  if (/(?<![а-яё])месяц/.test(q)) return makePeriod(29, 'за месяц', now)
+  if (/(?<![а-яё])квартал|90 дней/.test(q)) return makePeriod(89, 'за 90 дней', now)
 
   return null
 }
@@ -176,7 +187,7 @@ export function classifyOverviewQuery(text: string): OverviewClassification {
 
   // Мутационные глаголы всегда требуют модели (подтверждаемые действия):
   // детерминированный уровень отвечает только на чтение.
-  if (/\b(переимен|удали|создай|добавь|перенеси|отвяжи|привяжи|измени)/.test(q)) {
+  if (/(?<![а-яё])(?:переимен|удали|создай|добавь|перенеси|отвяжи|привяжи|измени)/.test(q)) {
     return { intent: bestIntent, confident: false }
   }
 

@@ -351,9 +351,9 @@ lib/
                          readiness) с single-flight + dirty-флагом: сообщение
                          клиента, пришедшее во время in-flight генерации, НЕ
                          теряется — по завершении запускается один повторный
-                         проход со свежей историей. Оба рантайма (livechat
+                         проход со с��ежей историей. Оба рантайма (livechat
                          lib/autopilot/runtime.ts и worker
-                         autopilot-ai-lead.ts) — тонкие адаптеры над ним; НЕ
+                         autopilot-ai-lead.ts) — тонкие адаптеры над ним; ��Е
                          дублируй пайплайн в рантаймах. In-flight
                          реестр module-scoped — процесс с AI-lead должен быть
                          ОДИН (pm2 cluster детектится и фейлится fail-fast,
@@ -364,6 +364,15 @@ lib/
                          при сигнале, НЕ на каждый inbound (латентность/цена)
   ai-console/            Admin AI: run-assistant.ts (30+ инструментов + промпт),
                          assistant.ts (типы действий/ревертов)
+  ai-overview/           ИИ-строка вкладки «Обзор» — каскад экономии токенов:
+                         уровень 1 (0 токенов: intents.ts регэксп-классификация
+                         + handlers.ts SQL-ответы; ВНИМАНИЕ: JS-`\b` не работает
+                         с кириллицей — только lookaround `(?<![а-яё])`) →
+                         уровень 2 (дешёвый LLM-роутер, generateObject, nano) →
+                         уровень 3 (агент с инструментами; мутации ТОЛЬКО через
+                         propose_* + подтверждение кнопкой, исполняет отдельный
+                         action confirmOverviewActionAction). Admin-видимая
+                         поверхность — в списке isolation.test.ts
   admin-console/         ОС-шелл-копилот всей админки (кроме god-панели)
   servers-console/       ассистент вкладки «Серверы» (флот, установка, SSH)
   console-core/          общее ядро разговорных консолей; stream-client.ts —
@@ -390,7 +399,11 @@ lib/
                          analytics.ts → analytics-admin.ts (админ-просмотр
                            диалогов БЕЗ manager-скоупа + активность
                            менеджеров; только за admin-гейтом),
-                           analytics-groups.ts (группы источников)
+                           analytics-groups.ts (CRUD источников; источник =
+                           finance_resource, миграция 060 — ЕДИНАЯ сущность
+                           «Обзора» и «Учёта», валюта по умолчанию USD),
+                           sources.ts (агрегаты вкладки «Обзор»: люди/воронка/
+                           финансы по источникам + детали одного источника)
                          shared.ts → shared-converters.ts (row → domain
                            маппинги toManager/toChannel/toConversation/toMessage)
                          brain-loaders.ts — next-сторона BrainInputLoaders
@@ -707,7 +720,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 | Задача | Где смотреть |
 |---|---|
 | Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
-| Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
+| Изменить ��оведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
 | Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент co-pilot |
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |

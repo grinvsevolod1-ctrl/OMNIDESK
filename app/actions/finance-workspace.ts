@@ -51,7 +51,9 @@ export async function createResourceAction(
   if (!name) return { ok: false, message: 'Укажите название источника.' }
 
   await createFinanceResource({ name, description, currency })
+  // Источник — единая сущность «Обзора» и «Учёта»: обновляем обе вкладки.
   revalidatePath('/admin/finance')
+  revalidatePath('/admin')
   return { ok: true, message: 'Источник добавлен.' }
 }
 
@@ -72,17 +74,19 @@ export async function updateResourceAction(
 
   await updateFinanceResource(id, { name, description, currency, archived })
   revalidatePath('/admin/finance')
-  return { ok: true, message: 'Ресурс обновлён.' }
+  revalidatePath('/admin')
+  return { ok: true, message: 'Источник обновлён.' }
 }
 
 export async function deleteResourceAction(
   id: string,
 ): Promise<FinanceResult> {
   await requireAdmin()
-  if (!id) return { ok: false, message: 'Ресурс не найден.' }
+  if (!id) return { ok: false, message: 'Источник не найден.' }
   await deleteFinanceResource(id)
   revalidatePath('/admin/finance')
-  return { ok: true, message: 'Ресурс удалён вместе со всеми данными.' }
+  revalidatePath('/admin')
+  return { ok: true, message: 'Источник удалён вместе со всеми данными.' }
 }
 
 /* -------------------------------------------------------------- */
@@ -95,7 +99,7 @@ export async function createSectionAction(
 ): Promise<FinanceResult> {
   await requireAdmin()
   const clean = name.trim().slice(0, MAX_NAME)
-  if (!resourceId) return { ok: false, message: 'Ресурс не найден.' }
+  if (!resourceId) return { ok: false, message: 'Источник не найден.' }
   if (!clean) return { ok: false, message: 'Укажите название вкладки.' }
   await createFinanceSection({ resourceId, name: clean })
   revalidatePath('/admin/finance')

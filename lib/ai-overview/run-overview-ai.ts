@@ -11,8 +11,8 @@ import 'server-only'
  *     возвращают компактные агрегаты; изменения — ТОЛЬКО через propose_*
  *     (pendingAction подтверждается кнопкой, исполняется отдельным action).
  *
- * ВАЖНО (изоляция god-панели, AGENTS.md §4): модуль НЕ импортирует god-gate,
- * god-sites, god-report, secret-* — закреплено в lib/ai/isolation.test.ts.
+ * ВАЖНО (AGENTS.md §4): модуль — admin-видимая поверхность и не импортирует
+ * скрытые подсистемы владельца; закреплено в lib/ai/isolation.test.ts.
  */
 
 import { generateObject, generateText, stepCountIs, tool } from 'ai'

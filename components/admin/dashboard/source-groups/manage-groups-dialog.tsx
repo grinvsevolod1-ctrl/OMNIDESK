@@ -126,8 +126,9 @@ export function ManageGroupsDialog({
         <DialogHeader className="border-b border-border px-5 py-4">
           <DialogTitle>Источники</DialogTitle>
           <DialogDescription>
-            Объедините каналы одного сайта в источник. Группировка влияет только
-            на отчёт в обзоре и не затрагивает входящие.
+            Источник объединяет каналы одного сайта или кампании. Это единая
+            сущность для всей панели: статистика в «Обзоре» и финансы в «Учёте».
+            Входящие сообщения группировка не затрагивает.
           </DialogDescription>
         </DialogHeader>
 

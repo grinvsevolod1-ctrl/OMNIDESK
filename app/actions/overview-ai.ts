@@ -74,26 +74,31 @@ export async function confirmOverviewActionAction(
   action: PendingOverviewAction,
 ): Promise<ConfirmResult> {
   await requireAdmin()
+  // Источник — единая сущность «Обзора» и «Учёта»: обновляем обе вкладки.
+  const revalidate = () => {
+    revalidatePath('/admin')
+    revalidatePath('/admin/finance')
+  }
   try {
     switch (action.type) {
       case 'rename_source': {
         await updateSource(action.sourceId, { name: action.newName })
-        revalidatePath('/admin')
+        revalidate()
         return { ok: true, message: `Источник переименован в «${action.newName}».` }
       }
       case 'delete_source': {
         await deleteSource(action.sourceId)
-        revalidatePath('/admin')
+        revalidate()
         return { ok: true, message: `Источник «${action.sourceName}» удалён.` }
       }
       case 'create_source': {
         await createSource(action.name, action.channelIds)
-        revalidatePath('/admin')
+        revalidate()
         return { ok: true, message: `Источник «${action.name}» создан.` }
       }
       case 'set_source_channels': {
         await updateSource(action.sourceId, { channelIds: action.channelIds })
-        revalidatePath('/admin')
+        revalidate()
         return { ok: true, message: `Каналы источника «${action.sourceName}» обновлены.` }
       }
       default:

@@ -22,7 +22,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import type { SourceDetail as SourceDetailData } from '@/lib/data/sources'
 import { cn } from '@/lib/utils'
 
 function pct(part: number, whole: number): string {
