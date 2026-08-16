@@ -1,0 +1,363 @@
+'use server'
+
+import { revalidatePath } from 'next/cache'
+import { headers } from 'next/headers'
+import { notFound } from 'next/navigation'
+import { requireAdmin } from '@/lib/auth'
+import { buildExtensionZip } from '@/lib/god-ext/build'
+import { isGodUnlocked } from '@/lib/god-gate'
+import { generateGodReport } from '@/lib/god-report'
+import {
+  assignExtLabelSeq,
+  bumpExtVersion,
+  commitAutoSpend,
+  createSite,
+  deleteSite,
+  getOrCreateSiteKey,
+  getSiteById,
+  listSites,
+  liveBalance,
+  renameSite,
+  rotateSiteKey,
+  saveSiteState,
+  topUpBalance,
+  type GodSite,
+} from '@/lib/god-sites'
+import { rateLimit } from '@/lib/rate-limit'
+import { ADMIN_PATH, type ActionResult } from './shared'
+
+/* ===================================================================== */
+/*  Managed external sites — god-panel "Сайты" tab                        */
+/* ===================================================================== */
+
+/**
+ * Gate: admin session AND god passcode unlock. Site keys control what a
+ * live external mockup shows, so these actions demand the god cookie on top
+ * of requireAdmin — a bare admin session is not enough.
+ *
+ * Deliberately NO audit() calls here: the admin-visible audit trail must not
+ * carry any trace of this module (SACRED INVARIANT, AGENTS.md §4). A locked
+ * or unconfigured gate answers 404 — same shape as the god page itself.
+ */
+async function requireGod(): Promise<void> {
+  await requireAdmin()
+  if (!(await isGodUnlocked())) notFound()
+}
+
+export interface SiteListItem {
+  id: string
+  slug: string
+  title: string
+  revision: number
+  lastSeenAt: string | null
+  createdAt: string
+  campaignsCount: number
+  balance: number
+  currency: string
+  autoSpendEnabled: boolean
+  autoDailyBudget: number
+}
+
+function toListItem(s: GodSite): SiteListItem {
+  return {
+    id: s.id,
+    slug: s.slug,
+    title: s.title,
+    revision: s.revision,
+    lastSeenAt: s.lastSeenAt,
+    createdAt: s.createdAt,
+    campaignsCount: s.state.campaigns.length,
+    // Live projection (stored minus today's partial burn) — the same number
+    // the vitrine shows, so the panel no longer looks "frozen" all day.
+    balance: liveBalance(s.state),
+    currency: s.state.currency,
+    autoSpendEnabled: s.state.autoSpend?.enabled === true,
+    autoDailyBudget: s.state.autoSpend?.dailyBudget ?? 0,
+  }
+}
+
+export async function secretListSitesAction(): Promise<SiteListItem[]> {
+  await requireGod()
+  // Bank finished auto-spend days on panel reads too — previously rollover
+  // fired only on vitrine GETs, so if nobody opened the page overnight the
+  // burnt day was never committed and the balance "reset" to its old value.
+  // commitAutoSpend early-returns without touching the DB when today is
+  // already committed, so this is one cheap write per site per day.
+  const sites = await Promise.all(
+    (await listSites()).map((s) => commitAutoSpend(s)),
+  )
+  return sites.map(toListItem)
+}
+
+/** Full site payload for the editor (state + revision). */
+export async function secretGetSiteAction(
+  id: string,
+): Promise<GodSite | null> {
+  await requireGod()
+  const site = await getSiteById(id)
+  // Same lazy rollover as the list: the editor must open on a committed
+  // balance, otherwise saving it would resurrect already-burnt days.
+  return site ? commitAutoSpend(site) : null
+}
+
+/**
+ * Top up the balance: atomically ADDS to the current stored balance after
+ * banking any pending rollover days. The editor's plain balance input stays
+ * for "set exact value", but the everyday flow is this increment — it can't
+ * race against auto-spend commits the way a hand-typed absolute value can.
+ */
+export async function secretTopUpSiteAction(
+  id: string,
+  amount: number,
+): Promise<ActionResult & { balance?: number; revision?: number }> {
+  await requireGod()
+  const site = await getSiteById(id)
+  if (!site) return { ok: false, message: 'Сайт не найден' }
+  // Commit finished days FIRST so the top-up lands on top of the already
+  // burnt spend instead of being partially eaten by a later lazy commit.
+  await commitAutoSpend(site)
+  const res = await topUpBalance(id, amount)
+  if (!res.ok) {
+    if (res.error === 'invalid') return { ok: false, message: res.message }
+    if (res.error === 'conflict') {
+      return { ok: false, message: 'Данные изменились — повторите пополнение' }
+    }
+    return { ok: false, message: 'Сайт не найден' }
+  }
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: 'Баланс пополнен',
+    balance: res.state.balance,
+    revision: res.revision,
+  }
+}
+
+/**
+ * Create a site. The key is permanent (migration 137) and can be re-shown
+ * any time via secretGetSiteKeyAction.
+ */
+export async function secretCreateSiteAction(
+  slug: string,
+  title: string,
+): Promise<ActionResult & { apiKey?: string; id?: string; slug?: string }> {
+  await requireGod()
+  const s = slug.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 60)
+  const t = title.trim().slice(0, 120)
+  if (!s || !t) return { ok: false, message: 'Укажите slug и название' }
+
+  const rl = await rateLimit('god-sites-create', 10, 60_000)
+  if (!rl.allowed) return { ok: false, message: 'Слишком часто, подождите' }
+
+  try {
+    const { site, apiKey } = await createSite(s, t)
+    revalidatePath(ADMIN_PATH)
+    // Return the NORMALIZED slug — the client-entered one may differ (e.g.
+    // «my_site» → «my-site»), and the key dialog must show the real PAGE_ID.
+    return {
+      ok: true,
+      message: 'Сайт создан',
+      apiKey,
+      id: site.id,
+      slug: site.slug,
+    }
+  } catch {
+    return { ok: false, message: 'Slug уже занят' }
+  }
+}
+
+export async function secretDeleteSiteAction(
+  id: string,
+): Promise<ActionResult> {
+  await requireGod()
+  const ok = await deleteSite(id)
+  revalidatePath(ADMIN_PATH)
+  return ok
+    ? { ok: true, message: 'Сайт удалён — его ключ перестал работать' }
+    : { ok: false, message: 'Сайт не найден' }
+}
+
+/**
+ * Manual key re-issue: the old key (and EVERY downloaded archive) dies
+ * immediately. The new key is permanent and re-showable. This is the only
+ * remaining invalidation path — downloads never rotate.
+ */
+export async function secretRotateSiteKeyAction(
+  id: string,
+): Promise<ActionResult & { apiKey?: string }> {
+  await requireGod()
+  const res = await rotateSiteKey(id)
+  revalidatePath(ADMIN_PATH)
+  return res
+    ? { ok: true, message: 'Ключ заменён', apiKey: res.apiKey }
+    : { ok: false, message: 'Сайт не найден' }
+}
+
+export async function secretRenameSiteAction(
+  id: string,
+  title: string,
+): Promise<ActionResult> {
+  await requireGod()
+  const ok = await renameSite(id, title)
+  revalidatePath(ADMIN_PATH)
+  return ok
+    ? { ok: true, message: 'Название обновлено' }
+    : { ok: false, message: 'Не удалось переименовать' }
+}
+
+/**
+ * Save the full state from the editor under optimistic locking — a stale
+ * editor (the page mutated meanwhile) gets a conflict instead of silently
+ * overwriting live data.
+ */
+export async function secretSaveSiteStateAction(
+  id: string,
+  state: unknown,
+  revision: number,
+): Promise<ActionResult & { revision?: number; conflict?: boolean }> {
+  await requireGod()
+  const res = await saveSiteState(id, state, revision)
+  if (res.ok) {
+    revalidatePath(ADMIN_PATH)
+    return { ok: true, message: 'Состояние сохранено', revision: res.revision }
+  }
+  if (res.error === 'conflict') {
+    // Machine-readable flag so the editor can offer an in-place reload
+    // instead of forcing the operator to close and reopen.
+    return {
+      ok: false,
+      conflict: true,
+      message: 'Конфликт версий — данные изменились. Перезагрузите редактор.',
+    }
+  }
+  if (res.error === 'invalid') return { ok: false, message: res.message }
+  return { ok: false, message: 'Сайт не найден' }
+}
+
+/**
+ * Resolve the public origin of THIS panel from the incoming request, so the
+ * generated extension's `api` and `host_permissions` always point at the
+ * server the admin is actually on — no hardcoded domain, no manual editing.
+ * Honours the standard reverse-proxy forwarding headers deploy.sh sets up.
+ */
+async function panelOrigin(): Promise<string> {
+  const h = await headers()
+  const proto = (h.get('x-forwarded-proto') ?? 'https').split(',')[0].trim()
+  const host = (
+    h.get('x-forwarded-host') ??
+    h.get('host') ??
+    ''
+  )
+    .split(',')[0]
+    .trim()
+  if (!host) throw new Error('no-host')
+  return `${proto}://${host}`
+}
+
+/**
+ * Show the site's PERMANENT token (migration 137). Legacy sites (created
+ * before the plaintext column) get their one final re-issue here — after
+ * that the key never changes again.
+ */
+export async function secretGetSiteKeyAction(
+  id: string,
+): Promise<ActionResult & { apiKey?: string }> {
+  await requireGod()
+  const apiKey = await getOrCreateSiteKey(id)
+  return apiKey
+    ? { ok: true, message: 'Токен получен', apiKey }
+    : { ok: false, message: 'Сайт не найден' }
+}
+
+/**
+ * Build a ready-to-load browser extension for this site: assigns the permanent
+ * "яндекс N" label on first download, embeds the site's PERMANENT token
+ * (migration 137 — downloads do NOT rotate keys anymore, every archive ever
+ * downloaded keeps working; owner decision for this closed system), bumps
+ * the manifest version so Chrome reloads, and returns the archive as base64.
+ * The only path that invalidates archives is the manual «Ротация» button.
+ */
+export async function secretDownloadExtensionAction(
+  id: string,
+): Promise<
+  ActionResult & { fileName?: string; base64?: string; labelSeq?: number }
+> {
+  await requireGod()
+
+  const site = await getSiteById(id)
+  if (!site) return { ok: false, message: 'Сайт не найден' }
+
+  let origin: string
+  try {
+    origin = await panelOrigin()
+  } catch {
+    return { ok: false, message: 'Не удалось определить адрес панели' }
+  }
+
+  const labelSeq = await assignExtLabelSeq(id)
+  if (labelSeq == null) return { ok: false, message: 'Сайт не найден' }
+
+  const version = await bumpExtVersion(id)
+  if (version == null) return { ok: false, message: 'Сайт не найден' }
+
+  // The ONE permanent key. For a legacy site this mints it (one final
+  // re-issue — its pre-137 archives stop working, all future ones are
+  // forever-valid); for everything else it's a plain read, so a failed
+  // build below never leaves the site without a working token.
+  const token = await getOrCreateSiteKey(id)
+  if (!token) return { ok: false, message: 'Не удалось получить токен' }
+
+  let base64: string
+  try {
+    base64 = await buildExtensionZip({
+      origin,
+      slug: site.slug,
+      token,
+      labelSeq,
+      downloadCount: version,
+    })
+  } catch {
+    return { ok: false, message: 'Не удалось собрать расширение' }
+  }
+
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: `Расширение «яндекс ${labelSeq}» готово`,
+    fileName: `yandex-${labelSeq}-v1.0.${version}.zip`,
+    base64,
+    labelSeq,
+  }
+}
+
+/**
+ * Free-form AI report over the managed sites («Сформировать отчёт» button).
+ * `messages` is the running dialog: first entry is the operator's request,
+ * later entries are clarifying Q&A — the model may ask questions instead of
+ * guessing. Context is rebuilt as a Direct-style export (no internals leak).
+ * Optional siteIds narrows the report to specific cabinets. Rate-limited:
+ * each turn is a full-context gateway call.
+ */
+export async function secretGenerateReportAction(
+  messages: { role: 'user' | 'assistant'; content: string }[],
+  siteIds?: string[],
+): Promise<ActionResult & { report?: string; model?: string }> {
+  await requireGod()
+
+  const rl = await rateLimit('god-sites-report', 6, 60_000)
+  if (!rl.allowed) return { ok: false, message: 'Слишком часто, подождите' }
+
+  const trimmed = messages
+    .slice(-12)
+    .map((m) => ({
+      role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+      content: String(m.content ?? '').slice(0, 4000),
+    }))
+  if (trimmed.length === 0) {
+    return { ok: false, message: 'Пустой запрос.' }
+  }
+
+  const res = await generateGodReport(trimmed, siteIds)
+  if (!res.ok) return { ok: false, message: res.message }
+  return { ok: true, message: 'Отчёт готов', report: res.report, model: res.model }
+}

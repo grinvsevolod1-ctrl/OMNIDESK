@@ -1,0 +1,152 @@
+# =============================================================================
+# OMNIDESK — пример конфигурации nginx (reverse-proxy для Next.js)
+# =============================================================================
+#
+# ЗАЧЕМ ЭТО НУЖНО
+# ---------------
+# Симптомы «нет стилей + ошибка `Expected RSC response, got text/plain` +
+# `Failed to find Server Action`» почти всегда означают, что nginx и Node-сервер
+# рассинхронизированы:
+#   * nginx раздаёт /_next/static со СТАРОГО билда (или отдаёт 404), а Node
+#     крутит НОВЫЙ билд — хеши бандлов не совпадают;
+#   * либо приложение слушает не тот порт, и nginx отдаёт свою страницу ошибки
+#     (502/504) как text/plain там, где браузер ждёт RSC-payload.
+#
+# ПРАВИЛА, КОТОРЫЕ НЕЛЬЗЯ НАРУШАТЬ
+# --------------------------------
+#   1. Приложение слушает ПОРТ 3000 (см. ecosystem.config.js → args: 'start -p 3000').
+#      Не меняйте порт в одном месте, забыв про другое.
+#   2. Проще всего — проксировать ВСЁ на 127.0.0.1:3000, включая /_next/static,
+#      и не пытаться раздавать статику самим nginx. Тогда рассинхрона не бывает
+#      by design. Именно так сделано ниже (рекомендуется).
+#   3. На каждый деплой: `rm -rf .next && pnpm build && pm2 restart omnidesk-panel`.
+#      Никогда не оставляйте старый .next рядом с новым сервером.
+#   4. Не переписывайте заголовки RSC. nginx по умолчанию их не трогает — просто
+#      НЕ добавляйте `proxy_set_header` / `proxy_hide_header`, которые режут
+#      `RSC`, `Next-Router-Prefetch`, `Next-Router-State-Tree`, `Next-Action`.
+#
+# Скопируйте файл в /etc/nginx/sites-available/omnidesk, замените домен и путь,
+# затем: ln -s ... sites-enabled/ && nginx -t && systemctl reload nginx
+# =============================================================================
+
+upstream omnidesk_panel {
+    # Порт ДОЛЖЕН совпадать с ecosystem.config.js (start -p 3000).
+    server 127.0.0.1:3000;
+    keepalive 64;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name example.com;                 # ← ваш домен
+
+    # --- HTTPS-редирект (раскомментируйте после выпуска сертификата) ---------
+    # return 301 https://$host$request_uri;
+# }
+#
+# server {
+#     listen 443 ssl http2;
+#     listen [::]:443 ssl http2;
+#     server_name example.com;               # ← ваш домен
+#
+#     ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+#
+#     # --- TLS hardening -----------------------------------------------------
+#     # Только современные протоколы. TLSv1/TLSv1.1 устарели и небезопасны —
+#     # НЕ включайте их (POODLE/BEAST и слабые шифры).
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#     ssl_prefer_server_ciphers off;   # для TLS1.3 приоритет отдаёт клиент
+#     ssl_session_timeout 1d;
+#     ssl_session_cache shared:SSL:10m;
+#     ssl_session_tickets off;
+#
+#     # --- Security headers (defence-in-depth; дублирует next.config.mjs) -----
+#     # always — чтобы заголовки ставились и на ответах об ошибке (4xx/5xx).
+#     add_header Strict-Transport-Security "max-age=63072000" always;
+#     add_header X-Content-Type-Options "nosniff" always;
+#     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+#     add_header X-Frame-Options "SAMEORIGIN" always;
+#     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    # Не раскрывать версию nginx в заголовке Server и на страницах ошибок.
+    server_tokens off;
+
+    # --- Лимиты тела запроса (анти-DoS) --------------------------------------
+    # ВАЖНО: bodySizeLimit в next.config.mjs поднят до 210m ГЛОБАЛЬНО (иначе
+    # Server Actions режут любые видео). Из-за этого nginx — ЕДИНСТВЕННАЯ
+    # линия защиты от анонимных многомегабайтных POST (например, на /login).
+    # Поэтому: по умолчанию тело маленькое, большие загрузки разрешены ТОЛЬКО
+    # в авторизованных разделах с медиа (см. location'ы ниже).
+    client_max_body_size 1m;
+
+    # SSE (/api/stream) — realtime-лента. Никакого буфера и своего таймаута.
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    # -------------------------------------------------------------------------
+    # РЕКОМЕНДУЕМЫЙ ВАРИАНТ: проксируем ВСЁ на Node, включая /_next/static.
+    # Гарантирует, что статика и RSC всегда из одного и того же билда.
+    # -------------------------------------------------------------------------
+    location / {
+        proxy_pass http://omnidesk_panel;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        # ВАЖНО: не задаём вручную заголовки RSC/Next-* — nginx пробрасывает их
+        # как есть. Их перезапись ломает клиентскую навигацию и Server Actions.
+
+        proxy_buffering off;              # нужно для SSE и стриминга RSC
+        proxy_read_timeout 3600s;         # длинные SSE-соединения
+        proxy_send_timeout 3600s;
+    }
+
+    # Авторизованные разделы с загрузкой медиа (Server Actions шлют multipart
+    # POST на URL самой страницы). Только здесь разрешаем большие тела:
+    # видео-кружки, WhatsApp-видео (16 МБ), документы VK (до 200 МБ) + оверхед
+    # multipart. Аноним сюда физически может дойти, но Next-мидлварь отбросит
+    # его редиректом ДО чтения тела, а /login и весь остальной сайт остаются
+    # под общим лимитом 1m.
+    location ~ ^/(admin|app|curator)(/|$) {
+        client_max_body_size 210m;
+
+        proxy_pass http://omnidesk_panel;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # Иммутабельная статика Next кешируется браузером надолго — заголовки уже
+    # выставляет само приложение, здесь ничего добавлять не надо.
+    location /_next/static/ {
+        proxy_pass http://omnidesk_panel;
+        proxy_set_header Host $host;
+        proxy_buffering on;
+    }
+
+    # -------------------------------------------------------------------------
+    # АЛЬТЕРНАТИВА (только если очень нужно отдавать статику мимо Node):
+    # раздавайте /_next/static ФАЙЛАМИ ИЗ ТЕКУЩЕГО билда и пересинхронизируйте
+    # их на каждом деплое. Иначе будет рассинхрон и ошибки RSC.
+    #
+    # location /_next/static/ {
+    #     alias /var/www/omnidesk/.next/static/;   # ← путь к АКТУАЛЬНОМУ .next
+    #     access_log off;
+    #     expires 1y;
+    #     add_header Cache-Control "public, immutable";
+    #     try_files $uri @app;                     # фолбэк в приложение
+    # }
+    # location @app { proxy_pass http://omnidesk_panel; }
+    # -------------------------------------------------------------------------
+}

@@ -1,0 +1,104 @@
+import { clientIpFromHeaders } from './client-ip'
+import type { LivechatChannel } from './data'
+
+/**
+ * Helpers shared by the public live-chat endpoints
+ * (app/api/livechat/ingest + app/api/livechat/stream).
+ *
+ * The widget runs on the customer's own website (a different origin from the
+ * panel), so every response needs CORS headers. We reflect the request Origin
+ * when it matches the domain configured on the channel; otherwise we fall back
+ * to the configured domain. This keeps the API usable cross-origin while still
+ * being scoped to the site that owns the API key.
+ */
+
+/**
+ * Origin gate for the public live-chat endpoints.
+ *
+ * The widget is meant to run on any site that holds the channel's API key, so
+ * the key itself is the access boundary and every origin is allowed. This keeps
+ * installation friction-free: the same snippet works on any domain — production,
+ * staging, localhost — with no per-site configuration. The channel `domain`
+ * field is informational only (shown in the admin) and never blocks requests.
+ */
+export function originAllowed(
+  _origin: string | null,
+  _channel: Pick<LivechatChannel, 'domain'>,
+): boolean {
+  return true
+}
+
+/**
+ * Best-effort client IP from the proxy headers. Used as a rate-limit key, never
+ * trusted for anything security-critical.
+ *
+ * These headers can be spoofed unless the upstream proxy is trusted — which on
+ * a typical VPS reverse-proxy setup (nginx/Caddy/Cloudflare) it is, so we trust
+ * them by default. Deployments that expose Node directly (no trusted proxy) can
+ * set `TRUST_PROXY=false` to stop honouring forwarded headers, preventing a
+ * client from spoofing its IP to sidestep per-IP throttling.
+ */
+export function clientIp(headers: Headers): string {
+  // Delegates to the canonical extractor (lib/client-ip.ts) so the trust
+  // policy and IP validation cannot diverge between endpoints.
+  return clientIpFromHeaders(headers)
+}
+
+/** Standard 429 response for the live-chat endpoints. */
+export function tooMany(
+  cors: Record<string, string>,
+  retryAfterSec: number,
+): Response {
+  return new Response(
+    JSON.stringify({ ok: false, error: 'rate_limited' }),
+    {
+      status: 429,
+      headers: {
+        ...cors,
+        'content-type': 'application/json',
+        'retry-after': String(Math.max(1, retryAfterSec)),
+      },
+    },
+  )
+}
+
+/**
+ * Build CORS headers. We reflect the request Origin (required when the widget
+ * sends credentials) and vary on Origin so caches stay correct.
+ */
+export function corsHeaders(origin: string | null): Record<string, string> {
+  return {
+    'access-control-allow-origin': origin ?? '*',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-headers': 'content-type',
+    'access-control-max-age': '86400',
+    vary: 'Origin',
+  }
+}
+
+/** Standard preflight response for the live-chat endpoints. */
+export function preflight(origin: string | null): Response {
+  return new Response(null, { status: 204, headers: corsHeaders(origin) })
+}
+
+/** Normalize a visitor id into a stable, safe conversation handle. */
+export function visitorHandle(raw: unknown): string {
+  const s = String(raw ?? '').trim()
+  // Accept the widget-generated id (uuid-ish) but cap length and strip control
+  // chars so it's always a clean key.
+  const cleaned = s.replace(/[^\w.\-:]/g, '').slice(0, 80)
+  return cleaned || `anon-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** Clamp a visitor display name. */
+export function visitorName(raw: unknown): string {
+  const s = String(raw ?? '').trim()
+  return (s || 'Website visitor').slice(0, 80)
+}
+
+/** Clamp a message body. Returns null if empty. */
+export function messageBody(raw: unknown): string | null {
+  const s = String(raw ?? '').trim()
+  if (!s) return null
+  return s.slice(0, 4000)
+}
