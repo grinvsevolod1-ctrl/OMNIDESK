@@ -1,27 +1,27 @@
-import { ManagerLeaderboard } from '@/components/admin/dashboard/manager-leaderboard'
-import { SourceGroupsOverview } from '@/components/admin/dashboard/source-groups-overview'
+import { OverviewTab } from '@/components/admin/overview/overview-tab'
 import { Card } from '@/components/ui/card'
 import { requireAdmin } from '@/lib/auth'
 import { checkDbConnection } from '@/lib/db'
+import { getSourcesOverview } from '@/lib/data/sources'
 import { getWorkerHealth } from '@/lib/data/worker-health'
-import {
-  getManagerPerformance,
-  listAllChannels,
-  listSourceGroups,
-} from '@/lib/data'
+import { listAllChannels, listSourceGroups } from '@/lib/data'
 
 export default async function AdminOverviewPage() {
   await requireAdmin()
 
-  const [groups, channels, performance, db, worker] = await Promise.all([
+  // Начальный период — 7 дней. Клиент дальше сам меняет период через SWR.
+  const to = new Date()
+  to.setHours(24, 0, 0, 0)
+  const from = new Date(to)
+  from.setDate(to.getDate() - 7)
+
+  const [overview, groups, channels, db, worker] = await Promise.all([
+    getSourcesOverview(from.toISOString(), to.toISOString(), 0),
     listSourceGroups(),
     listAllChannels(),
-    getManagerPerformance(),
     checkDbConnection(),
     getWorkerHealth(),
   ])
-
-  const initialGroupId = groups[0]?.id ?? null
 
   const channelOptions = channels.map((c) => ({
     id: c.id,
@@ -31,7 +31,7 @@ export default async function AdminOverviewPage() {
   }))
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {!db.ok ? (
         <Card className="border-warning/30 bg-warning/5 p-4 text-sm text-warning">
           {db.message}
@@ -46,14 +46,11 @@ export default async function AdminOverviewPage() {
         </Card>
       ) : null}
 
-      <SourceGroupsOverview
+      <OverviewTab
+        initialOverview={overview}
         groups={groups}
         channels={channelOptions}
-        initialGroupId={initialGroupId}
       />
-
-      {/* Manager control stays at the bottom, as before. */}
-      <ManagerLeaderboard managers={performance} />
     </div>
   )
 }
