@@ -42,6 +42,15 @@ const GUARDED_FILES = [
   // It sits on the customer-reply hot path and must never reach into the
   // simulator or god panel either.
   'lib/data/ai-experiments.ts',
+  // ИИ-строка Обзора (каскад уровней 1→3) и её слой данных: admin-видимая
+  // поверхность, обязана оставаться слепой к god-панели и personal-аккаунтам.
+  'lib/ai-overview/types.ts',
+  'lib/ai-overview/intents.ts',
+  'lib/ai-overview/handlers.ts',
+  'lib/ai-overview/run-overview-ai.ts',
+  'lib/data/sources.ts',
+  'app/actions/overview-ai.ts',
+  'app/actions/sources.ts',
 ]
 
 // Any of these appearing in an import/require or path string means the module
@@ -231,6 +240,11 @@ describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
     'lib/servers-console/tools.ts',
     'lib/servers-console/prompt.ts',
     'lib/servers-console/intents.ts',
+    // ИИ-строка Обзора: system-промпты роутера и агента — русский текст,
+    // который модель читает дословно.
+    'lib/ai-overview/run-overview-ai.ts',
+    'lib/ai-overview/intents.ts',
+    'lib/ai-overview/handlers.ts',
   ]
   for (const rel of PROMPT_FILES) {
     it(`${rel} contains no replacement characters`, () => {

@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import useSWR from 'swr'
+import useSWR, { useSWRConfig } from 'swr'
 import { getSourcesOverviewAction } from '@/app/actions/sources'
 import { ManageGroupsDialog } from '@/components/admin/dashboard/source-groups/manage-groups-dialog'
 import {
@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import type { SourceGroup } from '@/lib/data'
 import type { SourcesOverview } from '@/lib/data/sources'
 import { cn } from '@/lib/utils'
+import { AiBar } from './ai-bar'
 import { SourceDetail, UnassignedDetail } from './source-detail'
 import { SourceGrid, UNASSIGNED_ID } from './source-grid'
 
@@ -64,9 +65,32 @@ export function OverviewTab({
   )
 
   const unassigned = overview.unassigned
+  const { mutate } = useSWRConfig()
+
+  const fallbackPeriod = useMemo(
+    () => ({
+      fromISO: range.fromISO,
+      toISO: range.toISO,
+      label:
+        PRESETS.find((p) => p.id === preset)?.label.toLowerCase() ?? 'за период',
+    }),
+    [range, preset],
+  )
 
   return (
     <div className="flex flex-col gap-4">
+      {/* ИИ-строка: вопросы своими словами, ответы структурными виджетами */}
+      <AiBar
+        sources={overview.items.map((s) => ({ id: s.id, name: s.name }))}
+        fallbackPeriod={fallbackPeriod}
+        onOpenSource={(id) => setActiveId(id)}
+        onDataChanged={() => {
+          void mutate(
+            (key) => Array.isArray(key) && key[0] === 'sources-overview',
+          )
+        }}
+      />
+
       {/* Шапка: период + управление источниками */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div
