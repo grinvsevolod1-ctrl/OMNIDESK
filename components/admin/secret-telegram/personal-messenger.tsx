@@ -13,14 +13,12 @@ import {
   Paperclip,
   Pencil,
   Reply,
-  Search,
   Send,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
   DropdownMenu,
@@ -30,11 +28,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
 import { usePersonalMessenger } from './use-personal-messenger'
-import {
-  DialogAvatar,
-  dayLabel,
-  formatDialogTime,
-} from './messenger-shared'
+import { DialogAvatar, dayLabel } from './messenger-shared'
+import { DialogList } from './dialog-list'
 import { MessageBubble } from './message-bubble'
 import type { PersonalMessage } from '@/app/actions/admin-secret/telegram-personal'
 
@@ -282,87 +277,19 @@ export function PersonalMessenger({
   return (
     <div className="flex h-full min-h-0 overflow-hidden rounded-xl border border-border bg-card">
       {/* Список диалогов */}
-      <aside
-        className={cn(
-          'flex w-full shrink-0 flex-col border-r border-border md:w-80',
-          m.peer && 'hidden md:flex',
-        )}
-      >
-        <div className="flex items-center gap-2 border-b border-border p-3">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 shrink-0"
-            onClick={onBack}
-            aria-label="К списку аккаунтов"
-          >
-            <ArrowLeft className="size-4" />
-          </Button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold">{accountName}</p>
-            <p className="text-xs text-muted-foreground">Личный аккаунт</p>
-          </div>
-        </div>
-        <div className="border-b border-border p-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Поиск диалогов"
-              className="h-9 pl-8"
-            />
-          </div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {m.dialogsLoading ? (
-            <div className="flex items-center justify-center py-10 text-muted-foreground">
-              <Loader2 className="size-5 animate-spin" />
-            </div>
-          ) : m.dialogsError ? (
-            <p className="p-4 text-sm text-muted-foreground">{m.dialogsError}</p>
-          ) : filteredDialogs.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">
-              {search ? 'Ничего не найдено.' : 'Диалогов пока нет.'}
-            </p>
-          ) : (
-            filteredDialogs.map((d) => (
-              <button
-                key={d.peerId}
-                type="button"
-                onClick={() => m.setPeer(d.peerId)}
-                className={cn(
-                  'flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/60',
-                  m.peer === d.peerId && 'bg-muted',
-                )}
-              >
-                <DialogAvatar channelId={channelId} dialog={d} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <p className="truncate text-sm font-medium">{d.title}</p>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {formatDialogTime(d.lastMessageAt)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-xs text-muted-foreground">
-                      {d.lastOutgoing && (
-                        <span className="mr-1 text-muted-foreground/70">Вы:</span>
-                      )}
-                      {d.lastMessage || '—'}
-                    </p>
-                    {d.unreadCount > 0 && (
-                      <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">
-                        {d.unreadCount > 99 ? '99+' : d.unreadCount}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-      </aside>
+      <DialogList
+        channelId={channelId}
+        accountName={accountName}
+        onBack={onBack}
+        search={search}
+        onSearchChange={setSearch}
+        dialogs={filteredDialogs}
+        loading={m.dialogsLoading}
+        error={m.dialogsError}
+        activePeer={m.peer}
+        onSelectPeer={m.setPeer}
+        peerOpen={Boolean(m.peer)}
+      />
 
       {/* Тред */}
       <section className={cn('flex min-w-0 flex-1 flex-col', !m.peer && 'hidden md:flex')}>
