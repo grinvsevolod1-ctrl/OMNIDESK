@@ -99,14 +99,8 @@ function ChannelTable({ analytics }: { analytics: GroupAnalytics }) {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2.5">
-                    <span
-                      className={cn(
-                        'flex size-8 shrink-0 items-center justify-center rounded-lg text-primary-foreground',
-                        typeDot(c.type),
-                      )}
-                    >
-                      <Icon className="size-4" />
-                    </span>
+                    {/* Бренд-иконка без подложки: логотипы самодостаточны */}
+                    <Icon className="size-8" />
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{c.name}</p>
                       <p className="truncate text-xs text-muted-foreground">

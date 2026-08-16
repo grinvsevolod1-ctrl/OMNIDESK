@@ -6,7 +6,6 @@ import { Card } from '@/components/ui/card'
 import { requireAdmin } from '@/lib/auth'
 import { listAdminChannels, listAllProxies, listManagers } from '@/lib/data'
 import { isWorkerConfigured, workerHealthCached } from '@/lib/worker-client'
-import { cn } from '@/lib/utils'
 
 type Source = 'telegram' | 'vk' | 'max'
 
@@ -14,8 +13,6 @@ interface SourceMeta {
   title: string
   description: string
   icon: ComponentType<{ className?: string }>
-  /** Tailwind classes for the brand accent (icon tile). */
-  accent: string
   /** Telegram needs the worker online; token-based sources don't. */
   needsWorker: boolean
   steps: string[]
@@ -27,7 +24,6 @@ const META: Record<Source, SourceMeta> = {
     description:
       'Подключение личных аккаунтов Telegram по номеру телефона через MTProto. Для входа нужен запущенный процесс воркера на VPS.',
     icon: channelIcon('telegram'),
-    accent: 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400',
     needsWorker: true,
     steps: [
       'Выберите менеджера-владельца и, при необходимости, прокси (MTProto или без прокси).',
@@ -40,7 +36,6 @@ const META: Record<Source, SourceMeta> = {
     description:
       'Подключение сообществ VK через ключ доступа с правами на сообщения. Воркер не требуется — сообщения идут по Long Poll API.',
     icon: channelIcon('vk'),
-    accent: 'border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400',
     needsWorker: false,
     steps: [
       'В управлении сообществом VK → «Работа с API» создайте ключ доступа со scope messages и manage.',
@@ -53,7 +48,6 @@ const META: Record<Source, SourceMeta> = {
     description:
       'Подключение ботов мессенджера MAX по токену из @MasterBot. Воркер не требуется.',
     icon: channelIcon('max'),
-    accent: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
     needsWorker: false,
     steps: [
       'Создайте бота в @MasterBot и скопируйте выданный токен.',
@@ -112,14 +106,8 @@ export async function SourceAccountsPage({ source }: { source: Source }) {
       {/* Setup guide */}
       <Card className="p-5">
         <div className="flex items-start gap-3">
-          <div
-            className={cn(
-              'flex size-10 shrink-0 items-center justify-center rounded-xl border',
-              meta.accent,
-            )}
-          >
-            <Icon className="size-5" />
-          </div>
+          {/* Бренд-иконка без подложки: логотипы самодостаточны */}
+          <Icon className="size-9 shrink-0" />
           <div className="min-w-0">
             <h2 className="text-sm font-semibold">Как подключить {meta.title}</h2>
             <ol className="mt-2 flex flex-col gap-2">

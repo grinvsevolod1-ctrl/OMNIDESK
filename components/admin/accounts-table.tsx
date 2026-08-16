@@ -169,9 +169,8 @@ function AccountRow({
   return (
     <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
-          <Icon className="size-4" />
-        </div>
+        {/* Бренд-иконка без подложки: логотипы самодостаточны */}
+        <Icon className="size-8" />
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{channel.name}</p>
           <p className="truncate text-xs text-muted-foreground">

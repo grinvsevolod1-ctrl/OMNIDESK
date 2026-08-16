@@ -18,18 +18,6 @@ import { downloadText } from '@/lib/vault-utils'
 import { useLeadStatusMeta } from '@/components/dictionaries-provider'
 import type { ContactChannelGroup, ContactRecord } from '@/lib/types'
 import type { Dictionaries } from '@/lib/dictionaries'
-import { cn } from '@/lib/utils'
-
-/** Per-channel accent, mirroring the Accounts tab palette. */
-const CHANNEL_ACCENT: Record<string, string> = {
-  telegram: 'border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400',
-  whatsapp:
-    'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  vk: 'border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400',
-  max: 'border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400',
-  livechat:
-    'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-}
 
 function csvCell(value: string): string {
   const v = value ?? ''
@@ -101,15 +89,8 @@ export function ContactsAdmin({ groups }: { groups: ContactChannelGroup[] }) {
                 className="flex flex-col gap-4 p-5 transition-colors hover:border-primary/40"
               >
                 <div className="flex items-center justify-between">
-                  <div
-                    className={cn(
-                      'flex size-11 items-center justify-center rounded-xl border',
-                      CHANNEL_ACCENT[group.channelType] ??
-                        'border-border bg-muted text-foreground',
-                    )}
-                  >
-                    <Icon className="size-6" />
-                  </div>
+                  {/* Бренд-иконка без подложки: логотипы самодостаточны */}
+                  <Icon className="size-9" />
                   <span className="text-2xl font-semibold tabular-nums">
                     {group.count}
                   </span>

@@ -106,9 +106,8 @@ export function ChannelCard({ channel }: { channel: Channel }) {
     <Card className="p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
-            <ChannelIcon type={channel.type} className="size-5" />
-          </div>
+          {/* Бренд-иконка без подложки: логотипы самодостаточны */}
+          <ChannelIcon type={channel.type} className="size-9" />
           <div className="min-w-0">
             <p className="truncate text-sm font-medium">{channel.name}</p>
             <p className="truncate text-xs text-muted-foreground">
