@@ -1,29 +1,16 @@
 import Link from 'next/link'
-import { CheckCheck, Inbox, MessageCircle, Plug, Plus, Users } from 'lucide-react'
-import { channelIcon } from '@/components/channel-icons'
+import { CheckCheck, Inbox, MessageCircle, Users } from 'lucide-react'
 import { ManagerActivityChart } from '@/components/analytics/manager-activity-chart'
+import { ChannelsOverview } from '@/components/manager/channels-overview'
 import { LeadStatusBoard } from '@/components/manager/lead-status-board'
-import {
-  EmptyState,
-  PageHeader,
-  StatCard,
-  StatusBadge,
-} from '@/components/page-parts'
+import { PageHeader, StatCard } from '@/components/page-parts'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { requireManager } from '@/lib/auth'
-import { getLeadAnalytics, getManagerStats, listChannels } from '@/lib/data'
-import { getChannelMeta } from '@/lib/types'
-
-
+import { getLeadAnalytics } from '@/lib/data'
 
 export default async function ManagerOverviewPage() {
   const session = await requireManager()
-  const [stats, channels, leads] = await Promise.all([
-    getManagerStats(session.sub),
-    listChannels(session.sub),
-    getLeadAnalytics(session.sub),
-  ])
+  const leads = await getLeadAnalytics(session.sub)
   const firstName = session.name.split(' ')[0]
 
   return (
@@ -84,66 +71,8 @@ export default async function ManagerOverviewPage() {
         total={leads.totalLeads}
       />
 
-      {/* Channels */}
-      <Card>
-        <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <div className="flex items-center gap-2">
-            <h2 className="font-medium">Ваши каналы</h2>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-              {stats.connectedChannels}/{stats.totalChannels} подключено
-            </span>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            render={<Link href="/app/connections">Управление</Link>}
-          />
-        </div>
-        {channels.length === 0 ? (
-          <div className="p-5">
-            <EmptyState
-              icon={Plug}
-              title="Каналов пока нет"
-              description="Подключите Telegram, WhatsApp или виджет живого чата на сайте, чтобы начать получать сообщения."
-              action={
-                <Button
-                  render={
-                    <Link href="/app/connections">
-                      <Plus className="size-4" />
-                      Добавить первый канал
-                    </Link>
-                  }
-                />
-              }
-            />
-          </div>
-        ) : (
-          <div className="divide-y divide-border">
-            {channels.map((c) => {
-              const Icon = channelIcon(c.type)
-              return (
-                <div
-                  key={c.id}
-                  className="flex items-center justify-between gap-3 px-5 py-3"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
-                      <Icon className="size-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{c.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {getChannelMeta(c.type).label} · {c.detail}
-                      </p>
-                    </div>
-                  </div>
-                  <StatusBadge status={c.status} />
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </Card>
+      {/* Обзор каналов: трафик за период, вид карточки/список (запоминается) */}
+      <ChannelsOverview />
     </div>
   )
 }

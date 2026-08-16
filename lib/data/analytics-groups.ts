@@ -563,3 +563,155 @@ export const getManagerActivityAnalytics = cachedAnalytics(
   getManagerActivityAnalyticsUncached,
   ['getManagerActivityAnalytics'],
 )
+
+/* --------------------- Обзор каналов менеджера --------------------------- */
+
+export interface ManagerChannelOverviewItem {
+  id: string
+  name: string
+  type: ChannelType
+  status: ChannelStatus
+  detail: string
+  /** Написало людей за период (по первому входящему — человек один раз). */
+  people: number
+  /** Из них передано (текущий статус диалога). */
+  transferred: number
+  /** Люди по дням (плотный ряд, старые -> новые) для спарклайна. */
+  spark: number[]
+}
+
+export interface ManagerChannelsOverview {
+  from: string
+  to: string
+  items: ManagerChannelOverviewItem[]
+  totals: { people: number; transferred: number }
+}
+
+/** Число локальных суток в [from, to), максимум 92 (как в Обзоре админа). */
+function overviewDayCount(fromISO: string, toISO: string): number {
+  const ms = new Date(toISO).getTime() - new Date(fromISO).getTime()
+  return Math.max(1, Math.min(92, Math.ceil(ms / 86_400_000)))
+}
+
+/**
+ * Обзор каналов ОДНОГО менеджера за период — менеджерский аналог сетки
+ * источников в админском Обзоре, но по его логической цепочке: канал →
+ * трафик → передано. Денег здесь нет (финансы — зона администратора).
+ * Ровно 3 SQL-запроса, без N+1.
+ */
+async function getManagerChannelsOverviewUncached(
+  managerId: string,
+  fromISO: string,
+  toISO: string,
+  tzOffsetMinutes = 0,
+): Promise<ManagerChannelsOverview> {
+  const off = Number.isFinite(tzOffsetMinutes) ? tzOffsetMinutes : 0
+  const sparkDays = overviewDayCount(fromISO, toISO)
+  const localDayExpr = `to_char((f.first_at AT TIME ZONE 'UTC') - make_interval(mins => $4::int), 'YYYY-MM-DD')`
+
+  // Первый входящий каждого диалога менеджера — человек считается один раз.
+  const FIRST_CONTACT = `
+    SELECT c.id, c.channel_id, c.status,
+           MIN(m.created_at) FILTER (WHERE m.direction = 'in') AS first_at
+      FROM conversations c
+      JOIN messages m ON m.conversation_id = c.id
+     WHERE c.manager_id = $1
+     GROUP BY c.id, c.channel_id, c.status`
+
+  const [channels, trafficRows, sparkRows] = await Promise.all([
+    query<{
+      id: string
+      name: string
+      type: ChannelType
+      status: ChannelStatus
+      detail: string
+    }>(
+      `SELECT id, name, type, status, COALESCE(detail, '') AS detail
+         FROM channels
+        WHERE manager_id = $1 AND type <> 'telegram_personal'
+        ORDER BY name ASC`,
+      [managerId],
+    ),
+    query<{ channel_id: string; people: string; transferred: string }>(
+      `SELECT f.channel_id,
+              count(*)::int AS people,
+              count(*) FILTER (WHERE f.status = 'transferred')::int AS transferred
+         FROM (${FIRST_CONTACT}) f
+        WHERE f.first_at >= $2 AND f.first_at < $3
+        GROUP BY f.channel_id`,
+      [managerId, fromISO, toISO],
+    ),
+    query<{ channel_id: string; d: string; people: string }>(
+      `SELECT f.channel_id, ${localDayExpr} AS d, count(*)::int AS people
+         FROM (${FIRST_CONTACT}) f
+        WHERE f.first_at >= $2 AND f.first_at < $3
+        GROUP BY f.channel_id, 2`,
+      [managerId, fromISO, toISO, off],
+    ),
+  ])
+
+  // Ось локальных суток — та же математика, что в админском Обзоре.
+  const dayKeys: string[] = []
+  {
+    const startShift = new Date(new Date(fromISO).getTime() - off * 60000)
+    let cursor = new Date(
+      Date.UTC(
+        startShift.getUTCFullYear(),
+        startShift.getUTCMonth(),
+        startShift.getUTCDate(),
+      ),
+    )
+    for (let i = 0; i < sparkDays; i++) {
+      dayKeys.push(cursor.toISOString().slice(0, 10))
+      cursor = new Date(cursor)
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+    }
+  }
+
+  const traffic = new Map(trafficRows.map((r) => [r.channel_id, r]))
+  const sparkByChannel = new Map<string, number[]>()
+  for (const r of sparkRows) {
+    let arr = sparkByChannel.get(r.channel_id)
+    if (!arr) {
+      arr = Array.from({ length: dayKeys.length }, () => 0)
+      sparkByChannel.set(r.channel_id, arr)
+    }
+    const idx = dayKeys.indexOf(r.d)
+    if (idx >= 0) arr[idx] = Number(r.people)
+  }
+
+  const items: ManagerChannelOverviewItem[] = channels.map((ch) => {
+    const t = traffic.get(ch.id)
+    return {
+      id: ch.id,
+      name: ch.name,
+      type: ch.type,
+      status: ch.status,
+      detail: ch.detail,
+      people: Number(t?.people ?? 0),
+      transferred: Number(t?.transferred ?? 0),
+      spark:
+        sparkByChannel.get(ch.id) ??
+        Array.from({ length: dayKeys.length }, () => 0),
+    }
+  })
+
+  // Активные сверху: по людям за период, затем по имени.
+  items.sort((a, b) => b.people - a.people || a.name.localeCompare(b.name, 'ru'))
+
+  return {
+    from: fromISO,
+    to: toISO,
+    items,
+    totals: {
+      people: items.reduce((s, i) => s + i.people, 0),
+      transferred: items.reduce((s, i) => s + i.transferred, 0),
+    },
+  }
+}
+
+/** Обзор каналов менеджера (time-cached). */
+export const getManagerChannelsOverview = cachedAnalytics(
+  getManagerChannelsOverviewUncached,
+  ['getManagerChannelsOverview'],
+)
