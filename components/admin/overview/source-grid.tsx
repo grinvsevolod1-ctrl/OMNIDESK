@@ -4,20 +4,11 @@ import { useMemo, useState } from 'react'
 import { ChevronDown, LayoutGrid, Rows3, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import type { SourceOverviewItem, SourcesOverview } from '@/lib/data/sources'
 import { cn } from '@/lib/utils'
 import { SourceCard, type CardVariant } from './source-card'
 import { SourceList } from './source-list'
 import type { OverviewView } from './use-overview-prefs'
-
-type SortKey = 'people' | 'transferred' | 'expense' | 'name'
 
 /** От скольких источников показывать поиск. */
 const SEARCH_THRESHOLD = 12
@@ -50,21 +41,17 @@ export function SourceGrid({
   onViewChange: (view: OverviewView) => void
 }) {
   const [q, setQ] = useState('')
-  const [sort, setSort] = useState<SortKey>('people')
   const [expanded, setExpanded] = useState(false)
 
+  // Всегда по трафику (людей написало) — самые живые источники сверху.
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase()
     let list = overview.items
     if (needle) {
       list = list.filter((s) => s.name.toLowerCase().includes(needle))
     }
-    const sorted = [...list].sort((a, b) => {
-      if (sort === 'name') return a.name.localeCompare(b.name, 'ru')
-      return b.stats[sort] - a.stats[sort]
-    })
-    return sorted
-  }, [overview.items, q, sort])
+    return [...list].sort((a, b) => b.stats.people - a.stats.people)
+  }, [overview.items, q])
 
   const un = overview.unassigned
 
@@ -109,20 +96,6 @@ export function SourceGrid({
               aria-label="Поиск источника"
             />
           </div>
-        ) : null}
-
-        {overview.items.length > 1 ? (
-          <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
-            <SelectTrigger className="h-8 w-40" aria-label="Сортировка">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="people">По трафику</SelectItem>
-              <SelectItem value="transferred">По лидам</SelectItem>
-              <SelectItem value="expense">По расходу</SelectItem>
-              <SelectItem value="name">По имени</SelectItem>
-            </SelectContent>
-          </Select>
         ) : null}
 
         {q && filtered.length === 0 ? (

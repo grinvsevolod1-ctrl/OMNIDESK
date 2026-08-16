@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
-import { Loader2, Pencil, Trash2, X } from 'lucide-react'
+import { ChevronRight, Loader2, Pencil, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   deleteSourceAction,
@@ -12,7 +12,7 @@ import {
   renameSourceAction,
 } from '@/app/actions/sources'
 import { Report } from '@/components/admin/dashboard/source-groups/group-report'
-import { typeDot } from '@/components/admin/dashboard/source-groups/shared'
+import { ChannelIcon } from '@/components/channel-icons'
 import { useChannelTypeLabels } from '@/components/dictionaries-provider'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -184,10 +184,7 @@ export function SourceDetail({
                   key={c.id}
                   className="flex items-center gap-1.5 text-xs text-muted-foreground"
                 >
-                  <span
-                    className={cn('size-2 rounded-full', typeDot(c.type))}
-                    aria-hidden
-                  />
+                  <ChannelIcon type={c.type} className="size-3.5" />
                   {TYPE_LABEL[c.type]}: {c.name}
                 </span>
               ))
@@ -263,13 +260,17 @@ export function SourceDetail({
         </div>
       </section>
 
-      {/* Деньги */}
-      <section aria-label="Финансы источника">
-        <h3 className="mb-2 text-sm font-medium text-muted-foreground">
-          Деньги{' '}
-          <span className="font-normal">
-            (то же, что во вкладке «Учёт» — это один источник)
-          </span>
+      {/* Расходы — ведут в «Учёт», где эти же цифры можно редактировать */}
+      <section aria-label="Расходы источника">
+        <h3 className="mb-2 text-sm font-medium">
+          <Link
+            href="/admin/finance"
+            className="group inline-flex items-center gap-1 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            title="Открыть в «Учёте»"
+          >
+            Расходы
+            <ChevronRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+          </Link>
         </h3>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-lg border border-border p-3">
@@ -366,7 +367,11 @@ export function UnassignedDetail({
   channels,
   onClose,
 }: {
-  channels: { id: string; name: string; type: Parameters<typeof typeDot>[0] }[]
+  channels: {
+    id: string
+    name: string
+    type: Parameters<typeof ChannelIcon>[0]['type']
+  }[]
   onClose: () => void
 }) {
   const TYPE_LABEL = useChannelTypeLabels()
@@ -392,7 +397,7 @@ export function UnassignedDetail({
       <ul className="flex flex-col gap-1.5">
         {channels.map((c) => (
           <li key={c.id} className="flex items-center gap-2 text-sm">
-            <span className={cn('size-2 rounded-full', typeDot(c.type))} aria-hidden />
+            <ChannelIcon type={c.type} className="size-3.5" />
             <span className="text-muted-foreground">{TYPE_LABEL[c.type]}:</span>
             {c.name}
           </li>

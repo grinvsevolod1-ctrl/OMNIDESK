@@ -2,7 +2,7 @@
 
 import { memo } from 'react'
 import { ChevronRight } from 'lucide-react'
-import { typeDot } from '@/components/admin/dashboard/source-groups/shared'
+import { ChannelIcon } from '@/components/channel-icons'
 import { DeltaBadge } from './delta-badge'
 import { cn } from '@/lib/utils'
 import type { SourceOverviewItem } from '@/lib/data/sources'
@@ -84,16 +84,17 @@ function Stat({
   )
 }
 
+/** Иконки мессенджеров источника + число привязанных каналов. */
 function ChannelDots({ item }: { item: SourceOverviewItem }) {
   const types = [...new Set(item.channels.map((c) => c.type))]
   return (
     <div className="flex items-center gap-1">
       {types.length > 0 ? (
         types.map((t) => (
-          <span
+          <ChannelIcon
             key={t}
-            className={cn('size-2 rounded-full', typeDot(t))}
-            aria-hidden
+            type={t}
+            className="size-3.5 text-muted-foreground"
           />
         ))
       ) : (
