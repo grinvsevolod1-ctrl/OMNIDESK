@@ -1,6 +1,8 @@
 import 'server-only'
 
+import { clientIpFromHeaders } from '@/lib/client-ip'
 import { getSiteBySlugAndKey, type GodSite } from '@/lib/god-sites'
+import { rateLimit } from '@/lib/rate-limit'
 
 /**
  * Shared plumbing for the read-only page3.html contract:
@@ -39,6 +41,35 @@ export function bare404(): Response {
 
 export function bare401(): Response {
   return new Response(null, { status: 401, headers: CORS_HEADERS })
+}
+
+/**
+ * Bare 429 with a Retry-After hint. Matches the fail-closed style of the other
+ * ext responses (no body, CORS headers so the browser can read the status).
+ */
+export function bare429(retryAfterSec: number): Response {
+  return new Response(null, {
+    status: 429,
+    headers: { ...CORS_HEADERS, 'Retry-After': String(retryAfterSec) },
+  })
+}
+
+/**
+ * Per-IP fixed-window guard for the public read-only ext endpoints. These are
+ * unauthenticated at the network edge (the token is checked afterwards), so a
+ * flood of requests — or a flood of SSE (re)connects — must not be able to
+ * exhaust DB/connection capacity. Returns the RateResult; callers reply with
+ * `bare429(retryAfterSec)` when `allowed` is false. Mirrors the livechat
+ * endpoints' IP guard so behaviour (and the shared Redis store) is consistent.
+ */
+export async function extIpGuard(
+  req: Request,
+  bucket: string,
+  limit: number,
+  windowMs: number,
+): Promise<{ allowed: boolean; retryAfterSec: number }> {
+  const ip = clientIpFromHeaders(req.headers)
+  return rateLimit(`ext:${bucket}:ip:${ip}`, limit, windowMs)
 }
 
 /** Bearer header first (plain GET), ?token= as the SSE fallback. */

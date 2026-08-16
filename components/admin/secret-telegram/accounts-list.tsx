@@ -380,11 +380,12 @@ function SettingsDialog({
   const [initialUsername, setInitialUsername] = useState('')
   const [pending, startTransition] = useTransition()
 
-  // Загружаем живой профиль из Telegram при открытии.
+  // Загружаем живой профиль из Telegram при открытии. Диалог пересоздаётся по
+  // key={`s-${account.id}`} на месте вызова, поэтому `loading` уже стартует с
+  // true при каждом новом аккаунте — синхронный setState в эффекте не нужен.
   useEffect(() => {
     if (!account) return
     let cancelled = false
-    setLoading(true)
     personalGetProfileAction(account.id).then((res) => {
       if (cancelled) return
       if (res.ok && res.profile) {
@@ -441,7 +442,7 @@ function SettingsDialog({
         <DialogHeader>
           <DialogTitle>Настройки Telegram</DialogTitle>
           <DialogDescription>
-            Изменяет профиль прямо в Telegram: имя, фамилию, @username и «о
+            Изменяет профиль прямо в Telegram: имя, фамилия, @username и «о
             себе».
           </DialogDescription>
         </DialogHeader>

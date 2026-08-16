@@ -5,11 +5,14 @@ import {
   stateForPeriod,
   type SitePeriod,
 } from '@/lib/god-sites'
+import { clientIpFromHeaders } from '@/lib/client-ip'
 import {
   bare401,
   bare404,
+  bare429,
   CORS_HEADERS,
   corsPreflight,
+  extIpGuard,
   readToken,
 } from '../shared'
 
@@ -29,6 +32,27 @@ export const dynamic = 'force-dynamic'
 const DB_POLL_MS = 3_000
 const HEARTBEAT_MS = 25_000
 
+/**
+ * Concurrent-connection caps for the SSE endpoint. Each open stream holds two
+ * live timers and polls the DB every DB_POLL_MS, so a client that opens many
+ * streams — or many clients behind one NAT — could pin server resources even
+ * while staying under the per-minute (re)connect rate limit. We track live
+ * streams in-process and refuse new ones past these ceilings. (In-process is
+ * the right scope: the resource being protected — timers and open sockets —
+ * lives in this process too.)
+ */
+const MAX_STREAMS_PER_IP = 20
+const MAX_STREAMS_PER_TOKEN = 40
+const ipStreams = new Map<string, number>()
+const tokenStreams = new Map<string, number>()
+
+function bump(map: Map<string, number>, key: string, delta: number): number {
+  const next = (map.get(key) ?? 0) + delta
+  if (next <= 0) map.delete(key)
+  else map.set(key, next)
+  return next
+}
+
 export async function GET(
   req: Request,
   ctx: { params: Promise<{ page: string }> },
@@ -36,6 +60,16 @@ export async function GET(
   const { page } = await ctx.params
   const token = readToken(req)
   if (!token) return bare401()
+
+  // Cap how often one IP can (re)open a stream (network blips / serverless
+  // timeouts stay well under 40/min), then refuse if this IP or token already
+  // holds too many concurrent streams.
+  const connGuard = await extIpGuard(req, 'stream', 40, 60_000)
+  if (!connGuard.allowed) return bare429(connGuard.retryAfterSec)
+
+  const ip = clientIpFromHeaders(req.headers)
+  if ((ipStreams.get(ip) ?? 0) >= MAX_STREAMS_PER_IP) return bare429(30)
+  if ((tokenStreams.get(token) ?? 0) >= MAX_STREAMS_PER_TOKEN) return bare429(30)
 
   const resolved = await getSiteBySlugAndKey(page, token, { touch: true })
   if (!resolved) return bare404()
@@ -50,6 +84,13 @@ export async function GET(
 
   const stream = new ReadableStream({
     start(controller) {
+      // Count this live stream against both caps; `cleanup` releases exactly
+      // once (guarded by `released`) whether the client aborts, the key is
+      // revoked, or a controller error fires.
+      bump(ipStreams, ip, +1)
+      bump(tokenStreams, token, +1)
+      let released = false
+
       const send = (payload: unknown) => {
         controller.enqueue(
           enc.encode(`event: state\ndata: ${JSON.stringify(payload)}\n\n`),
@@ -94,6 +135,11 @@ export async function GET(
       const cleanup = () => {
         clearInterval(poll)
         clearInterval(heartbeat)
+        if (!released) {
+          released = true
+          bump(ipStreams, ip, -1)
+          bump(tokenStreams, token, -1)
+        }
       }
       req.signal.addEventListener('abort', () => {
         cleanup()

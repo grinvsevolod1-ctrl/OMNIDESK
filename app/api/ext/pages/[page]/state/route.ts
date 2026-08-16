@@ -7,8 +7,10 @@ import {
 import {
   bare401,
   bare404,
+  bare429,
   CORS_HEADERS,
   corsPreflight,
+  extIpGuard,
   resolveSite,
 } from '../shared'
 
@@ -24,6 +26,12 @@ export async function GET(
   req: Request,
   ctx: { params: Promise<{ page: string }> },
 ): Promise<Response> {
+  // Per-IP flood guard: witrines poll this a few times a minute, so 120/min
+  // is generous for legitimate use while capping abusive polling that would
+  // otherwise hammer the DB (each hit resolves the site + rolls auto-spend).
+  const guard = await extIpGuard(req, 'state', 120, 60_000)
+  if (!guard.allowed) return bare429(guard.retryAfterSec)
+
   const resolved = await resolveSite(req, ctx.params, { touch: true })
   if (resolved === 'unauthorized') return bare401()
   if (!resolved) return bare404()
