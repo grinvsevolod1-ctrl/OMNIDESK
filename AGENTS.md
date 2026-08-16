@@ -351,9 +351,9 @@ lib/
                          readiness) с single-flight + dirty-флагом: сообщение
                          клиента, пришедшее во время in-flight генерации, НЕ
                          теряется — по завершении запускается один повторный
-                         проход со с��ежей историей. Оба рантайма (livechat
+                         проход со свежей историей. Оба рантайма (livechat
                          lib/autopilot/runtime.ts и worker
-                         autopilot-ai-lead.ts) — тонкие адаптеры над ним; ��Е
+                         autopilot-ai-lead.ts) — тонкие адаптеры над ним; НЕ
                          дублируй пайплайн в рантаймах. In-flight
                          реестр module-scoped — процесс с AI-lead должен быть
                          ОДИН (pm2 cluster детектится и фейлится fail-fast,
@@ -720,7 +720,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 | Задача | Где смотреть |
 |---|---|
 | Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
-| Изменить ��оведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
+| Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
 | Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент co-pilot |
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
