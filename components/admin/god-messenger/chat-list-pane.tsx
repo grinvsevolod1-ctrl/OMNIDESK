@@ -6,23 +6,25 @@ import {
   Loader2,
   MessagesSquare,
   Plus,
-  Radio,
   Search,
 } from 'lucide-react'
 import type { ConversationWithManager } from '@/app/actions/admin-secret'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
+import { ContactAvatar, Highlight } from '@/components/manager/inbox/atoms'
+import { SourceChip } from '@/components/manager/inbox/atoms'
+import { listStamp } from '@/components/manager/inbox/visual'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { TYPE_LABEL, fmtTime, initials } from './utils'
 import { NotifyButton } from './notify-button'
 import { parseReply } from './reply'
 
 /**
- * Left pane of the god messenger: header (live indicator, notifications, new
- * chat), search box and the conversation list with god-side unread badges.
- * Extracted verbatim from god-messenger.tsx.
+ * Left pane of the god messenger. Visual language mirrors the MANAGER inbox
+ * (same avatar-with-platform-badge, same row anatomy, same source chip and
+ * unread badge), adapted to the god structure: the third row shows the
+ * assigned manager instead of a lead status, and the unread counter is
+ * godUnread (manager replies the god user hasn't seen) — not the
+ * manager-side `unread`.
  */
 export function ChatListPane({
   showThread,
@@ -52,11 +54,11 @@ export function ChatListPane({
   return (
     <aside
       className={cn(
-        'flex w-full shrink-0 flex-col border-r border-border md:w-80 lg:w-96',
+        'flex w-full shrink-0 flex-col border-r border-border md:w-[340px]',
         showThread ? 'hidden md:flex' : 'flex',
       )}
     >
-      <header className="border-b border-border bg-card/40 px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+      <header className="border-b border-border px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <Link
           href="/wijegniwjgwjog"
           className="mb-2.5 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
@@ -65,55 +67,65 @@ export function ChatListPane({
           К панели
         </Link>
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5">
-            <div
-              className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary"
-              aria-hidden="true"
+          <div className="min-w-0">
+            <h1 className="text-base font-semibold leading-none tracking-tight">
+              Мессенджер
+            </h1>
+            {/* Live-индикатор в языке менеджерского SyncBadge: пульсирующая
+                точка + подпись, без рамок и подложек. */}
+            <span
+              className={cn(
+                'mt-1.5 inline-flex items-center gap-1.5 text-[11px] font-medium',
+                live
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-amber-600 dark:text-amber-400',
+              )}
+              role="status"
+              aria-live="polite"
             >
-              <MessagesSquare className="size-5" />
-            </div>
-            <div>
-              <h1 className="text-base font-semibold leading-none tracking-tight">
-                Мессенджер
-              </h1>
-              <span
-                className={cn(
-                  'mt-1.5 inline-flex items-center gap-1 text-xs',
-                  live ? 'text-success' : 'text-muted-foreground',
-                )}
-              >
-                <Radio className={cn('size-3', live && 'animate-pulse')} />
-                {live ? 'В сети' : 'Подключение…'}
+              <span className="relative flex size-2">
+                <span
+                  className={cn(
+                    'absolute inline-flex size-full animate-ping rounded-full opacity-60',
+                    live ? 'bg-emerald-500' : 'bg-amber-500',
+                  )}
+                  aria-hidden
+                />
+                <span
+                  className={cn(
+                    'relative inline-flex size-2 rounded-full',
+                    live ? 'bg-emerald-500' : 'bg-amber-500',
+                  )}
+                  aria-hidden
+                />
               </span>
-            </div>
+              {live ? 'Онлайн' : 'Подключение'}
+            </span>
           </div>
           <div className="flex items-center gap-1">
             <NotifyButton available={pushAvailable} />
             <Button
               size="icon"
-              className="size-10 rounded-xl"
+              className="size-9 rounded-lg"
               onClick={onCreate}
               aria-label="Новый диалог"
             >
-              <Plus className="size-5" />
+              <Plus className="size-4" />
             </Button>
           </div>
         </div>
-      </header>
-
-      <div className="border-b border-border p-3">
-        <div className="relative">
+        <div className="relative mt-3">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Поиск диалога"
-            className="h-11 rounded-xl pl-9 text-base md:text-sm"
+            className="h-9 rounded-lg pl-9 text-base md:text-sm"
           />
         </div>
-      </div>
+      </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 py-1.5">
         {loadingList ? (
           <div className="flex items-center justify-center py-16 text-muted-foreground">
             <Loader2 className="size-5 animate-spin" />
@@ -129,96 +141,101 @@ export function ChatListPane({
             </Button>
           </div>
         ) : (
-          <ul className="space-y-0.5 p-2">
-            {conversations.map((c) => (
-              // content-visibility: the browser skips layout/paint for
-              // rows outside the viewport — keeps the list instant even
-              // with hundreds of dialogs. intrinsic-size ≈ row height so
-              // the scrollbar stays stable.
-              <li
-                key={c.id}
-                style={{
-                  contentVisibility: 'auto',
-                  containIntrinsicSize: 'auto 68px',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => onSelect(c.id)}
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-muted/60 active:bg-muted',
-                    c.id === selectedId
-                      ? 'bg-primary/10 ring-1 ring-inset ring-primary/20'
-                      : 'bg-transparent',
-                  )}
+          <ul>
+            {conversations.map((c) => {
+              const unread = c.godUnread ?? 0
+              return (
+                // content-visibility: the browser skips layout/paint for
+                // rows outside the viewport — keeps the list instant even
+                // with hundreds of dialogs.
+                <li
+                  key={c.id}
+                  style={{
+                    contentVisibility: 'auto',
+                    containIntrinsicSize: 'auto 76px',
+                  }}
                 >
-                  <Avatar
+                  <button
+                    type="button"
+                    onClick={() => onSelect(c.id)}
                     className={cn(
-                      'size-12 shrink-0',
-                      (c.godUnread ?? 0) > 0 &&
-                        'ring-2 ring-primary ring-offset-2 ring-offset-background',
+                      'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-muted/60 active:scale-[0.985]',
+                      c.id === selectedId ? 'bg-secondary hover:bg-secondary' : '',
                     )}
                   >
-                    <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
-                      {initials(c.contactName || c.contactHandle)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={cn(
-                          'truncate text-sm',
-                          (c.godUnread ?? 0) > 0
-                            ? 'font-semibold'
-                            : 'font-medium',
-                        )}
-                      >
-                        {c.contactName || c.contactHandle}
-                      </span>
-                      <span
-                        className={cn(
-                          'shrink-0 text-[11px]',
-                          (c.godUnread ?? 0) > 0
-                            ? 'font-medium text-primary'
-                            : 'text-muted-foreground',
-                        )}
-                      >
-                        {c.lastMessageAt ? fmtTime(c.lastMessageAt) : ''}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={cn(
-                          'truncate text-xs',
-                          (c.godUnread ?? 0) > 0
-                            ? 'font-medium text-foreground'
-                            : 'text-muted-foreground',
-                        )}
-                      >
-                        {parseReply(c.lastMessage || '').text || 'Нет сообщений'}
-                      </span>
-                      {/* Telegram semantics: the badge counts what YOU (the
-                          god user, писавший от имени клиента) haven't read
-                          yet — i.e. manager replies newer than your last
-                          visit. NOT `unread`, which is the manager-side
-                          counter and lights up after your own messages. */}
-                      {(c.godUnread ?? 0) > 0 && (
-                        <Badge
-                          className="h-5 min-w-5 shrink-0 justify-center rounded-full bg-primary px-1.5 text-[11px] tabular-nums text-primary-foreground"
-                          title="Непрочитанные сообщения от менеджера"
+                    <ContactAvatar
+                      name={c.contactName || c.contactHandle}
+                      channel={c.channelType}
+                      channelId={c.channelId}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p
+                          className={cn(
+                            'flex min-w-0 items-center gap-1 truncate text-sm',
+                            unread > 0 ? 'font-semibold' : 'font-medium',
+                          )}
                         >
-                          {c.godUnread}
-                        </Badge>
-                      )}
+                          <Highlight
+                            text={c.contactName || c.contactHandle}
+                            query={search}
+                          />
+                          {c.contactUsername ? (
+                            <span className="shrink-0 truncate text-[11px] font-normal text-muted-foreground">
+                              @{c.contactUsername}
+                            </span>
+                          ) : null}
+                        </p>
+                        <span
+                          className={cn(
+                            'shrink-0 text-[11px]',
+                            unread > 0
+                              ? 'font-medium text-primary'
+                              : 'text-muted-foreground',
+                          )}
+                        >
+                          {c.lastMessageAt ? listStamp(c.lastMessageAt) : ''}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between gap-2">
+                        <p
+                          className={cn(
+                            'truncate text-xs',
+                            unread > 0
+                              ? 'text-foreground/80'
+                              : 'text-muted-foreground',
+                          )}
+                        >
+                          {parseReply(c.lastMessage || '').text ||
+                            'Нет сообщений'}
+                        </p>
+                        {/* Telegram semantics: counts what YOU (писавший от
+                            имени клиента) haven't read — manager replies
+                            newer than your last visit. NOT `unread`. */}
+                        {unread > 0 && (
+                          <span
+                            className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground"
+                            title="Непрочитанные сообщения от менеджера"
+                          >
+                            {unread}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 flex items-center gap-1.5">
+                        <span className="truncate text-[10px] text-muted-foreground">
+                          {managerNameOf(c.managerId)}
+                        </span>
+                        <SourceChip
+                          conversation={c}
+                          size="xs"
+                          className="ml-auto max-w-[45%]"
+                        />
+                      </div>
                     </div>
-                    <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      {TYPE_LABEL[c.channelType] ?? c.channelType} ·{' '}
-                      {managerNameOf(c.managerId)}
-                    </span>
-                  </div>
-                </button>
-              </li>
-            ))}
+                  </button>
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>

@@ -25,23 +25,19 @@ import {
   X,
 } from 'lucide-react'
 
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import type { ConversationWithManager } from '@/app/actions/admin-secret'
+import { ContactAvatar, SourceChip } from '@/components/manager/inbox/atoms'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
-import { TYPE_LABEL, initials, isComposing } from './utils'
+import { isComposing } from './utils'
 import { MessageBubble } from './message-bubble'
 import { snippetOf } from './reply'
 import { EmojiPicker } from './emoji-picker'
 
-/* Conversation shape used by the god panel (see use-god-thread). */
-export interface GodConversation {
-  id: string
-  contactName: string | null
-  contactHandle: string
-  channelType: string
-  managerId: string | null
-}
+/* Conversation shape used by the god panel (full row from use-god-thread —
+ * gives the header access to channelId/channelName for the source chip). */
+export type GodConversation = ConversationWithManager
 
 /* How many newest messages are rendered initially / added per "show more". */
 export const MESSAGES_WINDOW = 50
@@ -142,7 +138,7 @@ export function ThreadPane({
     >
       {!conversation && selectedId ? (
         <div className="flex flex-1 flex-col">
-          <header className="flex items-center gap-2 border-b border-border bg-card/40 px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-3">
+          <header className="flex items-center gap-2 border-b border-border px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:px-3">
             <button
               type="button"
               onClick={() => selectThread(null)}
@@ -185,28 +181,30 @@ export function ThreadPane({
         </div>
       ) : (
         <>
-          <header className="flex items-center gap-2 border-b border-border bg-card/40 px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] backdrop-blur sm:px-3">
+          <header className="flex items-center gap-2 border-b border-border px-2 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] backdrop-blur sm:px-3">
             <button
               type="button"
               onClick={() => selectThread(null)}
-              className="flex size-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+              className="flex size-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
               aria-label="Назад к списку"
             >
               <ChevronLeft className="size-6" />
             </button>
-            <Avatar className="size-10 shrink-0">
-              <AvatarFallback className="bg-primary/10 text-xs font-medium text-primary">
-                {initials(conversation.contactName || conversation.contactHandle)}
-              </AvatarFallback>
-            </Avatar>
+            <ContactAvatar
+              name={conversation.contactName || conversation.contactHandle}
+              channel={conversation.channelType}
+              channelId={conversation.channelId}
+            />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold leading-tight">
                 {conversation.contactName || conversation.contactHandle}
               </p>
-              <p className="truncate text-xs text-muted-foreground">
-                {TYPE_LABEL[conversation.channelType] ?? conversation.channelType} ·
-                Менеджер: {managerNameOf(conversation.managerId)}
-              </p>
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                <SourceChip conversation={conversation} size="xs" />
+                <span className="truncate text-xs text-muted-foreground">
+                  Менеджер: {managerNameOf(conversation.managerId)}
+                </span>
+              </div>
             </div>
           </header>
 

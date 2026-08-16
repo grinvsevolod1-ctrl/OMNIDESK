@@ -180,10 +180,10 @@ export const MessageBubble = memo(function MessageBubble({
         >
           <div
             className={cn(
-              'max-w-[82%] rounded-2xl px-3.5 py-2 text-sm shadow-sm sm:max-w-[75%]',
+              'max-w-[82%] rounded-2xl px-3.5 py-2 text-sm sm:max-w-[75%]',
               mine
-                ? 'rounded-br-md bg-primary text-primary-foreground'
-                : 'rounded-bl-md bg-card text-card-foreground',
+                ? 'rounded-br-sm bg-primary text-primary-foreground'
+                : 'rounded-bl-sm border border-border bg-card text-foreground',
             )}
           >
             {deleted ? (
