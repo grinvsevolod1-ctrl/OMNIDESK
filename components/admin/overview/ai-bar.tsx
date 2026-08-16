@@ -9,7 +9,7 @@
  * мутации применяются только после явного подтверждения кнопкой.
  */
 
-import { Loader2, Sparkles, X } from 'lucide-react'
+import { Loader2, Search, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { askOverviewAiAction, confirmOverviewActionAction } from '@/app/actions/overview-ai'
 import { Button } from '@/components/ui/button'
@@ -173,8 +173,8 @@ export function AiBar({
   return (
     <div className="flex flex-col gap-2">
       <div className="relative">
-        <Sparkles
-          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-primary"
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
           aria-hidden
         />
         <input

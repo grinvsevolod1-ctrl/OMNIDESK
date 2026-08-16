@@ -6,7 +6,7 @@
  * secret-gmt-tab.tsx. Часть god-панели — инварианты AGENTS.md §4.
  */
 
-import { CheckCircle2, Loader2, Sparkles, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, Loader2, TriangleAlert, UserPlus } from 'lucide-react'
 import { type ImportState } from '@/components/admin/secret-gmt/use-auto-import'
 import {
   Dialog,
@@ -46,7 +46,7 @@ export function ImportProgressDialog({
       <DialogContent className="sm:max-w-sm" showCloseButton={finished}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="size-4 text-primary" aria-hidden />
+            <UserPlus className="size-4 text-primary" aria-hidden />
             Импорт в god-аккаунты
           </DialogTitle>
           <DialogDescription>

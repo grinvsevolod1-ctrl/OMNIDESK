@@ -20,7 +20,7 @@ import {
   Package,
   RefreshCw,
   RotateCcw,
-  Sparkles,
+  UserPlus,
 } from 'lucide-react'
 import {
   secretGmtPurchasesAction,
@@ -336,7 +336,7 @@ function PurchaseRow({
             {importingThis && importBusy ? (
               <Loader2 className="size-3 animate-spin" />
             ) : (
-              <Sparkles className="size-3" />
+              <UserPlus className="size-3" />
             )}
             Импортировать в god-аккаунты
           </Button>
@@ -385,7 +385,7 @@ function PurchaseRow({
             {importingThis && importBusy ? (
               <Loader2 className="size-3 animate-spin" />
             ) : (
-              <Sparkles className="size-3" />
+              <UserPlus className="size-3" />
             )}
             Импортировать в god-аккаунты
           </Button>
