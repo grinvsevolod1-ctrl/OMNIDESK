@@ -48,14 +48,19 @@ export function LeadDetailPanel({
   onClose,
   onUpdated,
   variant = 'curator',
+  headCanEdit = false,
 }: {
   leadId: string | null
   /** Карточка из строки списка — рендерится мгновенно, без ожидания сети. */
   fallbackLead?: LeadCard | null
   onClose: () => void
   onUpdated: () => void
-  variant?: 'curator' | 'admin'
+  variant?: 'curator' | 'admin' | 'head'
+  /** Право руководителя «просмотр и редактирование» (variant='head'). */
+  headCanEdit?: boolean
 }) {
+  // Руководитель «только просмотр»: вся панель в режиме чтения.
+  const readOnly = variant === 'head' && !headCanEdit
   const [pending, startTransition] = useTransition()
 
   // Держим последний открытый id, чтобы контент оставался видимым во время
@@ -195,7 +200,7 @@ export function LeadDetailPanel({
           </PanelSection>
 
           {/* Передача коллеге: только в кураторской панели и пока лид
-              не в архиве — из архива сначала верните лид. */}
+              не в а��хиве — из архива сначала верните лид. */}
           {variant === 'curator' && !card.archivedAt ? (
             <PanelSection>
               <LeadTransferSection

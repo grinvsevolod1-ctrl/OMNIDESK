@@ -29,6 +29,7 @@ const ROLE_LABEL: Record<string, string> = {
   manager: 'менеджер',
   curator: 'менеджер по кадрам',
   admin: 'админ',
+  head: 'руководитель',
 }
 
 /**
@@ -43,7 +44,8 @@ export function LeadAttachments({
   attachments,
   onChanged,
   onBrowseMedia,
-}: {
+  readOnly = false,
+  }: {
   /** null — карточка ещё не сохранена (см. ensureCardId). */
   leadCardId: string | null
   /**
@@ -60,6 +62,8 @@ export function LeadAttachments({
    * навигацию по треду вместо старого выпадающего списка.
    */
   onBrowseMedia?: (kind: 'video_note' | 'photo') => void
+  /** Просмотр без загрузки (руководитель с правом «только просмотр»). */
+  readOnly?: boolean
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [pending, startTransition] = useTransition()
@@ -175,7 +179,12 @@ export function LeadAttachments({
             </span>
           ) : null}
         </p>
-        <div className="ml-auto flex items-center gap-1.5">
+        <div
+          className={cn(
+            'ml-auto flex items-center gap-1.5',
+            readOnly && 'hidden',
+          )}
+        >
           <input
             ref={fileInputRef}
             type="file"

@@ -18,6 +18,7 @@ import {
   adminSetLeadStatusAction,
   updateLeadStatusAction,
 } from '@/app/actions/lead-cards'
+import { headSetLeadStatusAction } from '@/app/actions/heads'
 import { Button } from '@/components/ui/button'
 import { CharCounter } from '@/components/ui/char-counter'
 import { Label } from '@/components/ui/label'
@@ -45,7 +46,7 @@ export const LeadStatusForm = memo(function LeadStatusForm({
   leadCardId: string
   currentStatus: LeadStatus | null
   onSaved: () => void
-  variant?: 'curator' | 'admin'
+  variant?: 'curator' | 'admin' | 'head'
 }) {
   const [pickedStatus, setPickedStatus] = useState<LeadStatus | null>(null)
   const [comment, setComment] = useState('')
@@ -63,7 +64,11 @@ export const LeadStatusForm = memo(function LeadStatusForm({
     }
     startTransition(async () => {
       const action =
-        variant === 'admin' ? adminSetLeadStatusAction : updateLeadStatusAction
+        variant === 'admin'
+          ? adminSetLeadStatusAction
+          : variant === 'head'
+            ? headSetLeadStatusAction
+            : updateLeadStatusAction
       const res = await action({
         leadCardId,
         status,

@@ -6,20 +6,27 @@ import { leadStatusLabel } from '@/lib/lead-status'
 import { formatDateTime } from './format'
 import type { LeadCommentView } from './types'
 
-/** Лента комментариев лида + форма свободного комментария. */
+/**
+ * Лента комментариев лида + форма свободного комментария.
+ * readOnly (руководитель «только просмотр») — лента без формы.
+ */
 export function LeadComments({
   leadCardId,
   comments,
   onCommentSaved,
+  readOnly = false,
 }: {
   leadCardId: string
   comments: LeadCommentView[]
   onCommentSaved: () => void
+  readOnly?: boolean
 }) {
   return (
     <>
       <p className="text-sm font-semibold">Комментарии</p>
-      <LeadFreeCommentForm leadCardId={leadCardId} onSaved={onCommentSaved} />
+      {readOnly ? null : (
+        <LeadFreeCommentForm leadCardId={leadCardId} onSaved={onCommentSaved} />
+      )}
       {comments.length === 0 ? (
         <p className="text-sm text-muted-foreground">Пока пусто</p>
       ) : (

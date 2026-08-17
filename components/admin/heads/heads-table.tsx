@@ -13,7 +13,7 @@ import { EditHeadCuratorsDialog } from '@/components/admin/heads/edit-head-curat
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import { toast } from '@/hooks/use-toast'
+import { toast } from 'sonner'
 import type { HeadCurator } from '@/lib/data/heads'
 import { formatMskDate as formatDate } from '@/lib/time'
 import type { Manager } from '@/lib/types'
@@ -69,9 +69,9 @@ function PermissionToggle({ head }: { head: Manager }) {
             const res = await setHeadCanEditAction(head.id, next)
             if (!res.ok) {
               setCanEdit(!next)
-              toast({ description: res.message, variant: 'destructive' })
+              toast.error(res.message)
             } else {
-              toast({ description: res.message })
+              toast.success(res.message)
             }
           })
         }}

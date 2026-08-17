@@ -23,6 +23,7 @@ import { safeDayKey } from '@/lib/data/lead-stats'
 import { isLeadStatus } from '@/lib/lead-status'
 import {
   assertCuratorNotLocked,
+  assertHeadCanEdit,
   canAccessLeadCard,
   notifyCuratorOfTransfer,
   type LeadCardActionResult,
@@ -179,23 +180,35 @@ export async function updateLeadFieldAction(input: {
   field: string
   value: string
 }): Promise<LeadCardActionResult> {
-  // Редактировать поля карточки может админ ЛИБО менеджер по кадрам,
-  // которому этот лид передан (передача другому сотруднику — по-прежнему
-  // только у админа, это отдельный action).
+  // Редактировать поля карточки может админ, менеджер по кадрам-владелец
+  // ЛИБО руководитель группы этого куратора с правом «редактирование»
+  // (передача другому сотруднику — по-прежнему отдельные actions).
   const session = await getSession()
   if (!session) return { ok: false, message: 'Не авторизован' }
   if (session.role !== 'admin') {
-    if (session.role !== 'curator') {
+    if (session.role === 'curator') {
+      const card = await getLeadCardById(input.leadCardId)
+      if (!card || !canAccessLeadCard(session, card)) {
+        return { ok: false, message: 'Это не ваш лид' }
+      }
+      try {
+        await assertCuratorNotLocked(session.sub)
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+      }
+    } else if (session.role === 'head') {
+      const card = await getLeadCardById(input.leadCardId)
+      const { isCuratorOfHead } = await import('@/lib/data/heads')
+      if (!card || !(await isCuratorOfHead(session.sub, card.curatorId))) {
+        return { ok: false, message: 'Лид не входит в вашу группу' }
+      }
+      try {
+        await assertHeadCanEdit(session.sub)
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+      }
+    } else {
       return { ok: false, message: 'Нет доступа' }
-    }
-    const card = await getLeadCardById(input.leadCardId)
-    if (!card || !canAccessLeadCard(session, card)) {
-      return { ok: false, message: 'Это не ваш лид' }
-    }
-    try {
-      await assertCuratorNotLocked(session.sub)
-    } catch (e) {
-      return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
     }
   }
   if (!isInlineLeadField(input.field)) {

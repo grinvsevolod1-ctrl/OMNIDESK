@@ -18,8 +18,6 @@ import {
   adminSetLeadStatus,
   getLeadCardById,
   transferLeadToCurator,
-  isInlineLeadField,
-  updateLeadCardField,
 } from '@/lib/data/lead-cards'
 import { isLeadStatus, STATUS_COMMENT_MIN_LEN, type LeadStatus } from '@/lib/lead-status'
 import {
@@ -118,29 +116,6 @@ export async function headTransferLeadAction(input: {
   }
 }
 
-/** Head (право «редактирование»): правка одного поля карточки лида группы. */
-export async function headUpdateLeadFieldAction(input: {
-  leadCardId: string
-  field: string
-  value: string
-}): Promise<LeadCardActionResult> {
-  const session = await requireHead()
-  if (!isInlineLeadField(input.field)) {
-    return { ok: false, message: 'Это поле нельзя редактировать.' }
-  }
-  try {
-    await assertHeadCanEdit(session.sub)
-    await requireGroupLead(session.sub, input.leadCardId)
-    await updateLeadCardField({
-      leadCardId: input.leadCardId,
-      field: input.field,
-      value: input.value,
-    })
-    return { ok: true, message: 'Сохранено' }
-  } catch (err) {
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : 'Ошибка',
-    }
-  }
-}
+// Правка полей карточки для руководителя идёт через общий
+// updateLeadFieldAction (app/actions/lead-cards/admin.ts) — он знает про
+// head-with-edit и группу; inline-редакторы работают без изменений.
