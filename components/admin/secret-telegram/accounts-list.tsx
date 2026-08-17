@@ -53,11 +53,14 @@ const STATUS_META: Record<
  */
 export function AccountsList({
   accounts,
+  unread,
   onOpen,
   onRefresh,
   refreshing,
 }: {
   accounts: PersonalAccountItem[]
+  /** id аккаунта -> непрочитанных всего (бейдж на кнопке «Открыть чаты»). */
+  unread: Record<string, number>
   onOpen: (account: PersonalAccountItem) => void
   onRefresh: () => void
   refreshing: boolean
@@ -228,6 +231,11 @@ export function AccountsList({
                 >
                   <MessageCircle className="size-4" />
                   Открыть чаты
+                  {(unread[a.id] ?? 0) > 0 && (
+                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">
+                      {(unread[a.id] ?? 0) > 99 ? '99+' : unread[a.id]}
+                    </span>
+                  )}
                 </Button>
               </Card>
             )

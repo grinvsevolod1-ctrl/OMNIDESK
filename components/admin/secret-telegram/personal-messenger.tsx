@@ -31,17 +31,28 @@ import { usePersonalMessenger } from './use-personal-messenger'
 import { DialogAvatar, dayLabel } from './messenger-shared'
 import { DialogList } from './dialog-list'
 import { MessageBubble } from './message-bubble'
-import type { PersonalMessage } from '@/app/actions/admin-secret/telegram-personal'
+import type {
+  PersonalAccountItem,
+  PersonalMessage,
+} from '@/app/actions/admin-secret/telegram-personal'
 
 /* ------------------------------ Мессенджер ------------------------------ */
 
 export function PersonalMessenger({
   channelId,
   accountName,
+  accounts,
+  unread,
+  onSwitchAccount,
   onBack,
 }: {
   channelId: string
   accountName: string
+  /** Все личные аккаунты — для свитчера в шапке списка диалогов. */
+  accounts: PersonalAccountItem[]
+  /** id аккаунта -> непрочитанных всего (бейджи в свитчере). */
+  unread: Record<string, number>
+  onSwitchAccount: (account: PersonalAccountItem) => void
   onBack: () => void
 }) {
   const m = usePersonalMessenger(channelId)
@@ -280,6 +291,9 @@ export function PersonalMessenger({
       <DialogList
         channelId={channelId}
         accountName={accountName}
+        accounts={accounts}
+        unread={unread}
+        onSwitchAccount={onSwitchAccount}
         onBack={onBack}
         search={search}
         onSearchChange={setSearch}

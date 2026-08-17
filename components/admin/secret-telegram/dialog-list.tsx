@@ -6,18 +6,38 @@
  * Часть god-панели — инварианты AGENTS.md §4.
  */
 
-import { ArrowLeft, Loader2, Search } from 'lucide-react'
+import { ArrowLeft, Check, ChevronsUpDown, Loader2, Search } from 'lucide-react'
 import type {
+  PersonalAccountItem,
   PersonalDialog,
 } from '@/app/actions/admin-secret/telegram-personal'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { DialogAvatar, formatDialogTime } from './messenger-shared'
 
+/** Компактный бейдж непрочитанных (одинаковый в свитчере и списке). */
+function UnreadBadge({ count }: { count: number }) {
+  if (count <= 0) return null
+  return (
+    <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">
+      {count > 99 ? '99+' : count}
+    </span>
+  )
+}
+
 export function DialogList({
   channelId,
   accountName,
+  accounts,
+  unread,
+  onSwitchAccount,
   onBack,
   search,
   onSearchChange,
@@ -31,6 +51,11 @@ export function DialogList({
 }: {
   channelId: string
   accountName: string
+  /** Все личные аккаунты для свитчера (offline показываются disabled). */
+  accounts: PersonalAccountItem[]
+  /** id аккаунта -> непрочитанных всего. */
+  unread: Record<string, number>
+  onSwitchAccount: (account: PersonalAccountItem) => void
   onBack: () => void
   search: string
   onSearchChange: (v: string) => void
@@ -41,6 +66,11 @@ export function DialogList({
   onSelectPeer: (peerId: string) => void
   peerOpen: boolean
 }) {
+  // Непрочитанные на ДРУГИХ аккаунтах — сигнал на свёрнутом триггере.
+  const otherUnread = accounts.reduce(
+    (s, a) => (a.id === channelId ? s : s + (unread[a.id] ?? 0)),
+    0,
+  )
   return (
     <aside
       className={cn(
@@ -58,10 +88,70 @@ export function DialogList({
         >
           <ArrowLeft className="size-4" />
         </Button>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">{accountName}</p>
-          <p className="text-xs text-muted-foreground">Личный аккаунт</p>
-        </div>
+        {/* Свитчер аккаунтов: все аккаунты в одном меню, с бейджами */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                className="h-auto min-w-0 flex-1 justify-start gap-2 px-2 py-1"
+                aria-label="Сменить аккаунт"
+              >
+                <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
+                  {accountName.slice(0, 1).toUpperCase()}
+                  {otherUnread > 0 && (
+                    <span
+                      className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-card bg-primary"
+                      aria-label="Есть непрочитанные на других аккаунтах"
+                    />
+                  )}
+                </span>
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block truncate text-sm font-semibold">
+                    {accountName}
+                  </span>
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    Личный аккаунт
+                  </span>
+                </span>
+                <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="start" className="w-72">
+            {accounts.map((a) => {
+              const online = a.sessionStatus === 'online'
+              const count = unread[a.id] ?? 0
+              return (
+                <DropdownMenuItem
+                  key={a.id}
+                  disabled={!online}
+                  onClick={() => {
+                    if (a.id !== channelId) onSwitchAccount(a)
+                  }}
+                >
+                  <span
+                    className={cn(
+                      'size-2 shrink-0 rounded-full',
+                      online ? 'bg-emerald-500' : 'bg-muted-foreground/40',
+                    )}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm">{a.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {a.phone ?? (online ? 'В сети' : 'Не в сети')}
+                    </span>
+                  </span>
+                  <UnreadBadge count={count} />
+                  {a.id === channelId && (
+                    <Check className="size-4 shrink-0 text-primary" />
+                  )}
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div className="border-b border-border p-2">
         <div className="relative">
@@ -111,11 +201,7 @@ export function DialogList({
                     )}
                     {d.lastMessage || '—'}
                   </p>
-                  {d.unreadCount > 0 && (
-                    <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">
-                      {d.unreadCount > 99 ? '99+' : d.unreadCount}
-                    </span>
-                  )}
+                  <UnreadBadge count={d.unreadCount} />
                 </div>
               </div>
             </button>

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import {
   personalListAccountsAction,
+  personalUnreadSummaryAction,
   type PersonalAccountItem,
 } from '@/app/actions/admin-secret/telegram-personal'
 import { AccountsList } from './accounts-list'
@@ -23,6 +24,8 @@ export function SecretTelegramTab() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [openAccount, setOpenAccount] = useState<PersonalAccountItem | null>(null)
+  // id аккаунта -> непрочитанных всего (живой фан-аут на worker).
+  const [unread, setUnread] = useState<Record<string, number>>({})
 
   // Против гонок: поздний ответ старого refresh не должен перетереть новый.
   const seqRef = useRef(0)
@@ -67,6 +70,27 @@ export function SecretTelegramTab() {
     }
   }, [refresh])
 
+  // Бейджи непрочитанных: отдельный, более редкий поллинг (каждый тик —
+  // фан-аут воркера по всем online-аккаунтам). Ошибки молча пропускаем.
+  useEffect(() => {
+    let cancelled = false
+    const tick = () => {
+      if (document.hidden) return
+      void personalUnreadSummaryAction()
+        .then((sum) => {
+          if (!cancelled) setUnread(sum)
+        })
+        .catch(() => {})
+    }
+    const kick = setTimeout(tick, 0)
+    const t = setInterval(tick, 15_000)
+    return () => {
+      cancelled = true
+      clearTimeout(kick)
+      clearInterval(t)
+    }
+  }, [])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24 text-muted-foreground">
@@ -79,8 +103,12 @@ export function SecretTelegramTab() {
     return (
       <div className="h-[calc(100dvh-14rem)] min-h-[24rem] md:h-[calc(100dvh-11.5rem)]">
         <PersonalMessenger
+          key={openAccount.id}
           channelId={openAccount.id}
           accountName={openAccount.name}
+          accounts={accounts}
+          unread={unread}
+          onSwitchAccount={(a) => setOpenAccount(a)}
           onBack={() => setOpenAccount(null)}
         />
       </div>
@@ -90,6 +118,7 @@ export function SecretTelegramTab() {
   return (
     <AccountsList
       accounts={accounts}
+      unread={unread}
       onOpen={(a) => setOpenAccount(a)}
       onRefresh={() => void refresh()}
       refreshing={refreshing}

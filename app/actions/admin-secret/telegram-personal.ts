@@ -407,6 +407,34 @@ function humanizeWorkerError(code: string | undefined, fallback: string): string
   }
 }
 
+/**
+ * Сводка непрочитанных по ВСЕМ online-аккаунтам: id канала -> сумма
+ * unreadCount его диалогов. Живой фан-аут на worker (параллельно), в БД
+ * ничего не оседает. Для бейджей в свитчере аккаунтов и на карточках.
+ */
+export async function personalUnreadSummaryAction(): Promise<
+  Record<string, number>
+> {
+  await requireGod()
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM channels
+      WHERE type = 'telegram_personal' AND session_status = 'online'`,
+  )
+  const entries = await Promise.all(
+    rows.map(async (r) => {
+      const data = await postJsonToWorkerSafeGet<{ dialogs: PersonalDialog[] }>(
+        `/personal/dialogs?channelId=${encodeURIComponent(r.id)}`,
+      )
+      const total = (data?.dialogs ?? []).reduce(
+        (s, d) => s + (d.unreadCount > 0 ? d.unreadCount : 0),
+        0,
+      )
+      return [r.id, total] as const
+    }),
+  )
+  return Object.fromEntries(entries)
+}
+
 /** Живой список диалогов аккаунта. Ничего не пишется в БД. */
 export async function personalDialogsAction(
   channelId: string,
