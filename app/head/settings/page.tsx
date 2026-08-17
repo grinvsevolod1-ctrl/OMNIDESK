@@ -1,8 +1,6 @@
 import { KeyRound } from 'lucide-react'
 import { getTwofaStatusAction } from '@/app/actions/twofa'
-import { MyGeoSettings } from '@/components/curator/my-geo-settings'
 import { ChangePasswordForm } from '@/components/manager/change-password-form'
-import { NotificationSettings } from '@/components/manager/notification-settings'
 import { PageHeader } from '@/components/page-parts'
 import { LoginHistory } from '@/components/shared/login-history'
 import { ProfileForm } from '@/components/shared/profile-form'
@@ -13,7 +11,7 @@ import {
 } from '@/components/shared/settings-shell'
 import { TwofaSettings } from '@/components/shared/twofa-settings'
 import { Card } from '@/components/ui/card'
-import { requireCurator } from '@/lib/auth'
+import { requireHead } from '@/lib/auth'
 import { getManagerById } from '@/lib/data'
 
 const TABS: SettingsTab[] = [
@@ -22,18 +20,6 @@ const TABS: SettingsTab[] = [
     label: 'Профиль',
     hint: 'Имя, логин, почта',
     icon: 'user',
-  },
-  {
-    id: 'geo',
-    label: 'Мои ГЕО',
-    hint: 'Города и регионы',
-    icon: 'map-pin',
-  },
-  {
-    id: 'notifications',
-    label: 'Уведомления',
-    hint: 'Лиды и напоминания',
-    icon: 'bell',
   },
   {
     id: 'security',
@@ -55,8 +41,8 @@ const TABS: SettingsTab[] = [
   },
 ]
 
-export default async function CuratorSettingsPage() {
-  const session = await requireCurator()
+export default async function HeadSettingsPage() {
+  const session = await requireHead()
   const [twofa, account] = await Promise.all([
     getTwofaStatusAction(),
     getManagerById(session.sub),
@@ -75,32 +61,6 @@ export default async function CuratorSettingsPage() {
           initialUsername={account?.username ?? null}
           initialEmail={session.email}
         />
-      </div>
-    </Card>
-  )
-
-  const geoPanel = (
-    <Card className="p-5">
-      <h2 className="font-medium">Мои ГЕО</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Города и регионы, за которые вы отвечаете: по ним вам подбираются
-        лиды. Первый город — основной.
-      </p>
-      <div className="mt-4">
-        <MyGeoSettings />
-      </div>
-    </Card>
-  )
-
-  const notificationsPanel = (
-    <Card className="p-5">
-      <h2 className="font-medium">Push-уведомления</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Push-уведомления о новых лидах и напоминания по статусам приходят на
-        это устройство даже при закрытой вкладке.
-      </p>
-      <div className="mt-4">
-        <NotificationSettings />
       </div>
     </Card>
   )
@@ -135,8 +95,6 @@ export default async function CuratorSettingsPage() {
         tabs={TABS}
         panels={{
           profile: profilePanel,
-          geo: geoPanel,
-          notifications: notificationsPanel,
           security: securityPanel,
           twofa: twofaPanel,
           sessions: sessionsPanel,
@@ -145,7 +103,7 @@ export default async function CuratorSettingsPage() {
         <SettingsIdentityCard
           name={session.name}
           email={session.email}
-          roleLabel="Менеджер по кадрам"
+          roleLabel="Руководитель"
         />
       </SettingsShell>
     </div>

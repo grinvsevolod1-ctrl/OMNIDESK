@@ -11,10 +11,15 @@ import {
 import {
   getManagerAuthState,
   getManagerByEmail,
+  getManagerById,
+  getManagerByIdentifier,
+  getManagerByIdWithSecret,
   getManagerOnLunch,
+  sanitizeUsername,
   setManagerOnLunch,
   tryGoOnLunch,
   updateManagerPassword,
+  updateManagerProfile,
 } from '@/lib/data'
 import { writeAudit } from '@/lib/data/audit'
 import type { SimpleResult } from './account-shared'
@@ -86,13 +91,18 @@ export async function getLunchStateAction(): Promise<boolean> {
   return getManagerOnLunch(session.sub)
 }
 
+/** Роли, чьи учётки живут в таблице managers и правят свой профиль сами. */
+function isSelfManagedRole(role: string): role is 'manager' | 'curator' | 'head' {
+  return role === 'manager' || role === 'curator' || role === 'head'
+}
+
 export async function changeOwnPasswordAction(
   formData: FormData,
 ): Promise<SimpleResult> {
-  // Both sales managers and curators (менеджеры по кадрам) live in the same
-  // accounts table and change their own password through this action.
+  // Sales managers, curators (менеджеры по кадрам) и руководители живут в одной
+  // таблице managers и меняют свой пароль через это действие.
   const session = await getSession()
-  if (!session || (session.role !== 'manager' && session.role !== 'curator')) {
+  if (!session || !isSelfManagedRole(session.role)) {
     return { ok: false, message: 'Нет доступа.' }
   }
   const current = String(formData.get('current') ?? '')
@@ -101,7 +111,8 @@ export async function changeOwnPasswordAction(
   if (next.length < 8) {
     return { ok: false, message: 'Новый пароль должен быть не короче 8 символов.' }
   }
-  const manager = await getManagerByEmail(session.email)
+  // По id, а не по email: email мог быть только что изменён в профиле.
+  const manager = await getManagerByIdWithSecret(session.sub)
   if (!manager) return { ok: false, message: 'Аккаунт не найден.' }
 
   const ok = await comparePassword(current, manager.passwordHash)
@@ -131,4 +142,100 @@ export async function changeOwnPasswordAction(
   })
 
   return { ok: true, message: 'Пароль обновлён.' }
+}
+
+/**
+ * Самостоятельная правка профиля (имя, логин, email) для менеджера, куратора
+ * и руководителя. Логин и почта уникальны на всю таблицу managers; пустой
+ * логин допустим (вход по email). Имя и email кэшируются в сессии/JWT, поэтому
+ * после сохранения перевыпускаем cookie текущей сессии со свежими значениями
+ * (session_version не двигаем — другие устройства остаются в системе).
+ */
+export async function updateMyProfileAction(
+  formData: FormData,
+): Promise<SimpleResult> {
+  const session = await getSession()
+  if (!session || !isSelfManagedRole(session.role)) {
+    return { ok: false, message: 'Нет доступа.' }
+  }
+
+  const name = String(formData.get('name') ?? '').trim()
+  const email = String(formData.get('email') ?? '')
+    .trim()
+    .toLowerCase()
+  const usernameRaw = String(formData.get('username') ?? '').trim()
+
+  if (!name) return { ok: false, message: 'Укажите имя.' }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, message: 'Введите корректный email.' }
+  }
+  // Логин необязателен; если задан — валидный хэндл (как при создании учётки).
+  const username = usernameRaw ? sanitizeUsername(usernameRaw) : ''
+  if (usernameRaw && (!username || username.length < 3)) {
+    return {
+      ok: false,
+      message: 'Логин: минимум 3 символа (a-z, 0-9, точка, дефис, _).',
+    }
+  }
+
+  const manager = await getManagerById(session.sub)
+  if (!manager) return { ok: false, message: 'Аккаунт не найден.' }
+
+  // Уникальность email и логина: занятость проверяем по чужим учёткам.
+  if (email !== manager.email) {
+    const byEmail = await getManagerByEmail(email)
+    if (byEmail && byEmail.id !== manager.id) {
+      return { ok: false, message: 'Этот email уже занят.' }
+    }
+  }
+  if (username && username !== (manager.username ?? '')) {
+    const byLogin = await getManagerByIdentifier(username)
+    if (byLogin && byLogin.id !== manager.id) {
+      return { ok: false, message: 'Этот логин уже занят.' }
+    }
+  }
+
+  try {
+    await updateManagerProfile(manager.id, {
+      name,
+      username: username || null,
+      email,
+    })
+  } catch (err) {
+    // Гонка двух сохранений может упереться в уникальный индекс (23505).
+    const code =
+      typeof err === 'object' && err && 'code' in err
+        ? (err as { code?: string }).code
+        : undefined
+    if (code === '23505') {
+      return { ok: false, message: 'Логин или email уже заняты.' }
+    }
+    console.error('[panel] updateMyProfileAction failed:', err)
+    return { ok: false, message: 'Не удалось сохранить профиль.' }
+  }
+
+  await writeAudit({
+    actorRole: session.role,
+    actorId: manager.id,
+    actorLabel: name,
+    action: 'account.profile_update',
+    entityType: 'manager',
+    entityId: manager.id,
+    details: { name, email, username: username || null },
+  })
+
+  // Имя/почта живут в JWT — перевыпускаем cookie со свежими значениями.
+  const fresh = await getManagerAuthState(manager.id)
+  await startSession({
+    sub: manager.id,
+    role: session.role,
+    email,
+    name,
+    sv: fresh?.sessionVersion ?? 0,
+  })
+
+  revalidatePath('/app/settings')
+  revalidatePath('/curator/settings')
+  revalidatePath('/head/settings')
+  return { ok: true, message: 'Профиль обновлён.' }
 }

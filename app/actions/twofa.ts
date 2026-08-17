@@ -2,7 +2,7 @@
 
 import QRCode from 'qrcode'
 import { comparePassword, getSession } from '@/lib/auth'
-import { getManagerByEmail } from '@/lib/data'
+import { getManagerByEmail, getManagerById } from '@/lib/data'
 import { writeAudit } from '@/lib/data/audit'
 import { rateLimit } from '@/lib/rate-limit'
 import {
@@ -33,13 +33,20 @@ async function requireStaff(): Promise<{
   id: string
   name: string
   email: string
-  role: 'manager' | 'curator'
+  role: 'manager' | 'curator' | 'head'
 } | null> {
   const session = await getSession()
-  if (!session || (session.role !== 'manager' && session.role !== 'curator')) {
+  if (
+    !session ||
+    (session.role !== 'manager' &&
+      session.role !== 'curator' &&
+      session.role !== 'head')
+  ) {
     return null
   }
-  const account = await getManagerByEmail(session.email)
+  // По id: email мог быть изменён в профиле и разойтись с сессией до её
+  // перевыпуска.
+  const account = await getManagerById(session.sub)
   if (!account) return null
   return {
     id: account.id,
@@ -244,7 +251,7 @@ export async function confirmTelegramSetupAction(
       verdict.reason === 'expired' || verdict.reason === 'missing'
         ? 'Код истёк. Отправьте новый.'
         : verdict.reason === 'attempts'
-          ? 'Слишком много неверных попыток. Отправьте новый код.'
+          ? 'Слишком много неверных попыток. Отправьте новый ко��.'
           : 'Неверный код. Попробуйте ещё раз.'
     return { ok: false, message: msg }
   }

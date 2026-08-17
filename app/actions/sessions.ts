@@ -23,7 +23,12 @@ export interface SessionsActionResult {
  */
 export async function logoutOtherDevicesAction(): Promise<SessionsActionResult> {
   const session = await getSession()
-  if (!session || (session.role !== 'manager' && session.role !== 'curator')) {
+  if (
+    !session ||
+    (session.role !== 'manager' &&
+      session.role !== 'curator' &&
+      session.role !== 'head')
+  ) {
     return { ok: false, message: 'Нет доступа' }
   }
 
@@ -65,7 +70,12 @@ export async function revokeTrustedDeviceAction(
   deviceId: string,
 ): Promise<SessionsActionResult> {
   const session = await getSession()
-  if (!session || (session.role !== 'manager' && session.role !== 'curator')) {
+  if (
+    !session ||
+    (session.role !== 'manager' &&
+      session.role !== 'curator' &&
+      session.role !== 'head')
+  ) {
     return { ok: false, message: 'Нет доступа' }
   }
   if (!deviceId) return { ok: false, message: 'Устройство не указано' }

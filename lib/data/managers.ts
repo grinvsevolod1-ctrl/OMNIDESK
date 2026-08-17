@@ -158,6 +158,21 @@ export async function getManagerById(id: string): Promise<Manager | null> {
 }
 
 /**
+ * Как getManagerById, но с секретами (password_hash / temp_password_enc) —
+ * для проверки текущего пароля при самостоятельной смене. По id, а не по
+ * email: email мог быть изменён в профиле и разойтись с сессией.
+ */
+export async function getManagerByIdWithSecret(
+  id: string,
+): Promise<ManagerWithSecret | null> {
+  const rows = await query<ManagerRow & { temp_password_enc: string | null }>(
+    `SELECT ${managerColumns()}, temp_password_enc FROM managers WHERE id = $1 LIMIT 1`,
+    [id],
+  )
+  return rows[0] ? toManagerWithSecret(rows[0]) : null
+}
+
+/**
  * How many of the given ids correspond to real managers, in ONE query. Lets
  * callers validate a whole pool of manager ids (e.g. a live-chat round-robin
  * queue) without a getManagerById-per-id N+1: compare the returned count to the
@@ -264,6 +279,29 @@ export async function updateManagerStatus(
     [id, status],
   )
   // Revoke any cached auth state immediately so blocking takes effect now.
+  invalidateManagerAuthState(id)
+}
+
+/**
+ * Обновляет редактируемые самим сотрудником поля профиля: имя, логин, email.
+ * Логин/почта уникальны — вызывающий код обязан заранее проверить занятость
+ * (getManagerByIdentifier / getManagerByEmail), но БД дополнительно защищена
+ * уникальными индексами. Пароль здесь НЕ трогается (см. updateManagerPassword).
+ */
+export async function updateManagerProfile(
+  id: string,
+  input: { name: string; username: string | null; email: string },
+): Promise<void> {
+  await query(
+    `UPDATE managers
+        SET name = $2,
+            username = $3,
+            email = $4
+      WHERE id = $1`,
+    [id, input.name, input.username, input.email],
+  )
+  // Имя/почта кэшируются в auth-state и попадают в JWT — сбрасываем кэш,
+  // чтобы перевыпуск сессии подхватил свежие значения.
   invalidateManagerAuthState(id)
 }
 

@@ -12,6 +12,7 @@ export {
   changeOwnPasswordAction,
   getLunchStateAction,
   setLunchAction,
+  updateMyProfileAction,
 } from './account-profile'
 export {
   markConversationReadAction,

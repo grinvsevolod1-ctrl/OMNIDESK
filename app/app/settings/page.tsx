@@ -5,6 +5,7 @@ import { LunchToggle } from '@/components/manager/lunch-toggle'
 import { NotificationSettings } from '@/components/manager/notification-settings'
 import { PageHeader } from '@/components/page-parts'
 import { LoginHistory } from '@/components/shared/login-history'
+import { ProfileForm } from '@/components/shared/profile-form'
 import {
   SettingsIdentityCard,
   SettingsShell,
@@ -13,9 +14,15 @@ import {
 import { TwofaSettings } from '@/components/shared/twofa-settings'
 import { Card } from '@/components/ui/card'
 import { requireManager } from '@/lib/auth'
-import { getManagerOnLunch } from '@/lib/data'
+import { getManagerById, getManagerOnLunch } from '@/lib/data'
 
 const TABS: SettingsTab[] = [
+  {
+    id: 'profile',
+    label: 'Профиль',
+    hint: 'Имя, логин, почта',
+    icon: 'user',
+  },
   {
     id: 'availability',
     label: 'Доступность',
@@ -50,10 +57,28 @@ const TABS: SettingsTab[] = [
 
 export default async function ManagerSettingsPage() {
   const session = await requireManager()
-  const [onLunch, twofa] = await Promise.all([
+  const [onLunch, twofa, account] = await Promise.all([
     getManagerOnLunch(session.sub),
     getTwofaStatusAction(),
+    getManagerById(session.sub),
   ])
+
+  const profilePanel = (
+    <Card className="p-5">
+      <h2 className="font-medium">Профиль</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Ваше имя, логин и email для входа. Изменения применяются сразу; логин
+        и email должны быть уникальны.
+      </p>
+      <div className="mt-5">
+        <ProfileForm
+          initialName={session.name}
+          initialUsername={account?.username ?? null}
+          initialEmail={session.email}
+        />
+      </div>
+    </Card>
+  )
 
   const availabilityPanel = (
     <Card className="p-5">
@@ -109,6 +134,7 @@ export default async function ManagerSettingsPage() {
       <SettingsShell
         tabs={TABS}
         panels={{
+          profile: profilePanel,
           availability: availabilityPanel,
           notifications: notificationsPanel,
           security: securityPanel,

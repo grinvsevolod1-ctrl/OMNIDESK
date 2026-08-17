@@ -3,7 +3,10 @@ import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
 import { SWRProvider } from '@/components/swr-provider'
 import { requireHead } from '@/lib/auth'
 
-const nav: NavItem[] = [{ href: '/head', label: 'Обзор', icon: 'overview' }]
+const nav: NavItem[] = [
+  { href: '/head', label: 'Обзор', icon: 'overview' },
+  { href: '/head/settings', label: 'Настройки', icon: 'settings' },
+]
 
 export default async function HeadLayout({
   children,
