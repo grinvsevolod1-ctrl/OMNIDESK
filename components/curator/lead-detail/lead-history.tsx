@@ -64,7 +64,9 @@ export function LeadHistory({
                   ? 'админ'
                   : t.initiatedByRole === 'curator'
                     ? 'менеджер по кадрам'
-                    : 'менеджер'}
+                    : t.initiatedByRole === 'head'
+                      ? 'руководитель'
+                      : 'менеджер'}
               </span>
             </HistoryRow>
           ))}

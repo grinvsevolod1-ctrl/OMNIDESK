@@ -37,7 +37,7 @@ export async function transferLeadToCurator(
   newCuratorId: string,
   initiator?: {
     id: string | null
-    role: 'admin' | 'curator'
+    role: 'admin' | 'curator' | 'head'
     /** Куратор может передавать только свои лиды: проверяется под локом. */
     requireOwnerId?: string
   },

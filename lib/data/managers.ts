@@ -285,7 +285,7 @@ export async function updateManagerPassword(
 /**
  * «Разлогинить все устройства»: продвигает session_version, мгновенно
  * инвалидируя каждый выданный JWT этого сотрудника. Сессия, которая вызвала
- * действие, должна сразу перевыпустить свою cookie со свежей версией (тот ��е
+ * действие, должна сразу перевыпустить свою cookie со свежей версией (тот же
  * паттерн, что при смене пароля — см. changeOwnPasswordAction).
  */
 export async function bumpSessionVersion(id: string): Promise<void> {

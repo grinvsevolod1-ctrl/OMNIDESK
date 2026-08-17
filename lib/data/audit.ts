@@ -12,7 +12,7 @@
  */
 import { query } from '../db'
 
-export type AuditActorRole = 'admin' | 'manager' | 'curator'
+export type AuditActorRole = 'admin' | 'manager' | 'curator' | 'head'
 
 export interface AuditEntry {
   actorRole: AuditActorRole

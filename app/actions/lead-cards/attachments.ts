@@ -25,16 +25,19 @@ import {
 } from '@/lib/data/lead-attachments'
 import {
   canAccessLeadCard,
+  canAccessLeadCardAsync,
   withCanDelete,
   type LeadAttachmentView,
 } from './shared'
 
-/** Список вложений карточки (для менеджера/менеджера по кадрам/админа с доступом). */
+/** Список вложений карточки (менеджер/менеджер по кадрам/админ/руководитель группы). */
 export async function listLeadAttachmentsAction(leadCardId: string) {
   const session = await getSession()
   if (!session) throw new Error('Unauthorized')
   const card = await getLeadCardById(leadCardId)
-  if (!card || !canAccessLeadCard(session, card)) throw new Error('Forbidden')
+  if (!card || !(await canAccessLeadCardAsync(session, card))) {
+    throw new Error('Forbidden')
+  }
   return withCanDelete(session, await listLeadAttachments(leadCardId))
 }
 
