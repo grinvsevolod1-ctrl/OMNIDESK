@@ -28,7 +28,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 | `admin` | `/admin` | `components/admin/` | руководитель: все лиды, финансы, настройка ИИ, копилот, аккаунты, серверы |
 | `manager` | `/app` | `components/manager/` | менеджер продаж: инбокс диалогов, автопилот, свои лиды |
 | `curator` | `/curator` | `components/curator/` | **менеджер по кадрам** (в UI и разговоре его называют так): свои лид-карточки, статусы, комментарии |
-| `head` | `/head` | `components/head/` | **руководитель** группы менеджеров по кадрам (миграция 141): видит лиды ТОЛЬКО своих кураторов (`head_curators`); право `managers.head_can_edit` — «просмотр» / «просмотр и редактирование» (поля, статусы, комментарии, передача внутри группы). Создаётся админом на `/admin/heads` |
+| `head` | `/head` | `components/head/` | **руководитель** группы (миграции 141, 143): ведёт кураторов (`head_curators`) И/ИЛИ менеджеров продаж (`head_managers`), видит их лиды (кураторские — только переданные, менеджерские — любые, кроме архива); право `managers.head_can_edit` — «просмотр» / «просмотр и редактирование» (поля, статусы, комментарии; передача — только между кураторами). Создаётся админом на `/admin/heads`, свои настройки — `/head/settings` |
 
 Гейты ролей — `lib/auth.ts` (`requireAdmin` / `requireManager` /
 `requireCurator` / `requireHead`); чужая роль редиректится в свой раздел
@@ -39,10 +39,12 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `142`
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `143`
   (140 — статус «Не связался», 141 — роль head, 142 — правка комментариев:
   только автором в МСК-день создания, прошлый текст — в
-  `lead_card_comment_revisions`, бейдж «изменён» виден всем).
+  `lead_card_comment_revisions`, бейдж «изменён» виден всем; 143 —
+  `head_managers`: руководитель может вести и менеджеров продаж, не только
+  кураторов).
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: teleproto (Telegram
@@ -167,7 +169,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    requireAdmin + god-unlock, без audit()-записей). UI —
    `components/admin/secret-telegram/` (telegram-tab → accounts-list /
    account-connect / personal-messenger + use-personal-messenger);
-   медиа/аватары — `app/wijegniwjgwjog/api/personal-media`.
+   медиа/авата��ы — `app/wijegniwjgwjog/api/personal-media`.
 7. **Вкладка «API TG»** — покупка Telegram-аккаунтов через сервис Get My TG
    (docs.getmytg.com/sdk-reference). Клиент — `lib/god-gmt.ts` (plain fetch к
    api.getmytg.com, заголовок `x-api-key`); actions —
@@ -225,6 +227,12 @@ app/                     Next.js App Router
                            finance-vault, finance-shared
                          account.ts → account-profile, account-messaging,
                            account-media
+                         account-profile.ts — self-service профиль сотрудника
+                           (менеджер/куратор/руководитель): updateMyProfileAction
+                           (имя, логин, email — уникальны; перевыпуск cookie, т.к.
+                           имя/почта в JWT) + changeOwnPasswordAction. UI —
+                           components/shared/profile-form.tsx, вкладка «Профиль»
+                           в /app/settings, /curator/settings, /head/settings
                          leads-export.ts — Excel-выгрузки: exportLeadsExcelAction
                            (админ, все лиды), exportMyLeadsExcelAction
                            (менеджер по кадрам, свои) и
@@ -516,7 +524,7 @@ lib/
                          для ОДНОГО процесса; pm2 cluster детектится и в
                          production без Redis — fail-fast
                          (RATE_LIMIT_REQUIRE_REDIS=true для внешних балансеров)
-  media-store.ts         ярусы хранения медиа: S3 (MEDIA_S3_*) → диск
+  media-store.ts         ярусы хранени�� медиа: S3 (MEDIA_S3_*) → диск
                          (MEDIA_STORE_DIR) → bytea; локатор s3://… или
                          абсолютный путь, диспатч по префиксу (media-s3.ts)
 worker/src/              воркер каналов
@@ -699,9 +707,9 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   - **Select (base-ui, `components/ui/select.tsx`)**: Root-обёртка сама
     собирает `items` из `SelectItem`-детей, поэтому закрытый триггер всегда
     показывает человеческую надпись, а не сырое значение («transferred»).
-    Если пункты рендерятся в отдельном подкомпоненте — передай `items`
+    Если пункты ренд��рятся в отдельном подкомпоненте — передай `items`
     явно. Попап выпадает ПОД триггером (`alignItemWithTrigger=false`,
-    `align="start"`) и не включай режим перекрытия обратно. Высота триггера —
+    `align="start"`) �� не включай режим перекрытия обратно. Высота триггера —
     обычные классы (`h-8` дефолт), переопределяется `h-9` из className.
   - Кликабельным элементам курсор pointer даёт глобальное правило в
     `globals.css` (`button:not(:disabled)`), отдельно прописывать не нужно;
