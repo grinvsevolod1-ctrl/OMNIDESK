@@ -33,7 +33,8 @@ import {
 import { sendPushToManager } from '@/lib/push'
 import {
   assertCuratorNotLocked,
-  canAccessLeadCard,
+  assertHeadCanEdit,
+  canAccessLeadCardAsync,
   notifyCuratorOfTransfer,
   requireManagerOrAdmin,
   resolveCardManagerId,
@@ -122,6 +123,18 @@ export async function saveLeadCardAction(input: {
   if (input.curatorId && !input.curatorId.trim()) {
     return { ok: false, message: 'Выберите менеджера по кадрам.' }
   }
+  // Обязательные поля при ПЕРЕДАЧЕ лида менеджеру по кадрам. Обычное
+  // сохранение (в т.ч. тихий черновик для вложений через ensureCardId)
+  // остаётся мягким — иначе прикрепить файл к недозаполненной карточке
+  // стало бы невозможно.
+  if (input.curatorId) {
+    if (!input.telegramUsername.trim()) {
+      return { ok: false, message: 'Укажите Telegram (юзик) лида.' }
+    }
+    if (!input.vacancy.trim()) {
+      return { ok: false, message: 'Укажите вакансию / должность.' }
+    }
+  }
 
   const resolved = await resolveCardManagerId(session, input.conversationId)
   if (!resolved.ok) return resolved
@@ -170,11 +183,8 @@ export async function getLeadCardDetailAction(leadCardId: string) {
   const card = await getLeadCardById(leadCardId)
   if (!card) return null
 
-  const allowed =
-    session.role === 'admin' ||
-    (session.role === 'curator' && card.curatorId === session.sub) ||
-    // The manager who owns the card may read its history too.
-    (session.role === 'manager' && card.managerId === session.sub)
+  // Админ / её куратор / её менеджер / руководитель её куратора.
+  const allowed = await canAccessLeadCardAsync(session, card)
   if (!allowed) throw new Error('Forbidden')
 
   const [comments, transfers, statusHistory, attachments] = await Promise.all([
@@ -243,7 +253,7 @@ export async function addLeadCommentAction(input: {
     return { ok: false, message: 'Введите комментарий.' }
   }
   const card = await getLeadCardById(input.leadCardId)
-  if (!card || !canAccessLeadCard(session, card)) {
+  if (!card || !(await canAccessLeadCardAsync(session, card))) {
     return { ok: false, message: 'Лид не найден.' }
   }
   try {
@@ -251,6 +261,10 @@ export async function addLeadCommentAction(input: {
     // сначала подтверди статусы. Менеджер и админ под гейт не попадают.
     if (session.role === 'curator') {
       await assertCuratorNotLocked(session.sub)
+    }
+    // Руководитель пишет комментарии только с правом «редактирование».
+    if (session.role === 'head') {
+      await assertHeadCanEdit(session.sub)
     }
     // Админ живёт вне таблицы managers (sub = 'admin') — FK хранит NULL,
     // имя уходит снапшотом, как в корзине и журнале статусов.

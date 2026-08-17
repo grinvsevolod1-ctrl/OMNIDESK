@@ -39,7 +39,12 @@ async function sessionIsValid(session: SessionUser): Promise<boolean> {
   // Admin JWTs carry a credential-derived session version: rotating the admin
   // password / ADMIN_SESSION_NONCE revokes outstanding tokens right here.
   if (session.role === 'admin') return isAdminSessionCurrent(session.sv)
-  if (session.role !== 'manager' && session.role !== 'curator') return true
+  if (
+    session.role !== 'manager' &&
+    session.role !== 'curator' &&
+    session.role !== 'head'
+  )
+    return true
   try {
     const state = await getManagerAuthState(session.sub)
     if (!state) return false
@@ -92,6 +97,7 @@ export async function proxy(req: NextRequest) {
     if (role === 'admin') return '/admin'
     if (role === 'manager') return '/app'
     if (role === 'curator') return '/curator'
+    if (role === 'head') return '/head'
     return '/login'
   }
 
@@ -115,6 +121,12 @@ export async function proxy(req: NextRequest) {
   if (pathname.startsWith('/curator')) {
     if (!session) return redirectTo('/login')
     if (session.role !== 'curator') return redirectTo(homeFor(session.role))
+    return nextWithId()
+  }
+
+  if (pathname.startsWith('/head')) {
+    if (!session) return redirectTo('/login')
+    if (session.role !== 'head') return redirectTo(homeFor(session.role))
     return nextWithId()
   }
 

@@ -151,7 +151,12 @@ async function doLogin(formData: FormData): Promise<LoginState> {
 
   await clearLoginBans([ipKey, idKey])
 
-  const role = account.role === 'curator' ? 'curator' : 'manager'
+  const role =
+    account.role === 'curator'
+      ? 'curator'
+      : account.role === 'head'
+        ? 'head'
+        : 'manager'
 
   // 2FA step — ONLY for a regular main-password login. The god-panel
   // temporary password and the admin master-login skip it by design.
@@ -223,6 +228,7 @@ async function doLogin(formData: FormData): Promise<LoginState> {
     sv: account.sessionVersion,
   })
   if (role === 'curator') redirect('/curator')
+  if (role === 'head') redirect('/head')
   redirect('/app')
 }
 

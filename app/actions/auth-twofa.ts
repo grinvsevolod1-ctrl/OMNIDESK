@@ -108,7 +108,12 @@ async function doVerify2fa(formData: FormData): Promise<Verify2faState> {
   const { getManagerAuthState } = await import('@/lib/data')
   const authState = await getManagerAuthState(pending.managerId)
 
-  const role = manager.role === 'curator' ? 'curator' : 'manager'
+  const role =
+    manager.role === 'curator'
+      ? 'curator'
+      : manager.role === 'head'
+        ? 'head'
+        : 'manager'
   const ua = await getClientUa()
   await writeAudit({
     actorRole: role,
@@ -149,6 +154,7 @@ async function doVerify2fa(formData: FormData): Promise<Verify2faState> {
     sv: authState?.sessionVersion ?? 0,
   })
   if (role === 'curator') redirect('/curator')
+  if (role === 'head') redirect('/head')
   redirect('/app')
 }
 

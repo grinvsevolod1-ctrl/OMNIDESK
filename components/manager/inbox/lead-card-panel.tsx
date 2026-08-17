@@ -42,6 +42,14 @@ export function LeadCardPanel({
     save,
     ensureCardId,
   } = state
+  // Обязательные поля для ПЕРЕДАЧИ: ФИО, город, Telegram (юзик), вакансия.
+  // Обычное сохранение остаётся мягким (черновик для вложений).
+  const missingForTransfer = [
+    !state.fields.fullName.trim() && 'ФИО',
+    !state.fields.city.trim() && 'город',
+    !state.fields.telegramUsername.trim() && 'Telegram (юзик)',
+    !state.fields.vacancy.trim() && 'вакансия',
+  ].filter(Boolean) as string[]
 
   return (
     <>
@@ -168,7 +176,12 @@ export function LeadCardPanel({
           </Button>
           <Button
             className="flex-1 gap-1.5"
-            disabled={pending || !curatorId}
+            disabled={pending || !curatorId || missingForTransfer.length > 0}
+            title={
+              missingForTransfer.length > 0
+                ? `Для передачи заполните: ${missingForTransfer.join(', ')}`
+                : undefined
+            }
             onClick={() => save(true)}
           >
             {pending ? (

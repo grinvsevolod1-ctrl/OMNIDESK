@@ -110,3 +110,35 @@ export function canAccessLeadCard(
     (session.role === 'manager' && card.managerId === session.sub)
   )
 }
+
+/**
+ * Асинхронный вариант canAccessLeadCard, знающий про руководителей: head
+ * имеет доступ к карточке, если её куратор входит в его группу (head_curators).
+ * Право на ЗАПИСЬ у head дополнительно требует managers.head_can_edit —
+ * проверяется отдельно через assertHeadCanEdit.
+ */
+export async function canAccessLeadCardAsync(
+  session: { role: string; sub: string },
+  card: { curatorId: string | null; managerId: string | null },
+): Promise<boolean> {
+  if (canAccessLeadCard(session, card)) return true
+  if (session.role !== 'head') return false
+  const { isCuratorOfHead } = await import('@/lib/data/heads')
+  return isCuratorOfHead(session.sub, card.curatorId)
+}
+
+/**
+ * Гейт записи для руководителя: право «просмотр и редактирование»
+ * (managers.head_can_edit) перечитывается из БД на каждый запрос — снятие
+ * права админом действует немедленно, не дожидаясь перевыпуска сессии.
+ */
+export async function assertHeadCanEdit(headId: string): Promise<void> {
+  const rows = await query<{ head_can_edit: boolean }>(
+    `SELECT head_can_edit FROM managers
+      WHERE id = $1 AND role = 'head' LIMIT 1`,
+    [headId],
+  )
+  if (!rows[0]?.head_can_edit) {
+    throw new Error('У вас право только на просмотр. Обратитесь к администратору.')
+  }
+}

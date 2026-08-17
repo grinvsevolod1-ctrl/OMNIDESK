@@ -216,7 +216,12 @@ export async function createManager(input: {
     ? input.username
     : usernameFromEmail(email)
   const username = await resolveUniqueUsername(desired)
-  const role: AccountRole = input.role === 'curator' ? 'curator' : 'manager'
+  const role: AccountRole =
+    input.role === 'curator'
+      ? 'curator'
+      : input.role === 'head'
+        ? 'head'
+        : 'manager'
   const city =
     role === 'curator' ? String(input.city ?? '').trim() || null : null
   if (role === 'curator' && !city) {
@@ -280,7 +285,7 @@ export async function updateManagerPassword(
 /**
  * «Разлогинить все устройства»: продвигает session_version, мгновенно
  * инвалидируя каждый выданный JWT этого сотрудника. Сессия, которая вызвала
- * действие, должна сразу перевыпустить свою cookie со свежей версией (тот же
+ * действие, должна сразу перевыпустить свою cookie со свежей версией (тот ��е
  * паттерн, что при смене пароля — см. changeOwnPasswordAction).
  */
 export async function bumpSessionVersion(id: string): Promise<void> {

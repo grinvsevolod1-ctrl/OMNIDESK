@@ -36,6 +36,8 @@ export interface ManagerRow {
   role: AccountRole | null
   /** City the curator is responsible for; null for managers. */
   city: string | null
+  /** Edit permission for role = 'head' (migration 141). */
+  head_can_edit: boolean | null
   created_at: string | Date
 }
 
@@ -214,7 +216,7 @@ export const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_m
  */
 const MANAGER_COLUMN_NAMES = [
   'id', 'name', 'email', 'username', 'password_hash', 'status',
-  'session_version', 'on_lunch', 'role', 'city', 'created_at',
+  'session_version', 'on_lunch', 'role', 'city', 'head_can_edit', 'created_at',
 ] as const
 
 const CHANNEL_COLUMN_NAMES = [

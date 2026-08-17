@@ -28,7 +28,7 @@ import {
 
 export function toManager(r: ManagerRow): Manager {
   const role: AccountRole =
-    r.role === 'curator' ? 'curator' : 'manager'
+    r.role === 'curator' ? 'curator' : r.role === 'head' ? 'head' : 'manager'
   return {
     id: r.id,
     name: r.name,
@@ -38,6 +38,7 @@ export function toManager(r: ManagerRow): Manager {
     onLunch: r.on_lunch ?? false,
     role,
     city: role === 'curator' ? (r.city ?? null) : null,
+    headCanEdit: role === 'head' ? Boolean(r.head_can_edit) : false,
     createdAt: new Date(r.created_at).toISOString(),
   }
 }

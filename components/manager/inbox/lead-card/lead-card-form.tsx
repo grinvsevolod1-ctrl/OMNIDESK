@@ -38,7 +38,7 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
             inputMode="tel"
           />
         </Field>
-        <Field label="Telegram">
+        <Field label="Telegram" required>
           <div className="flex items-center gap-1.5">
             <Input
               value={fields.telegramUsername}
@@ -89,7 +89,7 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
           placeholder="Улица, дом"
         />
       </Field>
-      <Field label="Вакансия / должность">
+      <Field label="Вакансия / должность" required>
         <Input
           value={fields.vacancy}
           onChange={(e) => fields.setVacancy(e.target.value)}

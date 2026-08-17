@@ -8,6 +8,7 @@ export const LEAD_STATUSES = [
   'training',
   'working',
   'temporarily_off',
+  'no_contact',
   'refused',
   'ignore',
   'left',
@@ -20,6 +21,7 @@ export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   training: 'Обучение',
   working: 'В работе',
   temporarily_off: 'Временно не работает',
+  no_contact: 'Не связался',
   refused: 'Отказался',
   ignore: 'Игнор',
   left: 'Кинул',
@@ -49,6 +51,11 @@ export const LEAD_STATUS_TONE: Record<
     bg: 'bg-amber-500/15',
     text: 'text-amber-700 dark:text-amber-400',
     dot: 'bg-amber-500',
+  },
+  no_contact: {
+    bg: 'bg-orange-500/15',
+    text: 'text-orange-700 dark:text-orange-400',
+    dot: 'bg-orange-500',
   },
   refused: {
     bg: 'bg-rose-500/15',

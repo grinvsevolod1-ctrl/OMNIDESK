@@ -1,7 +1,7 @@
-export type Role = 'admin' | 'manager' | 'curator'
+export type Role = 'admin' | 'manager' | 'curator' | 'head'
 
 /** DB-backed account role stored on the managers table (admin is env-only). */
-export type AccountRole = 'manager' | 'curator'
+export type AccountRole = 'manager' | 'curator' | 'head'
 
 export type ManagerStatus = 'active' | 'blocked'
 
@@ -25,6 +25,11 @@ export interface Manager {
    * always null for role = 'manager'.
    */
   city: string | null
+  /**
+   * Edit permission for role = 'head': false = «только просмотр»,
+   * true = «просмотр и редактирование». Always false for other roles.
+   */
+  headCanEdit: boolean
   createdAt: string
 }
 
