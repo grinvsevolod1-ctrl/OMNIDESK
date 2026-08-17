@@ -5,6 +5,10 @@ import { ArrowRightLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
 import {
+  headTransferLeadAction,
+  listMyGroupCuratorsAction,
+} from '@/app/actions/heads'
+import {
   listActiveCuratorsAction,
   transferMyLeadAction,
 } from '@/app/actions/lead-cards'
@@ -20,25 +24,31 @@ import {
 /**
  * Передача лида другому менеджеру по кадрам. Список коллег грузится лениво —
  * только когда секция раскрыта. Себя в списке нет: передать лид самому себе
- * нельзя (и сервер это тоже отклонит).
+ * нельзя (и сервер это тоже отклонит). variant='head' — руководитель
+ * переводит лид между кураторами СВОЕЙ группы (свой action и свой список).
  */
 export function LeadTransferSection({
   leadCardId,
   currentCuratorId,
   onTransferred,
+  variant = 'curator',
 }: {
   leadCardId: string
   /** Владелец карточки: исключается из списка получателей. */
   currentCuratorId: string | null
   onTransferred: () => void
+  variant?: 'curator' | 'head'
 }) {
   const [open, setOpen] = useState(false)
   const [target, setTarget] = useState('')
   const [pending, startTransition] = useTransition()
 
   const { data: curators, isLoading } = useSWR(
-    open ? 'active-curators' : null,
-    () => listActiveCuratorsAction(),
+    open ? ['transfer-curators', variant] : null,
+    () =>
+      variant === 'head'
+        ? listMyGroupCuratorsAction()
+        : listActiveCuratorsAction(),
     { revalidateOnFocus: false },
   )
   const options = (curators ?? []).filter((c) => c.id !== currentCuratorId)
@@ -46,10 +56,10 @@ export function LeadTransferSection({
   function transfer() {
     if (!target) return
     startTransition(async () => {
-      const res = await transferMyLeadAction({
-        leadCardId,
-        toCuratorId: target,
-      })
+      const res =
+        variant === 'head'
+          ? await headTransferLeadAction({ leadCardId, toCuratorId: target })
+          : await transferMyLeadAction({ leadCardId, toCuratorId: target })
       if (res.ok) {
         toast.success(res.message)
         onTransferred()

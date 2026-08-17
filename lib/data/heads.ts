@@ -30,6 +30,16 @@ export async function listHeads(): Promise<Manager[]> {
   return rows.map(toManager)
 }
 
+/** Текущее право руководителя (для первого рендера панели /head). */
+export async function getHeadCanEdit(headId: string): Promise<boolean> {
+  const rows = await query<{ head_can_edit: boolean }>(
+    `SELECT head_can_edit FROM managers
+      WHERE id = $1 AND role = 'head' LIMIT 1`,
+    [headId],
+  )
+  return !!rows[0]?.head_can_edit
+}
+
 /** Set the head's edit permission («только просмотр» / «редактирование»). */
 export async function setHeadCanEdit(
   headId: string,

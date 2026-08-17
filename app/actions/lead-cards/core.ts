@@ -290,3 +290,56 @@ export async function addLeadCommentAction(input: {
     return { ok: false, message: msg }
   }
 }
+
+/**
+ * Правка своего комментария — только в день его создания (по МСК).
+ * Прошлый текст сохраняется в ревизиях и остаётся видимым всем: правка
+ * не скрывает историю, а дополняет её.
+ */
+export async function editLeadCommentAction(input: {
+  commentId: string
+  leadCardId: string
+  body: string
+}): Promise<LeadCardActionResult> {
+  const session = await getSession()
+  if (!session) return { ok: false, message: 'Не авторизовано.' }
+  if (input.body.trim().length < 1) {
+    return { ok: false, message: 'Введите комментарий.' }
+  }
+  // Доступ к карточке — как для чтения (админ / её куратор / её менеджер /
+  // руководитель группы); авторство проверяет editLeadComment.
+  const card = await getLeadCardById(input.leadCardId)
+  if (!card || !(await canAccessLeadCardAsync(session, card))) {
+    return { ok: false, message: 'Лид не найден.' }
+  }
+  // Root-админ живёт вне managers — его комментарии имеют author_id = NULL
+  // и не могут быть отредактированы (авторство не доказать).
+  if (session.role === 'admin' && session.sub === 'admin') {
+    return { ok: false, message: 'Комментарии администратора не редактируются.' }
+  }
+  try {
+    const comments = await listLeadComments(input.leadCardId)
+    const comment = comments.find((c) => c.id === input.commentId)
+    if (!comment) return { ok: false, message: 'Комментарий не найден.' }
+    if (comment.authorId !== session.sub) {
+      return { ok: false, message: 'Можно править только свои комментарии.' }
+    }
+    // Дедлайн: комментарий правится только в МСК-день создания.
+    if (mskDayKey(comment.createdAt) !== mskDayKey(new Date())) {
+      return {
+        ok: false,
+        message: 'Комментарий можно редактировать только в день его создания.',
+      }
+    }
+    await editLeadComment({
+      commentId: input.commentId,
+      editorId: session.sub,
+      editorName: session.name ?? null,
+      newBody: input.body,
+    })
+    return { ok: true, message: 'Комментарий обновлён.' }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка'
+    return { ok: false, message: msg }
+  }
+}

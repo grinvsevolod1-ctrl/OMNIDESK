@@ -282,6 +282,7 @@ export async function listLeadComments(
 ): Promise<LeadCardComment[]> {
   const rows = await query<CommentRow>(
     `SELECT c.id, c.lead_card_id, c.author_id, c.body, c.status, c.created_at,
+            c.edited_at,
             COALESCE(m.name, c.author_name) AS author_name
        FROM lead_card_comments c
        LEFT JOIN managers m ON m.id = c.author_id
@@ -289,5 +290,83 @@ export async function listLeadComments(
       ORDER BY c.created_at DESC`,
     [leadCardId],
   )
-  return rows.map(toComment)
+  const comments = rows.map(toComment)
+
+  // Ревизии одним запросом на все правленные комментарии (обычно их мало).
+  const editedIds = comments.filter((c) => c.editedAt).map((c) => c.id)
+  if (editedIds.length > 0) {
+    const revs = await query<{
+      id: string
+      comment_id: string
+      previous_body: string
+      edited_by_name: string | null
+      edited_at: string | Date
+    }>(
+      `SELECT r.id, r.comment_id, r.previous_body, r.edited_at,
+              COALESCE(m.name, r.edited_by_name) AS edited_by_name
+         FROM lead_card_comment_revisions r
+         LEFT JOIN managers m ON m.id = r.edited_by
+        WHERE r.comment_id = ANY($1::uuid[])
+        ORDER BY r.edited_at DESC`,
+      [editedIds],
+    )
+    const byComment = new Map<string, LeadCardComment>()
+    for (const c of comments) byComment.set(c.id, c)
+    for (const r of revs) {
+      byComment.get(r.comment_id)?.revisions.push({
+        id: r.id,
+        previousBody: r.previous_body,
+        editedByName: r.edited_by_name,
+        editedAt: new Date(r.edited_at).toISOString(),
+      })
+    }
+  }
+  return comments
+}
+
+/**
+ * Правка комментария: только автором и только в день создания (по МСК) —
+ * дедлайн проверяется в action. Прошлый текст уходит в ревизии и остаётся
+ * видимым всем, у кого есть доступ к карточке.
+ */
+export async function editLeadComment(input: {
+  commentId: string
+  /** Кто правит: сверяется с author_id комментария. */
+  editorId: string
+  editorName: string | null
+  newBody: string
+}): Promise<void> {
+  const newBody = input.newBody.trim()
+  if (newBody.length < 1) throw new Error('Пустой комментарий')
+
+  await withTransaction(async (db) => {
+    // Лочим строку: параллельная правка не потеряет ревизию.
+    const rows = await db.query<{
+      id: string
+      author_id: string | null
+      body: string
+      created_at: string | Date
+    }>(
+      `SELECT id, author_id, body, created_at
+         FROM lead_card_comments WHERE id = $1 FOR UPDATE`,
+      [input.commentId],
+    )
+    const row = rows[0]
+    if (!row) throw new Error('Комментарий не найден')
+    if (!row.author_id || row.author_id !== input.editorId) {
+      throw new Error('Комментарий можно править только его автору.')
+    }
+    if (row.body === newBody) return
+
+    await db.query(
+      `INSERT INTO lead_card_comment_revisions
+         (comment_id, previous_body, edited_by, edited_by_name)
+       VALUES ($1, $2, $3, $4)`,
+      [input.commentId, row.body, input.editorId, input.editorName],
+    )
+    await db.query(
+      `UPDATE lead_card_comments SET body = $2, edited_at = now() WHERE id = $1`,
+      [input.commentId, newBody],
+    )
+  })
 }

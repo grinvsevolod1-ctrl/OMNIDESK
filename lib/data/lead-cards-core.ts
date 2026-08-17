@@ -43,6 +43,19 @@ export interface LeadCardComment {
   body: string
   status: LeadStatus | null
   createdAt: string
+  /** Когда комментарий последний раз правили (миграция 142); null — не правили. */
+  editedAt: string | null
+  /** Прошлые версии текста, новые сверху. Заполняется только при editedAt. */
+  revisions: LeadCommentRevision[]
+}
+
+/** Прошлая версия текста комментария (до очередной правки). */
+export interface LeadCommentRevision {
+  id: string
+  /** Текст, каким он был ДО правки. */
+  previousBody: string
+  editedByName: string | null
+  editedAt: string
 }
 
 export interface LeadTransfer {
@@ -87,6 +100,7 @@ export interface CommentRow {
   body: string
   status: string | null
   created_at: string | Date
+  edited_at?: string | Date | null
 }
 
 export function toDateOnly(v: string | Date | null | undefined): string | null {
@@ -148,6 +162,9 @@ export function toComment(r: CommentRow): LeadCardComment {
     body: r.body,
     status: isLeadStatus(r.status) ? r.status : null,
     createdAt: new Date(r.created_at).toISOString(),
+    editedAt: r.edited_at ? new Date(r.edited_at).toISOString() : null,
+    // Ревизии подгружаются отдельным запросом в listLeadComments.
+    revisions: [],
   }
 }
 

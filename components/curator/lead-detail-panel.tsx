@@ -167,11 +167,16 @@ export function LeadDetailPanel({
           className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
         >
           <PanelSection className="space-y-4">
-            <LeadIdentity card={card} onFieldSaved={onFieldSaved} />
+            <LeadIdentity
+              card={card}
+              onFieldSaved={onFieldSaved}
+              readOnly={readOnly}
+            />
             <LeadDetailFields
               card={card}
               variant={variant}
               onFieldSaved={onFieldSaved}
+              readOnly={readOnly}
             />
             {hydrating ? (
               <SlideOverSectionSkeleton rows={2} />
@@ -195,17 +200,21 @@ export function LeadDetailPanel({
                 conversationId={null}
                 attachments={detail?.attachments ?? []}
                 onChanged={() => void mutate()}
+                readOnly={readOnly}
               />
             )}
           </PanelSection>
 
-          {/* Передача коллеге: только в кураторской панели и пока лид
-              не в а��хиве — из архива сначала верните лид. */}
-          {variant === 'curator' && !card.archivedAt ? (
+          {/* Передача коллеге: кураторская панель и руководитель с правом
+              «редактирование» (внутри своей группы), пока лид не в архиве —
+              из архива сначала верните лид. */}
+          {(variant === 'curator' || (variant === 'head' && headCanEdit)) &&
+          !card.archivedAt ? (
             <PanelSection>
               <LeadTransferSection
                 leadCardId={card.id}
                 currentCuratorId={card.curatorId}
+                variant={variant}
                 onTransferred={() => {
                   onUpdated()
                   onClose()
@@ -214,8 +223,9 @@ export function LeadDetailPanel({
             </PanelSection>
           ) : null}
 
-          {/* Lifecycle: финальные лиды можно архивировать или вернуть ИИ. */}
-          {isFinalLeadStatus(card.status) ? (
+          {/* Lifecycle: финальные лиды можно архивировать или вернуть ИИ.
+              Руководителю недоступно даже с правом редактирования. */}
+          {variant !== 'head' && isFinalLeadStatus(card.status) ? (
             <PanelSection className="space-y-2">
               <LeadLifecycleActions
                 card={card}
@@ -227,13 +237,16 @@ export function LeadDetailPanel({
           ) : null}
 
           {/* Форма статуса — отдельный memo-компонент с собственным
-              состоянием: ввод комментария не перерисовывает панель. */}
-          <LeadStatusForm
-            leadCardId={card.id}
-            currentStatus={card.status}
-            onSaved={onStatusSaved}
-            variant={variant}
-          />
+              состоянием: ввод комментария не перерисовывает панель.
+              В readOnly-режиме статус менять нельзя. */}
+          {readOnly ? null : (
+            <LeadStatusForm
+              leadCardId={card.id}
+              currentStatus={card.status}
+              onSaved={onStatusSaved}
+              variant={variant}
+            />
+          )}
 
           <PanelSection border={false} className="space-y-3">
             {hydrating ? (
@@ -243,6 +256,7 @@ export function LeadDetailPanel({
                 leadCardId={card.id}
                 comments={detail?.comments ?? []}
                 onCommentSaved={onCommentSaved}
+                readOnly={readOnly}
               />
             )}
           </PanelSection>

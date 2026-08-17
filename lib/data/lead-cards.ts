@@ -29,6 +29,7 @@ export {
   type LeadCard,
   type LeadCardComment,
   type LeadCardRow,
+  type LeadCommentRevision,
   type LeadTransfer,
 } from './lead-cards-core'
 
@@ -53,6 +54,7 @@ export {
 export {
   addLeadComment,
   adminSetLeadStatus,
+  editLeadComment,
   listLeadComments,
   transferLeadToCurator,
   updateLeadStatus,

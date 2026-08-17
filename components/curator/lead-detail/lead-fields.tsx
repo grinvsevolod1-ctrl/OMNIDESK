@@ -65,14 +65,7 @@ export function LeadDetailFields({
         <dt className="text-xs text-muted-foreground">Город</dt>
         <dd className="font-medium">
           {readOnly ? (
-            <span>
-              {card.city || '—'}
-              {card.region ? (
-                <span className="text-xs text-muted-foreground">
-                  {` (${card.region})`}
-                </span>
-              ) : null}
-            </span>
+            <span>{card.city || '—'}</span>
           ) : (
             <CityInlineEditor lead={card} onSaved={onFieldSaved} />
           )}
