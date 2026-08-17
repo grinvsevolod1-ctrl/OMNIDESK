@@ -113,9 +113,9 @@ export function canAccessLeadCard(
 
 /**
  * Асинхронный вариант canAccessLeadCard, знающий про руководителей: head
- * имеет доступ к карточке, если её куратор входит в его группу (head_curators).
- * Право на ЗАПИСЬ у head дополнительно требует managers.head_can_edit —
- * проверяется отдельно через assertHeadCanEdit.
+ * имеет доступ к карточке, если её куратор ЛИБО её менеджер входит в его
+ * группу (head_curators / head_managers). Право на ЗАПИСЬ у head дополнительно
+ * требует managers.head_can_edit — проверяется отдельно через assertHeadCanEdit.
  */
 export async function canAccessLeadCardAsync(
   session: { role: string; sub: string },
@@ -123,8 +123,9 @@ export async function canAccessLeadCardAsync(
 ): Promise<boolean> {
   if (canAccessLeadCard(session, card)) return true
   if (session.role !== 'head') return false
-  const { isCuratorOfHead } = await import('@/lib/data/heads')
-  return isCuratorOfHead(session.sub, card.curatorId)
+  const { isCuratorOfHead, isManagerOfHead } = await import('@/lib/data/heads')
+  if (await isCuratorOfHead(session.sub, card.curatorId)) return true
+  return isManagerOfHead(session.sub, card.managerId)
 }
 
 /**

@@ -251,7 +251,7 @@ export async function confirmTelegramSetupAction(
       verdict.reason === 'expired' || verdict.reason === 'missing'
         ? 'Код истёк. Отправьте новый.'
         : verdict.reason === 'attempts'
-          ? 'Слишком много неверных попыток. Отправьте новый ко��.'
+          ? 'Слишком много неверных попыток. Отправьте новый код.'
           : 'Неверный код. Попробуйте ещё раз.'
     return { ok: false, message: msg }
   }

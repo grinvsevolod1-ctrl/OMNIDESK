@@ -2,9 +2,10 @@
 
 /**
  * Админ: управление руководителями (role = 'head', миграция 141) —
- * создание учётки, состав группы кураторов, право «просмотр» /
- * «просмотр и редактирование». Блокировка/сброс пароля/удаление — общие
- * экшены аккаунтов из app/actions/managers.ts.
+ * создание учётки, состав группы (кураторы — head_curators; менеджеры продаж —
+ * head_managers, миграция 143), право «просмотр» / «просмотр и редактирование».
+ * Блокировка/сброс пароля/удаление — общие экшены аккаунтов из
+ * app/actions/managers.ts.
  */
 import { revalidatePath } from 'next/cache'
 import { hashPassword, requireAdmin } from '@/lib/auth'
@@ -15,14 +16,18 @@ import {
   getManagerById,
   getManagerByIdentifier,
   listCurators,
+  listManagers,
   sanitizeUsername,
 } from '@/lib/data'
 import {
   listCuratorsOfHead,
   listHeads,
+  listManagersOfHead,
   mapCuratorHeads,
+  mapManagerHeads,
   setHeadCanEdit,
   setHeadCurators,
+  setHeadManagers,
 } from '@/lib/data/heads'
 import { writeAudit } from '@/lib/data/audit'
 import type { ActionResult as BaseActionResult } from '@/lib/types'
@@ -32,19 +37,28 @@ export interface HeadActionResult extends BaseActionResult {
   username?: string
 }
 
-/** Admin: руководители + состав их групп + все кураторы (для назначения). */
+/**
+ * Admin: руководители + состав их групп (кураторы и менеджеры) + справочники
+ * всех кураторов и всех менеджеров с их текущим руководителем (для назначения).
+ */
 export async function listHeadsAdminAction() {
   await requireAdmin()
-  const [heads, curators, curatorHeads] = await Promise.all([
-    listHeads(),
-    listCurators(),
-    mapCuratorHeads(),
-  ])
+  const [heads, curators, managers, curatorHeads, managerHeads] =
+    await Promise.all([
+      listHeads(),
+      listCurators(),
+      listManagers(),
+      mapCuratorHeads(),
+      mapManagerHeads(),
+    ])
   const groups = await Promise.all(
-    heads.map(async (h) => ({
-      head: h,
-      curators: await listCuratorsOfHead(h.id),
-    })),
+    heads.map(async (h) => {
+      const [groupCurators, groupManagers] = await Promise.all([
+        listCuratorsOfHead(h.id),
+        listManagersOfHead(h.id),
+      ])
+      return { head: h, curators: groupCurators, managers: groupManagers }
+    }),
   )
   return {
     groups,
@@ -52,6 +66,11 @@ export async function listHeadsAdminAction() {
       ...c,
       headId: curatorHeads.get(c.id)?.headId ?? null,
       headName: curatorHeads.get(c.id)?.headName ?? null,
+    })),
+    allManagers: managers.map((m) => ({
+      ...m,
+      headId: managerHeads.get(m.id)?.headId ?? null,
+      headName: managerHeads.get(m.id)?.headName ?? null,
     })),
   }
 }
@@ -167,5 +186,28 @@ export async function setHeadCuratorsAction(
     details: { name: head.name, curatorIds },
   })
   revalidatePath('/admin/heads')
-  return { ok: true, message: 'Состав группы обновлён.' }
+  return { ok: true, message: 'Состав кураторов обновлён.' }
+}
+
+/** Admin: полная замена состава менеджеров продаж в группе руководителя. */
+export async function setHeadManagersAction(
+  headId: string,
+  managerIds: string[],
+): Promise<BaseActionResult> {
+  await requireAdmin()
+  const head = await getManagerById(headId)
+  if (!head || head.role !== 'head') {
+    return { ok: false, message: 'Руководитель не найден.' }
+  }
+  await setHeadManagers(headId, managerIds)
+  await writeAudit({
+    actorRole: 'admin',
+    actorLabel: 'Administrator',
+    action: 'head.managers_update',
+    entityType: 'manager',
+    entityId: headId,
+    details: { name: head.name, managerIds },
+  })
+  revalidatePath('/admin/heads')
+  return { ok: true, message: 'Состав менеджеров обновлён.' }
 }

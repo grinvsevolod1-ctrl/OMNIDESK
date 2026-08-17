@@ -2,28 +2,31 @@
 
 /**
  * Админ-таблица руководителей: право доступа («просмотр» / «просмотр и
- * редактирование»), состав группы кураторов, общие действия аккаунта
- * (блокировка, сброс пароля, удаление — ManagerActions).
+ * редактирование»), состав группы — кураторы (менеджеры по кадрам) и менеджеры
+ * продаж, — общие действия аккаунта (блокировка, сброс пароля, удаление —
+ * ManagerActions).
  */
 import { useState, useTransition } from 'react'
-import { Pencil, ShieldCheck, Users } from 'lucide-react'
+import { Briefcase, Pencil, ShieldCheck, Users } from 'lucide-react'
 import { setHeadCanEditAction } from '@/app/actions/admin-heads'
 import { ManagerActions } from '@/components/admin/manager-actions'
-import { EditHeadCuratorsDialog } from '@/components/admin/heads/edit-head-curators-dialog'
+import { EditHeadMembersDialog } from '@/components/admin/heads/edit-head-members-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { toast } from 'sonner'
-import type { HeadCurator } from '@/lib/data/heads'
+import type { HeadCurator, HeadManager } from '@/lib/data/heads'
 import { formatMskDate as formatDate } from '@/lib/time'
 import type { Manager } from '@/lib/types'
 
 export interface HeadGroup {
   head: Manager
   curators: HeadCurator[]
+  managers: HeadManager[]
 }
 
-export interface AssignableCurator {
+/** Строка справочника для назначения (куратор ИЛИ менеджер продаж). */
+export interface AssignableMember {
   id: string
   name: string
   city: string | null
@@ -84,28 +87,34 @@ function PermissionToggle({ head }: { head: Manager }) {
   )
 }
 
-function CuratorChips({
-  group,
+/** Чипы состава группы одного вида (кураторы или менеджеры) + кнопка правки. */
+function MemberChips({
+  members,
+  icon,
+  emptyText,
   onEdit,
 }: {
-  group: HeadGroup
+  members: { id: string; name: string; city?: string | null; activeLeads: number }[]
+  icon: 'curator' | 'manager'
+  emptyText: string
   onEdit: () => void
 }) {
+  const Icon = icon === 'curator' ? Users : Briefcase
   return (
     <div className="flex max-w-md flex-wrap items-center gap-1.5">
-      {group.curators.length === 0 ? (
-        <span className="text-xs text-muted-foreground">Нет кураторов</span>
+      {members.length === 0 ? (
+        <span className="text-xs text-muted-foreground">{emptyText}</span>
       ) : (
-        group.curators.map((c) => (
+        members.map((m) => (
           <Badge
-            key={c.id}
+            key={m.id}
             variant="outline"
             className="gap-1.5 border-transparent bg-muted text-muted-foreground"
-            title={`${c.name}${c.city ? ` · ${c.city}` : ''} · активных лидов: ${c.activeLeads}`}
+            title={`${m.name}${m.city ? ` · ${m.city}` : ''} · активных лидов: ${m.activeLeads}`}
           >
-            <Users className="size-3" />
-            {c.name}
-            <span className="font-mono">{c.activeLeads}</span>
+            <Icon className="size-3" />
+            {m.name}
+            <span className="font-mono">{m.activeLeads}</span>
           </Badge>
         ))
       )}
@@ -116,8 +125,8 @@ function CuratorChips({
           onEdit()
         }}
         className="inline-flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        title="Изменить состав группы"
-        aria-label="Изменить состав группы"
+        title="Изменить состав"
+        aria-label="Изменить состав"
       >
         <Pencil className="size-3" />
       </button>
@@ -128,23 +137,29 @@ function CuratorChips({
 export function HeadsTable({
   groups,
   allCurators,
+  allManagers,
 }: {
   groups: HeadGroup[]
-  allCurators: AssignableCurator[]
+  allCurators: AssignableMember[]
+  allManagers: AssignableMember[]
 }) {
-  const [editing, setEditing] = useState<HeadGroup | null>(null)
+  // Какую группу и какой её вид сейчас редактируем.
+  const [editing, setEditing] = useState<{
+    group: HeadGroup
+    kind: 'curator' | 'manager'
+  } | null>(null)
 
   return (
     <>
-      <Card className="hidden overflow-hidden md:block">
+      <Card className="hidden overflow-hidden lg:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="px-5 py-3 font-medium">Имя</th>
               <th className="px-5 py-3 font-medium">Доступ</th>
               <th className="px-5 py-3 font-medium">Менеджеры по кадрам</th>
+              <th className="px-5 py-3 font-medium">Менеджеры продаж</th>
               <th className="px-5 py-3 font-medium">Статус</th>
-              <th className="px-5 py-3 font-medium">Создан</th>
               <th className="px-5 py-3 font-medium text-right">Действия</th>
             </tr>
           </thead>
@@ -169,13 +184,23 @@ export function HeadsTable({
                   <PermissionToggle head={g.head} />
                 </td>
                 <td className="px-5 py-3">
-                  <CuratorChips group={g} onEdit={() => setEditing(g)} />
+                  <MemberChips
+                    members={g.curators}
+                    icon="curator"
+                    emptyText="Нет кураторов"
+                    onEdit={() => setEditing({ group: g, kind: 'curator' })}
+                  />
+                </td>
+                <td className="px-5 py-3">
+                  <MemberChips
+                    members={g.managers}
+                    icon="manager"
+                    emptyText="Нет менеджеров"
+                    onEdit={() => setEditing({ group: g, kind: 'manager' })}
+                  />
                 </td>
                 <td className="px-5 py-3">
                   <StatusPill status={g.head.status} />
-                </td>
-                <td className="px-5 py-3 text-muted-foreground">
-                  {formatDate(g.head.createdAt)}
                 </td>
                 <td className="px-5 py-3 text-right">
                   <ManagerActions manager={g.head} />
@@ -186,7 +211,7 @@ export function HeadsTable({
         </table>
       </Card>
 
-      <div className="flex flex-col gap-3 md:hidden">
+      <div className="flex flex-col gap-3 lg:hidden">
         {groups.map((g) => (
           <Card key={g.head.id} className="p-4">
             <div className="flex items-start justify-between gap-3">
@@ -203,7 +228,28 @@ export function HeadsTable({
                 <StatusPill status={g.head.status} />
               </div>
               <PermissionToggle head={g.head} />
-              <CuratorChips group={g} onEdit={() => setEditing(g)} />
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Менеджеры по кадрам
+                </span>
+                <MemberChips
+                  members={g.curators}
+                  icon="curator"
+                  emptyText="Нет кураторов"
+                  onEdit={() => setEditing({ group: g, kind: 'curator' })}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Менеджеры продаж
+                </span>
+                <MemberChips
+                  members={g.managers}
+                  icon="manager"
+                  emptyText="Нет менеджеров"
+                  onEdit={() => setEditing({ group: g, kind: 'manager' })}
+                />
+              </div>
               <span className="text-xs text-muted-foreground">
                 {formatDate(g.head.createdAt)}
               </span>
@@ -213,9 +259,10 @@ export function HeadsTable({
       </div>
 
       {editing ? (
-        <EditHeadCuratorsDialog
-          group={editing}
-          allCurators={allCurators}
+        <EditHeadMembersDialog
+          kind={editing.kind}
+          group={editing.group}
+          allMembers={editing.kind === 'curator' ? allCurators : allManagers}
           open={!!editing}
           onOpenChange={(o) => {
             if (!o) setEditing(null)

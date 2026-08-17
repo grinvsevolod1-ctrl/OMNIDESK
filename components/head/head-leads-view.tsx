@@ -1,17 +1,19 @@
 'use client'
 
 /**
- * Панель руководителя (/head): активные лиды всех кураторов его группы —
- * в том же визуальном стиле, что и «Мои лиды» куратора. Отличия:
- * дополнительный фильтр по куратору, колонка «Менеджер по кадрам», и режим
- * прав: canEdit=false — только просмотр (детальная панель без форм),
- * canEdit=true — правка полей, статусов, комментарии и передача внутри группы.
+ * Панель руководителя (/head): активные лиды всей его группы — кураторов
+ * (менеджеров по кадрам) и менеджеров продаж — в том же визуальном стиле, что
+ * и «Мои лиды» куратора. Отличия: фильтр по конкретному подчинённому (куратор
+ * ЛИБО менеджер), колонка «Исполнитель», и режим прав: canEdit=false — только
+ * просмотр (детальная панель без форм), canEdit=true — правка полей, статусов,
+ * комментарии и передача внутри группы (передача — только между кураторами).
  */
 
 import { useCallback, useMemo, useState } from 'react'
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
+  Briefcase,
   Eye,
   ListFilter,
   Search,
@@ -19,6 +21,7 @@ import {
   Users,
   X,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { listGroupLeadsAction } from '@/app/actions/heads'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
@@ -33,7 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { HeadCurator } from '@/lib/data/heads'
+import type { HeadCurator, HeadManager } from '@/lib/data/heads'
 import type { LeadCard } from '@/lib/data/lead-cards'
 import {
   LEAD_STATUSES,
@@ -45,19 +48,74 @@ import { cn } from '@/lib/utils'
 
 const PAGE = 50
 
+/** Ряд чипов-фильтров по подчинённым одного вида (кураторы или менеджеры). */
+function MemberFilterRow({
+  label,
+  icon: Icon,
+  members,
+  kind,
+  activeFilter,
+  onToggle,
+}: {
+  label: string
+  icon: LucideIcon
+  members: { id: string; name: string; city?: string | null; activeLeads: number }[]
+  kind: 'curator' | 'manager'
+  activeFilter: string
+  onToggle: (next: string) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="w-full text-xs font-medium uppercase tracking-wide text-muted-foreground sm:w-auto">
+        {label}
+      </span>
+      {members.map((m) => {
+        const value = `${kind}:${m.id}`
+        const active = activeFilter === value
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => onToggle(active ? '' : value)}
+            className={cn(
+              'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors',
+              active
+                ? 'border-primary bg-primary/10 font-medium'
+                : 'border-border bg-muted/30 text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Icon className="size-3.5 shrink-0" />
+            {m.name}
+            {m.city ? (
+              <span className="text-xs opacity-70">({m.city})</span>
+            ) : null}
+            <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums">
+              {m.activeLeads}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function HeadLeadsView({
   initialLeads,
   curators,
+  managers,
   canEdit,
 }: {
   initialLeads: LeadCard[]
   curators: HeadCurator[]
+  managers: HeadManager[]
   canEdit: boolean
 }) {
   const [leads, setLeads] = useState(initialLeads)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const [curatorFilter, setCuratorFilter] = useState('')
+  // Фильтр по подчинённому: строка вида `curator:<id>` или `manager:<id>`,
+  // чтобы различать людей из разных таблиц (id уникальны, но семантика разная).
+  const [memberFilter, setMemberFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [search, setSearch] = useState('')
   const [searchFocused, setSearchFocused] = useState(false)
@@ -71,7 +129,13 @@ export function HeadLeadsView({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     let out = leads
-    if (curatorFilter) out = out.filter((l) => l.curatorId === curatorFilter)
+    if (memberFilter) {
+      const [kind, id] = memberFilter.split(':')
+      out =
+        kind === 'curator'
+          ? out.filter((l) => l.curatorId === id)
+          : out.filter((l) => l.managerId === id)
+    }
     if (statusFilter === 'none') out = out.filter((l) => !l.status)
     else if (statusFilter) out = out.filter((l) => l.status === statusFilter)
     if (q) {
@@ -86,7 +150,7 @@ export function HeadLeadsView({
     return [...out].sort((a, b) =>
       sort === 'newest' ? key(b) - key(a) : key(a) - key(b),
     )
-  }, [leads, curatorFilter, statusFilter, search, sort])
+  }, [leads, memberFilter, statusFilter, search, sort])
   const shown = filtered.slice(0, visible)
 
   const selectedLead = useMemo(
@@ -102,8 +166,8 @@ export function HeadLeadsView({
         title="Обзор группы"
         description={
           canEdit
-            ? 'Лиды ваших менеджеров по кадрам. Вы можете править карточки, статусы и передавать лидов внутри группы.'
-            : 'Лиды ваших менеджеров по кадрам. Режим «только просмотр» — правки недоступны.'
+            ? 'Лиды ваших кураторов и менеджеров. Вы можете править карточки, статусы и передавать лидов между кураторами группы.'
+            : 'Лиды ваших кураторов и менеджеров. Режим «только просмотр» — правки недоступны.'
         }
       />
 
@@ -117,38 +181,34 @@ export function HeadLeadsView({
         </div>
       ) : null}
 
-      {/* Сводка по кураторам группы */}
-      {curators.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {curators.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() =>
-                setCuratorFilter((cur) => (cur === c.id ? '' : c.id))
-              }
-              className={cn(
-                'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors',
-                curatorFilter === c.id
-                  ? 'border-primary bg-primary/10 font-medium'
-                  : 'border-border bg-muted/30 text-muted-foreground hover:text-foreground',
-              )}
-            >
-              <Users className="size-3.5 shrink-0" />
-              {c.name}
-              {c.city ? (
-                <span className="text-xs opacity-70">({c.city})</span>
-              ) : null}
-              <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums">
-                {c.activeLeads}
-              </span>
-            </button>
-          ))}
+      {/* Сводка по подчинённым: кураторы и менеджеры отдельными рядами,
+          клик по чипу фильтрует список по этому сотруднику. */}
+      {curators.length === 0 && managers.length === 0 ? (
+        <div className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          За вами пока не закреплены сотрудники — обратитесь к администратору.
         </div>
       ) : (
-        <div className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          За вами пока не закреплены менеджеры по кадрам — обратитесь к
-          администратору.
+        <div className="flex flex-col gap-2">
+          {curators.length > 0 ? (
+            <MemberFilterRow
+              label="Менеджеры по кадрам"
+              icon={Users}
+              members={curators}
+              kind="curator"
+              activeFilter={memberFilter}
+              onToggle={setMemberFilter}
+            />
+          ) : null}
+          {managers.length > 0 ? (
+            <MemberFilterRow
+              label="Менеджеры продаж"
+              icon={Briefcase}
+              members={managers}
+              kind="manager"
+              activeFilter={memberFilter}
+              onToggle={setMemberFilter}
+            />
+          ) : null}
         </div>
       )}
 
@@ -239,14 +299,14 @@ export function HeadLeadsView({
         <EmptyState
           icon={User}
           title={
-            search || statusFilter || curatorFilter
+            search || statusFilter || memberFilter
               ? 'Ничего не найдено'
               : 'Пока нет лидов'
           }
           description={
-            search || statusFilter || curatorFilter
+            search || statusFilter || memberFilter
               ? 'Попробуйте изменить фильтры или запрос поиска.'
-              : 'Когда вашим менеджерам по кадрам передадут лидов, они появятся здесь.'
+              : 'Когда у ваших сотрудников появятся лиды, они отобразятся здесь.'
           }
         />
       ) : (
@@ -265,8 +325,18 @@ export function HeadLeadsView({
                   <span className="hidden w-28 truncate text-xs text-muted-foreground sm:block">
                     {lead.city || '—'}
                   </span>
-                  <span className="hidden w-36 truncate text-xs text-muted-foreground md:block">
-                    {lead.curatorName ?? '—'}
+                  <span className="hidden w-40 min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground md:flex">
+                    {lead.curatorId ? (
+                      <>
+                        <Users className="size-3 shrink-0" />
+                        {lead.curatorName ?? '—'}
+                      </>
+                    ) : (
+                      <>
+                        <Briefcase className="size-3 shrink-0" />
+                        {lead.managerName ?? '—'}
+                      </>
+                    )}
                   </span>
                   <span className="hidden w-36 text-xs tabular-nums text-muted-foreground lg:block">
                     {lead.transferredAt

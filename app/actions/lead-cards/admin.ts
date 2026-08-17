@@ -25,6 +25,7 @@ import {
   assertCuratorNotLocked,
   assertHeadCanEdit,
   canAccessLeadCard,
+  canAccessLeadCardAsync,
   notifyCuratorOfTransfer,
   type LeadCardActionResult,
 } from './shared'
@@ -198,8 +199,8 @@ export async function updateLeadFieldAction(input: {
       }
     } else if (session.role === 'head') {
       const card = await getLeadCardById(input.leadCardId)
-      const { isCuratorOfHead } = await import('@/lib/data/heads')
-      if (!card || !(await isCuratorOfHead(session.sub, card.curatorId))) {
+      // Карточка входит в группу, если её куратор ИЛИ её менеджер — подчинённые.
+      if (!card || !(await canAccessLeadCardAsync(session, card))) {
         return { ok: false, message: 'Лид не входит в вашу группу' }
       }
       try {
