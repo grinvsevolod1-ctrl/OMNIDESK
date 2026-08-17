@@ -79,6 +79,8 @@ export function LeadDetailPanel({
             transfers: [],
             statusHistory: [],
             attachments: [],
+            // До гидратации авторство неизвестно — правка комментов недоступна.
+            viewerId: '',
             partial: true,
           }
         : undefined,
@@ -257,6 +259,7 @@ export function LeadDetailPanel({
                 comments={detail?.comments ?? []}
                 onCommentSaved={onCommentSaved}
                 readOnly={readOnly}
+                viewerId={detail?.viewerId ?? null}
               />
             )}
           </PanelSection>

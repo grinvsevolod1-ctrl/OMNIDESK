@@ -11,6 +11,7 @@
 import { getSession, requireCurator } from '@/lib/auth'
 import {
   addLeadComment,
+  editLeadComment,
   findCuratorsByCity,
   findLeadCardForContact,
   getLeadCardByConversation,
@@ -31,6 +32,7 @@ import {
   type LeadStatus,
 } from '@/lib/lead-status'
 import { sendPushToManager } from '@/lib/push'
+import { mskDayKey } from '@/lib/time'
 import {
   assertCuratorNotLocked,
   assertHeadCanEdit,
@@ -199,6 +201,9 @@ export async function getLeadCardDetailAction(leadCardId: string) {
     transfers,
     statusHistory,
     attachments: withCanDelete(session, attachments),
+    // Кто смотрит: клиент показывает «Изменить» только у своих комментариев
+    // (root-админ живёт вне managers, не матчится с author_id — и не должен).
+    viewerId: session.sub,
   }
 }
 

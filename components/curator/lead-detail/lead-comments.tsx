@@ -1,25 +1,31 @@
 'use client'
 
 import { LeadFreeCommentForm } from '@/components/curator/lead-panel-forms'
-import { Badge } from '@/components/ui/badge'
-import { leadStatusLabel } from '@/lib/lead-status'
-import { formatDateTime } from './format'
+import {
+  canEditComment,
+  LeadCommentItem,
+} from '@/components/shared/lead-comment-item'
 import type { LeadCommentView } from './types'
 
 /**
  * Лента комментариев лида + форма свободного комментария.
  * readOnly (руководитель «только просмотр») — лента без формы.
+ * Свой комментарий можно править, но только в день его создания (по МСК);
+ * прошлый текст сохраняется в истории и виден всем по бейджу «изменён».
  */
 export function LeadComments({
   leadCardId,
   comments,
   onCommentSaved,
   readOnly = false,
+  viewerId = null,
 }: {
   leadCardId: string
   comments: LeadCommentView[]
   onCommentSaved: () => void
   readOnly?: boolean
+  /** Кто смотрит: «Изменить» доступно только автору. */
+  viewerId?: string | null
 }) {
   return (
     <>
@@ -32,28 +38,14 @@ export function LeadComments({
       ) : (
         <ul className="flex flex-col gap-2">
           {comments.map((c) => (
-            <li
+            <LeadCommentItem
               key={c.id}
-              className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
-            >
-              <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">
-                  {c.authorName ?? 'Менеджер по кадрам'}
-                </span>
-                {c.status ? (
-                  <Badge
-                    variant="outline"
-                    className="border-transparent bg-background text-[10px]"
-                  >
-                    {leadStatusLabel(c.status)}
-                  </Badge>
-                ) : null}
-                <span className="ml-auto">{formatDateTime(c.createdAt)}</span>
-              </div>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                {c.body}
-              </p>
-            </li>
+              comment={c}
+              leadCardId={leadCardId}
+              onSaved={onCommentSaved}
+              canEdit={!readOnly && canEditComment(c, viewerId)}
+              fallbackAuthorLabel="Менеджер по кадрам"
+            />
           ))}
         </ul>
       )}
