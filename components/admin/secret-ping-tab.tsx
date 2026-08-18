@@ -33,7 +33,10 @@ import {
   CircleCheck,
   Copy,
   Database,
+  FileWarning,
   Gauge,
+  Globe,
+  KeyRound,
   Loader2,
   Lock,
   LockOpen,
@@ -47,10 +50,14 @@ import {
   secretS3ScanAction,
   secretSecurityAssessAction,
   secretSecurityAuditAction,
+  type DnsHygiene,
+  type PathLeak,
   type PingResult,
   type ReflectionCheck,
   type S3ScanResult,
   type SecurityAudit,
+  type SecurityScore,
+  type TlsCheck,
 } from '@/app/actions/admin-secret'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -58,6 +65,15 @@ import { Markdown } from '@/components/admin/secret-markdown'
 import { cn } from '@/lib/utils'
 
 const ATTEMPT_OPTIONS = [1, 2, 4, 6]
+
+/** Похож ли ввод на адрес S3-бакета (для авто-скана в едином прогоне). */
+function looksLikeS3(raw: string): boolean {
+  const s = raw.trim().toLowerCase()
+  return (
+    /\.s3[.-][a-z0-9-]*\.?amazonaws\.com/.test(s) ||
+    /(^|\/\/)s3[.-][a-z0-9-]*\.?amazonaws\.com\//.test(s)
+  )
+}
 
 export function SecretPingTab() {
   const [url, setUrl] = useState('')
@@ -106,6 +122,12 @@ export function SecretPingTab() {
 
       if (sec.data) setAudit(sec.data)
       if (!sec.ok && !sec.data) toast.error(sec.message)
+
+      // Авто-детект S3: если адрес похож на бакет — сразу сканируем и его.
+      if (looksLikeS3(target)) {
+        setBucket(target)
+        void runS3Scan(target)
+      }
     } catch {
       toast.error('Внутренняя ошибка при проверке')
     } finally {
@@ -138,8 +160,8 @@ export function SecretPingTab() {
     }
   }
 
-  async function runS3Scan() {
-    const target = bucket.trim()
+  async function runS3Scan(override?: string) {
+    const target = (override ?? bucket).trim()
     if (!target) {
       toast.error('Введите имя S3-бакета или URL')
       return
@@ -180,9 +202,11 @@ export function SecretPingTab() {
           Проверка домена
         </div>
         <p className="mb-4 text-xs text-muted-foreground text-pretty">
-          Один адрес — полный отчёт: доступность и задержка, заголовки защиты,
-          cookie, раскрытие версий ПО и проверка отражения ввода (reflected XSS).
-          Всё пассивно — только чтение ответа.
+          Один адрес — полный отчёт со сводной оценкой: доступность и задержка,
+          заголовки защиты, TLS-сертификат, отражение ввода (reflected XSS),
+          типовые утечки путей, DNS/почтовая гигиена (SPF/DMARC/DKIM/CAA), cookie
+          и раскрытие версий ПО. Если адрес похож на S3 — бакет сканируется
+          автоматически. Всё пассивно — только чтение ответа.
         </p>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -262,12 +286,7 @@ export function SecretPingTab() {
         <SectionCard
           icon={ShieldCheck}
           title="Безопасность"
-          right={
-            <span className="font-mono text-xs text-muted-foreground">
-              {audit.securityHeaders.filter((h) => h.present).length}/
-              {audit.securityHeaders.length} заголовков
-            </span>
-          }
+          right={<ScoreBadge score={audit.score} />}
         >
           <AuditBody audit={audit} />
 
@@ -495,8 +514,17 @@ function AuditBody({ audit }: { audit: SecurityAudit }) {
         ))}
       </div>
 
+      {/* TLS-сертификат */}
+      <TlsCard tls={audit.tls} />
+
       {/* Отражение ввода (reflected XSS) */}
       <ReflectionCard reflection={audit.reflection} />
+
+      {/* Утечки типовых путей */}
+      <PathLeaksCard leaks={audit.pathLeaks} />
+
+      {/* DNS / почтовая гигиена */}
+      <DnsCard dns={audit.dns} />
 
       {/* Раскрытие версий ПО */}
       {audit.disclosure.length > 0 && (
@@ -618,6 +646,178 @@ function FlagMark({ on }: { on: boolean }) {
     <CircleCheck className="size-3.5 text-emerald-500" />
   ) : (
     <CircleAlert className="size-3.5 text-destructive" />
+  )
+}
+
+/* --------------------------- Сводная оценка ----------------------------- */
+
+/** Тон бейджа по буквенной оценке. */
+function gradeTone(grade: SecurityScore['grade']): string {
+  if (grade === 'A' || grade === 'B') return 'bg-emerald-500/10 text-emerald-500'
+  if (grade === 'C' || grade === 'D') return 'bg-amber-500/10 text-amber-500'
+  return 'bg-destructive/10 text-destructive'
+}
+
+function ScoreBadge({ score }: { score: SecurityScore }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold',
+        gradeTone(score.grade),
+      )}
+      title={
+        score.deductions.length
+          ? score.deductions.map((d) => `−${d.points} ${d.reason}`).join('\n')
+          : 'Замечаний не найдено'
+      }
+    >
+      <Gauge className="size-3.5" />
+      {score.value}/100 · {score.grade}
+    </span>
+  )
+}
+
+/* ----------------------------- TLS-карточка ----------------------------- */
+
+const TLS_TONE: Record<TlsCheck['status'], { border: string; text: string; label: string }> = {
+  ok: { border: 'border-emerald-500/30 bg-emerald-500/5', text: 'text-emerald-500', label: 'Сертификат в порядке' },
+  warn: { border: 'border-amber-500/40 bg-amber-500/10', text: 'text-amber-500', label: 'Требует внимания' },
+  bad: { border: 'border-destructive/40 bg-destructive/10', text: 'text-destructive', label: 'Проблема с сертификатом' },
+  unknown: { border: 'border-border/60 bg-background/40', text: 'text-muted-foreground', label: 'Не проверено' },
+}
+
+function TlsCard({ tls }: { tls: TlsCheck }) {
+  const tone = TLS_TONE[tls.status]
+  return (
+    <div className={cn('mt-4 rounded-lg border p-3', tone.border)}>
+      <div className="flex items-center gap-2">
+        <KeyRound className={cn('size-4 shrink-0', tone.text)} />
+        <span className="text-xs font-medium text-foreground">TLS-сертификат</span>
+        <span className={cn('ml-auto text-xs font-semibold', tone.text)}>
+          {tone.label}
+        </span>
+      </div>
+      {tls.tested ? (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-muted-foreground">
+          {tls.protocol && <span>протокол: {tls.protocol}</span>}
+          {tls.issuer && <span>издатель: {tls.issuer}</span>}
+          {tls.daysLeft !== null && (
+            <span className={tls.daysLeft <= 14 ? tone.text : undefined}>
+              осталось: {tls.daysLeft} дн.
+            </span>
+          )}
+          <span className={tls.hostnameMatch ? undefined : 'text-destructive'}>
+            имя хоста: {tls.hostnameMatch ? 'совпадает' : 'не совпадает'}
+          </span>
+        </div>
+      ) : (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">{tls.note}</p>
+      )}
+    </div>
+  )
+}
+
+/* -------------------------- Утечки путей -------------------------------- */
+
+function PathLeaksCard({ leaks }: { leaks: PathLeak[] }) {
+  if (leaks.length === 0) return null
+  const exposed = leaks.filter((p) => p.exposed && p.severity !== 'info')
+  const clean = exposed.length === 0
+
+  return (
+    <div
+      className={cn(
+        'mt-4 rounded-lg border p-3',
+        clean
+          ? 'border-emerald-500/30 bg-emerald-500/5'
+          : 'border-destructive/40 bg-destructive/10',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <FileWarning
+          className={cn(
+            'size-4 shrink-0',
+            clean ? 'text-emerald-500' : 'text-destructive',
+          )}
+        />
+        <span className="text-xs font-medium text-foreground">
+          Типовые пути
+        </span>
+        <span
+          className={cn(
+            'ml-auto text-xs font-semibold',
+            clean ? 'text-emerald-500' : 'text-destructive',
+          )}
+        >
+          {clean ? 'Ничего не открыто' : `Открыто: ${exposed.length}`}
+        </span>
+      </div>
+      {clean ? (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          Чувствительные пути (.env, .git, бэкапы) наружу не отдаются.
+        </p>
+      ) : (
+        <div className="mt-2 flex flex-col gap-1">
+          {exposed.map((p) => (
+            <div
+              key={p.path}
+              className={cn(
+                'flex items-center gap-2 font-mono text-[11px]',
+                p.severity === 'critical' ? 'text-destructive' : 'text-amber-500',
+              )}
+            >
+              <CircleAlert className="size-3.5 shrink-0" />
+              {p.path}
+              <span className="text-muted-foreground">HTTP {p.status}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* -------------------------- DNS / почта --------------------------------- */
+
+function DnsCard({ dns }: { dns: DnsHygiene }) {
+  if (!dns.tested) return null
+  const rows: { label: string; ok: boolean; extra?: string }[] = [
+    { label: 'SPF', ok: dns.spf },
+    {
+      label: 'DMARC',
+      ok: dns.dmarc,
+      extra: dns.dmarc && dns.dmarcPolicy ? `p=${dns.dmarcPolicy}` : undefined,
+    },
+    { label: 'DKIM', ok: dns.dkim },
+    { label: 'CAA', ok: dns.caa },
+  ]
+  return (
+    <div className="mt-4 rounded-lg border border-border/60 bg-background/40 p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <Globe className="size-4 shrink-0 text-primary" />
+        <span className="text-xs font-medium text-foreground">
+          DNS и почтовая гигиена
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {rows.map((r) => (
+          <div
+            key={r.label}
+            className="flex items-center gap-2 rounded-md border border-border/60 bg-card/40 px-2.5 py-1.5"
+          >
+            <FlagMark on={r.ok} />
+            <span className="text-xs font-medium text-foreground">
+              {r.label}
+            </span>
+            {r.extra && (
+              <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                {r.extra}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 

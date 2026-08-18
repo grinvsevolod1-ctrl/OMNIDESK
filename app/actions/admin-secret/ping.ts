@@ -1,7 +1,9 @@
 'use server'
 
 import { notFound } from 'next/navigation'
-import { lookup } from 'node:dns/promises'
+import { lookup, resolveTxt, resolveCaa } from 'node:dns/promises'
+import { connect as tlsConnect } from 'node:tls'
+import type { PeerCertificate } from 'node:tls'
 import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
 
@@ -248,12 +250,77 @@ export interface ReflectionCheck {
   reflected: boolean
   /** Отражены ли спецсимволы `<>"` в СЫРОМ (неэкранированном) виде. */
   rawSpecials: boolean
+  /** Отражён ли наш маркер в заголовке ответа (риск header injection/XSS). */
+  headerReflected: boolean
   /** Есть ли CSP, способный смягчить исполнение инлайн-скриптов. */
   cspPresent: boolean
   /** Итоговая оценка риска отражённого XSS. */
   risk: 'none' | 'low' | 'medium' | 'high'
   /** Короткое пояснение для UI. */
   note: string
+}
+
+/**
+ * Пассивная проверка TLS-сертификата: открываем TLS-соединение и читаем
+ * ПУБЛИЧНО предъявляемый сертификат (срок, издатель, протокол). Ничего не
+ * отправляем и не эксплуатируем — то же, что видит любой браузер.
+ */
+export interface TlsCheck {
+  tested: boolean
+  /** Протокол (TLSv1.2 / TLSv1.3 / …), если удалось согласовать. */
+  protocol: string | null
+  /** Издатель сертификата (CN организации). */
+  issuer: string | null
+  /** Дата окончания действия (ISO), если прочитана. */
+  validTo: string | null
+  /** Осталось дней до истечения (может быть отрицательным). */
+  daysLeft: number | null
+  /** Совпадает ли имя хоста с сертификатом. */
+  hostnameMatch: boolean
+  /** Доверенная ли цепочка (не самоподписан, известный CA). */
+  authorized: boolean
+  /** Итоговая оценка. */
+  status: 'ok' | 'warn' | 'bad' | 'unknown'
+  note: string
+}
+
+/**
+ * Пассивная проверка типовых утечек путей: GET по списку известных
+ * «чувствительных» путей своего домена и классификация по статусу. Никакого
+ * перебора/фаззинга — фиксированный короткий белый список для харденинга.
+ */
+export interface PathLeak {
+  path: string
+  status: number | null
+  /** Насколько находка критична. */
+  severity: 'critical' | 'warn' | 'info'
+  /** Найден ли путь (доступен наружу). */
+  exposed: boolean
+}
+
+/**
+ * Почтовая/DNS-гигиена домена: наличие SPF, DMARC, DKIM и CAA-записей.
+ * Обычные публичные DNS-запросы (TXT/CAA) — защита от спуфинга и mis-issuance.
+ */
+export interface DnsHygiene {
+  tested: boolean
+  spf: boolean
+  dmarc: boolean
+  /** Политика DMARC (none/quarantine/reject), если найдена. */
+  dmarcPolicy: string | null
+  /** Найден ли DKIM хотя бы по одному распространённому селектору. */
+  dkim: boolean
+  caa: boolean
+}
+
+/** Сводная оценка защищённости домена. */
+export interface SecurityScore {
+  /** 0–100. */
+  value: number
+  /** Буквенная оценка A–F. */
+  grade: 'A' | 'B' | 'C' | 'D' | 'E' | 'F'
+  /** Разбивка снятых баллов: причина → сколько снято. */
+  deductions: { reason: string; points: number }[]
 }
 
 export interface SecurityAudit {
@@ -269,6 +336,14 @@ export interface SecurityAudit {
   cookies: CookieFlags[]
   /** Пассивная проверка отражения ввода (риск reflected XSS). */
   reflection: ReflectionCheck
+  /** Проверка TLS-сертификата (только https). */
+  tls: TlsCheck
+  /** Типовые утечки путей. */
+  pathLeaks: PathLeak[]
+  /** Почтовая/DNS-гигиена домена. */
+  dns: DnsHygiene
+  /** Сводная оценка защищённости. */
+  score: SecurityScore
   latencyMs: number | null
   error: string | null
 }
@@ -332,21 +407,39 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
     const cspPresent = securityHeaders.some(
       (h) => h.key === 'content-security-policy' && h.present,
     )
+    const disclosure = readHeaders(DISCLOSURE_HEADER_KEYS).filter(
+      (h) => h.present,
+    )
 
-    return {
+    // Все дополнительные проверки — параллельно, чтобы не растягивать аудит.
+    const [httpsUpgrade, reflection, tls, pathLeaks, dns] = await Promise.all([
+      checkHttpsUpgrade(url),
+      checkReflection(url, cspPresent),
+      checkTls(finalUrl),
+      checkPathLeaks(finalUrl),
+      checkDnsHygiene(url.hostname),
+    ])
+
+    const audit: SecurityAudit = {
       url: url.toString(),
       host: url.hostname,
       finalUrl: finalUrl.toString(),
       status: res.status,
       scheme: finalUrl.protocol.replace(':', ''),
-      httpsUpgrade: await checkHttpsUpgrade(url),
+      httpsUpgrade,
       securityHeaders,
-      disclosure: readHeaders(DISCLOSURE_HEADER_KEYS).filter((h) => h.present),
+      disclosure,
       cookies,
-      reflection: await checkReflection(url, cspPresent),
+      reflection,
+      tls,
+      pathLeaks,
+      dns,
+      score: { value: 0, grade: 'F', deductions: [] },
       latencyMs,
       error: null,
     }
+    audit.score = computeScore(audit)
+    return audit
   } catch (err) {
     const aborted =
       err instanceof Error &&
@@ -369,10 +462,32 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
         tested: false,
         reflected: false,
         rawSpecials: false,
+        headerReflected: false,
         cspPresent: false,
         risk: 'none',
         note: 'Проверка не выполнена — хост не ответил.',
       },
+      tls: {
+        tested: false,
+        protocol: null,
+        issuer: null,
+        validTo: null,
+        daysLeft: null,
+        hostnameMatch: false,
+        authorized: false,
+        status: 'unknown',
+        note: 'Проверка не выполнена — хост не ответил.',
+      },
+      pathLeaks: [],
+      dns: {
+        tested: false,
+        spf: false,
+        dmarc: false,
+        dmarcPolicy: null,
+        dkim: false,
+        caa: false,
+      },
+      score: { value: 0, grade: 'F', deductions: [] },
       latencyMs: null,
       error: aborted ? 'Таймаут' : 'Нет соединения',
     }
@@ -436,10 +551,21 @@ async function checkReflection(
       redirect: 'follow',
       cache: 'no-store',
       signal: controller.signal,
-      headers: { 'user-agent': 'OMNIDESK-Audit/1.0' },
+      headers: {
+        'user-agent': 'OMNIDESK-Audit/1.0',
+        // Второй контекст: маркер в заголовке-подсказке (без спецсимволов —
+        // многие серверы отвергают их), чтобы поймать отражение в ответ.
+        'x-od-probe': core,
+      },
     })
 
-    // Проверяем отражение только в HTML — в JSON/бинарнике это не про XSS.
+    // Отражение в заголовках ответа — риск header injection / XSS через заголовок.
+    let headerReflected = false
+    res.headers.forEach((v) => {
+      if (v.includes(core)) headerReflected = true
+    })
+
+    // Проверяем отражение в теле только для HTML — в JSON/бинарнике это не про XSS.
     const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
     const isHtml =
       contentType.includes('text/html') ||
@@ -450,9 +576,12 @@ async function checkReflection(
         tested: true,
         reflected: false,
         rawSpecials: false,
+        headerReflected,
         cspPresent,
-        risk: 'none',
-        note: 'Ответ не HTML — отражение ввода в разметку неприменимо.',
+        risk: headerReflected ? 'medium' : 'none',
+        note: headerReflected
+          ? 'Ответ не HTML, но ввод отражается в заголовке ответа — проверьте фильтрацию.'
+          : 'Ответ не HTML — отражение ввода в разметку неприменимо.',
       }
     }
 
@@ -476,13 +605,27 @@ async function checkReflection(
       risk = 'low'
       note = 'Ввод отражается, но спецсимволы экранированы — базовая защита есть.'
     }
+    if (headerReflected && (risk === 'none' || risk === 'low')) {
+      // Отражение в заголовке — поднимаем минимум до среднего риска.
+      risk = 'medium'
+      note += ' Кроме того, ввод отражается в заголовке ответа.'
+    }
 
-    return { tested: true, reflected, rawSpecials, cspPresent, risk, note }
+    return {
+      tested: true,
+      reflected,
+      rawSpecials,
+      headerReflected,
+      cspPresent,
+      risk,
+      note,
+    }
   } catch {
     return {
       tested: false,
       reflected: false,
       rawSpecials: false,
+      headerReflected: false,
       cspPresent,
       risk: 'none',
       note: 'Проверку отражения выполнить не удалось.',
@@ -490,6 +633,361 @@ async function checkReflection(
   } finally {
     clearTimeout(timer)
   }
+}
+
+/* ------------------------- Проверка TLS-сертификата --------------------- */
+
+/**
+ * Открыть TLS-соединение и прочитать предъявляемый сертификат. Пассивно:
+ * согласуем TLS (как браузер), читаем срок/издателя/протокол и закрываем.
+ * Только для https-адресов.
+ */
+function checkTls(finalUrl: URL): Promise<TlsCheck> {
+  const unknown: TlsCheck = {
+    tested: false,
+    protocol: null,
+    issuer: null,
+    validTo: null,
+    daysLeft: null,
+    hostnameMatch: false,
+    authorized: false,
+    status: 'unknown',
+    note: 'Проверка TLS не выполнялась.',
+  }
+  if (finalUrl.protocol !== 'https:') {
+    return Promise.resolve({
+      ...unknown,
+      note: 'Соединение без HTTPS — TLS-сертификат отсутствует.',
+    })
+  }
+
+  const host = finalUrl.hostname
+  const port = finalUrl.port ? Number(finalUrl.port) : 443
+
+  return new Promise<TlsCheck>((resolve) => {
+    let settled = false
+    const done = (r: TlsCheck) => {
+      if (settled) return
+      settled = true
+      try {
+        socket.destroy()
+      } catch {
+        /* уже закрыт */
+      }
+      resolve(r)
+    }
+
+    // rejectUnauthorized:false — мы САМИ оцениваем доверие, чтобы прочитать
+    // сертификат даже у просроченных/самоподписанных (для диагностики).
+    const socket = tlsConnect(
+      { host, port, servername: host, rejectUnauthorized: false, ALPNProtocols: ['h2', 'http/1.1'] },
+      () => {
+        const cert = socket.getPeerCertificate()
+        const protocol = socket.getProtocol()
+        const authorized = socket.authorized
+        done(evaluateCert(cert, protocol, authorized, host))
+      },
+    )
+    socket.setTimeout(TIMEOUT_MS, () =>
+      done({ ...unknown, note: 'Таймаут TLS-соединения.' }),
+    )
+    socket.on('error', () =>
+      done({ ...unknown, note: 'Не удалось установить TLS-соединение.' }),
+    )
+  })
+}
+
+/** Оценить прочитанный сертификат: срок, издатель, протокол, доверие. */
+function evaluateCert(
+  cert: PeerCertificate | Record<string, never>,
+  protocol: string | null,
+  authorized: boolean,
+  host: string,
+): TlsCheck {
+  const validTo =
+    cert && 'valid_to' in cert && cert.valid_to
+      ? new Date(cert.valid_to)
+      : null
+  const validToIso =
+    validTo && !Number.isNaN(validTo.getTime()) ? validTo.toISOString() : null
+  const daysLeft = validTo
+    ? Math.round((validTo.getTime() - Date.now()) / 86_400_000)
+    : null
+  const issuer =
+    cert && 'issuer' in cert && cert.issuer
+      ? cert.issuer.O ?? cert.issuer.CN ?? null
+      : null
+  const hostnameMatch = certMatchesHost(cert, host)
+
+  let status: TlsCheck['status'] = 'ok'
+  let note = 'Сертификат действителен.'
+  const weakProto =
+    protocol !== null && /TLSv1(\.0|\.1)?$/.test(protocol) && protocol !== 'TLSv1.2' && protocol !== 'TLSv1.3'
+
+  if (daysLeft !== null && daysLeft < 0) {
+    status = 'bad'
+    note = 'Сертификат просрочен.'
+  } else if (!authorized || !hostnameMatch) {
+    status = 'bad'
+    note = !hostnameMatch
+      ? 'Имя хоста не совпадает с сертификатом.'
+      : 'Цепочка сертификата не доверенная (самоподписан или неизвестный CA).'
+  } else if (daysLeft !== null && daysLeft <= 14) {
+    status = 'warn'
+    note = `Сертификат истекает через ${daysLeft} дн. — пора обновить.`
+  } else if (weakProto) {
+    status = 'warn'
+    note = `Согласован устаревший протокол ${protocol}. Рекомендуется TLS 1.2+.`
+  }
+
+  return {
+    tested: true,
+    protocol,
+    issuer,
+    validTo: validToIso,
+    daysLeft,
+    hostnameMatch,
+    authorized,
+    status,
+    note,
+  }
+}
+
+/** Совпадает ли хост с CN/SAN сертификата (учитывая wildcard). */
+function certMatchesHost(
+  cert: PeerCertificate | Record<string, never>,
+  host: string,
+): boolean {
+  if (!cert || !('subject' in cert)) return false
+  const names = new Set<string>()
+  if (cert.subject?.CN) names.add(cert.subject.CN.toLowerCase())
+  const san = 'subjectaltname' in cert ? cert.subjectaltname : undefined
+  if (san) {
+    for (const entry of san.split(',')) {
+      const m = entry.trim().match(/^DNS:(.+)$/i)
+      if (m) names.add(m[1].toLowerCase())
+    }
+  }
+  const h = host.toLowerCase()
+  for (const name of names) {
+    if (name === h) return true
+    if (name.startsWith('*.')) {
+      const base = name.slice(2)
+      const idx = h.indexOf('.')
+      if (idx > -1 && h.slice(idx + 1) === base) return true
+    }
+  }
+  return false
+}
+
+/* ------------------------- Утечки типовых путей ------------------------- */
+
+/** Короткий белый список чувствительных путей (без фаззинга/перебора). */
+const SENSITIVE_PATHS: { path: string; severity: PathLeak['severity'] }[] = [
+  { path: '/.env', severity: 'critical' },
+  { path: '/.git/config', severity: 'critical' },
+  { path: '/.git/HEAD', severity: 'critical' },
+  { path: '/config.json', severity: 'warn' },
+  { path: '/backup.zip', severity: 'warn' },
+  { path: '/.well-known/security.txt', severity: 'info' },
+  { path: '/server-status', severity: 'warn' },
+  { path: '/phpinfo.php', severity: 'warn' },
+]
+
+/**
+ * Проверить типовые «утечки» по фиксированному списку. Для каждого пути —
+ * один GET; путь считается «exposed», если сервер вернул 200 (для
+ * security.txt это норма, а не проблема). Ограничение объёма тела.
+ */
+async function checkPathLeaks(finalUrl: URL): Promise<PathLeak[]> {
+  const origin = `${finalUrl.protocol}//${finalUrl.host}`
+  const results = await Promise.all(
+    SENSITIVE_PATHS.map(async ({ path, severity }) => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+      try {
+        const res = await fetch(`${origin}${path}`, {
+          method: 'GET',
+          redirect: 'manual',
+          cache: 'no-store',
+          signal: controller.signal,
+          headers: { 'user-agent': 'OMNIDESK-Audit/1.0' },
+        })
+        void res.body?.cancel()
+        return {
+          path,
+          status: res.status,
+          severity,
+          exposed: res.status === 200,
+        }
+      } catch {
+        return { path, status: null, severity, exposed: false }
+      } finally {
+        clearTimeout(timer)
+      }
+    }),
+  )
+  return results
+}
+
+/* ------------------------- DNS / почтовая гигиена ----------------------- */
+
+/** Распространённые DKIM-селекторы для best-effort проверки. */
+const DKIM_SELECTORS = ['default', 'google', 'selector1', 'selector2', 'k1', 'mail', 's1']
+
+/** Собрать флаги SPF/DMARC/DKIM/CAA через публичные DNS-запросы. */
+async function checkDnsHygiene(host: string): Promise<DnsHygiene> {
+  // Базовый домен для DMARC/DKIM (отсекаем www., поддомены оставляем как есть).
+  const base = host.replace(/^www\./, '')
+
+  const [spf, dmarcInfo, dkim, caa] = await Promise.all([
+    hasSpf(base),
+    getDmarc(base),
+    hasDkim(base),
+    hasCaa(base),
+  ])
+
+  return {
+    tested: true,
+    spf,
+    dmarc: dmarcInfo.present,
+    dmarcPolicy: dmarcInfo.policy,
+    dkim,
+    caa,
+  }
+}
+
+async function hasSpf(domain: string): Promise<boolean> {
+  try {
+    const records = await resolveTxt(domain)
+    return records.some((chunks) =>
+      chunks.join('').toLowerCase().startsWith('v=spf1'),
+    )
+  } catch {
+    return false
+  }
+}
+
+async function getDmarc(
+  domain: string,
+): Promise<{ present: boolean; policy: string | null }> {
+  try {
+    const records = await resolveTxt(`_dmarc.${domain}`)
+    const joined = records.map((c) => c.join('')).find((t) =>
+      t.toLowerCase().startsWith('v=dmarc1'),
+    )
+    if (!joined) return { present: false, policy: null }
+    const m = joined.toLowerCase().match(/p=([a-z]+)/)
+    return { present: true, policy: m ? m[1] : null }
+  } catch {
+    return { present: false, policy: null }
+  }
+}
+
+async function hasDkim(domain: string): Promise<boolean> {
+  const checks = await Promise.all(
+    DKIM_SELECTORS.map(async (sel) => {
+      try {
+        const records = await resolveTxt(`${sel}._domainkey.${domain}`)
+        return records.some((c) => c.join('').toLowerCase().includes('v=dkim1'))
+      } catch {
+        return false
+      }
+    }),
+  )
+  return checks.some(Boolean)
+}
+
+async function hasCaa(domain: string): Promise<boolean> {
+  try {
+    const records = await resolveCaa(domain)
+    return records.length > 0
+  } catch {
+    return false
+  }
+}
+
+/* ------------------------- Сводная оценка (score) ----------------------- */
+
+/** Присутствует ли заголовок безопасности по ключу. */
+function headerPresent(audit: SecurityAudit, key: string): boolean {
+  return audit.securityHeaders.some((h) => h.key === key && h.present)
+}
+
+/**
+ * Вычислить сводную оценку защищённости: старт 100, вычитаем баллы за
+ * недостатки. Чистая функция от собранного аудита — легко тестируется.
+ */
+export function computeScore(audit: SecurityAudit): SecurityScore {
+  const deductions: { reason: string; points: number }[] = []
+  const cut = (reason: string, points: number) => {
+    if (points > 0) deductions.push({ reason, points })
+  }
+
+  // Транспорт.
+  if (audit.scheme !== 'https') cut('Соединение без HTTPS', 20)
+  if (audit.httpsUpgrade === 'no') cut('Нет редиректа http→https', 8)
+
+  // Заголовки безопасности.
+  if (!headerPresent(audit, 'strict-transport-security'))
+    cut('Нет HSTS (Strict-Transport-Security)', 10)
+  if (!headerPresent(audit, 'content-security-policy'))
+    cut('Нет Content-Security-Policy', 12)
+  if (!headerPresent(audit, 'x-content-type-options'))
+    cut('Нет X-Content-Type-Options', 5)
+  if (!headerPresent(audit, 'x-frame-options'))
+    cut('Нет X-Frame-Options', 5)
+  if (!headerPresent(audit, 'referrer-policy'))
+    cut('Нет Referrer-Policy', 3)
+  if (!headerPresent(audit, 'permissions-policy'))
+    cut('Нет Permissions-Policy', 3)
+
+  // Раскрытие версий ПО.
+  if (audit.disclosure.length > 0)
+    cut('Раскрытие версий ПО в заголовках', Math.min(audit.disclosure.length * 3, 9))
+
+  // Reflected XSS.
+  if (audit.reflection.risk === 'high') cut('Высокий риск reflected XSS', 25)
+  else if (audit.reflection.risk === 'medium') cut('Средний риск reflected XSS', 15)
+  else if (audit.reflection.risk === 'low') cut('Отражение ввода (низкий риск)', 5)
+
+  // TLS.
+  if (audit.tls.tested) {
+    if (audit.tls.status === 'bad') cut(`TLS: ${audit.tls.note}`, 25)
+    else if (audit.tls.status === 'warn') cut(`TLS: ${audit.tls.note}`, 10)
+  }
+
+  // Утечки путей.
+  const critical = audit.pathLeaks.filter(
+    (p) => p.exposed && p.severity === 'critical',
+  ).length
+  const warn = audit.pathLeaks.filter(
+    (p) => p.exposed && p.severity === 'warn',
+  ).length
+  if (critical > 0) cut('Открыты критичные пути (.env/.git)', Math.min(critical * 12, 30))
+  if (warn > 0) cut('Открыты чувствительные пути', Math.min(warn * 5, 15))
+
+  // Cookie без флагов.
+  const badCookies = audit.cookies.filter(
+    (c) => !c.secure || !c.httpOnly,
+  ).length
+  if (badCookies > 0)
+    cut('Cookie без Secure/HttpOnly', Math.min(badCookies * 3, 9))
+
+  // DNS/почта.
+  if (audit.dns.tested) {
+    if (!audit.dns.spf) cut('Нет SPF-записи', 4)
+    if (!audit.dns.dmarc) cut('Нет DMARC-записи', 5)
+    else if (audit.dns.dmarcPolicy === 'none') cut('DMARC policy=none', 2)
+    if (!audit.dns.caa) cut('Нет CAA-записи', 2)
+  }
+
+  const totalCut = deductions.reduce((s, d) => s + d.points, 0)
+  const value = Math.max(0, Math.min(100, 100 - totalCut))
+  const grade: SecurityScore['grade'] =
+    value >= 90 ? 'A' : value >= 80 ? 'B' : value >= 70 ? 'C' : value >= 55 ? 'D' : value >= 40 ? 'E' : 'F'
+
+  return { value, grade, deductions }
 }
 
 /**
@@ -575,6 +1073,10 @@ export async function secretSecurityAssessAction(
     disclosure: audit.disclosure,
     cookies: audit.cookies,
     reflection: audit.reflection,
+    tls: audit.tls,
+    pathLeaks: audit.pathLeaks,
+    dns: audit.dns,
+    score: audit.score,
     latencyMs: audit.latencyMs,
   })
 
@@ -828,7 +1330,7 @@ export async function secretS3ScanAction(
   if (r1.region) region = r1.region
   probes.push(toProbe('virtual-hosted', vhUrl, r1))
 
-  // 2) Если знаем регион (из редиректа/заголовка) — точный региональный запрос.
+  // 2) Если зн��ем регион (из редиректа/заголовка) — точный региональный запрос.
   let listing: S3Response | null =
     classifyOutcome(r1) === 'public-listing' ? r1 : null
   if (region) {
