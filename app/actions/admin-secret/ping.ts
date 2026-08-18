@@ -365,7 +365,7 @@ export interface CookieFlags {
  * маркер (случайная строка + символы `<>"'`), НЕ являющийся скриптом и ничего
  * не выполняющий. Мы лишь смотрим, вернул ли сервер этот ввод в теле ответа и
  * экранировал ли спецсимволы. Отражение без экранирования — классический
- * признак риска reflected XSS. Это диагностика конфигур��ции, а не эксплойт.
+ * признак риска reflected XSS. Это диагностика конфигурации, а не эксплойт.
  */
 export interface ReflectionCheck {
   /** Удалось ли выполнить проверку (был ответ с телом). */
@@ -1039,7 +1039,7 @@ function scanMixedContent(
 /**
  * CORS-проверка: шлём запрос с подставным Origin и смотрим, отражает ли сервер
  * его в Access-Control-Allow-Origin и разрешает ли credentials. Отражение
- * ��роизвольного Origin вместе с ACAC:true — классическая опасная мисконфигурация.
+ * произвольного Origin вместе с ACAC:true — классическая опасная мисконфигурация.
  */
 async function checkCors(finalUrl: URL): Promise<CorsCheck> {
   const probeOrigin = 'https://od-cors-probe.example'
@@ -1574,7 +1574,7 @@ export async function secretPathLeaksAction(
   const blocked = await guardPublicHost(url.hostname)
   if (blocked) return { ok: false, message: blocked }
 
-  // Определяем финальн��й URL (после редиректов), чтобы пути били по нужному хосту.
+  // Определяем финальный URL (после редиректов), чтобы пути били по нужному хосту.
   let finalUrl = url
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)

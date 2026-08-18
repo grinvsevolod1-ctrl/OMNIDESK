@@ -1631,7 +1631,7 @@ function PingReport({ result }: { result: PingResult }) {
           label={result.warmAvg !== null ? 'Тёплая средняя' : 'Средняя'}
           value={
             result.warmAvg !== null
-              ? `${result.warmAvg} ��с`
+              ? `${result.warmAvg} мс`
               : result.avg !== null
                 ? `${result.avg} мс`
                 : '—'
@@ -1639,7 +1639,7 @@ function PingReport({ result }: { result: PingResult }) {
           tone="muted"
           hint={
             result.warmAvg !== null
-              ? `Без учёта холод��ой попытки. Общая средняя: ${result.avg} мс`
+              ? `Без учёта холодной попытки. Общая средняя: ${result.avg} мс`
               : undefined
           }
         />
