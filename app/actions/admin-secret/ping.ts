@@ -2755,45 +2755,73 @@ async function detectCms(origin: string): Promise<CmsDetection> {
   const gen = body.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']/i)
   if (gen) evidence.push(`meta generator: ${gen[1]}`)
 
-  // WordPress.
-  if (/wp-content|wp-includes|\/wp-json/i.test(body) || /wordpress/i.test(gen?.[1] ?? '')) {
+  // Детекция по РЕАЛЬНЫМ маркерам в теле/generator, а НЕ по факту «путь не 404».
+  // Кастомный роут /admin или /cockpit/ на Next.js больше не даёт ложный вывод.
+
+  // WordPress — характерные пути ассетов и generator.
+  if (/wp-content\/|wp-includes\/|\/wp-json\b/i.test(body) || /wordpress/i.test(gen?.[1] ?? '')) {
     name = 'WordPress'
-    version = extractVersion(body, /WordPress\s+([\d.]+)/i)
-    evidence.push('маркеры wp-content/wp-json в HTML')
+    version = extractVersion(body, /WordPress\s+([\d.]+)/i) ?? extractVersion(gen?.[1] ?? '', /WordPress\s+([\d.]+)/i)
+    evidence.push('маркеры wp-content / wp-json в HTML')
   }
-  // Cockpit CMS.
-  else if (/cockpit/i.test(gen?.[1] ?? '') || /\/cockpit\//i.test(body)) {
+  // Cockpit CMS — только по настоящим маркерам движка, не по слову "cockpit".
+  else if (
+    /cockpit/i.test(gen?.[1] ?? '') ||
+    /\/modules\/App\/assets\//i.test(body) ||
+    /data-version=|window\.COCKPIT|"cockpit"\s*:/i.test(body)
+  ) {
     name = 'Cockpit CMS'
-    evidence.push('маркер cockpit в HTML/generator')
+    version = extractVersion(body, /data-version=["']([\d.]+)["']/i)
+    evidence.push('маркеры движка Cockpit в HTML (assets/data-version)')
   }
   // Drupal / Joomla — по generator.
   else if (/drupal/i.test(gen?.[1] ?? '')) {
     name = 'Drupal'
     version = extractVersion(gen?.[1] ?? '', /Drupal\s+([\d.]+)/i)
+    evidence.push('generator: Drupal')
   } else if (/joomla/i.test(gen?.[1] ?? '')) {
     name = 'Joomla'
+    evidence.push('generator: Joomla')
   }
-  // NestJS / Express — по характерному ответу и X-Powered-By.
+  // Next.js — по __NEXT_DATA__ и путям _next/static. Помогает отсечь ложные CMS.
+  else if (/__NEXT_DATA__|\/_next\/static\/|next\/dist\//i.test(body)) {
+    name = 'Next.js'
+    evidence.push('маркеры Next.js (__NEXT_DATA__ / _next/static)')
+  }
+  // NestJS / Express — по характерному ответу.
   else if (/cannot get \//i.test(body) && body.length < 200) {
     name = 'Express/NestJS'
     evidence.push('характерный ответ "Cannot GET /"')
   }
 
-  // Пути к панели/маркерам — параллельно, только фиксируем наличие (< 400).
-  const CMS_PATHS = ['/wp-login.php', '/wp-admin/', '/administrator/', '/cockpit/', '/admin', '/user/login']
+  const isNextJs = name === 'Next.js' || /__NEXT_DATA__|\/_next\/static\//i.test(body)
+
+  // Пути к панели засчитываем ТОЛЬКО если тело реально содержит маркер CMS,
+  // а не просто вернуло < 400 (кастомные роуты Next.js возвращают 200).
+  const CMS_PATHS: { path: string; markers: RegExp }[] = [
+    { path: '/wp-login.php', markers: /wp-submit|user_login|wordpress/i },
+    { path: '/wp-admin/', markers: /wp-admin|wordpress|wp-login/i },
+    { path: '/administrator/', markers: /joomla|com_login|mod-login/i },
+    { path: '/cockpit/', markers: /\/modules\/App\/assets\/|window\.COCKPIT|cockpit/i },
+    { path: '/user/login', markers: /drupal|user-login-form/i },
+  ]
   const pathResults = await Promise.all(
-    CMS_PATHS.map(async (p) => {
-      const r = await reconFetch(`${origin}${p}`)
-      return { p, ok: r.status !== null && r.status < 400 }
+    CMS_PATHS.map(async ({ path, markers }) => {
+      const r = await reconFetch(`${origin}${path}`, { readBody: true })
+      // 200 без маркеров на Next.js — это кастомный роут, а не панель CMS.
+      const confirmed = r.status !== null && r.status < 400 && markers.test(r.body)
+      return { path, confirmed }
     }),
   )
-  const adminPaths = pathResults.filter((r) => r.ok).map((r) => r.p)
-  if (!name && adminPaths.includes('/wp-login.php')) name = 'WordPress'
+  const adminPaths = pathResults.filter((r) => r.confirmed).map((r) => r.path)
+  if (!name && adminPaths.some((p) => p.startsWith('/wp-'))) name = 'WordPress'
   if (!name && adminPaths.includes('/cockpit/')) name = 'Cockpit CMS'
 
   const note = name
-    ? `Обнаружено: ${name}${version ? ` ${version}` : ''}.`
-    : 'CMS/фреймворк по пассивным признакам не определён.'
+    ? `Обнаружено: ${name}${version ? ` ${version}` : ''}${
+        isNextJs && name !== 'Next.js' ? ' (на базе Next.js)' : ''
+      }.`
+    : 'CMS/фреймворк по надёжным маркерам не определён.'
   return { tested: home.status !== null, name, version, adminPaths, evidence, note }
 }
 
