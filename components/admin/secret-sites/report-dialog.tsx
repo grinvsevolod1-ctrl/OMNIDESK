@@ -94,10 +94,7 @@ export function ReportDialog({
     setInput('')
     startTransition(async () => {
       try {
-        const res = await secretGenerateReportAction(
-          next,
-          siteId ? [siteId] : undefined,
-        )
+        const res = await secretGenerateReportAction(next, selectedIds())
         if (res.ok && res.report) {
           setThread([...next, { role: 'assistant', content: res.report }])
         } else {
@@ -118,6 +115,7 @@ export function ReportDialog({
     if (!v) {
       setThread([])
       setInput('')
+      setExcluded(new Set())
     }
   }
 
@@ -127,12 +125,45 @@ export function ReportDialog({
         <DialogHeader className="border-b px-6 py-4">
           <DialogTitle className="flex items-center gap-2">
             <FileText className="size-5" />
-            AI-отчёт{siteTitle ? ` — ${siteTitle}` : ' по всем кабинетам'}
+            AI-отчёт
+            {siteTitle
+              ? ` — ${siteTitle}`
+              : selectable && excluded.size > 0
+                ? ` — кабинетов: ${selectedCount}`
+                : ' по всем кабинетам'}
           </DialogTitle>
           <DialogDescription>
             Опишите, какой отчёт нужен. Если запрос неоднозначный — ассистент
             задаст уточняющие вопросы, отвечайте прямо в этом окне.
           </DialogDescription>
+          {selectable && (
+            <div className="flex flex-wrap gap-1.5 pt-2">
+              {(sites ?? []).map((s) => {
+                const active = !excluded.has(s.id)
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => toggleSite(s.id)}
+                    aria-pressed={active}
+                    disabled={pending}
+                    title={
+                      active
+                        ? 'Кабинет включён в отчёт — нажмите, чтобы исключить'
+                        : 'Кабинет исключён — нажмите, чтобы вернуть'
+                    }
+                    className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                      active
+                        ? 'border-primary/40 bg-primary/10 font-medium text-foreground'
+                        : 'text-muted-foreground line-through hover:bg-muted hover:text-foreground'
+                    }`}
+                  >
+                    {s.title}
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </DialogHeader>
 
         <div

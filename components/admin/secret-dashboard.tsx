@@ -372,7 +372,7 @@ export function SecretDashboard({
           {section === 'telegram' && <SecretTelegramTab />}
           {section === 'gmt' && <SecretGmtTab />}
           {section === 'ads' && <SecretAdsTab accounts={adAccounts} />}
-          {section === 'sites' && <SecretSitesTab sites={sites} beta />}
+          {section === 'sites' && <SecretSitesTab sites={sites} />}
           {section === 'ping' && <SecretPingTab />}
         </main>
       </div>
