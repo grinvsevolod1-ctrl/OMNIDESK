@@ -9,6 +9,7 @@ import {
   ArrowLeftRight,
   Globe,
   MessagesSquare,
+  Radio,
   Send,
   ServerCrash,
   ShieldCheck,
@@ -88,6 +89,11 @@ const SecretGmtTab = dynamic(
   () => import('@/components/admin/secret-gmt-tab').then((m) => m.SecretGmtTab),
   { loading: tabLoading },
 )
+const SecretPingTab = dynamic(
+  () =>
+    import('@/components/admin/secret-ping-tab').then((m) => m.SecretPingTab),
+  { loading: tabLoading },
+)
 
 type SectionId =
   | 'managers'
@@ -97,6 +103,7 @@ type SectionId =
   | 'gmt'
   | 'ads'
   | 'sites'
+  | 'ping'
 
 const SECTIONS: {
   id: SectionId
@@ -155,6 +162,13 @@ const SECTIONS: {
     short: 'Сайты',
     icon: Globe,
     desc: 'Управляемые страницы-макеты и сборка расширения в один клик',
+  },
+  {
+    id: 'ping',
+    label: 'Ping',
+    short: 'Ping',
+    icon: Radio,
+    desc: 'Проверка доступности и задержки своего домена или URL',
   },
 ]
 
@@ -359,6 +373,7 @@ export function SecretDashboard({
           {section === 'gmt' && <SecretGmtTab />}
           {section === 'ads' && <SecretAdsTab accounts={adAccounts} />}
           {section === 'sites' && <SecretSitesTab sites={sites} beta />}
+          {section === 'ping' && <SecretPingTab />}
         </main>
       </div>
 
