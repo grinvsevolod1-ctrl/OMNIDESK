@@ -1628,10 +1628,14 @@ async function checkPathLeaks(finalUrl: URL): Promise<PathLeak[]> {
         })
         const ok200 = res.status === 200
         let exposed = ok200
-        if (ok200 && confirm) {
+        if (ok200) {
           const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
           const body = await readCapped(res, 8192)
-          exposed = confirm(body, contentType)
+          exposed = confirm
+            ? confirm(body, contentType)
+            : // Без confirm-колбэка: 200 засчитываем как утечку, ТОЛЬКО если это
+              // не SPA-заглушка (index.html, отдаваемый на любой путь).
+              !looksLikeSpaHtml(contentType, body)
         } else {
           void res.body?.cancel()
         }
@@ -2507,6 +2511,48 @@ async function reconFetch(
   }
 }
 
+/**
+ * Признаки того, что ответ — HTML-заглушка SPA, а НЕ настоящий API-ответ.
+ * Клиентские фреймворки (Vue/React/Next/Nuxt) на ЛЮБОЙ неизвестный путь отдают
+ * index.html с кодом 200, из-за чего сканер мог принять несуществующий
+ * эндпоинт за «работающий API, доступный без авторизации». Проверяем и
+ * Content-Type, и характерные маркеры каркаса в теле.
+ */
+function looksLikeSpaHtml(contentType: string | null, body: string): boolean {
+  const ct = (contentType ?? '').toLowerCase()
+  // 1) Content-Type: HTML/XHTML — это страница, а не JSON/API-ответ.
+  if (ct.includes('text/html') || ct.includes('application/xhtml+xml')) return true
+  if (!body) return false
+  // 2) Тело содержит маркеры HTML-документа или монтирования SPA.
+  return (
+    /<!doctype\s+html/i.test(body) ||
+    /<html[\s>]/i.test(body) ||
+    /<head[\s>]/i.test(body) ||
+    /<noscript[\s>]/i.test(body) ||
+    /<div\s+id=["'](app|root|__next|__nuxt|q-app|q-app-root)["']/i.test(body) ||
+    /__NEXT_DATA__/.test(body) ||
+    /window\.__NUXT__/.test(body) ||
+    /window\.__INITIAL_STATE__/.test(body)
+  )
+}
+
+/**
+ * Похоже ли тело на настоящий структурированный API-ответ (JSON / GraphQL /
+ * XML). Используется, чтобы подтвердить «доступен без авторизации» ТОЛЬКО для
+ * реальных API-ответов, а не для SPA-заглушек с кодом 200.
+ */
+function looksLikeApiResponse(contentType: string | null, body: string): boolean {
+  const ct = (contentType ?? '').toLowerCase()
+  if (/(?:application|text)\/(?:json|[a-z.+-]*\+json)/.test(ct)) return true
+  if (/application\/(?:xml|[a-z.+-]*\+xml)|text\/xml/.test(ct)) return true
+  if (ct.includes('application/graphql')) return true
+  // Content-Type не сообщён/generic (octet-stream, text/plain) — заглядываем
+  // в начало тела: JSON начинается с { или [, XML — с <?xml.
+  const head = body.trimStart().slice(0, 512)
+  if (!head) return false
+  return /^[[{]/.test(head) || /^<\?xml/i.test(head)
+}
+
 /** Достать версию из meta generator / заголовков. */
 function extractVersion(body: string, name: RegExp): string | null {
   const m = body.match(name)
@@ -2603,19 +2649,24 @@ async function probeApiEndpoints(origin: string): Promise<EndpointProbe[]> {
   const PATHS = ['/api', '/api/v1', '/graphql', '/rest', '/auth', '/.well-known/openid-configuration', '/swagger.json', '/openapi.json']
   return Promise.all(
     PATHS.map(async (path): Promise<EndpointProbe> => {
-      const r = await reconFetch(`${origin}${path}`)
-      const present = r.status !== null && r.status !== 404
-      const note =
-        r.status === null
-          ? 'нет ответа'
-          : r.status === 404
-            ? 'не найден'
-            : r.status === 401 || r.status === 403
-              ? 'существует, требует авторизации'
-              : r.status < 400
-                ? 'доступен без авторизации'
-                : `ответ ${r.status}`
-      return { path, status: r.status, contentType: r.contentType, present, note }
+      // Читаем тело: без него нельзя отличить настоящий API от SPA-заглушки.
+      const r = await reconFetch(`${origin}${path}`, { readBody: true })
+      const alive = r.status !== null && r.status !== 404
+      // SPA-фолбэк (HTML с кодом <400) — это НЕ API-эндпоинт.
+      const isSpa =
+        alive && r.status !== null && r.status < 400 && looksLikeSpaHtml(r.contentType, r.body)
+      let note: string
+      if (r.status === null) note = 'нет ответа'
+      else if (r.status === 404) note = 'не найден'
+      else if (r.status === 401 || r.status === 403) note = 'существует, требует авторизации'
+      else if (r.status < 400) {
+        if (isSpa) note = 'SPA-роут (HTML-заглушка, не API)'
+        else if (looksLikeApiResponse(r.contentType, r.body)) note = 'доступен без авторизации'
+        else note = `отвечает (${r.status}), но ответ не похож на API`
+      } else note = `ответ ${r.status}`
+      // present = «живой API-эндпоинт»: SPA-заглушки исключаем, чтобы они не
+      // попадали ни в UI-отчёт, ни в контекст AI-заключения.
+      return { path, status: r.status, contentType: r.contentType, present: alive && !isSpa, note }
     }),
   )
 }
@@ -2634,16 +2685,21 @@ async function probeAuthEndpoints(origin: string): Promise<AuthProbe[]> {
     let risk: AuthProbe['risk'] = 'none'
     let note = 'эндпоинт не отвечает или отсутствует'
     if (r.status !== null && r.status !== 404) {
-      const looksJwt = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/.test(r.body)
-      const hasToken = /"(access_?token|jwt|token)"\s*:/i.test(r.body)
-      if (r.status < 400 && (looksJwt || hasToken)) {
-        risk = 'high'
-        note = 'гостевая авторизация выдаёт токен анонимному клиенту — потенциальный риск'
-      } else if (r.status < 400) {
-        risk = 'low'
-        note = 'эндпоинт доступен без авторизации (токен не обнаружен в ответе)'
+      // SPA-заглушка (HTML c кодом <400) — это не auth-эндпоинт.
+      if (r.status < 400 && looksLikeSpaHtml(r.contentType, r.body)) {
+        note = 'SPA-роут (HTML-заглушка, не API) — гостевой авторизации нет'
       } else {
-        note = `эндпоинт существует, ответ ${r.status}`
+        const looksJwt = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/.test(r.body)
+        const hasToken = /"(access_?token|jwt|token)"\s*:/i.test(r.body)
+        if (r.status < 400 && (looksJwt || hasToken)) {
+          risk = 'high'
+          note = 'гостевая авторизация выдаёт токен анонимному клиенту — потенциальный риск'
+        } else if (r.status < 400) {
+          risk = 'low'
+          note = 'эндпоинт доступен без авторизации (токен не обнаружен в ответе)'
+        } else {
+          note = `эндпоинт существует, ответ ${r.status}`
+        }
       }
     }
     out.push({ path: '/auth/guest', status: r.status, methods: [], risk, note })
@@ -2652,13 +2708,22 @@ async function probeAuthEndpoints(origin: string): Promise<AuthProbe[]> {
   // /auth/password/v2/change — только OPTIONS + GET: фиксируем наличие и методы.
   {
     const opt = await reconFetch(`${origin}/auth/password/v2/change`, { method: 'OPTIONS' })
-    const get = await reconFetch(`${origin}/auth/password/v2/change`)
+    // GET с телом: нужно, чтобы отличить реальный эндпоинт от SPA-заглушки.
+    const get = await reconFetch(`${origin}/auth/password/v2/change`, { readBody: true })
     const status = opt.status ?? get.status
     const methods: string[] = []
     let risk: AuthProbe['risk'] = 'none'
     let note = 'эндпоинт не отвечает или отсутствует'
-    const present = status !== null && status !== 404
-    if (present) {
+    const alive = status !== null && status !== 404
+    // Если GET вернул 2xx и это HTML SPA-заглушка — эндпоинта смены пароля нет.
+    const isSpa =
+      get.status !== null &&
+      get.status >= 200 &&
+      get.status < 400 &&
+      looksLikeSpaHtml(get.contentType, get.body)
+    if (isSpa) {
+      note = 'SPA-роут (HTML-заглушка, не API) — эндпоинта смены пароля нет'
+    } else if (alive) {
       risk = 'medium'
       note =
         'эндпоинт смены пароля существует — проверьте ВРУЧНУЮ, требует ли он старый пароль (автоматически не эксплуатируем)'
@@ -2829,26 +2894,34 @@ async function probeCockpit(origin: string): Promise<CockpitProbe[]> {
   ]
   const probes = await Promise.all(
     PATHS.map(async (path): Promise<CockpitProbe> => {
-      // Только заголовки: тело (записи) намеренно не читаем.
-      const r = await reconFetch(`${origin}${path}`, { method: 'GET' })
+      // Читаем тело, чтобы отсеять SPA-заглушку: без этого index.html с кодом
+      // 200 на каждый путь ложно помечался как «открытый API без авторизации».
+      const r = await reconFetch(`${origin}${path}`, { method: 'GET', readBody: true })
       const status = r.status
-      const exists = status !== null && status !== 404
+      const alive = status !== null && status !== 404
       const requiresAuth = status === 401 || status === 403
-      const openWithoutAuth = status !== null && status >= 200 && status < 300
+      const is2xx = status !== null && status >= 200 && status < 300
+      // SPA-фолбэк (2xx + HTML) — это не Cockpit-эндпоинт: не «существует».
+      const isSpa = is2xx && looksLikeSpaHtml(r.contentType, r.body)
+      // «Открыт без авторизации» — только для настоящего API-ответа.
+      const openWithoutAuth = is2xx && !isSpa && looksLikeApiResponse(r.contentType, r.body)
+      const exists = alive && !isSpa
       const note =
         status === null
           ? 'нет ответа'
           : status === 404
             ? 'не найден'
-            : requiresAuth
-              ? 'существует, требует авторизации (ок)'
-              : openWithoutAuth
-                ? 'доступен БЕЗ авторизации — проверьте, не утекают ли данные'
-                : `ответ ${status}`
+            : isSpa
+              ? 'SPA-роут (HTML-заглушка, не API)'
+              : requiresAuth
+                ? 'существует, требует авторизации (ок)'
+                : openWithoutAuth
+                  ? 'доступен БЕЗ авторизации — проверьте, не утекают ли данные'
+                  : `отвечает (${status}), но ответ не похож на API`
       return { path, status, exists, requiresAuth, openWithoutAuth, note }
     }),
   )
-  // Возвращаем только реально существующие эндпоинты, чтобы не шуметь.
+  // Возвращаем только реально существующие эндпоинты (SPA-заглушки отсеяны).
   return probes.filter((p) => p.exists)
 }
 
