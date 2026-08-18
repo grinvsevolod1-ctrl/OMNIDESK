@@ -186,3 +186,275 @@ async function pingOnce(url: URL, seq: number): Promise<PingAttempt> {
     clearTimeout(timer)
   }
 }
+
+/* ===================================================================== */
+/*  Аудит безопасности (пассивный)                                        */
+/*                                                                        */
+/*  Строго защитная проверка СВОЕГО домена: делаем ОДИН GET по адресу     */
+/*  (плюс один запрос http:// для проверки upgrade на https) и читаем     */
+/*  только ПУБЛИЧНО наблюдаемые метаданные ответа — заголовки            */
+/*  безопасности, флаги cookie (без значений), раскрытие версий ПО.       */
+/*  Никаких переборов путей, портов, эксплойтов или полезной нагрузки —   */
+/*  это инвентаризация конфигурации для харденинга, а не сканер атак.     */
+/* ===================================================================== */
+
+/** Заголовки безопасности, наличие/значение которых мы проверяем. */
+const SECURITY_HEADER_KEYS = [
+  'strict-transport-security',
+  'content-security-policy',
+  'x-content-type-options',
+  'x-frame-options',
+  'referrer-policy',
+  'permissions-policy',
+  'cross-origin-opener-policy',
+  'cross-origin-embedder-policy',
+  'cross-origin-resource-policy',
+] as const
+
+/** Заголовки, раскрывающие используемое ПО и его версии. */
+const DISCLOSURE_HEADER_KEYS = [
+  'server',
+  'x-powered-by',
+  'x-aspnet-version',
+  'x-aspnetmvc-version',
+  'x-generator',
+] as const
+
+export interface HeaderCheck {
+  key: string
+  present: boolean
+  value: string | null
+}
+
+export interface CookieFlags {
+  /** Только имя cookie — значение НИКОГДА не читается и не сохраняется. */
+  name: string
+  secure: boolean
+  httpOnly: boolean
+  sameSite: string | null
+}
+
+export interface SecurityAudit {
+  url: string
+  host: string
+  finalUrl: string
+  status: number | null
+  scheme: string
+  /** Редиректит ли http:// на https:// ('yes' | 'no' | 'unknown'). */
+  httpsUpgrade: 'yes' | 'no' | 'unknown'
+  securityHeaders: HeaderCheck[]
+  disclosure: HeaderCheck[]
+  cookies: CookieFlags[]
+  latencyMs: number | null
+  error: string | null
+}
+
+export interface SecurityAuditActionResult {
+  ok: boolean
+  message: string
+  data?: SecurityAudit
+}
+
+/** Разобрать один Set-Cookie в имя + флаги безопасности (без значения). */
+function parseCookieFlags(raw: string): CookieFlags {
+  const [pair, ...attrs] = raw.split(';')
+  const name = (pair ?? '').split('=')[0]?.trim() || '(без имени)'
+  const lower = attrs.map((a) => a.trim().toLowerCase())
+  const sameSiteAttr = lower.find((a) => a.startsWith('samesite='))
+  return {
+    name,
+    secure: lower.includes('secure'),
+    httpOnly: lower.includes('httponly'),
+    sameSite: sameSiteAttr ? sameSiteAttr.split('=')[1] ?? null : null,
+  }
+}
+
+/** Собрать пассивный аудит по URL. Вызывается только из гейт-экшена. */
+async function collectAudit(url: URL): Promise<SecurityAudit> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const started = performance.now()
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': 'OMNIDESK-Audit/1.0' },
+    })
+    const latencyMs = Math.round(performance.now() - started)
+    void res.body?.cancel()
+
+    const finalUrl = new URL(res.url || url.toString())
+    const readHeaders = (keys: readonly string[]): HeaderCheck[] =>
+      keys.map((key) => {
+        const value = res.headers.get(key)
+        return { key, present: value !== null, value }
+      })
+
+    // Флаги cookie — только имена и флаги, значения не трогаем.
+    let cookies: CookieFlags[] = []
+    try {
+      const setCookies =
+        typeof res.headers.getSetCookie === 'function'
+          ? res.headers.getSetCookie()
+          : []
+      cookies = setCookies.map(parseCookieFlags)
+    } catch {
+      cookies = []
+    }
+
+    return {
+      url: url.toString(),
+      host: url.hostname,
+      finalUrl: finalUrl.toString(),
+      status: res.status,
+      scheme: finalUrl.protocol.replace(':', ''),
+      httpsUpgrade: await checkHttpsUpgrade(url),
+      securityHeaders: readHeaders(SECURITY_HEADER_KEYS),
+      disclosure: readHeaders(DISCLOSURE_HEADER_KEYS).filter((h) => h.present),
+      cookies,
+      latencyMs,
+      error: null,
+    }
+  } catch (err) {
+    const aborted =
+      err instanceof Error &&
+      (err.name === 'AbortError' || err.name === 'TimeoutError')
+    return {
+      url: url.toString(),
+      host: url.hostname,
+      finalUrl: url.toString(),
+      status: null,
+      scheme: url.protocol.replace(':', ''),
+      httpsUpgrade: 'unknown',
+      securityHeaders: SECURITY_HEADER_KEYS.map((key) => ({
+        key,
+        present: false,
+        value: null,
+      })),
+      disclosure: [],
+      cookies: [],
+      latencyMs: null,
+      error: aborted ? 'Таймаут' : 'Нет соединения',
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Проверить, редиректит ли http:// на https:// (best-effort). */
+async function checkHttpsUpgrade(url: URL): Promise<'yes' | 'no' | 'unknown'> {
+  const httpUrl = new URL(url.toString())
+  httpUrl.protocol = 'http:'
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetch(httpUrl, {
+      method: 'HEAD',
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': 'OMNIDESK-Audit/1.0' },
+    })
+    void res.body?.cancel()
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location') ?? ''
+      return loc.toLowerCase().startsWith('https:') ? 'yes' : 'no'
+    }
+    return res.status < 400 ? 'no' : 'unknown'
+  } catch {
+    return 'unknown'
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Публичный экшен: собрать пассивный аудит безопасности своего домена.
+ * Гейт requireGod, без audit() — как остальные god-экшены.
+ */
+export async function secretSecurityAuditAction(
+  rawUrl: string,
+): Promise<SecurityAuditActionResult> {
+  await requireGod()
+  const url = normalizeUrl(rawUrl)
+  if (!url) {
+    return {
+      ok: false,
+      message: 'Некорректный адрес. Введите домен или http(s)-URL.',
+    }
+  }
+  const data = await collectAudit(url)
+  if (data.error && data.status === null) {
+    return { ok: false, message: `Хост не ответил: ${data.error}`, data }
+  }
+  return { ok: true, message: 'Готово', data }
+}
+
+/* ------------------------- AI-заключение (харденинг) --------------------- */
+
+// Мягкий rate-limit на дорогой вызов модели: 6 заключений в минуту суммарно
+// (как у god-отчёта). In-memory, best-effort — панель однопроцессная.
+const assessTimestamps: number[] = []
+
+export interface PentestActionResult {
+  ok: boolean
+  message: string
+  /** Markdown-текст заключения. */
+  report?: string
+  /** Данные аудита, на которых построено заключение (для отображения). */
+  audit?: SecurityAudit
+}
+
+/**
+ * Собрать пассивный аудит и получить от AI Gateway ЗАЩИТНОЕ заключение
+ * (харденинг) по своему домену. Гейт requireGod, без audit().
+ */
+export async function secretSecurityAssessAction(
+  rawUrl: string,
+): Promise<PentestActionResult> {
+  await requireGod()
+
+  const url = normalizeUrl(rawUrl)
+  if (!url) {
+    return {
+      ok: false,
+      message: 'Некорректный адрес. Введите домен или http(s)-URL.',
+    }
+  }
+
+  const now = Date.now()
+  while (assessTimestamps.length && now - assessTimestamps[0] > 60_000) {
+    assessTimestamps.shift()
+  }
+  if (assessTimestamps.length >= 6) {
+    return {
+      ok: false,
+      message: 'Слишком часто. Подождите минуту и попробуйте снова.',
+    }
+  }
+  assessTimestamps.push(now)
+
+  const audit = await collectAudit(url)
+  if (audit.error && audit.status === null) {
+    return { ok: false, message: `Хост не ответил: ${audit.error}`, audit }
+  }
+
+  // Ленивый импорт: тянет server-only + gateway-пл'юмбинг только при запросе.
+  const { assessSecurity } = await import('@/lib/god-pentest')
+  const res = await assessSecurity({
+    host: audit.host,
+    finalUrl: audit.finalUrl,
+    status: audit.status,
+    scheme: audit.scheme,
+    httpsUpgrade: audit.httpsUpgrade,
+    securityHeaders: audit.securityHeaders,
+    disclosure: audit.disclosure,
+    cookies: audit.cookies,
+    latencyMs: audit.latencyMs,
+  })
+
+  if (!res.ok) return { ok: false, message: res.message, audit }
+  return { ok: true, message: 'Готово', report: res.report, audit }
+}

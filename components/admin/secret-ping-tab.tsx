@@ -18,16 +18,25 @@ import {
   ArrowRight,
   CircleAlert,
   CircleCheck,
+  Copy,
   Gauge,
   Loader2,
+  Lock,
+  LockOpen,
   Radio,
+  ShieldCheck,
+  Sparkles,
 } from 'lucide-react'
 import {
   secretPingAction,
+  secretSecurityAssessAction,
+  secretSecurityAuditAction,
   type PingResult,
+  type SecurityAudit,
 } from '@/app/actions/admin-secret'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Markdown } from '@/components/admin/secret-markdown'
 import { cn } from '@/lib/utils'
 
 const ATTEMPT_OPTIONS = [1, 2, 4, 6]
@@ -37,6 +46,11 @@ export function SecretPingTab() {
   const [attempts, setAttempts] = useState(4)
   const [pending, setPending] = useState(false)
   const [result, setResult] = useState<PingResult | null>(null)
+
+  const [auditPending, setAuditPending] = useState(false)
+  const [audit, setAudit] = useState<SecurityAudit | null>(null)
+  const [assessPending, setAssessPending] = useState(false)
+  const [assessment, setAssessment] = useState<string | null>(null)
 
   async function runPing() {
     const target = url.trim()
@@ -58,6 +72,63 @@ export function SecretPingTab() {
       toast.error('Внутренняя ошибка при проверке')
     } finally {
       setPending(false)
+    }
+  }
+
+  async function runAudit() {
+    const target = url.trim()
+    if (!target) {
+      toast.error('Введите домен или URL')
+      return
+    }
+    setAuditPending(true)
+    setAudit(null)
+    setAssessment(null)
+    try {
+      const res = await secretSecurityAuditAction(target)
+      if (res.ok && res.data) {
+        setAudit(res.data)
+      } else {
+        if (res.data) setAudit(res.data)
+        toast.error(res.message)
+      }
+    } catch {
+      toast.error('Внутренняя ошибка при аудите')
+    } finally {
+      setAuditPending(false)
+    }
+  }
+
+  async function runAssess() {
+    const target = url.trim()
+    if (!target) {
+      toast.error('Введите домен или URL')
+      return
+    }
+    setAssessPending(true)
+    setAssessment(null)
+    try {
+      const res = await secretSecurityAssessAction(target)
+      if (res.audit) setAudit(res.audit)
+      if (res.ok && res.report) {
+        setAssessment(res.report)
+      } else {
+        toast.error(res.message)
+      }
+    } catch {
+      toast.error('Внутренняя ошибка при формировании заключения')
+    } finally {
+      setAssessPending(false)
+    }
+  }
+
+  async function copyAssessment() {
+    if (!assessment) return
+    try {
+      await navigator.clipboard.writeText(assessment)
+      toast.success('Заключение скопировано')
+    } catch {
+      toast.error('Не удалось скопировать')
     }
   }
 
@@ -109,7 +180,7 @@ export function SecretPingTab() {
           </Button>
         </div>
 
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">Попыток:</span>
           {ATTEMPT_OPTIONS.map((n) => (
             <button
@@ -126,19 +197,234 @@ export function SecretPingTab() {
               {n}
             </button>
           ))}
+
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void runAudit()}
+              disabled={auditPending}
+              className="press-scale gap-1.5"
+            >
+              {auditPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <ShieldCheck className="size-3.5" />
+              )}
+              Аудит безопасности
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void runAssess()}
+              disabled={assessPending}
+              className="press-scale gap-1.5"
+            >
+              {assessPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="size-3.5" />
+              )}
+              AI-заключение
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* ---- Результат ---- */}
+      {/* ---- Результат ping ---- */}
       {result && <PingReport result={result} />}
 
-      {!result && !pending && (
-        <p className="px-1 text-sm text-muted-foreground">
-          Введите свой домен или адрес страницы состояния — панель измерит
-          HTTP-статус и время ответа за несколько попыток.
+      {/* ---- Аудит безопасности ---- */}
+      {audit && <AuditReport audit={audit} />}
+
+      {/* ---- AI-заключение ---- */}
+      {(assessment || assessPending) && (
+        <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
+          <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <Sparkles className="size-4" />
+            Заключение по защищённости
+            {assessment && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => void copyAssessment()}
+                className="ml-auto size-7"
+                aria-label="Скопировать заключение"
+              >
+                <Copy className="size-3.5" />
+              </Button>
+            )}
+          </div>
+          {assessPending ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Анализирую конфигурацию…
+            </div>
+          ) : (
+            assessment && <Markdown text={assessment} />
+          )}
+        </div>
+      )}
+
+      {!result && !audit && !pending && !auditPending && !assessPending && (
+        <p className="px-1 text-sm text-muted-foreground text-pretty">
+          Введите свой домен или адрес страницы состояния. «Проверить» измерит
+          HTTP-статус и задержку, «Аудит безопасности» соберёт заголовки защиты
+          и флаги cookie, а «AI-заключение» даст рекомендации по харденингу.
         </p>
       )}
     </div>
+  )
+}
+
+/* ------------------------------ Аудит UI -------------------------------- */
+
+/** Человекочитаемые подписи проверяемых заголовков. */
+const HEADER_LABELS: Record<string, string> = {
+  'strict-transport-security': 'HSTS',
+  'content-security-policy': 'CSP',
+  'x-content-type-options': 'X-Content-Type-Options',
+  'x-frame-options': 'X-Frame-Options',
+  'referrer-policy': 'Referrer-Policy',
+  'permissions-policy': 'Permissions-Policy',
+  'cross-origin-opener-policy': 'COOP',
+  'cross-origin-embedder-policy': 'COEP',
+  'cross-origin-resource-policy': 'CORP',
+}
+
+function AuditReport({ audit }: { audit: SecurityAudit }) {
+  const present = audit.securityHeaders.filter((h) => h.present).length
+  const total = audit.securityHeaders.length
+  const httpsOk = audit.scheme === 'https' && audit.httpsUpgrade !== 'no'
+
+  return (
+    <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
+      <div className="mb-4 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+        <ShieldCheck className="size-4" />
+        Аудит безопасности
+        <span className="ml-auto font-mono text-xs">
+          {present}/{total} заголовков защиты
+        </span>
+      </div>
+
+      {/* Транспорт */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium',
+            httpsOk
+              ? 'bg-emerald-500/10 text-emerald-500'
+              : 'bg-destructive/10 text-destructive',
+          )}
+        >
+          {httpsOk ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
+          {audit.scheme.toUpperCase()}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          http→https:{' '}
+          {audit.httpsUpgrade === 'yes'
+            ? 'редирект есть'
+            : audit.httpsUpgrade === 'no'
+              ? 'нет редиректа'
+              : 'не определено'}
+        </span>
+        {audit.status !== null && (
+          <span className="font-mono text-xs text-muted-foreground">
+            HTTP {audit.status}
+          </span>
+        )}
+      </div>
+
+      {/* Заголовки безопасности */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {audit.securityHeaders.map((h) => (
+          <div
+            key={h.key}
+            className="flex items-start gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2"
+          >
+            {h.present ? (
+              <CircleCheck className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+            ) : (
+              <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+            )}
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-foreground">
+                {HEADER_LABELS[h.key] ?? h.key}
+              </div>
+              <div className="truncate font-mono text-[11px] text-muted-foreground">
+                {h.present ? h.value || '(включён)' : 'отсутствует'}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Раскрытие версий ПО */}
+      {audit.disclosure.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-2 text-xs font-medium text-muted-foreground">
+            Раскрытие версий ПО
+          </div>
+          <div className="flex flex-col gap-1">
+            {audit.disclosure.map((h) => (
+              <div key={h.key} className="font-mono text-[11px] text-amber-500">
+                {h.key}: {h.value}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cookie */}
+      {audit.cookies.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-2 text-xs font-medium text-muted-foreground">
+            Cookie (только флаги, значения не читались)
+          </div>
+          <div className="overflow-hidden rounded-lg border border-border/60">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border/60 bg-muted/40 text-left text-muted-foreground">
+                  <th className="px-3 py-1.5 font-medium">Имя</th>
+                  <th className="px-3 py-1.5 font-medium">Secure</th>
+                  <th className="px-3 py-1.5 font-medium">HttpOnly</th>
+                  <th className="px-3 py-1.5 font-medium">SameSite</th>
+                </tr>
+              </thead>
+              <tbody>
+                {audit.cookies.map((c, i) => (
+                  <tr
+                    key={`${c.name}-${i}`}
+                    className="border-b border-border/40 last:border-0"
+                  >
+                    <td className="px-3 py-1.5 font-mono text-foreground">
+                      {c.name}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <FlagMark on={c.secure} />
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <FlagMark on={c.httpOnly} />
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                      {c.sameSite ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FlagMark({ on }: { on: boolean }) {
+  return on ? (
+    <CircleCheck className="size-3.5 text-emerald-500" />
+  ) : (
+    <CircleAlert className="size-3.5 text-destructive" />
   )
 }
 
