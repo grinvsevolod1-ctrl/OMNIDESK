@@ -101,6 +101,7 @@ const SCAN_PHASES = [
 
 export function SecretPingTab() {
   const [url, setUrl] = useState('')
+  const [cookie, setCookie] = useState('')
   const [authorized, setAuthorized] = useState(false)
   const [pending, setPending] = useState(false)
   const [phase, setPhase] = useState(0)
@@ -142,7 +143,7 @@ export function SecretPingTab() {
     setResult(null)
     setScanned(true)
     try {
-      const res = await secretFullScanAction(target, authorized)
+      const res = await secretFullScanAction(target, authorized, cookie.trim() || undefined)
       if (res.ok && res.data) {
         setResult(res.data)
         if (!res.data.audit.responded) toast.error(res.message)
@@ -211,6 +212,30 @@ export function SecretPingTab() {
             )}
             Запустить
           </Button>
+        </div>
+
+        {/* Необязательные cookie для обхода Cloudflare-челленджа */}
+        <div className="mt-3">
+          <label
+            htmlFor="scan-cookie"
+            className="mb-1 block text-[11px] font-medium text-muted-foreground"
+          >
+            Cookie (необязательно) — для обхода Cloudflare challenge
+          </label>
+          <textarea
+            id="scan-cookie"
+            value={cookie}
+            onChange={(e) => setCookie(e.target.value)}
+            placeholder="cf_clearance=…; session=…  (скопируйте из DevTools → Application → Cookies)"
+            spellCheck={false}
+            rows={2}
+            className="w-full resize-y rounded-lg border border-border bg-background/60 px-3 py-2 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground text-pretty">
+            Запрос выполняется с полным браузерным набором заголовков. Если сайт
+            за Cloudflare отдаёт страницу-вызов, вставьте сюда cookie из своего
+            браузера — они будут приложены к запросу.
+          </p>
         </div>
 
         {/* Обязательное подтверждение права тестировать домен */}
@@ -1169,15 +1194,17 @@ function MixedContentCard({ mixed }: { mixed: MixedContentCheck }) {
 
 function InfraCard({ infra }: { infra: InfraCheck }) {
   const hasAny =
-    infra.cdn || infra.waf || infra.server || infra.cacheControl
+    infra.cdn || infra.waf || infra.server || infra.cacheControl || infra.challenge
   if (!hasAny) return null
   return (
     <div
       className={cn(
         'mt-4 rounded-lg border p-3',
-        infra.privateCacheable
-          ? 'border-amber-500/40 bg-amber-500/10'
-          : 'border-border/60 bg-background/40',
+        infra.challenge
+          ? 'border-destructive/40 bg-destructive/10'
+          : infra.privateCacheable
+            ? 'border-amber-500/40 bg-amber-500/10'
+            : 'border-border/60 bg-background/40',
       )}
     >
       <div className="flex items-center gap-2">
@@ -1208,6 +1235,12 @@ function InfraCard({ infra }: { infra: InfraCheck }) {
           Ответ с cookie помечен публично кэшируемым — риск утечки между
           пользователями через CDN.
         </p>
+      )}
+      {infra.challenge && infra.challengeNote && (
+        <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-2">
+          <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+          <p className="text-[11px] text-destructive text-pretty">{infra.challengeNote}</p>
+        </div>
       )}
     </div>
   )

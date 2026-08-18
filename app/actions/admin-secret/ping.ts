@@ -93,6 +93,70 @@ const TIMEOUT_MS = 10_000
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
+/**
+ * Полный набор заголовков реального браузера (навигационный запрос Chrome).
+ * Многие WAF/CDN (в т.ч. Cloudflare) отдают challenge/403 на «голые» запросы
+ * без Accept, Accept-Language и Sec-Fetch-*; повторяя браузерный набор, мы
+ * проходим базовую эвристику бота. При наличии cookie от пользователя
+ * (например, cf_clearance, скопированные из браузера) — прикладываем их.
+ */
+function browserHeaders(cookie?: string | null): Record<string, string> {
+  const h: Record<string, string> = {
+    'user-agent': BROWSER_UA,
+    accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9,ru;q=0.8',
+    'accept-encoding': 'gzip, deflate, br',
+    'upgrade-insecure-requests': '1',
+    'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'sec-fetch-user': '?1',
+  }
+  if (cookie && cookie.trim()) h['cookie'] = cookie.trim().slice(0, 4096)
+  return h
+}
+
+/**
+ * Детектор страницы-вызова Cloudflare (и похожих WAF-интерстишлов). Смотрит на
+ * статус + характерные маркеры тела/заголовков. Это НЕ обход — мы лишь честно
+ * распознаём, что вместо контента нам отдали проверочную страницу.
+ */
+function detectCloudflareChallenge(
+  status: number,
+  body: string,
+  headers: Headers,
+): { isChallenge: boolean; note: string | null } {
+  const b = body.toLowerCase()
+  const markers = [
+    'cf-browser-verification',
+    'cf_chl_opt',
+    '__cf_chl_',
+    'cf-challenge',
+    'challenge-platform',
+    'just a moment',
+    'checking your browser',
+    'enable javascript and cookies to continue',
+    'attention required',
+  ]
+  const hit = markers.some((m) => b.includes(m))
+  const cfMitigated = headers.get('cf-mitigated') === 'challenge'
+  const blockedStatus = status === 403 || status === 503 || status === 429
+  if (cfMitigated || (hit && blockedStatus) || (hit && b.includes('challenge-platform'))) {
+    return {
+      isChallenge: true,
+      note:
+        'Cloudflare WAF: активен, отдана страница-вызов (challenge). Обход не удался. ' +
+        'Рекомендация: найдите реальный IP через SecurityTrails/Censys, ' +
+        'либо скопируйте cookie из браузера (в т.ч. cf_clearance) и передайте их в поле cookie.',
+    }
+  }
+  return { isChallenge: false, note: null }
+}
+
 /** Приватный/служебный IP (loopback, RFC1918, link-local, CGNAT, ULA). */
 function isPrivateIp(ip: string): boolean {
   const v = isIP(ip)
@@ -280,6 +344,7 @@ async function pingOnce(
   url: URL,
   seq: number,
   cold: boolean,
+  cookie?: string | null,
 ): Promise<PingAttempt> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
@@ -290,7 +355,7 @@ async function pingOnce(
       redirect: 'manual',
       cache: 'no-store',
       signal: controller.signal,
-      headers: { 'user-agent': BROWSER_UA },
+      headers: browserHeaders(cookie),
     })
     const ms = Math.round(performance.now() - started)
     // Закрываем тело, чтобы не тянуть его целиком — нам нужен только статус.
@@ -509,6 +574,10 @@ export interface InfraCheck {
   cacheControl: string | null
   /** Приватный ответ (с cookie) помечен публично кэшируемым — риск утечки. */
   privateCacheable: boolean
+  /** Вместо контента отдана страница-вызов WAF (Cloudflare challenge и т.п.). */
+  challenge: boolean
+  /** Пояснение/рекомендация по challenge (если обнаружен). */
+  challengeNote: string | null
   note: string
 }
 
@@ -652,23 +721,27 @@ function untestedChecks() {
       server: null,
       cacheControl: null,
       privateCacheable: false,
+      challenge: false,
+      challengeNote: null,
       note: 'Проверка не выполнена — хост не ответил.',
     } as InfraCheck,
   }
 }
 
 /** Собрать пассивный аудит по URL. Вызывается только из гейт-экшена. */
-async function collectAudit(url: URL): Promise<SecurityAudit> {
+async function collectAudit(url: URL, cookie?: string | null): Promise<SecurityAudit> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   const started = performance.now()
   try {
     // SSRF-safe: следим за редиректами вручную, проверяя каждый переход.
+    // Полный браузерный набор заголовков (+ cookie пользователя) — чтобы
+    // пройти базовую бот-эвристику Cloudflare/WAF, а не получить сразу 403.
     const { res, finalUrl } = await guardedFetch(url, {
       method: 'GET',
       cache: 'no-store',
       signal: controller.signal,
-      headers: { 'user-agent': BROWSER_UA },
+      headers: browserHeaders(cookie),
     })
     const latencyMs = Math.round(performance.now() - started)
 
@@ -706,9 +779,8 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
     const csp = analyzeCsp(cspValue)
     const hsts = analyzeHsts(hstsValue, finalUrl.protocol === 'https:')
     const cookiePrefixIssues = cookiePrefixProblems(cookies)
-    const infra = detectInfra(res.headers, cookies)
 
-    // Читаем тело (с ограничением) для проверки mixed content — только для HTML.
+    // Читаем тело (с ограничением) для mixed content И для детекции challenge.
     const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
     const isHtmlResp =
       contentType.includes('text/html') || contentType.includes('xhtml')
@@ -718,6 +790,11 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
     } else {
       void res.body?.cancel()
     }
+
+    // Распознаём страницу-вызов Cloudflare/WAF (честная детекция, не обход).
+    const challenge = detectCloudflareChallenge(res.status, bodyForScan, res.headers)
+    const infra = detectInfra(res.headers, cookies, challenge)
+
     const mixedContent = scanMixedContent(
       bodyForScan,
       finalUrl.protocol === 'https:',
@@ -943,7 +1020,11 @@ function cookiePrefixProblems(cookies: CookieFlags[]): string[] {
 }
 
 /** Определить CDN/WAF по характерным заголовкам и разобрать кэш. */
-function detectInfra(headers: Headers, cookies: CookieFlags[]): InfraCheck {
+function detectInfra(
+  headers: Headers,
+  cookies: CookieFlags[],
+  challenge: { isChallenge: boolean; note: string | null } = { isChallenge: false, note: null },
+): InfraCheck {
   const has = (k: string) => headers.get(k) !== null
   const server = headers.get('server')
   let cdn: string | null = null
@@ -975,12 +1056,16 @@ function detectInfra(headers: Headers, cookies: CookieFlags[]): InfraCheck {
     (/s-maxage=\d+/.test(lc) && !lc.includes('private') && !lc.includes('no-store'))
   const privateCacheable = setsCookies && publiclyCacheable
 
+  // Страница-вызов означает, что WAF точно активен, даже если заголовков мало.
+  if (challenge.isChallenge && !waf) waf = cdn === 'Cloudflare' ? 'Cloudflare' : (cdn ?? 'WAF')
+
   const parts: string[] = []
   if (cdn) parts.push(`CDN: ${cdn}`)
   if (waf) parts.push(`WAF: ${waf}`)
   if (!cdn && !waf) parts.push('CDN/WAF по заголовкам не определён')
   if (privateCacheable)
     parts.push('ответ с cookie помечен публично кэшируемым — риск утечки')
+  if (challenge.isChallenge) parts.push('отдана страница-вызов (challenge) — контент недоступен')
 
   return {
     cdn,
@@ -988,6 +1073,8 @@ function detectInfra(headers: Headers, cookies: CookieFlags[]): InfraCheck {
     server,
     cacheControl,
     privateCacheable,
+    challenge: challenge.isChallenge,
+    challengeNote: challenge.note,
     note: parts.join('; ') + '.',
   }
 }
@@ -1221,7 +1308,7 @@ async function checkReflection(
         cspPresent,
         risk: headerReflected ? 'medium' : 'none',
         note: headerReflected
-          ? 'Ответ не HTML, но ввод отражается в заголовке ответа — проверьте фильтрацию.'
+          ? 'Ответ не HTML, но ввод отражается в заголовке ответа — потенциальный риск'
           : 'Ответ не HTML — отражение ввода в разметку неприменимо.',
       }
     }
@@ -3250,6 +3337,7 @@ function findingsToDrill(
 export async function secretFullScanAction(
   rawUrl: string,
   authorized: boolean,
+  cookie?: string | null,
 ): Promise<FullScanActionResult> {
   await requireGod()
 
@@ -3285,7 +3373,7 @@ export async function secretFullScanAction(
   {
     const attempts: PingAttempt[] = []
     for (let i = 0; i < DEFAULT_ATTEMPTS; i++) {
-      attempts.push(await pingOnce(url, i + 1, i === 0))
+      attempts.push(await pingOnce(url, i + 1, i === 0, cookie))
     }
     const okAttempts = attempts.filter((a) => a.ms !== null)
     const times = okAttempts.map((a) => a.ms as number)
@@ -3309,12 +3397,24 @@ export async function secretFullScanAction(
   }
 
   // 2) Полный пассивный аудит (заголовки, CSP/HSTS/CORS/методы/mixed/TLS/DNS…).
-  const audit = await collectAudit(url)
+  const audit = await collectAudit(url, cookie)
   if (!audit.responded) {
     // Хост не ответил — возвращаем то, что есть (ping мог показать причину).
     return {
       ok: true,
       message: `Хост не ответил: ${audit.error ?? 'нет соединения'}`,
+      data: { ping, audit, drills: [], recon: null, s3: [], report: null, reportError: null },
+    }
+  }
+
+  // 2a) WAF отдал страницу-вызов — реальный контент недоступен, глубокие пробы
+  //     будут упираться в тот же challenge. Честно сообщаем и останавливаемся.
+  if (audit.infra.challenge) {
+    return {
+      ok: true,
+      message:
+        audit.infra.challengeNote ??
+        'Cloudflare WAF: активен, обход не удался. Скопируйте cookie из браузера и повторите.',
       data: { ping, audit, drills: [], recon: null, s3: [], report: null, reportError: null },
     }
   }
