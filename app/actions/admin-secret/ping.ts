@@ -205,7 +205,7 @@ function normalizeUrl(raw: string): URL | null {
  *
  * Один запрос: GET с таймаутом; читается ТОЛЬКО статус-код и время ответа,
  * тело ответа не загружается (соединение закрывается через AbortController
- * сразу пос��е получения заголовков).
+ * сразу после получения заголовков).
  */
 export async function secretPingAction(
   rawUrl: string,
@@ -364,7 +364,7 @@ export interface CookieFlags {
  * маркер (случайная строка + символы `<>"'`), НЕ являющийся скриптом и ничего
  * не выполняющий. Мы лишь смотрим, вернул ли сервер этот ввод в теле ответа и
  * экранировал ли спецсимволы. Отражение без экранирования — классический
- * признак риска reflected XSS. Это диагностика конфиг��рации, а не эксплойт.
+ * признак риска reflected XSS. Это диагностика конфигурации, а не эксплойт.
  */
 export interface ReflectionCheck {
   /** Удалось ли выполнить проверку (был ответ с телом). */
@@ -396,7 +396,7 @@ export interface TlsCheck {
   issuer: string | null
   /** Дата окончания действия (ISO), если прочитана. */
   validTo: string | null
-  /** Осталось д��ей до истечения (может быть отрицательным). */
+  /** Осталось дней до истечения (может быть отрицательным). */
   daysLeft: number | null
   /** Совпадает ли имя хоста с сертификатом. */
   hostnameMatch: boolean
@@ -1708,7 +1708,7 @@ async function hasCaa(domain: string): Promise<boolean> {
 }
 
 /**
- * Публичн��й экшен: собрать пассивный аудит безопасности своего домена.
+ * Публичный экшен: собрать пассивный аудит безопасности своего домена.
  * Гейт requireGod, без audit() — как остальные god-экшены.
  */
 export async function secretSecurityAuditAction(
@@ -2169,7 +2169,7 @@ async function drillHttpsUpgrade(origin: string): Promise<DrillResult> {
   }
 
   if (redirectsToHttps) {
-    steps.push({ label: 'Итог', detail: 'http корре��тно редиректит на https.', outcome: 'refuted' })
+    steps.push({ label: 'Итог', detail: 'http корректно редиректит на https.', outcome: 'refuted' })
     return { kind: 'no-https-upgrade', title: 'Нет upgrade на HTTPS', verdict: 'not-exploitable', steps, evidence: null }
   }
 
@@ -2288,7 +2288,7 @@ export async function secretDrillFindingAction(
 /*  GET-запросов к публичным REST-эндпоинтам Amazon S3 и по коду ответа + */
 /*  телу (ListBucketResult / AccessDenied / NoSuchBucket) определяем,     */
 /*  открыт ли листинг наружу — типичная мисконфигурация. Инструмент       */
-/*  ТОЛЬ��О читает публично наблюдаемый ответ: не пишет, не удаляет, не    */
+/*  ТОЛЬКО читает публично наблюдаемый ответ: не пишет, не удаляет, не    */
 /*  использует учётные данные, не перебирает пути. Часть скрытой панели:  */
 /*  гейт requireGod, без audit() (инвариант AGENTS.md §4).                */
 /* ===================================================================== */
