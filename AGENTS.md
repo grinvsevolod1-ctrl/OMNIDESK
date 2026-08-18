@@ -91,7 +91,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    (Частая ошибка — не повторяй её.)
 4. **Гейт FAIL-CLOSED.** Без `SECRET_PANEL_PASSWORD` консоль отдаёт голый 404
    (страница и все god-API) и разлочить её нельзя вообще; ошибка «неверный
-   пароль» неотличима от «пароль не настроен». Recovery только через env:
+   парол��» неотличима от «пароль не настроен». Recovery только через env:
    задать `SECRET_PANEL_PASSWORD` на VPS и перезапустить процесс — никакого
    in-band восстановления по дизайну.
 5. **Управляемые сайты** (вкладка «Сайты», `lib/god-sites.ts`, миграции
@@ -169,7 +169,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    requireAdmin + god-unlock, без audit()-записей). UI —
    `components/admin/secret-telegram/` (telegram-tab → accounts-list /
    account-connect / personal-messenger + use-personal-messenger);
-   медиа/авата��ы — `app/wijegniwjgwjog/api/personal-media`.
+   медиа/аватары — `app/wijegniwjgwjog/api/personal-media`.
 7. **Вкладка «API TG»** — покупка Telegram-аккаунтов через сервис Get My TG
    (docs.getmytg.com/sdk-reference). Клиент — `lib/god-gmt.ts` (plain fetch к
    api.getmytg.com, заголовок `x-api-key`); actions —
@@ -284,7 +284,7 @@ components/admin/        UI админки
                          хук состояния (view/диалоги/фильтрация по ресурсу)
   lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлайн-
                          редакторы лида; общий transition+toast флоу — в хуке
-components/shared/       кросс-ролевые компоненты; use-xlsx-export.ts — общий
+components/shared/       кр��сс-ролевые компоненты; use-xlsx-export.ts — общий
                          флоу Excel-выгрузки (admin/manager/curator leads);
                          slide-over.tsx — ЕДИНЫЙ шелл боковых панелей/шитов
                          (transform-only анимация, см. стандарт UI в разделе 10);
@@ -524,7 +524,7 @@ lib/
                          для ОДНОГО процесса; pm2 cluster детектится и в
                          production без Redis — fail-fast
                          (RATE_LIMIT_REQUIRE_REDIS=true для внешних балансеров)
-  media-store.ts         ярусы хранени�� медиа: S3 (MEDIA_S3_*) → диск
+  media-store.ts         ярусы хранения медиа: S3 (MEDIA_S3_*) → диск
                          (MEDIA_STORE_DIR) → bytea; локатор s3://… или
                          абсолютный путь, диспатч по префиксу (media-s3.ts)
 worker/src/              воркер каналов
@@ -698,18 +698,18 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
     `width/height/top/left/box-shadow` на открытии.
   - Данные для деталей показывай мгновенно из уже загруженной строки списка
     (`fallbackData` в SWR), сеть догружает только недостающее — секции
-    получают лёгкие скелетоны, глобального спиннера на панели быть не должно.
+    получают лёгкие скелетоны, глобального спиннера ��а панели быть не должно.
   - После мутации — ОДИН путь обновления: клиентский `refresh()`/`mutate()`.
-    `revalidatePath` в actions дашбордов не использовать: страницы динамические
+    `revalidatePath` в actions дашборд��в не использовать: страницы динамические
     (cookie-auth), клиент держит состояние в `useState` — серверный ре-рендер
     выбрасывается впустую (см. `app/actions/lead-cards/core.ts`).
   - Эталоны: docked-карточка в Inbox менеджера, `SlideOver` карточки лида.
   - **Select (base-ui, `components/ui/select.tsx`)**: Root-обёртка сама
     собирает `items` из `SelectItem`-детей, поэтому закрытый триггер всегда
     показывает человеческую надпись, а не сырое значение («transferred»).
-    Если пункты ренд��рятся в отдельном подкомпоненте — передай `items`
+    Если пункты рендерятся в отдельном подкомпоненте — передай `items`
     явно. Попап выпадает ПОД триггером (`alignItemWithTrigger=false`,
-    `align="start"`) �� не включай режим перекрытия обратно. Высота триггера —
+    `align="start"`) — не включай режим перекрытия обратно. Высота триггера —
     обычные классы (`h-8` дефолт), переопределяется `h-9` из className.
   - Кликабельным элементам курсор pointer даёт глобальное правило в
     `globals.css` (`button:not(:disabled)`), отдельно прописывать не нужно;

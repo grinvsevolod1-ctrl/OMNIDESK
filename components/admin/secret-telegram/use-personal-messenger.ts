@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import {
   personalDialogsAction,
   personalHistoryAction,
+  personalDeleteDialogAction,
   personalMarkReadAction,
   personalSendTextAction,
   personalSendFileAction,
@@ -264,6 +265,23 @@ export function usePersonalMessenger(channelId: string | null) {
     [channelId, peer],
   )
 
+  const deleteDialog = useCallback(
+    async (targetPeer: string, revoke: boolean) => {
+      if (!channelId) return false
+      const res = await personalDeleteDialogAction(channelId, targetPeer, revoke)
+      if (!res.ok) {
+        toast.error(res.message)
+        return false
+      }
+      // Оптимистично убираем из списка; если открыт этот тред — закрываем.
+      setDialogs((prev) => prev.filter((d) => d.peerId !== targetPeer))
+      setPeer((cur) => (cur === targetPeer ? null : cur))
+      toast.success('Диалог удалён')
+      return true
+    },
+    [channelId],
+  )
+
   return {
     dialogs,
     dialogsLoading,
@@ -282,5 +300,6 @@ export function usePersonalMessenger(channelId: string | null) {
     sendVoice,
     editMessage,
     deleteMessage,
+    deleteDialog,
   }
 }

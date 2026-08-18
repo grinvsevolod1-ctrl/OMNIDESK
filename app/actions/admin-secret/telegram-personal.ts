@@ -613,6 +613,30 @@ export async function personalDeleteMessageAction(
   return { ok: true, message: 'Удалено' }
 }
 
+/**
+ * Удаление всего диалога. `revoke` — также стереть историю у собеседника
+ * (только личные диалоги); каналы и супергруппы worker покидает.
+ */
+export async function personalDeleteDialogAction(
+  channelId: string,
+  peer: string,
+  revoke: boolean,
+): Promise<PersonalActionResult> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  const data = await postJsonToWorker<{ deleted?: boolean; error?: string }>(
+    '/personal/delete-dialog',
+    { channelId, peer, revoke },
+  )
+  if (!data?.deleted) {
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось удалить диалог.'),
+    }
+  }
+  return { ok: true, message: 'Диалог удалён' }
+}
+
 /** Отметить диалог прочитанным (best-effort). */
 export async function personalMarkReadAction(
   channelId: string,

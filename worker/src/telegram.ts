@@ -36,6 +36,7 @@ import {
 import { createTargetResolver } from './telegram-peers.js'
 import {
   createPersonalTargetResolver,
+  deletePersonalDialog,
   downloadPersonalAvatar,
   downloadPersonalMedia,
   getPersonalHistory,
@@ -702,6 +703,19 @@ export class TelegramSession {
       this.resolveTarget,
       peer,
       messageId,
+    )
+  }
+
+  /**
+   * Delete a whole dialog (personal mode). `revoke` also removes the history
+   * for the other participant (user dialogs); channels/supergroups are left.
+   */
+  async personalDeleteDialog(peer: string, revoke: boolean): Promise<void> {
+    return deletePersonalDialog(
+      this.personalClient(),
+      this.resolveTarget,
+      peer,
+      revoke,
     )
   }
 

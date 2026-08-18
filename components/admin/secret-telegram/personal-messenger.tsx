@@ -303,6 +303,7 @@ export function PersonalMessenger({
         error={m.dialogsError}
         activePeer={m.peer}
         onSelectPeer={m.setPeer}
+        onDeleteDialog={(peerId, revoke) => void m.deleteDialog(peerId, revoke)}
         peerOpen={Boolean(m.peer)}
       />
 

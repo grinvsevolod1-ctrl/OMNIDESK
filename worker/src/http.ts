@@ -290,7 +290,7 @@ export function startHttpServer(): void {
           })
         }
 
-        // Голосовое сообщение (нативный voice bubble).
+        // Голосовое сообщение (нативн��й voice bubble).
         if (url.pathname === '/personal/send-voice' && req.method === 'POST') {
           const peer = String(body.peer ?? '')
           const audioB64 = String(body.audio ?? '')
@@ -328,6 +328,15 @@ export function startHttpServer(): void {
           return json(res, 200, { deleted: true })
         }
 
+        // Удаление всего диалога (revoke — также у собеседника; каналы и
+        // супергруппы покидаются вместо удаления).
+        if (url.pathname === '/personal/delete-dialog' && req.method === 'POST') {
+          const peer = String(body.peer ?? '')
+          if (!peer) return json(res, 400, { error: 'peer required' })
+          await session.personalDeleteDialog(peer, Boolean(body.revoke))
+          return json(res, 200, { deleted: true })
+        }
+
         // Отметить диалог прочитанным.
         if (url.pathname === '/personal/read' && req.method === 'POST') {
           const peer = String(body.peer ?? '')
@@ -342,7 +351,7 @@ export function startHttpServer(): void {
           return json(res, 200, { profile })
         }
 
-        // Изменить имя/фамилию/«о себе» в самом Telegram.
+        // Изменить имя/фамилию/«о се��е» в самом Telegram.
         if (url.pathname === '/personal/profile' && req.method === 'POST') {
           await session.personalUpdateProfile({
             firstName:

@@ -216,6 +216,34 @@ export async function getPersonalHistory(
 }
 
 /**
+ * Delete an entire dialog from the account's chat list. For users and basic
+ * groups this is messages.DeleteHistory (`revoke` also removes it for the
+ * other side — user dialogs only). Channels and supergroups cannot be
+ * "deleted", only left, so those go through channels.LeaveChannel.
+ */
+export async function deletePersonalDialog(
+  client: TelegramClient,
+  resolveTarget: (target: string) => Promise<Api.TypeInputPeer | string>,
+  peer: string,
+  revoke: boolean,
+): Promise<void> {
+  const target = await resolveTarget(peer)
+  const entity = await client.getEntity(target)
+  if (entity instanceof Api.Channel) {
+    await client.invoke(new Api.channels.LeaveChannel({ channel: entity }))
+    return
+  }
+  await client.invoke(
+    new Api.messages.DeleteHistory({
+      peer: target,
+      revoke,
+      justClear: false,
+      maxId: 0,
+    }),
+  )
+}
+
+/**
  * Download a peer's profile photo (avatar). Returns null when the peer has no
  * photo. Pure read.
  */

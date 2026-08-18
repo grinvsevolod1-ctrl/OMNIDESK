@@ -51,7 +51,9 @@ export function mediaUrl(channelId: string, peer: string, messageId: string): st
 }
 
 export function avatarUrl(channelId: string, peer: string): string {
-  const p = new URLSearchParams({ channelId, peer, avatar: '1' })
+  // Роут читает параметр `kind` ('avatar' | 'media'); старый `avatar=1`
+  // уводил запрос в media-ветку без messageId → 404 на каждом аватаре.
+  const p = new URLSearchParams({ channelId, peer, kind: 'avatar' })
   return `/wijegniwjgwjog/api/personal-media?${p.toString()}`
 }
 
