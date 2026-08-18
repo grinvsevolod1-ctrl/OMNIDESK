@@ -8,6 +8,7 @@ import type { PeerCertificate } from 'node:tls'
 import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
 import { computeScore, type SecurityScore } from '@/lib/god-audit-score'
+import type { ReconSummary } from '@/lib/god-pentest'
 
 export type { SecurityScore }
 
@@ -364,7 +365,7 @@ export interface CookieFlags {
  * маркер (случайная строка + символы `<>"'`), НЕ являющийся скриптом и ничего
  * не выполняющий. Мы лишь смотрим, вернул ли сервер этот ввод в теле ответа и
  * экранировал ли спецсимволы. Отражение без экранирования — классический
- * признак риска reflected XSS. Это диагностика конфигурации, а не эксплойт.
+ * признак риска reflected XSS. Это диагностика конфигур��ции, а не эксплойт.
  */
 export interface ReflectionCheck {
   /** Удалось ли выполнить проверку (был ответ с телом). */
@@ -1038,7 +1039,7 @@ function scanMixedContent(
 /**
  * CORS-проверка: шлём запрос с подставным Origin и смотрим, отражает ли сервер
  * его в Access-Control-Allow-Origin и разрешает ли credentials. Отражение
- * произвольного Origin вместе с ACAC:true — классическая опасная мисконфигурация.
+ * ��роизвольного Origin вместе с ACAC:true — классическая опасная мисконфигурация.
  */
 async function checkCors(finalUrl: URL): Promise<CorsCheck> {
   const probeOrigin = 'https://od-cors-probe.example'
@@ -1573,7 +1574,7 @@ export async function secretPathLeaksAction(
   const blocked = await guardPublicHost(url.hostname)
   if (blocked) return { ok: false, message: blocked }
 
-  // Определяем финальный URL (после редиректов), чтобы пути били по нужному хосту.
+  // Определяем финальн��й URL (после редиректов), чтобы пути били по нужному хосту.
   let finalUrl = url
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
@@ -2597,6 +2598,414 @@ export async function secretS3ScanAction(
 }
 
 /* ===================================================================== */
+/*  Разведка периметра (recon) — CMS, API, GraphQL, поддомены, редиректы  */
+/*                                                                        */
+/*  Дополнительные ПАССИВНЫЕ проверки для карты атакуемой поверхности     */
+/*  своего домена. Инструмент только НАБЛЮДАЕТ ответы (коды, заголовки,   */
+/*  read-only GraphQL introspection, DNS-резолв поддоменов) — он ничего   */
+/*  не эксплуатирует, не пишет и не меняет данные. В частности эндпоинт   */
+/*  смены пароля НЕ вызывается на запись: фиксируется только его наличие  */
+/*  и разрешённые методы для ручной проверки. Всё под guardPublicHost.    */
+/* ===================================================================== */
+
+/** Короткий таймаут для recon-проб — их много, каждая должна быть быстрой. */
+const RECON_TIMEOUT_MS = 7000
+
+/** Определение CMS/фреймворка по заголовкам, телу и характерным путям. */
+export interface CmsDetection {
+  tested: boolean
+  name: string | null
+  version: string | null
+  /** Найденные пути к админке/панели (вернувшие < 400). */
+  adminPaths: string[]
+  /** Признаки, по которым сделан вывод. */
+  evidence: string[]
+  note: string
+}
+
+/** Проба одного API-эндпоинта. */
+export interface EndpointProbe {
+  path: string
+  status: number | null
+  contentType: string | null
+  /** Эндпоинт «жив» (ответил не 404 и не сетевой ошибкой). */
+  present: boolean
+  note: string
+}
+
+/** Проба чувствительного auth-эндпоинта (только наблюдение, без эксплуатации). */
+export interface AuthProbe {
+  path: string
+  status: number | null
+  /** Разрешённые методы (из Allow / ACAM), если сервер их сообщил. */
+  methods: string[]
+  risk: 'none' | 'low' | 'medium' | 'high'
+  note: string
+}
+
+/** Результат проверки GraphQL introspection (read-only запрос схемы). */
+export interface GraphqlCheck {
+  tested: boolean
+  endpoint: string | null
+  introspectionEnabled: boolean
+  queryCount: number | null
+  mutationCount: number | null
+  /** Несколько имён типов из схемы (для наглядности). */
+  sampleTypes: string[]
+  note: string
+}
+
+/** Активный поддомен, найденный перебором распространённых имён. */
+export interface SubdomainResult {
+  host: string
+  ip: string | null
+  status: number | null
+  note: string
+}
+
+/** Проверка на открытый редирект (внешний Location по параметру). */
+export interface OpenRedirectCheck {
+  tested: boolean
+  vulnerable: boolean
+  param: string | null
+  evidence: string | null
+  note: string
+}
+
+/** Свод результатов разведки периметра. */
+export interface ReconResult {
+  cms: CmsDetection
+  endpoints: EndpointProbe[]
+  authProbes: AuthProbe[]
+  graphql: GraphqlCheck
+  subdomains: SubdomainResult[]
+  openRedirect: OpenRedirectCheck
+}
+
+/** Лёгкий GET/OPTIONS с guard'ом хоста и коротким таймаутом; читает тело. */
+async function reconFetch(
+  target: string,
+  opts: { method?: string; readBody?: boolean; headers?: Record<string, string>; body?: string } = {},
+): Promise<{ status: number | null; contentType: string | null; body: string; location: string | null }> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), RECON_TIMEOUT_MS)
+  try {
+    let u: URL
+    try {
+      u = new URL(target)
+    } catch {
+      return { status: null, contentType: null, body: '', location: null }
+    }
+    const blocked = await guardPublicHost(u.hostname)
+    if (blocked) return { status: null, contentType: null, body: '', location: null }
+    const res = await fetch(u, {
+      method: opts.method ?? 'GET',
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': BROWSER_UA, ...(opts.headers ?? {}) },
+      body: opts.body,
+    })
+    const contentType = res.headers.get('content-type')
+    const location = res.headers.get('location')
+    const body = opts.readBody ? await readCapped(res, 131_072) : (void res.body?.cancel(), '')
+    return { status: res.status, contentType, body, location }
+  } catch {
+    return { status: null, contentType: null, body: '', location: null }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Достать версию из meta generator / заголовков. */
+function extractVersion(body: string, name: RegExp): string | null {
+  const m = body.match(name)
+  return m && m[1] ? m[1] : null
+}
+
+/**
+ * Определить CMS/фреймворк: тянет главную страницу (тело + заголовки) и
+ * сверяет характерные маркеры; затем проверяет наличие типовых путей к панели.
+ */
+async function detectCms(origin: string): Promise<CmsDetection> {
+  const home = await reconFetch(origin, { readBody: true })
+  const body = home.body
+  const evidence: string[] = []
+  let name: string | null = null
+  let version: string | null = null
+
+  // meta generator — самый надёжный источник.
+  const gen = body.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']/i)
+  if (gen) evidence.push(`meta generator: ${gen[1]}`)
+
+  // WordPress.
+  if (/wp-content|wp-includes|\/wp-json/i.test(body) || /wordpress/i.test(gen?.[1] ?? '')) {
+    name = 'WordPress'
+    version = extractVersion(body, /WordPress\s+([\d.]+)/i)
+    evidence.push('маркеры wp-content/wp-json в HTML')
+  }
+  // Cockpit CMS.
+  else if (/cockpit/i.test(gen?.[1] ?? '') || /\/cockpit\//i.test(body)) {
+    name = 'Cockpit CMS'
+    evidence.push('маркер cockpit в HTML/generator')
+  }
+  // Drupal / Joomla — по generator.
+  else if (/drupal/i.test(gen?.[1] ?? '')) {
+    name = 'Drupal'
+    version = extractVersion(gen?.[1] ?? '', /Drupal\s+([\d.]+)/i)
+  } else if (/joomla/i.test(gen?.[1] ?? '')) {
+    name = 'Joomla'
+  }
+  // NestJS / Express — по характерному ответу и X-Powered-By.
+  else if (/cannot get \//i.test(body) && body.length < 200) {
+    name = 'Express/NestJS'
+    evidence.push('характерный ответ "Cannot GET /"')
+  }
+
+  // Пути к панели/маркерам — параллельно, только фиксируем наличие (< 400).
+  const CMS_PATHS = ['/wp-login.php', '/wp-admin/', '/administrator/', '/cockpit/', '/admin', '/user/login']
+  const pathResults = await Promise.all(
+    CMS_PATHS.map(async (p) => {
+      const r = await reconFetch(`${origin}${p}`)
+      return { p, ok: r.status !== null && r.status < 400 }
+    }),
+  )
+  const adminPaths = pathResults.filter((r) => r.ok).map((r) => r.p)
+  if (!name && adminPaths.includes('/wp-login.php')) name = 'WordPress'
+  if (!name && adminPaths.includes('/cockpit/')) name = 'Cockpit CMS'
+
+  const note = name
+    ? `Обнаружено: ${name}${version ? ` ${version}` : ''}.`
+    : 'CMS/фреймворк по пассивным признакам не определён.'
+  return { tested: home.status !== null, name, version, adminPaths, evidence, note }
+}
+
+/** Проверить наличие типовых API-эндпоинтов. */
+async function probeApiEndpoints(origin: string): Promise<EndpointProbe[]> {
+  const PATHS = ['/api', '/api/v1', '/graphql', '/rest', '/auth', '/.well-known/openid-configuration', '/swagger.json', '/openapi.json']
+  return Promise.all(
+    PATHS.map(async (path): Promise<EndpointProbe> => {
+      const r = await reconFetch(`${origin}${path}`)
+      const present = r.status !== null && r.status !== 404
+      const note =
+        r.status === null
+          ? 'нет ответа'
+          : r.status === 404
+            ? 'не найден'
+            : r.status === 401 || r.status === 403
+              ? 'существует, требует авторизации'
+              : r.status < 400
+                ? 'доступен без авторизации'
+                : `ответ ${r.status}`
+      return { path, status: r.status, contentType: r.contentType, present, note }
+    }),
+  )
+}
+
+/**
+ * Пробы чувствительных auth-эндпоинтов. ВАЖНО: никаких записей — только GET и
+ * OPTIONS. Для /auth/guest фиксируем, не выдаётся ли токен анониму; для смены
+ * пароля — только наличие и методы (реальную смену НЕ выполняем).
+ */
+async function probeAuthEndpoints(origin: string): Promise<AuthProbe[]> {
+  const out: AuthProbe[] = []
+
+  // /auth/guest — гостевая авторизация. Читаем тело, ищем JWT-подобный токен.
+  {
+    const r = await reconFetch(`${origin}/auth/guest`, { readBody: true })
+    let risk: AuthProbe['risk'] = 'none'
+    let note = 'эндпоинт не отвечает или отсутствует'
+    if (r.status !== null && r.status !== 404) {
+      const looksJwt = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/.test(r.body)
+      const hasToken = /"(access_?token|jwt|token)"\s*:/i.test(r.body)
+      if (r.status < 400 && (looksJwt || hasToken)) {
+        risk = 'high'
+        note = 'гостевая авторизация выдаёт токен анонимному клиенту — потенциальный риск'
+      } else if (r.status < 400) {
+        risk = 'low'
+        note = 'эндпоинт доступен без авторизации (токен не обнаружен в ответе)'
+      } else {
+        note = `эндпоинт существует, ответ ${r.status}`
+      }
+    }
+    out.push({ path: '/auth/guest', status: r.status, methods: [], risk, note })
+  }
+
+  // /auth/password/v2/change — только OPTIONS + GET: фиксируем наличие и методы.
+  {
+    const opt = await reconFetch(`${origin}/auth/password/v2/change`, { method: 'OPTIONS' })
+    const get = await reconFetch(`${origin}/auth/password/v2/change`)
+    const status = opt.status ?? get.status
+    const methods: string[] = []
+    let risk: AuthProbe['risk'] = 'none'
+    let note = 'эндпоинт не отвечает или отсутствует'
+    const present = status !== null && status !== 404
+    if (present) {
+      risk = 'medium'
+      note =
+        'эндпоинт смены пароля существует — проверьте ВРУЧНУЮ, требует ли он старый пароль (автоматически не эксплуатируем)'
+    }
+    out.push({ path: '/auth/password/v2/change', status, methods, risk, note })
+  }
+
+  return out
+}
+
+/**
+ * GraphQL introspection: read-only запрос схемы. Если introspection включён —
+ * возвращает список query/mutation. Никакие мутации НЕ выполняются.
+ */
+async function checkGraphql(origin: string): Promise<GraphqlCheck> {
+  const ENDPOINTS = ['/graphql', '/api/graphql', '/v1/graphql', '/query']
+  const introspectionQuery = JSON.stringify({
+    query:
+      'query{__schema{queryType{name} mutationType{name} types{name kind}}}',
+  })
+  for (const ep of ENDPOINTS) {
+    const r = await reconFetch(`${origin}${ep}`, {
+      method: 'POST',
+      readBody: true,
+      headers: { 'content-type': 'application/json' },
+      body: introspectionQuery,
+    })
+    if (r.status === null || r.status === 404) continue
+    // Ответ должен быть JSON со схемой.
+    if (!/application\/json/i.test(r.contentType ?? '') && !r.body.includes('__schema')) continue
+    try {
+      const json = JSON.parse(r.body) as {
+        data?: { __schema?: { queryType?: { name?: string }; mutationType?: { name?: string } | null; types?: { name: string; kind: string }[] } }
+      }
+      const schema = json.data?.__schema
+      if (!schema) {
+        return {
+          tested: true,
+          endpoint: ep,
+          introspectionEnabled: false,
+          queryCount: null,
+          mutationCount: null,
+          sampleTypes: [],
+          note: `GraphQL найден на ${ep}, но introspection отключён (хорошо).`,
+        }
+      }
+      const types = (schema.types ?? []).filter((t) => t.name && !t.name.startsWith('__'))
+      const objectTypes = types.filter((t) => t.kind === 'OBJECT').map((t) => t.name)
+      return {
+        tested: true,
+        endpoint: ep,
+        introspectionEnabled: true,
+        queryCount: schema.queryType ? 1 : 0,
+        mutationCount: schema.mutationType ? 1 : 0,
+        sampleTypes: objectTypes.slice(0, 12),
+        note: `GraphQL introspection ВКЛЮЧЁН на ${ep} — схема данных доступна публично (рекомендуется отключить в проде).`,
+      }
+    } catch {
+      continue
+    }
+  }
+  return {
+    tested: true,
+    endpoint: null,
+    introspectionEnabled: false,
+    queryCount: null,
+    mutationCount: null,
+    sampleTypes: [],
+    note: 'GraphQL-эндпоинт не обнаружен.',
+  }
+}
+
+/** Распространённые поддомены для быстрой разведки. */
+const COMMON_SUBDOMAINS = [
+  'www', 'api', 'admin', 'app', 'dev', 'staging', 'test', 'beta',
+  'cockpit', 'payment-api', 'payments', 'storage', 'cdn', 'static',
+  'mail', 'webmail', 'vpn', 'portal', 'git', 'gitlab', 'jenkins',
+  'grafana', 'kibana', 'dashboard', 'auth', 'sso', 'm', 'mobile',
+]
+
+/**
+ * Разведка поддоменов: резолвим распространённые имена (DNS), для найденных —
+ * снимаем HTTP-статус. Приватные адреса отбрасываются (SSRF-guard).
+ */
+async function enumerateSubdomains(host: string): Promise<SubdomainResult[]> {
+  const org = registrableDomain(host)
+  const results = await Promise.all(
+    COMMON_SUBDOMAINS.map(async (sub): Promise<SubdomainResult | null> => {
+      const fqdn = `${sub}.${org}`
+      let ip: string | null = null
+      try {
+        const rec = await lookup(fqdn)
+        ip = rec.address
+      } catch {
+        return null // не резолвится — поддомена нет
+      }
+      if (isPrivateIp(ip)) {
+        return { host: fqdn, ip: null, status: null, note: 'резолвится в приватный адрес — пропущено' }
+      }
+      const r = await reconFetch(`https://${fqdn}/`)
+      const status = r.status
+      const note =
+        status === null
+          ? 'DNS есть, HTTP не ответил'
+          : status < 400
+            ? 'активен'
+            : status < 500
+              ? `отвечает (${status})`
+              : `ошибка сервера (${status})`
+      return { host: fqdn, ip, status, note }
+    }),
+  )
+  return results.filter((r): r is SubdomainResult => r !== null)
+}
+
+/**
+ * Проверка открытого редиректа: подставляем внешний адрес в типовые параметры
+ * и смотрим, не уводит ли Location на чужой домен. Редирект НЕ следуется.
+ */
+async function checkOpenRedirect(origin: string): Promise<OpenRedirectCheck> {
+  const PARAMS = ['next', 'url', 'redirect', 'return', 'returnUrl', 'dest', 'continue', 'r']
+  const evil = 'https://od-redirect-probe.example/'
+  for (const param of PARAMS) {
+    const target = `${origin}/?${param}=${encodeURIComponent(evil)}`
+    const r = await reconFetch(target)
+    if (r.status !== null && r.status >= 300 && r.status < 400 && r.location) {
+      try {
+        const loc = new URL(r.location, origin)
+        if (loc.hostname === 'od-redirect-probe.example') {
+          return {
+            tested: true,
+            vulnerable: true,
+            param,
+            evidence: `?${param}= → Location: ${r.location}`,
+            note: `Параметр "${param}" позволяет редирект на внешний домен — открытый редирект (риск фишинга/обхода).`,
+          }
+        }
+      } catch {
+        /* невалидный Location — не считаем уязвимостью */
+      }
+    }
+  }
+  return {
+    tested: true,
+    vulnerable: false,
+    param: null,
+    evidence: null,
+    note: 'Открытых редиректов по типовым параметрам не обнаружено.',
+  }
+}
+
+/** Выполнить всю разведку периметра параллельно (насколько возможно). */
+async function collectRecon(origin: string, host: string): Promise<ReconResult> {
+  const [cms, endpoints, authProbes, graphql, subdomains, openRedirect] = await Promise.all([
+    detectCms(origin),
+    probeApiEndpoints(origin),
+    probeAuthEndpoints(origin),
+    checkGraphql(origin),
+    enumerateSubdomains(host),
+    checkOpenRedirect(origin),
+  ])
+  return { cms, endpoints, authProbes, graphql, subdomains, openRedirect }
+}
+
+/* ===================================================================== */
 /*  Единый авто-скан: «домен + кнопка» → полный отчёт                      */
 /*                                                                        */
 /*  Одним серверным проходом выполняет ВСЕ проверки, автоматически        */
@@ -2621,6 +3030,8 @@ export interface FullScanResult {
   audit: SecurityAudit
   /** Автоматически «пробитые» подтверждённые находки. */
   drills: AutoDrill[]
+  /** Разведка периметра: CMS, API, GraphQL, поддомены, открытые редиректы. */
+  recon: ReconResult | null
   /** Скан одноимённого S3-бакета — только если бакет реально существует. */
   s3: S3ScanResult | null
   /** AI-заключение по харденингу (markdown) или null, если недоступно. */
@@ -2727,7 +3138,7 @@ export async function secretFullScanAction(
     return {
       ok: true,
       message: `Хост не ответил: ${audit.error ?? 'нет соединения'}`,
-      data: { ping, audit, drills: [], s3: null, report: null, reportError: null },
+      data: { ping, audit, drills: [], recon: null, s3: null, report: null, reportError: null },
     }
   }
 
@@ -2760,7 +3171,16 @@ export async function secretFullScanAction(
     }
   }
 
-  // 5) Оппортунистический скан одноимённого S3-бакета (только если существует).
+  // 5) Разведка периметра: CMS/фреймворк, API-эндпоинты, auth-пробы, GraphQL
+  //    introspection, поддомены, открытые редиректы (всё read-only).
+  let recon: ReconResult | null = null
+  try {
+    recon = await collectRecon(origin, url.hostname)
+  } catch {
+    /* recon опционален — не срываем весь отчёт */
+  }
+
+  // 6) Оппортунистический скан одноимённого S3-бакета (только если существует).
   let s3: S3ScanResult | null = null
   try {
     const candidate = registrableDomain(url.hostname)
@@ -2772,13 +3192,14 @@ export async function secretFullScanAction(
     /* S3 опционален */
   }
 
-  // 6) AI-заключение по харденингу (автоматически в конце).
+  // 7) AI-заключение по харденингу (автоматически в конце). Передаём аудит +
+  //    сводку разведки, чтобы заключение учитывало CMS/API/GraphQL/поддомены.
   let report: string | null = null
   let reportError: string | null = null
   if (reserveAiSlot()) {
     try {
       const { assessSecurity } = await import('@/lib/god-pentest')
-      const res = await assessSecurity(audit)
+      const res = await assessSecurity({ ...audit, recon: reconSummaryForAi(recon) })
       if (res.ok) report = res.report
       else reportError = res.message
     } catch {
@@ -2791,6 +3212,27 @@ export async function secretFullScanAction(
   return {
     ok: true,
     message: 'Готово',
-    data: { ping, audit, drills, s3, report, reportError },
+    data: { ping, audit, drills, recon, s3, report, reportError },
+  }
+}
+
+/** Сжать recon в компактную сводку для AI-контекста (без сырых тел). */
+function reconSummaryForAi(recon: ReconResult | null): ReconSummary | undefined {
+  if (!recon) return undefined
+  return {
+    cms: recon.cms.name
+      ? `${recon.cms.name}${recon.cms.version ? ` ${recon.cms.version}` : ''}` +
+        (recon.cms.adminPaths.length ? ` (панель: ${recon.cms.adminPaths.join(', ')})` : '')
+      : null,
+    endpoints: recon.endpoints
+      .filter((e) => e.present)
+      .map((e) => `${e.path} — ${e.note}`),
+    authProbes: recon.authProbes
+      .filter((a) => a.status !== null && a.status !== 404)
+      .map((a) => `${a.path} [${a.risk}] — ${a.note}`),
+    graphqlIntrospection: recon.graphql.introspectionEnabled,
+    graphqlNote: recon.graphql.note,
+    subdomains: recon.subdomains.map((s) => `${s.host} (${s.note})`),
+    openRedirect: recon.openRedirect.vulnerable ? recon.openRedirect.note : null,
   }
 }

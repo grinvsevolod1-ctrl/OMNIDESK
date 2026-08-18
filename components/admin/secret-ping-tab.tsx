@@ -33,14 +33,17 @@ import {
   Database,
   FileWarning,
   Gauge,
+  GitBranch,
   Globe,
   KeyRound,
+  Layers,
   Loader2,
   Lock,
   LockOpen,
   Network,
   Radio,
   Rocket,
+  Route,
    ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -48,22 +51,29 @@ import {
 } from 'lucide-react'
 import {
   secretFullScanAction,
+  type AuthProbe,
   type AutoDrill,
+  type CmsDetection,
   type CorsCheck,
   type CspAnalysis,
   type DnsHygiene,
   type DrillResult,
+  type EndpointProbe,
   type FullScanResult,
+  type GraphqlCheck,
   type HstsAnalysis,
   type InfraCheck,
   type MethodsCheck,
   type MixedContentCheck,
+  type OpenRedirectCheck,
   type PathLeak,
   type PingResult,
+  type ReconResult,
   type ReflectionCheck,
   type S3ScanResult,
   type SecurityAudit,
   type SecurityScore,
+  type SubdomainResult,
   type TlsCheck,
 } from '@/app/actions/admin-secret'
 import { Button } from '@/components/ui/button'
@@ -81,6 +91,9 @@ const SCAN_PHASES = [
   'DNS и почтовая гигиена',
   'Поиск утечек типовых путей',
   'Пробив подтверждённых находок',
+  'Обнаружение CMS и API-эндпоинтов',
+  'Разведка поддоменов',
+  'GraphQL и открытые редиректы',
   'Проверка S3-бакета',
   'AI-заключение по харденингу',
 ] as const
@@ -276,7 +289,7 @@ function ScanProgress({ phase }: { phase: number }) {
 /* --------------------------- Полный отчёт ------------------------------- */
 
 function FullReport({ result }: { result: FullScanResult }) {
-  const { ping, audit, drills, s3, report, reportError } = result
+  const { ping, audit, drills, recon, s3, report, reportError } = result
 
   async function copyReport() {
     if (!report) return
@@ -326,6 +339,9 @@ function FullReport({ result }: { result: FullScanResult }) {
           </div>
         </SectionCard>
       )}
+
+      {/* Разведка периметра */}
+      {recon && <ReconSections recon={recon} />}
 
       {/* S3-бакет — только если реально существует */}
       {s3 && (
@@ -384,6 +400,265 @@ function SectionCard({
         {right && <span className="ml-auto">{right}</span>}
       </div>
       {children}
+    </div>
+  )
+}
+
+/* --------------------------- Разведка периметра ------------------------- */
+
+/** Цвет бейджа риска. */
+function riskClass(risk: 'none' | 'low' | 'medium' | 'high'): string {
+  switch (risk) {
+    case 'high':
+      return 'bg-destructive/10 text-destructive'
+    case 'medium':
+      return 'bg-amber-500/10 text-amber-500'
+    case 'low':
+      return 'bg-sky-500/10 text-sky-500'
+    default:
+      return 'bg-emerald-500/10 text-emerald-500'
+  }
+}
+
+const RISK_LABEL: Record<'none' | 'low' | 'medium' | 'high', string> = {
+  none: 'ок',
+  low: 'низкий',
+  medium: 'средний',
+  high: 'высокий',
+}
+
+function ReconSections({ recon }: { recon: ReconResult }) {
+  return (
+    <>
+      <SectionCard icon={Layers} title="CMS и фреймворк">
+        <CmsReport cms={recon.cms} />
+      </SectionCard>
+
+      <SectionCard icon={Network} title="API-эндпоинты">
+        <EndpointsReport endpoints={recon.endpoints} authProbes={recon.authProbes} />
+      </SectionCard>
+
+      <SectionCard icon={GitBranch} title="GraphQL">
+        <GraphqlReport gql={recon.graphql} />
+      </SectionCard>
+
+      <SectionCard icon={Globe} title="Активные поддомены">
+        <SubdomainsReport subs={recon.subdomains} />
+      </SectionCard>
+
+      <SectionCard icon={Route} title="Открытый редирект">
+        <OpenRedirectReport check={recon.openRedirect} />
+      </SectionCard>
+    </>
+  )
+}
+
+function CmsReport({ cms }: { cms: CmsDetection }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {cms.name ? (
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-500">
+            <Layers className="size-3.5" />
+            {cms.name}
+            {cms.version ? ` ${cms.version}` : ''}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-500">
+            <CircleCheck className="size-3.5" />
+            не определён
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground text-pretty">{cms.note}</p>
+      {cms.adminPaths.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className="text-[11px] font-medium text-muted-foreground">Найденные пути к панели:</div>
+          {cms.adminPaths.map((p) => (
+            <div key={p} className="font-mono text-[11px] text-amber-500">
+              {p}
+            </div>
+          ))}
+        </div>
+      )}
+      {cms.evidence.length > 0 && (
+        <ul className="flex flex-col gap-0.5">
+          {cms.evidence.map((e) => (
+            <li key={e} className="text-[11px] text-muted-foreground">
+              • {e}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function EndpointsReport({
+  endpoints,
+  authProbes,
+}: {
+  endpoints: EndpointProbe[]
+  authProbes: AuthProbe[]
+}) {
+  const present = endpoints.filter((e) => e.present)
+  return (
+    <div className="flex flex-col gap-3">
+      {present.length === 0 ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <CircleCheck className="size-4 text-emerald-500" />
+          Типовых открытых API-эндпоинтов не обнаружено.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {present.map((e) => (
+            <div
+              key={e.path}
+              className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-1.5"
+            >
+              <span className="font-mono text-[11px] text-foreground">{e.path}</span>
+              {e.status !== null && (
+                <span className="font-mono text-[11px] text-muted-foreground">HTTP {e.status}</span>
+              )}
+              <span className="ml-auto text-[11px] text-muted-foreground">{e.note}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {authProbes.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <div className="text-[11px] font-medium text-muted-foreground">
+            Чувствительные auth-эндпоинты (только наблюдение):
+          </div>
+          {authProbes.map((a) => (
+            <div
+              key={a.path}
+              className="flex items-start gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2"
+            >
+              <KeyRound className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[11px] text-foreground">{a.path}</span>
+                  {a.status !== null && (
+                    <span className="font-mono text-[11px] text-muted-foreground">HTTP {a.status}</span>
+                  )}
+                  <span
+                    className={cn(
+                      'ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium',
+                      riskClass(a.risk),
+                    )}
+                  >
+                    {RISK_LABEL[a.risk]}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground text-pretty">{a.note}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function GraphqlReport({ gql }: { gql: GraphqlCheck }) {
+  if (!gql.endpoint) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <CircleCheck className="size-4 text-emerald-500" />
+        {gql.note}
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[11px] text-foreground">{gql.endpoint}</span>
+        <span
+          className={cn(
+            'rounded px-1.5 py-0.5 text-[10px] font-medium',
+            gql.introspectionEnabled ? 'bg-destructive/10 text-destructive' : 'bg-emerald-500/10 text-emerald-500',
+          )}
+        >
+          introspection {gql.introspectionEnabled ? 'включён' : 'выключен'}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground text-pretty">{gql.note}</p>
+      {gql.sampleTypes.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {gql.sampleTypes.map((t) => (
+            <span
+              key={t}
+              className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SubdomainsReport({ subs }: { subs: SubdomainResult[] }) {
+  if (subs.length === 0) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <CircleCheck className="size-4 text-emerald-500" />
+        Активных поддоменов из типового списка не найдено.
+      </div>
+    )
+  }
+  return (
+    <div className="overflow-hidden rounded-lg border border-border/60">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-border/60 bg-muted/40 text-left text-muted-foreground">
+            <th className="px-3 py-1.5 font-medium">Хост</th>
+            <th className="px-3 py-1.5 font-medium">IP</th>
+            <th className="px-3 py-1.5 font-medium">HTTP</th>
+            <th className="px-3 py-1.5 font-medium">Статус</th>
+          </tr>
+        </thead>
+        <tbody>
+          {subs.map((s) => (
+            <tr key={s.host} className="border-b border-border/40 last:border-0">
+              <td className="px-3 py-1.5 font-mono text-foreground">{s.host}</td>
+              <td className="px-3 py-1.5 font-mono text-muted-foreground">{s.ip ?? '—'}</td>
+              <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                {s.status ?? '—'}
+              </td>
+              <td className="px-3 py-1.5 text-muted-foreground">{s.note}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function OpenRedirectReport({ check }: { check: OpenRedirectCheck }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        {check.vulnerable ? (
+          <CircleAlert className="size-4 text-destructive" />
+        ) : (
+          <CircleCheck className="size-4 text-emerald-500" />
+        )}
+        <span
+          className={cn(
+            'text-sm',
+            check.vulnerable ? 'text-destructive' : 'text-muted-foreground',
+          )}
+        >
+          {check.note}
+        </span>
+      </div>
+      {check.evidence && (
+        <div className="font-mono text-[11px] text-destructive">{check.evidence}</div>
+      )}
     </div>
   )
 }
@@ -1356,7 +1631,7 @@ function PingReport({ result }: { result: PingResult }) {
           label={result.warmAvg !== null ? 'Тёплая средняя' : 'Средняя'}
           value={
             result.warmAvg !== null
-              ? `${result.warmAvg} мс`
+              ? `${result.warmAvg} ��с`
               : result.avg !== null
                 ? `${result.avg} мс`
                 : '—'
@@ -1364,7 +1639,7 @@ function PingReport({ result }: { result: PingResult }) {
           tone="muted"
           hint={
             result.warmAvg !== null
-              ? `Без учёта холодной попытки. Общая средняя: ${result.avg} мс`
+              ? `Без учёта холод��ой попытки. Общая средняя: ${result.avg} мс`
               : undefined
           }
         />
