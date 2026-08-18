@@ -42,10 +42,18 @@ export async function GET(
     [attachment.leadCardId],
   )
   if (!card[0]) return new Response('Not found', { status: 404 })
-  const allowed =
+  let allowed =
     session.role === 'admin' ||
     (session.role === 'curator' && card[0].curator_id === session.sub) ||
     (session.role === 'manager' && card[0].manager_id === session.sub)
+  // Руководитель видит вложения карточек своей группы: куратор ИЛИ менеджер
+  // карточки — его подчинённый (та же логика, что canAccessLeadCardAsync).
+  if (!allowed && session.role === 'head') {
+    const { isCuratorOfHead, isManagerOfHead } = await import('@/lib/data/heads')
+    allowed =
+      (await isCuratorOfHead(session.sub, card[0].curator_id)) ||
+      (await isManagerOfHead(session.sub, card[0].manager_id))
+  }
   if (!allowed) return new Response('Forbidden', { status: 403 })
 
   // 1) Загруженный файл.

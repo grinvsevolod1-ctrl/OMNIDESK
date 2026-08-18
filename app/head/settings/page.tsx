@@ -79,7 +79,7 @@ export default async function HeadSettingsPage() {
         </div>
       </div>
       <div className="mt-5">
-        <ChangePasswordForm />
+        <ChangePasswordForm email={session.email} />
       </div>
     </Card>
   )

@@ -74,7 +74,7 @@ function PasswordInput({
   )
 }
 
-export function ChangePasswordForm() {
+export function ChangePasswordForm({ email }: { email?: string }) {
   const [pending, startTransition] = useTransition()
   const [next, setNext] = useState('')
   const formRef = useRef<HTMLFormElement>(null)
@@ -110,6 +110,18 @@ export function ChangePasswordForm() {
       action={handle}
       className="flex max-w-md flex-col gap-5"
     >
+      {/* Скрытый логин: менеджеры паролей и скринридеры привязывают пароль
+          к учётке (см. предупреждение Chrome о password-формах). */}
+      <input
+        type="text"
+        name="username"
+        autoComplete="username"
+        value={email ?? ''}
+        readOnly
+        hidden
+        aria-hidden="true"
+        tabIndex={-1}
+      />
       <div className="flex flex-col gap-2">
         <Label htmlFor="current">Текущий пароль</Label>
         <PasswordInput

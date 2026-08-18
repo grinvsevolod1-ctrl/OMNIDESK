@@ -119,7 +119,7 @@ export default async function ManagerSettingsPage() {
         </div>
       </div>
       <div className="mt-5">
-        <ChangePasswordForm />
+        <ChangePasswordForm email={session.email} />
       </div>
     </Card>
   )
