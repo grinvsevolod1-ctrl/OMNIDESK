@@ -2,7 +2,8 @@
 
 import { notFound } from 'next/navigation'
 import { lookup, resolveTxt, resolveCaa } from 'node:dns/promises'
-import { connect as tlsConnect } from 'node:tls'
+import { isIP } from 'node:net'
+import { connect as tlsConnect, checkServerIdentity } from 'node:tls'
 import type { PeerCertificate } from 'node:tls'
 import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
@@ -74,6 +75,60 @@ const DEFAULT_ATTEMPTS = 4
 const TIMEOUT_MS = 10_000
 
 /**
+ * Реалистичный браузерный User-Agent. Кастомные UA часто режутся WAF/CDN
+ * (403/таймаут), из-за чего живой сайт выглядел бы недоступным — поэтому
+ * все пассивные проверки представляются обычным браузером.
+ */
+const BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+/** Приватный/служебный IP (loopback, RFC1918, link-local, CGNAT, ULA). */
+function isPrivateIp(ip: string): boolean {
+  const v = isIP(ip)
+  if (v === 4) {
+    const p = ip.split('.').map(Number)
+    if (p.some((n) => Number.isNaN(n))) return false
+    if (p[0] === 0 || p[0] === 10 || p[0] === 127) return true
+    if (p[0] === 169 && p[1] === 254) return true // link-local / metadata
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true
+    if (p[0] === 192 && p[1] === 168) return true
+    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true // CGNAT
+    return false
+  }
+  if (v === 6) {
+    const lower = ip.toLowerCase()
+    if (lower === '::1' || lower === '::') return true
+    if (lower.startsWith('fe80')) return true // link-local
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true // ULA
+    const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+    if (mapped) return isPrivateIp(mapped[1])
+    return false
+  }
+  return false
+}
+
+/**
+ * Защита от SSRF: инструмент проверяет ПУБЛИЧНЫЕ домены владельца, поэтому
+ * запросы к внутренним/облачным адресам (127.0.0.1, 169.254.169.254, RFC1918
+ * и т.п.) блокируются. Возвращает текст ошибки или null, если хост публичный.
+ * Неразрешимый хост пропускаем — fetch сам упадёт естественной ошибкой.
+ */
+async function guardPublicHost(hostname: string): Promise<string | null> {
+  if (isIP(hostname) && isPrivateIp(hostname)) {
+    return 'Адрес указывает на внутренний/приватный IP — проверка заблокирована.'
+  }
+  try {
+    const { address } = await lookup(hostname)
+    if (isPrivateIp(address)) {
+      return 'Адрес разрешается во внутренний/приватный IP — проверка заблокирована.'
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+/**
  * Нормализует пользовательский ввод в http(s)-URL. Возвращает null, если
  * ввод некорректен или использует не-HTTP схему (защита от file://, gopher://
  * и подобных — инструмент проверяет только веб-доступность).
@@ -115,6 +170,9 @@ export async function secretPingAction(
       message: 'Некорректный адрес. Введите домен или http(s)-URL.',
     }
   }
+
+  const blocked = await guardPublicHost(url.hostname)
+  if (blocked) return { ok: false, message: blocked }
 
   const attemptsCount =
     Number.isInteger(count) && count >= 1 && count <= MAX_ATTEMPTS
@@ -170,7 +228,7 @@ async function pingOnce(url: URL, seq: number): Promise<PingAttempt> {
       redirect: 'manual',
       cache: 'no-store',
       signal: controller.signal,
-      headers: { 'user-agent': 'OMNIDESK-Ping/1.0' },
+      headers: { 'user-agent': BROWSER_UA },
     })
     const ms = Math.round(performance.now() - started)
     // Закрываем тело, чтобы не тянуть его целиком — нам нужен только статус.
@@ -372,7 +430,7 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
       redirect: 'follow',
       cache: 'no-store',
       signal: controller.signal,
-      headers: { 'user-agent': 'OMNIDESK-Audit/1.0' },
+      headers: { 'user-agent': BROWSER_UA },
     })
     const latencyMs = Math.round(performance.now() - started)
     void res.body?.cancel()
@@ -501,7 +559,7 @@ async function checkHttpsUpgrade(url: URL): Promise<'yes' | 'no' | 'unknown'> {
       redirect: 'manual',
       cache: 'no-store',
       signal: controller.signal,
-      headers: { 'user-agent': 'OMNIDESK-Audit/1.0' },
+      headers: { 'user-agent': BROWSER_UA },
     })
     void res.body?.cancel()
     if (res.status >= 300 && res.status < 400) {
@@ -545,7 +603,7 @@ async function checkReflection(
       cache: 'no-store',
       signal: controller.signal,
       headers: {
-        'user-agent': 'OMNIDESK-Audit/1.0',
+        'user-agent': BROWSER_UA,
         // Второй контекст: маркер в заголовке-подсказке (без спецсимволов —
         // многие серверы отвергают их), чтобы поймать отражение в ответ.
         'x-od-probe': core,
@@ -714,8 +772,8 @@ function evaluateCert(
 
   let status: TlsCheck['status'] = 'ok'
   let note = 'Сертификат действителен.'
-  const weakProto =
-    protocol !== null && /TLSv1(\.0|\.1)?$/.test(protocol) && protocol !== 'TLSv1.2' && protocol !== 'TLSv1.3'
+  // TLSv1, TLSv1.0, TLSv1.1 — устаревшие; TLSv1.2/1.3 регэксп не матчит.
+  const weakProto = protocol !== null && /^TLSv1(\.[01])?$/.test(protocol)
 
   if (daysLeft !== null && daysLeft < 0) {
     status = 'bad'
@@ -746,56 +804,116 @@ function evaluateCert(
   }
 }
 
-/** Совпадает ли хост с CN/SAN сертификата (учитывая wildcard). */
+/**
+ * Совпадает ли хост с сертификатом. Основной путь — штатный
+ * `tls.checkServerIdentity` (корректно учитывает SAN без Subject, wildcard,
+ * IP-SAN). Ручной разбор SAN/CN — только запасной вариант на случай, если
+ * стандартная проверка бросит исключение на нетипичном сертификате.
+ */
 function certMatchesHost(
   cert: PeerCertificate | Record<string, never>,
   host: string,
 ): boolean {
-  if (!cert || !('subject' in cert)) return false
-  const names = new Set<string>()
-  if (cert.subject?.CN) names.add(cert.subject.CN.toLowerCase())
-  const san = 'subjectaltname' in cert ? cert.subjectaltname : undefined
-  if (san) {
-    for (const entry of san.split(',')) {
-      const m = entry.trim().match(/^DNS:(.+)$/i)
-      if (m) names.add(m[1].toLowerCase())
-    }
+  if (!cert || typeof cert !== 'object' || Object.keys(cert).length === 0) {
+    return false
   }
-  const h = host.toLowerCase()
-  for (const name of names) {
-    if (name === h) return true
-    if (name.startsWith('*.')) {
-      const base = name.slice(2)
-      const idx = h.indexOf('.')
-      if (idx > -1 && h.slice(idx + 1) === base) return true
+  try {
+    // undefined — имя валидно; Error — не совпало.
+    return checkServerIdentity(host, cert as PeerCertificate) === undefined
+  } catch {
+    // Запасной ручной матчинг: SAN проверяется НЕЗАВИСИМО от наличия Subject.
+    const names = new Set<string>()
+    const subject = 'subject' in cert ? cert.subject : undefined
+    if (subject?.CN) names.add(subject.CN.toLowerCase())
+    const san = 'subjectaltname' in cert ? cert.subjectaltname : undefined
+    if (san) {
+      for (const entry of san.split(',')) {
+        const m = entry.trim().match(/^DNS:(.+)$/i)
+        if (m) names.add(m[1].toLowerCase())
+      }
     }
+    const h = host.toLowerCase()
+    for (const name of names) {
+      if (name === h) return true
+      if (name.startsWith('*.')) {
+        const base = name.slice(2)
+        const idx = h.indexOf('.')
+        if (idx > -1 && h.slice(idx + 1) === base) return true
+      }
+    }
+    return false
   }
-  return false
 }
 
 /* ------------------------- Утечки типовых путей ------------------------- */
 
-/** Короткий белый список чувствительных путей (без фаззинга/перебора). */
-const SENSITIVE_PATHS: { path: string; severity: PathLeak['severity'] }[] = [
-  { path: '/.env', severity: 'critical' },
-  { path: '/.git/config', severity: 'critical' },
-  { path: '/.git/HEAD', severity: 'critical' },
-  { path: '/config.json', severity: 'warn' },
-  { path: '/backup.zip', severity: 'warn' },
+/**
+ * Определение чувствительного пути. `confirm` подтверждает, что 200 — это
+ * действительно файл, а не catch-all/SPA-заглушка (которая отдаёт index.html
+ * с кодом 200 на любой путь). Без такой проверки любой SPA ложно «светил»
+ * открытыми .env/.git/бэкапами. Для info-путей (security.txt) подтверждение не
+ * требуется — там сам факт наличия и есть ожидаемый результат.
+ */
+type SensitivePath = {
+  path: string
+  severity: PathLeak['severity']
+  confirm?: (body: string, contentType: string) => boolean
+}
+
+const isHtml = (ct: string) => ct.includes('text/html') || ct.includes('xhtml')
+
+const SENSITIVE_PATHS: SensitivePath[] = [
+  {
+    path: '/.env',
+    severity: 'critical',
+    // Реальный .env — не HTML и содержит строки вида KEY=VALUE.
+    confirm: (b, ct) => !isHtml(ct) && /^[A-Za-z_][A-Za-z0-9_.]*\s*=/m.test(b),
+  },
+  {
+    path: '/.git/config',
+    severity: 'critical',
+    confirm: (b, ct) => !isHtml(ct) && /\[core\]/i.test(b),
+  },
+  {
+    path: '/.git/HEAD',
+    severity: 'critical',
+    confirm: (b, ct) =>
+      !isHtml(ct) && (/^ref:\s/m.test(b) || /^[0-9a-f]{40}\b/m.test(b)),
+  },
+  {
+    path: '/config.json',
+    severity: 'warn',
+    confirm: (b, ct) => ct.includes('json') || /^\s*[{[]/.test(b),
+  },
+  {
+    path: '/backup.zip',
+    severity: 'warn',
+    confirm: (b, ct) =>
+      ct.includes('zip') || ct.includes('octet-stream') || b.startsWith('PK'),
+  },
   { path: '/.well-known/security.txt', severity: 'info' },
-  { path: '/server-status', severity: 'warn' },
-  { path: '/phpinfo.php', severity: 'warn' },
+  {
+    path: '/server-status',
+    severity: 'warn',
+    confirm: (b) => /Apache Server Status|Server uptime|Total accesses/i.test(b),
+  },
+  {
+    path: '/phpinfo.php',
+    severity: 'warn',
+    confirm: (b) => /phpinfo\(\)|PHP Version|php_uname/i.test(b),
+  },
 ]
 
 /**
  * Проверить типовые «утечки» по фиксированному списку. Для каждого пути —
- * один GET; путь считается «exposed», если сервер вернул 200 (для
- * security.txt это норма, а не проблема). Ограничение объёма тела.
+ * один GET; 200 засчитывается как утечка только если `confirm` подтверждает
+ * содержимое (защита от catch-all/SPA, отдающих 200 на любой путь). Объём тела
+ * ограничен.
  */
 async function checkPathLeaks(finalUrl: URL): Promise<PathLeak[]> {
   const origin = `${finalUrl.protocol}//${finalUrl.host}`
   const results = await Promise.all(
-    SENSITIVE_PATHS.map(async ({ path, severity }) => {
+    SENSITIVE_PATHS.map(async ({ path, severity, confirm }) => {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
       try {
@@ -804,15 +922,18 @@ async function checkPathLeaks(finalUrl: URL): Promise<PathLeak[]> {
           redirect: 'manual',
           cache: 'no-store',
           signal: controller.signal,
-          headers: { 'user-agent': 'OMNIDESK-Audit/1.0' },
+          headers: { 'user-agent': BROWSER_UA },
         })
-        void res.body?.cancel()
-        return {
-          path,
-          status: res.status,
-          severity,
-          exposed: res.status === 200,
+        const ok200 = res.status === 200
+        let exposed = ok200
+        if (ok200 && confirm) {
+          const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
+          const body = await readCapped(res, 8192)
+          exposed = confirm(body, contentType)
+        } else {
+          void res.body?.cancel()
         }
+        return { path, status: res.status, severity, exposed }
       } catch {
         return { path, status: null, severity, exposed: false }
       } finally {
@@ -828,16 +949,40 @@ async function checkPathLeaks(finalUrl: URL): Promise<PathLeak[]> {
 /** Распространённые DKIM-селекторы для best-effort проверки. */
 const DKIM_SELECTORS = ['default', 'google', 'selector1', 'selector2', 'k1', 'mail', 's1']
 
+/**
+ * Составные публичные суффиксы (мини-PSL). Нужны, чтобы для `sub.example.co.uk`
+ * получить регистрируемый домен `example.co.uk`, а не `co.uk`.
+ */
+const MULTI_PART_TLDS = new Set([
+  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk', 'ltd.uk',
+  'com.au', 'net.au', 'org.au', 'co.nz', 'com.br', 'com.mx',
+  'co.jp', 'com.tr', 'com.ua', 'co.il', 'com.sg', 'com.cn',
+  'co.kr', 'co.in', 'com.hk', 'co.za', 'com.pl', 'com.ru',
+])
+
+/**
+ * Регистрируемый домен (eTLD+1). SPF/DMARC/CAA публикуются, как правило, на
+ * нём, а не на поддомене — поэтому проверять надо именно его, иначе для
+ * `app.example.com` мы ложно рапортовали «нет SPF/DMARC».
+ */
+function registrableDomain(host: string): string {
+  const labels = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean)
+  if (labels.length <= 2) return labels.join('.')
+  const lastTwo = labels.slice(-2).join('.')
+  if (MULTI_PART_TLDS.has(lastTwo)) return labels.slice(-3).join('.')
+  return lastTwo
+}
+
 /** Собрать флаги SPF/DMARC/DKIM/CAA через публичные DNS-запросы. */
 async function checkDnsHygiene(host: string): Promise<DnsHygiene> {
-  // Базовый домен для DMARC/DKIM (отсекаем www., поддомены оставляем как есть).
-  const base = host.replace(/^www\./, '')
+  const org = registrableDomain(host)
 
   const [spf, dmarcInfo, dkim, caa] = await Promise.all([
-    hasSpf(base),
-    getDmarc(base),
-    hasDkim(base),
-    hasCaa(base),
+    hasSpf(org),
+    // DMARC ищем сперва на самом хосте, затем — на org-домене (наследование).
+    getDmarcWithFallback(host, org),
+    hasDkim(org),
+    hasCaa(org),
   ])
 
   return {
@@ -848,6 +993,16 @@ async function checkDnsHygiene(host: string): Promise<DnsHygiene> {
     dkim,
     caa,
   }
+}
+
+/** DMARC: сначала точный хост, потом org-домен (получатели резолвят по нему). */
+async function getDmarcWithFallback(
+  host: string,
+  org: string,
+): Promise<{ present: boolean; policy: string | null }> {
+  const primary = await getDmarc(host)
+  if (primary.present || org === host) return primary
+  return getDmarc(org)
 }
 
 async function hasSpf(domain: string): Promise<boolean> {
@@ -915,6 +1070,8 @@ export async function secretSecurityAuditAction(
       message: 'Некорректный адрес. Введите домен или http(s)-URL.',
     }
   }
+  const blocked = await guardPublicHost(url.hostname)
+  if (blocked) return { ok: false, message: blocked }
   const data = await collectAudit(url)
   if (data.error && data.status === null) {
     return { ok: false, message: `Хост не ответил: ${data.error}`, data }
@@ -953,6 +1110,9 @@ export async function secretSecurityAssessAction(
       message: 'Некорректный адрес. Введите домен или http(s)-URL.',
     }
   }
+
+  const blocked = await guardPublicHost(url.hostname)
+  if (blocked) return { ok: false, message: blocked }
 
   const now = Date.now()
   while (assessTimestamps.length && now - assessTimestamps[0] > 60_000) {
@@ -1149,7 +1309,7 @@ async function s3Get(url: string): Promise<S3Response> {
       redirect: 'manual',
       cache: 'no-store',
       signal: controller.signal,
-      headers: { 'user-agent': 'OMNIDESK-S3Scan/1.0' },
+      headers: { 'user-agent': BROWSER_UA },
     })
     const ms = Math.round(performance.now() - started)
     const region = res.headers.get('x-amz-bucket-region')

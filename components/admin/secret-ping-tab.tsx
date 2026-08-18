@@ -90,9 +90,7 @@ export function SecretPingTab() {
   const [assessPending, setAssessPending] = useState(false)
   const [assessment, setAssessment] = useState<string | null>(null)
 
-  // S3 — отдельная вспомогательная секция.
-  const [bucket, setBucket] = useState('')
-  const [s3Pending, setS3Pending] = useState(false)
+  // Результат S3-скана (запускается автоматически, если адрес похож на бакет).
   const [s3Result, setS3Result] = useState<S3ScanResult | null>(null)
 
   async function runFullScan() {
@@ -101,33 +99,50 @@ export function SecretPingTab() {
       toast.error('Введите домен или URL')
       return
     }
+    const isS3 = looksLikeS3(target)
     setScanPending(true)
     setPingResult(null)
     setAudit(null)
+    setS3Result(null)
     setAssessment(null)
     setAssessOpen(false)
     setScanned(true)
     try {
-      const [ping, sec] = await Promise.all([
-        secretPingAction(target, attempts),
-        secretSecurityAuditAction(target),
-      ])
+      // Всегда меряем доступность. Затем, в зависимости от типа адреса,
+      // либо сканируем S3-бакет, либо собираем веб-аудит (веб-аудит на
+      // адресе бакета бессмысленен, поэтому для S3 его пропускаем).
+      const tasks: Promise<void>[] = [
+        secretPingAction(target, attempts).then((ping) => {
+          if (ping.ok && ping.data) {
+            setPingResult(ping.data)
+            if (ping.data.received === 0) toast.error(ping.message)
+          } else {
+            toast.error(ping.message)
+          }
+        }),
+      ]
 
-      if (ping.ok && ping.data) {
-        setPingResult(ping.data)
-        if (ping.data.received === 0) toast.error(ping.message)
+      if (isS3) {
+        tasks.push(
+          secretS3ScanAction(target).then((res) => {
+            if (res.ok && res.data) {
+              setS3Result(res.data)
+              if (res.data.verdict === 'public') toast.error(res.message)
+            } else {
+              toast.error(res.message)
+            }
+          }),
+        )
       } else {
-        toast.error(ping.message)
+        tasks.push(
+          secretSecurityAuditAction(target).then((sec) => {
+            if (sec.data) setAudit(sec.data)
+            if (!sec.ok && !sec.data) toast.error(sec.message)
+          }),
+        )
       }
 
-      if (sec.data) setAudit(sec.data)
-      if (!sec.ok && !sec.data) toast.error(sec.message)
-
-      // Авто-детект S3: если адрес похож на бакет — сразу сканируем и его.
-      if (looksLikeS3(target)) {
-        setBucket(target)
-        void runS3Scan(target)
-      }
+      await Promise.all(tasks)
     } catch {
       toast.error('Внутренняя ошибка при проверке')
     } finally {
@@ -157,29 +172,6 @@ export function SecretPingTab() {
       setAssessOpen(false)
     } finally {
       setAssessPending(false)
-    }
-  }
-
-  async function runS3Scan(override?: string) {
-    const target = (override ?? bucket).trim()
-    if (!target) {
-      toast.error('Введите имя S3-бакета или URL')
-      return
-    }
-    setS3Pending(true)
-    setS3Result(null)
-    try {
-      const res = await secretS3ScanAction(target)
-      if (res.ok && res.data) {
-        setS3Result(res.data)
-        if (res.data.verdict === 'public') toast.error(res.message)
-      } else {
-        toast.error(res.message)
-      }
-    } catch {
-      toast.error('Внутренняя ошибка при сканировании')
-    } finally {
-      setS3Pending(false)
     }
   }
 
@@ -269,7 +261,7 @@ export function SecretPingTab() {
       </div>
 
       {/* ---- Единый отчёт: доступность → безопасность → AI ---- */}
-      {scanPending && !pingResult && !audit && (
+      {scanPending && !pingResult && !audit && !s3Result && (
         <div className="flex items-center gap-2 rounded-xl border border-border bg-card/40 p-4 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
           Проверяю доступность и конфигурацию…
@@ -344,71 +336,22 @@ export function SecretPingTab() {
         </SectionCard>
       )}
 
+      {/* S3-бакет: сканируется автоматически, если адрес похож на бакет. */}
+      {s3Result && (
+        <SectionCard icon={Boxes} title="S3-бакет">
+          <S3Report result={s3Result} />
+        </SectionCard>
+      )}
+
       {!scanned && !scanPending && (
         <p className="px-1 text-sm text-muted-foreground text-pretty">
           Введите свой домен или адрес страницы состояния и нажмите «Проверить».
           Панель за один проход измерит доступность, соберёт аудит безопасности и
           проверит отражение ввода, а по кнопке ниже отчёта AI даст рекомендации
-          по харденингу.
+          по харденингу. Если адрес похож на S3-бакет — вместо веб-аудита
+          автоматически запускается проверка публичного листинга бакета.
         </p>
       )}
-
-      {/* ---- Отдельно: сканирование S3-бакета ---- */}
-      <div className="mt-1 rounded-xl border border-border bg-card/40 p-4 md:p-5">
-        <div className="mb-1 flex items-center gap-2 text-sm font-medium text-foreground">
-          <Boxes className="size-4 text-primary" />
-          Сканирование S3-бакета
-        </div>
-        <p className="mb-4 text-xs text-muted-foreground text-pretty">
-          Отдельная проверка своего S3-бакета: только читает публичный ответ S3,
-          чтобы понять, открыт ли листинг наружу. Ничего не пишет и не удаляет.
-        </p>
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
-            <Database className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={bucket}
-              onChange={(e) => setBucket(e.target.value)}
-              onKeyDown={(e) => {
-                if (
-                  e.key === 'Enter' &&
-                  !e.nativeEvent.isComposing &&
-                  e.keyCode !== 229 &&
-                  !s3Pending
-                ) {
-                  void runS3Scan()
-                }
-              }}
-              placeholder="my-bucket или my-bucket.s3.amazonaws.com"
-              spellCheck={false}
-              autoCapitalize="none"
-              autoCorrect="off"
-              className="pl-9 font-mono text-sm"
-              aria-label="Имя S3-бакета или URL"
-            />
-          </div>
-
-          <Button
-            onClick={() => void runS3Scan()}
-            disabled={s3Pending}
-            className="press-scale gap-1.5"
-          >
-            {s3Pending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <ArrowRight className="size-4" />
-            )}
-            Сканировать
-          </Button>
-        </div>
-
-        {s3Result && (
-          <div className="mt-4">
-            <S3Report result={s3Result} />
-          </div>
-        )}
-      </div>
     </div>
   )
 }
@@ -454,7 +397,9 @@ const HEADER_LABELS: Record<string, string> = {
 }
 
 function AuditBody({ audit }: { audit: SecurityAudit }) {
-  const httpsOk = audit.scheme === 'https' && audit.httpsUpgrade !== 'no'
+  // Бейдж отражает ТОЛЬКО схему соединения. Наличие http→https-редиректа —
+  // отдельный факт, он показан соседней строкой, смешивать их нельзя.
+  const httpsOk = audit.scheme === 'https'
 
   return (
     <>
@@ -667,7 +612,7 @@ function ScoreBadge({ score }: { score: SecurityScore }) {
       )}
       title={
         score.deductions.length
-          ? score.deductions.map((d) => `−${d.points} ${d.reason}`).join('\n')
+          ? score.deductions.map((d) => `−${d.points} ${d.reason}`).join(' · ')
           : 'Замечаний не найдено'
       }
     >
