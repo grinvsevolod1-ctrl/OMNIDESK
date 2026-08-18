@@ -81,7 +81,6 @@ export interface PingActionResult {
   data?: PingResult
 }
 
-const MAX_ATTEMPTS = 6
 const DEFAULT_ATTEMPTS = 4
 const TIMEOUT_MS = 10_000
 
@@ -264,80 +263,10 @@ function normalizeUrl(raw: string): URL | null {
   }
 }
 
-/**
- * Проверить доступность URL: сделать `count` последовательных запросов,
- * измерить задержку каждого и вернуть сводную статистику.
- *
- * Один запрос: GET с таймаутом; читается ТОЛЬКО статус-код и время ответа,
- * тело ответа не загружается (соединение закрывается через AbortController
- * сразу после получения заголовков).
- */
-export async function secretPingAction(
-  rawUrl: string,
-  count = DEFAULT_ATTEMPTS,
-): Promise<PingActionResult> {
-  await requireGod()
-
-  const url = normalizeUrl(rawUrl)
-  if (!url) {
-    return {
-      ok: false,
-      message: 'Некорректный адрес. Введите домен или http(s)-URL.',
-    }
-  }
-
-  const blocked = await guardPublicHost(url.hostname)
-  if (blocked) return { ok: false, message: blocked }
-
-  const attemptsCount =
-    Number.isInteger(count) && count >= 1 && count <= MAX_ATTEMPTS
-      ? count
-      : DEFAULT_ATTEMPTS
-
-  // Резолвим IP для наглядности (best-effort, не влияет на сам пинг).
-  let ip: string | null = null
-  try {
-    const res = await lookup(url.hostname)
-    ip = res.address
-  } catch {
-    ip = null
-  }
-
-  // Последовательные попытки; первая — «холодная» (установка TCP/TLS).
-  const attempts: PingAttempt[] = []
-  for (let i = 0; i < attemptsCount; i++) {
-    attempts.push(await pingOnce(url, i + 1, i === 0))
-  }
-
-  const okAttempts = attempts.filter((a) => a.ms !== null)
-  const times = okAttempts.map((a) => a.ms as number)
-  const received = okAttempts.length
-  const lost = attempts.length - received
-
-  // Тёплая средняя — по успешным попыткам, исключая холодную (первую).
-  const warmTimes = okAttempts.filter((a) => !a.cold).map((a) => a.ms as number)
-
-  return {
-    ok: true,
-    message: received > 0 ? 'Готово' : 'Хост не ответил ни разу',
-    data: {
-      url: url.toString(),
-      host: url.hostname,
-      ip,
-      attempts,
-      received,
-      lost,
-      min: times.length ? Math.min(...times) : null,
-      avg: times.length
-        ? Math.round(times.reduce((s, t) => s + t, 0) / times.length)
-        : null,
-      max: times.length ? Math.max(...times) : null,
-      warmAvg: warmTimes.length
-        ? Math.round(warmTimes.reduce((s, t) => s + t, 0) / warmTimes.length)
-        : null,
-    },
-  }
-}
+// Примечание: единственная точка входа вкладки — secretFullScanAction (ниже),
+// который сам делает ping через pingOnce(). Отдельный публичный
+// secretPingAction удалён как неиспользуемый server-action endpoint
+// (сокращение attack surface — лишних '"use server"' точек входа быть не должно).
 
 /** Один замер: время от запроса до заголовков ответа. */
 async function pingOnce(
@@ -1097,19 +1026,39 @@ function scanMixedContent(
           : 'Mixed content не обнаружен.',
     }
   }
-  const re = /(?:src|href|action)\s*=\s*["'](http:\/\/[^"']+)["']/gi
+  // Несколько источников mixed content на https-странице:
+  //  • атрибуты src/href/action (скрипты, стили, картинки, формы),
+  //  • srcset (responsive-картинки, может содержать несколько URL),
+  //  • CSS url(...) в inline-стилях и <style> (фоны, шрифты),
+  //  • @import в CSS (подгрузка стороннего CSS).
+  const patterns: RegExp[] = [
+    /(?:src|href|action)\s*=\s*["'](http:\/\/[^"']+)["']/gi,
+    /(?:srcset|imagesrcset)\s*=\s*["']([^"']*http:\/\/[^"']+)["']/gi,
+    /url\(\s*["']?(http:\/\/[^)"']+)/gi,
+    /@import\s+["'](http:\/\/[^"']+)["']/gi,
+  ]
   const samples: string[] = []
   const seen = new Set<string>()
-  let m: RegExpExecArray | null
   let count = 0
-  while ((m = re.exec(body)) && count < 200) {
-    const u = m[1]
-    // http://schema.org и подобные пространства имён — не загрузка ресурса.
-    if (/^http:\/\/(www\.)?w3\.org|^http:\/\/schema\.org/i.test(u)) continue
-    count++
-    if (samples.length < 5 && !seen.has(u)) {
-      seen.add(u)
-      samples.push(u)
+  const isNamespace = (u: string) =>
+    /^http:\/\/(www\.)?w3\.org|^http:\/\/schema\.org|^http:\/\/(www\.)?openxmlformats\.org|^http:\/\/purl\.org/i.test(
+      u,
+    )
+  for (const re of patterns) {
+    let m: RegExpExecArray | null
+    while ((m = re.exec(body)) && count < 200) {
+      // srcset может содержать несколько http://-ссылок в одном значении —
+      // достаём каждую отдельно.
+      const matches = m[1].match(/http:\/\/[^\s,'")]+/gi) ?? [m[1]]
+      for (const u of matches) {
+        // http://schema.org и подобные пространства имён — не загрузка ресурса.
+        if (isNamespace(u)) continue
+        count++
+        if (samples.length < 5 && !seen.has(u)) {
+          seen.add(u)
+          samples.push(u)
+        }
+      }
     }
   }
   return {
@@ -1229,27 +1178,43 @@ async function checkMethods(finalUrl: URL): Promise<MethodsCheck> {
 async function checkHttpsUpgrade(url: URL): Promise<'yes' | 'no' | 'unknown'> {
   const httpUrl = new URL(url.toString())
   httpUrl.protocol = 'http:'
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-  try {
-    const res = await fetch(httpUrl, {
-      method: 'HEAD',
-      redirect: 'manual',
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: { 'user-agent': BROWSER_UA },
-    })
-    void res.body?.cancel()
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get('location') ?? ''
-      return loc.toLowerCase().startsWith('https:') ? 'yes' : 'no'
+
+  // Одна проба заданным методом: возвращает вердикт либо null (неинформативно).
+  async function probe(method: 'HEAD' | 'GET'): Promise<'yes' | 'no' | null> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    try {
+      const res = await fetch(httpUrl, {
+        method,
+        redirect: 'manual',
+        cache: 'no-store',
+        signal: controller.signal,
+        headers: { 'user-agent': BROWSER_UA },
+      })
+      void res.body?.cancel()
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get('location') ?? ''
+        return loc.toLowerCase().startsWith('https:') ? 'yes' : 'no'
+      }
+      // Успешный ответ по http без редиректа — апгрейда нет.
+      if (res.status < 400) return 'no'
+      // 405/501 (метод не поддержан) и прочие 4xx/5xx — неинформативно,
+      // пусть решает следующая проба (GET).
+      return null
+    } catch {
+      return null
+    } finally {
+      clearTimeout(timer)
     }
-    return res.status < 400 ? 'no' : 'unknown'
-  } catch {
-    return 'unknown'
-  } finally {
-    clearTimeout(timer)
   }
+
+  // Сначала лёгкий HEAD; если сервер его не поддерживает (405/501) или ответ
+  // неинформативен — повторяем полноценным GET, т.к. на GET сайт может
+  // редиректить на HTTPS, а на HEAD — нет (частый ложноотрицательный вывод).
+  const head = await probe('HEAD')
+  if (head !== null) return head
+  const get = await probe('GET')
+  return get ?? 'unknown'
 }
 
 /**
@@ -1309,7 +1274,7 @@ async function checkReflection(
         risk: headerReflected ? 'medium' : 'none',
         note: headerReflected
           ? 'Ответ не HTML, но ввод отражается в заголовке ответа — потенциальный риск'
-          : 'Ответ не HTML — отражение ввода в разметку неприменимо.',
+          : 'Ответ не HTML — от��ажение ввода в разметку неприменимо.',
       }
     }
 
@@ -1647,42 +1612,8 @@ export interface PathLeaksActionResult {
  * только чтение публичного ответа. Итоговый URL определяется одним запросом,
  * чтобы учесть редиректы (http→https, www).
  */
-export async function secretPathLeaksAction(
-  rawUrl: string,
-): Promise<PathLeaksActionResult> {
-  await requireGod()
-  const url = normalizeUrl(rawUrl)
-  if (!url) {
-    return {
-      ok: false,
-      message: 'Некорректный адрес. Введите домен или http(s)-URL.',
-    }
-  }
-  const blocked = await guardPublicHost(url.hostname)
-  if (blocked) return { ok: false, message: blocked }
-
-  // Определяем финальный URL (после редиректов), чтобы пути били по нужному хосту.
-  let finalUrl = url
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-  try {
-    const { res, finalUrl: fin } = await guardedFetch(url, {
-      method: 'GET',
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: { 'user-agent': BROWSER_UA },
-    })
-    void res.body?.cancel()
-    finalUrl = fin
-  } catch {
-    return { ok: false, message: 'Хост не ответил — пути не проверены.' }
-  } finally {
-    clearTimeout(timer)
-  }
-
-  const leaks = await checkPathLeaks(finalUrl)
-  return { ok: true, message: 'Готово', data: leaks }
-}
+// secretPathLeaksAction удалён: утечки путей проверяет secretFullScanAction
+// через checkPathLeaks() в общем проходе. Отдельный публичный endpoint не нужен.
 
 /* ------------------------- DNS / почтовая гигиена ----------------------- */
 
@@ -1694,10 +1625,29 @@ const DKIM_SELECTORS = ['default', 'google', 'selector1', 'selector2', 'k1', 'ma
  * получить регистрируемый домен `example.co.uk`, а не `co.uk`.
  */
 const MULTI_PART_TLDS = new Set([
-  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk', 'ltd.uk',
-  'com.au', 'net.au', 'org.au', 'co.nz', 'com.br', 'com.mx',
-  'co.jp', 'com.tr', 'com.ua', 'co.il', 'com.sg', 'com.cn',
-  'co.kr', 'co.in', 'com.hk', 'co.za', 'com.pl', 'com.ru',
+  // Великобритания
+  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk', 'ltd.uk', 'plc.uk', 'net.uk', 'sch.uk',
+  // Австралия / Новая Зеландия
+  'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au', 'id.au',
+  'co.nz', 'net.nz', 'org.nz', 'govt.nz', 'ac.nz',
+  // Азия
+  'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp', 'ad.jp',
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn',
+  'co.kr', 'or.kr', 're.kr', 'com.hk', 'org.hk', 'com.tw', 'org.tw', 'idv.tw',
+  'com.sg', 'com.my', 'org.my', 'net.my', 'gov.my',
+  'co.in', 'net.in', 'org.in', 'gen.in', 'firm.in', 'ind.in',
+  'co.id', 'or.id', 'web.id', 'ac.id', 'go.id',
+  'com.ph', 'com.vn', 'com.pk', 'com.bd', 'co.th', 'in.th', 'or.th', 'ac.th', 'go.th',
+  'com.sa', 'com.eg', 'co.il', 'org.il', 'ac.il', 'gov.il',
+  // Европа
+  'com.tr', 'com.ua', 'com.pl', 'com.ru', 'com.es', 'com.de', 'co.at', 'or.at',
+  'com.gr', 'com.pt', 'com.ro', 'com.hr', 'com.cy',
+  // Латинская Америка
+  'com.br', 'net.br', 'org.br', 'gov.br', 'com.mx', 'com.ar', 'com.co', 'com.pe',
+  'com.ec', 'com.uy', 'co.ve', 'com.ve', 'com.bo', 'com.py', 'com.cl',
+  // Африка
+  'co.za', 'org.za', 'net.za', 'gov.za', 'ac.za',
+  'co.ke', 'or.ke', 'com.ng', 'org.ng', 'com.gh', 'com.eg',
 ])
 
 /**
@@ -1795,29 +1745,8 @@ async function hasCaa(domain: string): Promise<boolean> {
   }
 }
 
-/**
- * Публичный экшен: собрать пассивный аудит безопасности своего домена.
- * Гейт requireGod, без audit() — как остальные god-экшены.
- */
-export async function secretSecurityAuditAction(
-  rawUrl: string,
-): Promise<SecurityAuditActionResult> {
-  await requireGod()
-  const url = normalizeUrl(rawUrl)
-  if (!url) {
-    return {
-      ok: false,
-      message: 'Некорректный адрес. Введите домен или http(s)-URL.',
-    }
-  }
-  const blocked = await guardPublicHost(url.hostname)
-  if (blocked) return { ok: false, message: blocked }
-  const data = await collectAudit(url)
-  if (data.error && data.status === null) {
-    return { ok: false, message: `Хост не ответил: ${data.error}`, data }
-  }
-  return { ok: true, message: 'Готово', data }
-}
+// secretSecurityAuditAction удалён: аудит собирает secretFullScanAction через
+// collectAudit() в общем проходе. Отдельный публичный endpoint не нужен.
 
 /* ------------------------- AI-заключение (харденинг) --------------------- */
 
@@ -1845,57 +1774,8 @@ export interface PentestActionResult {
   audit?: SecurityAudit
 }
 
-/**
- * Собрать пассивный аудит и получить от AI Gateway ЗАЩИТНОЕ заключение
- * (харденинг) по своему домену. Гейт requireGod, без audit().
- */
-export async function secretSecurityAssessAction(
-  rawUrl: string,
-): Promise<PentestActionResult> {
-  await requireGod()
-
-  const url = normalizeUrl(rawUrl)
-  if (!url) {
-    return {
-      ok: false,
-      message: 'Некорректный адрес. Введите домен или http(s)-URL.',
-    }
-  }
-
-  const blocked = await guardPublicHost(url.hostname)
-  if (blocked) return { ok: false, message: blocked }
-
-  if (!reserveAiSlot()) {
-    return {
-      ok: false,
-      message: 'Слишком часто. Подождите минуту и попробуйте снова.',
-    }
-  }
-
-  const audit = await collectAudit(url)
-  if (audit.error && audit.status === null) {
-    return { ok: false, message: `Хост не ответил: ${audit.error}`, audit }
-  }
-
-  // AI-заключение — это «глубокий» проход, поэтому дотягиваем и утечки путей
-  // (в обычном аудите они ленивые), затем пересчитываем сводную оценку.
-  try {
-    const leaks = await checkPathLeaks(new URL(audit.finalUrl))
-    audit.pathLeaks = leaks
-    audit.pathLeaksChecked = true
-    audit.score = computeScore(audit)
-  } catch {
-    /* пути не критичны для заключения — продолжаем без них */
-  }
-
-  // Ленивый импорт: тянет server-only + gateway-пл'юмбинг только при запросе.
-  // Аудит собран сервером (не доверяется клиенту), поэтому передаём целиком.
-  const { assessSecurity } = await import('@/lib/god-pentest')
-  const res = await assessSecurity(audit)
-
-  if (!res.ok) return { ok: false, message: res.message, audit }
-  return { ok: true, message: 'Готово', report: res.report, audit }
-}
+// secretSecurityAssessAction удалён: AI-заключение формирует secretFullScanAction
+// в конце общего прохода (assessSecurity под тем же reserveAiSlot rate-limit).
 
 /* ===================================================================== */
 /*  Движок «пробива» находок (drill-down верификация)                     */
@@ -2315,59 +2195,8 @@ async function drillTls(origin: string): Promise<DrillResult> {
   }
 }
 
-/**
- * Экшен «пробить находку»: подтверждающие read-only проверки + AI-заключение
- * именно по этой находке. Гейт requireGod, SSRF-guard.
- */
-export async function secretDrillFindingAction(
-  rawUrl: string,
-  kind: DrillKind,
-  arg: string | null,
-  withAi = true,
-): Promise<DrillActionResult> {
-  await requireGod()
-  const url = normalizeUrl(rawUrl)
-  if (!url) {
-    return { ok: false, message: 'Некорректный адрес.' }
-  }
-  const blocked = await guardPublicHost(url.hostname)
-  if (blocked) return { ok: false, message: blocked }
-
-  // Финальный origin после редиректов, чтобы бить по реальному хосту.
-  let origin = `${url.protocol}//${url.host}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-  try {
-    const { finalUrl: fin } = await guardedFetch(url, {
-      method: 'GET',
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: { 'user-agent': BROWSER_UA },
-    })
-    origin = `${fin.protocol}//${fin.host}`
-  } catch {
-    /* если не ответил — drill сам это отразит */
-  } finally {
-    clearTimeout(timer)
-  }
-
-  const result = await drillFinding(kind, origin, arg)
-
-  // AI-заключение по конкретной находке — опционально и под общим rate-limit
-  // (в авто-скане выключено: итоговое заключение покрывает все находки).
-  let report: string | undefined
-  if (withAi && reserveAiSlot()) {
-    try {
-      const { assessFinding } = await import('@/lib/god-pentest')
-      const r = await assessFinding({ host: url.hostname, origin, drill: result })
-      if (r.ok) report = r.report
-    } catch {
-      /* заключение опционально */
-    }
-  }
-
-  return { ok: true, message: 'Готово', data: result, report }
-}
+// secretDrillFindingAction удалён: «пробив» находок выполняет
+// secretFullScanAction через drillFinding() по каждой находке из findingsToDrill().
 
 /* ===================================================================== */
 /*  Сканирование S3-бакетов (пассивное, защитное)                         */
@@ -2432,56 +2261,8 @@ export interface S3ScanActionResult {
 /** Валидное имя S3-бакета: 3–63 символа, [a-z0-9.-], край — буква/цифра. */
 const BUCKET_NAME_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
 
-/**
- * Достать имя бакета (и по возможности регион) из ввода: принимает как
- * голое имя (`my-bucket`), так и любой S3-URL
- * (`my-bucket.s3.amazonaws.com`, `s3.eu-west-1.amazonaws.com/my-bucket`, …).
- */
-function parseBucket(raw: string): { bucket: string; region: string | null } | null {
-  const trimmed = raw.trim().toLowerCase()
-  if (!trimmed || trimmed.length > 300) return null
-
-  let host = ''
-  let pathBucket: string | null = null
-  const looksLikeUrl = /^https?:\/\//.test(trimmed) || trimmed.includes('/') || trimmed.includes('.amazonaws.com')
-  if (looksLikeUrl) {
-    try {
-      const u = new URL(/^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`)
-      host = u.hostname
-      pathBucket = u.pathname.split('/').filter(Boolean)[0] ?? null
-    } catch {
-      host = ''
-    }
-  }
-
-  let bucket: string | null = null
-  let region: string | null = null
-
-  if (host.endsWith('.amazonaws.com')) {
-    // virtual-hosted: {bucket}.s3.amazonaws.com | {bucket}.s3.{region}.amazonaws.com
-    const vh = host.match(/^(.+?)\.s3[.-](?:([a-z0-9-]+)\.)?amazonaws\.com$/)
-    if (vh) {
-      bucket = vh[1]
-      region = vh[2] ?? null
-    } else {
-      // path-style: s3.amazonaws.com/{bucket} | s3.{region}.amazonaws.com/{bucket}
-      const ps = host.match(/^s3[.-](?:([a-z0-9-]+)\.)?amazonaws\.com$/)
-      if (ps) {
-        region = ps[1] ?? null
-        bucket = pathBucket
-      }
-    }
-  } else if (!host) {
-    // Голое имя бакета (или name/prefix).
-    bucket = trimmed.split('/')[0]
-  } else {
-    // Не-S3 хост — не поддерживаем.
-    return null
-  }
-
-  if (!bucket || !BUCKET_NAME_RE.test(bucket)) return null
-  return { bucket, region: region && /^[a-z0-9-]+$/.test(region) ? region : null }
-}
+// parseBucket удалён вместе с secretS3ScanAction (ручной ввод имени бакета).
+// Авто-скан работает по одноимённым кандидатам из scanDomainBuckets().
 
 /** Прочитать тело ответа с ограничением по объёму (защита от гигантских листингов). */
 async function readCapped(res: Response, maxBytes = 65_536): Promise<string> {
@@ -2497,6 +2278,9 @@ async function readCapped(res: Response, maxBytes = 65_536): Promise<string> {
       total += value.length
       text += decoder.decode(value, { stream: true })
     }
+    // Финальный flush: дописываем «хвост» многобайтового символа, повисший
+    // на границе последнего чанка (иначе он молча терялся).
+    text += decoder.decode()
   } catch {
     /* частичное тело — достаточно для классификации */
   } finally {
@@ -2587,102 +2371,8 @@ function countKeys(body: string): number {
   return (body.match(/<Key>/g) ?? []).length
 }
 
-/**
- * Публичный экшен: проверить публичную доступность S3-бакета своего проекта.
- * Гейт requireGod, без audit() — как остальные god-экшены.
- */
-export async function secretS3ScanAction(
-  rawBucket: string,
-): Promise<S3ScanActionResult> {
-  await requireGod()
-
-  const parsed = parseBucket(rawBucket)
-  if (!parsed) {
-    return {
-      ok: false,
-      message:
-        'Некорректное имя бакета. Введите имя S3-бакета или его URL.',
-    }
-  }
-
-  const { bucket } = parsed
-  let region = parsed.region
-  const probes: S3Probe[] = []
-
-  // 1) Глобальный virtual-hosted эндпоинт — заодно узнаём регион по редиректу.
-  const vhUrl = `https://${bucket}.s3.amazonaws.com/`
-  const r1 = await s3Get(vhUrl)
-  if (r1.region) region = r1.region
-  probes.push(toProbe('virtual-hosted', vhUrl, r1))
-
-  // 2) Если знаем регион (из редиректа/заголовка) — точный региональный запрос.
-  let listing: S3Response | null =
-    classifyOutcome(r1) === 'public-listing' ? r1 : null
-  if (region) {
-    const regUrl = `https://${bucket}.s3.${region}.amazonaws.com/`
-    const r2 = await s3Get(regUrl)
-    if (r2.region) region = r2.region
-    probes.push(toProbe('regional', regUrl, r2))
-    if (classifyOutcome(r2) === 'public-listing') listing = r2
-  }
-
-  // 3) Path-style эндпоинт — на случай нестандартных настроек.
-  if (!listing) {
-    const psBase = region ? `s3.${region}.amazonaws.com` : 's3.amazonaws.com'
-    const psUrl = `https://${psBase}/${bucket}/`
-    const r3 = await s3Get(psUrl)
-    if (r3.region) region = r3.region
-    probes.push(toProbe('path-style', psUrl, r3))
-    if (classifyOutcome(r3) === 'public-listing') listing = r3
-  }
-
-  // Свести вердикт по всем пробам.
-  const outcomes = probes.map((p) => p.outcome)
-  const publicListing = outcomes.includes('public-listing')
-  let exists: boolean | null = null
-  let verdict: S3ScanResult['verdict'] = 'unknown'
-  if (publicListing) {
-    exists = true
-    verdict = 'public'
-  } else if (outcomes.includes('access-denied')) {
-    exists = true
-    verdict = 'private'
-  } else if (outcomes.includes('not-found')) {
-    exists = false
-    verdict = 'not-found'
-  }
-
-  const sampleKeys = listing ? extractKeys(listing.body) : []
-  const objectCount = listing ? countKeys(listing.body) : null
-  const truncated = listing
-    ? listing.body.includes('<IsTruncated>true</IsTruncated>')
-    : false
-
-  const message =
-    verdict === 'public'
-      ? 'Внимание: листинг бакета открыт наружу'
-      : verdict === 'private'
-        ? 'Бакет существует, публичный листинг закрыт'
-        : verdict === 'not-found'
-          ? 'Бакет не найден'
-          : 'Не удалось однозначно определить состояние бакета'
-
-  return {
-    ok: true,
-    message,
-    data: {
-      bucket,
-      region,
-      exists,
-      publicListing,
-      objectCount,
-      truncated,
-      sampleKeys,
-      probes,
-      verdict,
-    },
-  }
-}
+// secretS3ScanAction удалён: одноимённые бакеты проверяет secretFullScanAction
+// через scanDomainBuckets() в общем проходе. Отдельный публичный endpoint не нужен.
 
 /* ===================================================================== */
 /*  Разведка периметра (recon) — CMS, API, GraphQL, поддомены, редиректы  */
@@ -2838,7 +2528,7 @@ async function detectCms(origin: string): Promise<CmsDetection> {
   let name: string | null = null
   let version: string | null = null
 
-  // meta generator — самый надёжный источник.
+  // meta generator — самый н��дёжный источник.
   const gen = body.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']/i)
   if (gen) evidence.push(`meta generator: ${gen[1]}`)
 
@@ -2957,7 +2647,7 @@ async function probeAuthEndpoints(origin: string): Promise<AuthProbe[]> {
         risk = 'low'
         note = 'эндпоинт доступен без авторизации (токен не обнаружен в ответе)'
       } else {
-        note = `эндпоинт существует, ответ ${r.status}`
+        note = `э��дпоинт существует, ответ ${r.status}`
       }
     }
     out.push({ path: '/auth/guest', status: r.status, methods: [], risk, note })

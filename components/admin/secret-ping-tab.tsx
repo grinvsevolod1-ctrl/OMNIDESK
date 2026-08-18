@@ -87,15 +87,12 @@ import { cn } from '@/lib/utils'
 /** Фазы конвейера — для пошагового прогресс-бара (порядок = порядок работы). */
 const SCAN_PHASES = [
   'Проверка доступности и задержки',
-  'Сбор заголовков и TLS-сертификата',
-  'Разбор CSP / HSTS / CORS / методов',
-  'DNS и почтовая гигиена',
+  'Заголовки, TLS, CSP/HSTS/CORS, методы, DNS',
   'Поиск утечек типовых путей',
   'Пробив подтверждённых находок',
   'Обнаружение CMS и API-эндпоинтов',
-  'Разведка поддоменов',
-  'GraphQL и открытые редиректы',
-  'Cockpit и детекция S3-бакетов',
+  'Разведка поддоменов, GraphQL, редиректы',
+  'Детекция S3-бакетов',
   'AI-заключение по харденингу',
 ] as const
 
@@ -105,26 +102,45 @@ export function SecretPingTab() {
   const [authorized, setAuthorized] = useState(false)
   const [pending, setPending] = useState(false)
   const [phase, setPhase] = useState(0)
+  const [elapsed, setElapsed] = useState(0)
   const [result, setResult] = useState<FullScanResult | null>(null)
   const [scanned, setScanned] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Пока идёт единый серверный проход, продвигаем прогресс по фазам «на глаз»
-  // (сервер не стримит) — но останавливаемся на предпоследней, а финал (100%)
-  // ставим по факту ответа. Это даёт честное ощущение «текущего процесса».
+  // Сервер не стримит прогресс, поэтому продвигаем фазы «на глаз» с ЗАМЕДЛЕНИЕМ:
+  // ранние фазы (пинг/заголовки) идут быстро, поздние (recon/поддомены/S3/AI) —
+  // всё реже, и мы никогда не доходим до последней фазы до реального ответа.
+  // Плюс показываем счётчик прошедших секунд — чтобы бар не выглядел «зависшим»,
+  // когда фаза долго не меняется. Финал (100%) ставится по факту завершения.
   useEffect(() => {
     if (!pending) {
       if (timerRef.current) {
-        clearInterval(timerRef.current)
+        clearTimeout(timerRef.current)
         timerRef.current = null
       }
       return
     }
-    timerRef.current = setInterval(() => {
-      setPhase((p) => (p < SCAN_PHASES.length - 2 ? p + 1 : p))
-    }, 1400)
+    setElapsed(0)
+    const startedAt = Date.now()
+    const elapsedTimer = setInterval(() => {
+      setElapsed(Math.round((Date.now() - startedAt) / 1000))
+    }, 1000)
+
+    let step = 0
+    const scheduleNext = () => {
+      // Замедляющаяся каденция: 1000мс, 1400, 1800, … (плато к концу).
+      const delay = Math.min(1000 + step * 400, 4000)
+      timerRef.current = setTimeout(() => {
+        setPhase((p) => (p < SCAN_PHASES.length - 2 ? p + 1 : p))
+        step += 1
+        scheduleNext()
+      }, delay)
+    }
+    scheduleNext()
+
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
+      clearInterval(elapsedTimer)
+      if (timerRef.current) clearTimeout(timerRef.current)
     }
   }, [pending])
 
@@ -146,7 +162,17 @@ export function SecretPingTab() {
       const res = await secretFullScanAction(target, authorized, cookie.trim() || undefined)
       if (res.ok && res.data) {
         setResult(res.data)
-        if (!res.data.audit.responded) toast.error(res.message)
+        if (!res.data.audit.responded) {
+          // Хост вообще не ответил.
+          toast.error(res.message)
+        } else if (res.data.audit.infra.challenge) {
+          // WAF/Cloudflare отдал страницу-вызов: контент недоступен, глубокие
+          // пробы упрутся в тот же challenge. Подсказываем про cookie.
+          toast.warning(res.message)
+        } else if (res.message && res.message !== 'Готово') {
+          // Прочие информативные сообщения (например, AI-заключение пропущено).
+          toast.info(res.message)
+        }
       } else {
         toast.error(res.message)
       }
@@ -257,7 +283,7 @@ export function SecretPingTab() {
       </div>
 
       {/* ---- Прогресс конвейера ---- */}
-      {pending && <ScanProgress phase={phase} />}
+      {pending && <ScanProgress phase={phase} elapsed={elapsed} />}
 
       {/* ---- Единый полный отчёт ---- */}
       {result && !pending && <FullReport result={result} />}
@@ -276,16 +302,18 @@ export function SecretPingTab() {
 
 /* --------------------------- Прогресс-бар ------------------------------- */
 
-function ScanProgress({ phase }: { phase: number }) {
+function ScanProgress({ phase, elapsed }: { phase: number; elapsed: number }) {
   const total = SCAN_PHASES.length
   const pct = Math.round(((phase + 1) / total) * 100)
+  // Достигли «плато» (предпоследняя фаза) — идут долгие recon/S3/AI-этапы.
+  const onPlateau = phase >= total - 2
   return (
     <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
         <Loader2 className="size-4 animate-spin text-primary" />
-        {SCAN_PHASES[phase]}
-        <span className="ml-auto font-mono text-xs text-muted-foreground">
-          {pct}%
+        <span className="truncate">{SCAN_PHASES[phase]}</span>
+        <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
+          {elapsed}s · {pct}%
         </span>
       </div>
 
@@ -331,6 +359,13 @@ function ScanProgress({ phase }: { phase: number }) {
           )
         })}
       </ol>
+
+      {onPlateau && (
+        <p className="mt-3 text-[11px] text-muted-foreground text-pretty">
+          Идут глубокие проверки (разведка поддоменов, S3, AI-заключение) — это
+          самый долгий этап, он может занять до минуты. Не закрывайте вкладку.
+        </p>
+      )}
     </div>
   )
 }
