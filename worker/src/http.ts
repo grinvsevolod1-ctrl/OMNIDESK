@@ -290,7 +290,7 @@ export function startHttpServer(): void {
           })
         }
 
-        // Голосовое сообщение (нативн��й voice bubble).
+        // Голосовое сообщение (нативный voice bubble).
         if (url.pathname === '/personal/send-voice' && req.method === 'POST') {
           const peer = String(body.peer ?? '')
           const audioB64 = String(body.audio ?? '')
@@ -351,7 +351,7 @@ export function startHttpServer(): void {
           return json(res, 200, { profile })
         }
 
-        // Изменить имя/фамилию/«о се��е» в самом Telegram.
+        // Изменить имя/фамилию/«о себе» в самом Telegram.
         if (url.pathname === '/personal/profile' && req.method === 'POST') {
           await session.personalUpdateProfile({
             firstName:

@@ -91,7 +91,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    (Частая ошибка — не повторяй её.)
 4. **Гейт FAIL-CLOSED.** Без `SECRET_PANEL_PASSWORD` консоль отдаёт голый 404
    (страница и все god-API) и разлочить её нельзя вообще; ошибка «неверный
-   парол��» неотличима от «пароль не настроен». Recovery только через env:
+   пароль» неотличима от «пароль не настроен». Recovery только через env:
    задать `SECRET_PANEL_PASSWORD` на VPS и перезапустить процесс — никакого
    in-band восстановления по дизайну.
 5. **Управляемые сайты** (вкладка «Сайты», `lib/god-sites.ts`, миграции
@@ -169,7 +169,13 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    requireAdmin + god-unlock, без audit()-записей). UI —
    `components/admin/secret-telegram/` (telegram-tab → accounts-list /
    account-connect / personal-messenger + use-personal-messenger);
-   медиа/аватары — `app/wijegniwjgwjog/api/personal-media`.
+   медиа/аватары — `app/wijegniwjgwjog/api/personal-media` (параметр
+   `kind: 'avatar' | 'media'`). В мессенджере: рельса аккаунтов слева от
+   списка диалогов (desktop, переключение одним кликом, онлайн-точка и
+   счётчик непрочитанных), удаление диалога через hover-меню («у себя» /
+   «у обоих» для личных, «покинуть» для каналов/групп — worker
+   `/personal/delete-dialog`: messages.DeleteHistory или LeaveChannel),
+   удаление и правка отдельных сообщений — из меню пузыря.
 7. **Вкладка «API TG»** — покупка Telegram-аккаунтов через сервис Get My TG
    (docs.getmytg.com/sdk-reference). Клиент — `lib/god-gmt.ts` (plain fetch к
    api.getmytg.com, заголовок `x-api-key`); actions —
@@ -284,7 +290,7 @@ components/admin/        UI админки
                          хук состояния (view/диалоги/фильтрация по ресурсу)
   lead-inline-edit.tsx + lead-inline-edit/use-inline-save.ts  инлайн-
                          редакторы лида; общий transition+toast флоу — в хуке
-components/shared/       кр��сс-ролевые компоненты; use-xlsx-export.ts — общий
+components/shared/       кросс-ролевые компоненты; use-xlsx-export.ts — общий
                          флоу Excel-выгрузки (admin/manager/curator leads);
                          slide-over.tsx — ЕДИНЫЙ шелл боковых панелей/шитов
                          (transform-only анимация, см. стандарт UI в разделе 10);
@@ -698,9 +704,9 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
     `width/height/top/left/box-shadow` на открытии.
   - Данные для деталей показывай мгновенно из уже загруженной строки списка
     (`fallbackData` в SWR), сеть догружает только недостающее — секции
-    получают лёгкие скелетоны, глобального спиннера ��а панели быть не должно.
+    получают лёгкие скелетоны, глобального спиннера на панели быть не должно.
   - После мутации — ОДИН путь обновления: клиентский `refresh()`/`mutate()`.
-    `revalidatePath` в actions дашборд��в не использовать: страницы динамические
+    `revalidatePath` в actions дашбордов не использовать: страницы динамические
     (cookie-auth), клиент держит состояние в `useState` — серверный ре-рендер
     выбрасывается впустую (см. `app/actions/lead-cards/core.ts`).
   - Эталоны: docked-карточка в Inbox менеджера, `SlideOver` карточки лида.
