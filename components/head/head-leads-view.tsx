@@ -9,12 +9,14 @@
  * комментарии и передача внутри группы (передача — только между кураторами).
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   Briefcase,
   Eye,
+  LayoutGrid,
+  List,
   ListFilter,
   Search,
   User,
@@ -47,6 +49,113 @@ import { formatMskDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 const PAGE = 50
+const VIEW_STORAGE_KEY = 'head-leads-view-mode'
+
+/**
+ * Строка/карточка лида в панели руководителя. Список — CSS grid с фиксированными
+ * колонками (имя · город · исполнитель · дата · статус), чтобы колонки были
+ * выровнены во всех строках; карточка — как у куратора. Мемоизирована.
+ */
+const HeadLeadRow = memo(function HeadLeadRow({
+  lead,
+  view,
+  onOpen,
+}: {
+  lead: LeadCard
+  view: 'list' | 'grid'
+  onOpen: (id: string) => void
+}) {
+  const executor = lead.curatorId ? (
+    <>
+      <Users className="size-3 shrink-0" />
+      <span className="truncate">{lead.curatorName ?? '—'}</span>
+    </>
+  ) : (
+    <>
+      <Briefcase className="size-3 shrink-0" />
+      <span className="truncate">{lead.managerName ?? '—'}</span>
+    </>
+  )
+  const date = lead.transferredAt ? formatMskDateTime(lead.transferredAt) : '—'
+
+  if (view === 'grid') {
+    return (
+      <li
+        className={cn(
+          'group flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-card p-3 transition-colors hover:bg-muted/30',
+          '[content-visibility:auto] [contain-intrinsic-size:auto_8rem]',
+        )}
+        onClick={() => onOpen(lead.id)}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium">
+              {lead.fullName || 'Без имени'}
+            </p>
+            <p className="truncate text-xs text-muted-foreground">
+              {[lead.vacancy, lead.phone].filter(Boolean).join(' · ') || '—'}
+            </p>
+          </div>
+          <LeadStatusBadge
+            status={lead.status}
+            previousStatus={lead.previousStatus}
+          />
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          {executor}
+          {lead.city ? (
+            <>
+              <span aria-hidden>·</span>
+              <span className="truncate">{lead.city}</span>
+            </>
+          ) : null}
+        </div>
+        <span className="mt-auto text-xs tabular-nums text-muted-foreground">
+          {date}
+        </span>
+      </li>
+    )
+  }
+
+  return (
+    <li className="[content-visibility:auto] [contain-intrinsic-size:auto_3.5rem]">
+      <button
+        type="button"
+        onClick={() => onOpen(lead.id)}
+        className={cn(
+          'grid w-full grid-cols-[minmax(0,1fr)_7.5rem] items-center gap-x-4 px-4 py-2.5 text-left transition-colors hover:bg-muted/40',
+          'sm:grid-cols-[minmax(0,1fr)_7rem_7.5rem]',
+          'md:grid-cols-[minmax(0,1fr)_7rem_minmax(0,10rem)_7.5rem]',
+          'lg:grid-cols-[minmax(0,1fr)_7rem_minmax(0,10rem)_8.5rem_7.5rem]',
+        )}
+      >
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium">
+            {lead.fullName || 'Без имени'}
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {[lead.vacancy, lead.phone].filter(Boolean).join(' · ') || '—'}
+          </span>
+        </span>
+        <span className="hidden truncate text-xs text-muted-foreground sm:block">
+          {lead.city || '—'}
+        </span>
+        <span className="hidden min-w-0 items-center gap-1.5 text-xs text-muted-foreground md:flex">
+          {executor}
+        </span>
+        <span className="hidden text-xs tabular-nums text-muted-foreground lg:block">
+          {date}
+        </span>
+        <span className="flex justify-end">
+          <LeadStatusBadge
+            status={lead.status}
+            previousStatus={lead.previousStatus}
+          />
+        </span>
+      </button>
+    </li>
+  )
+})
 
 /** Ряд чипов-фильтров по подчинённым одного вида (кураторы или менеджеры). */
 function MemberFilterRow({
@@ -113,6 +222,18 @@ export function HeadLeadsView({
   const [leads, setLeads] = useState(initialLeads)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
+  // Вид: список / карточки — как у куратора, выбор переживает перелогин.
+  const [view, setView] = useState<'list' | 'grid'>('list')
+  useEffect(() => {
+    const saved = window.localStorage.getItem(VIEW_STORAGE_KEY)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- гидратация: на сервере localStorage нет, восстановить выбор можно только после маунта
+    if (saved === 'grid' || saved === 'list') setView(saved)
+  }, [])
+  const switchView = useCallback((v: 'list' | 'grid') => {
+    setView(v)
+    window.localStorage.setItem(VIEW_STORAGE_KEY, v)
+  }, [])
+
   // Фильтр по подчинённому: строка вида `curator:<id>` или `manager:<id>`,
   // чтобы различать людей из разных таблиц (id уникальны, но семантика разная).
   const [memberFilter, setMemberFilter] = useState('')
@@ -125,6 +246,9 @@ export function HeadLeadsView({
   const refresh = useCallback(async () => {
     setLeads(await listGroupLeadsAction())
   }, [])
+
+  // Стабильный колбэк для мемоизированных строк.
+  const openLead = useCallback((id: string) => setSelectedId(id), [])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -292,6 +416,38 @@ export function HeadLeadsView({
           )}
           {!searchExpanded ? (sort === 'newest' ? 'Новые' : 'Старые') : null}
         </Button>
+
+        {/* Переключатель вида: список / карточки — как у куратора */}
+        <div className="flex h-9 items-center rounded-lg border border-border p-1">
+          <button
+            type="button"
+            onClick={() => switchView('list')}
+            aria-label="Вид: список"
+            aria-pressed={view === 'list'}
+            className={cn(
+              'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
+              view === 'list'
+                ? 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <List className="size-4 shrink-0" />
+          </button>
+          <button
+            type="button"
+            onClick={() => switchView('grid')}
+            aria-label="Вид: карточки"
+            aria-pressed={view === 'grid'}
+            className={cn(
+              'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
+              view === 'grid'
+                ? 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <LayoutGrid className="size-4 shrink-0" />
+          </button>
+        </div>
       </div>
 
       {/* Список */}
@@ -309,46 +465,27 @@ export function HeadLeadsView({
               : 'Когда у ваших сотрудников появятся лиды, они отобразятся здесь.'
           }
         />
+      ) : view === 'grid' ? (
+        <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+          {shown.map((lead) => (
+            <HeadLeadRow
+              key={lead.id}
+              lead={lead}
+              view="grid"
+              onOpen={openLead}
+            />
+          ))}
+        </ul>
       ) : (
         <Card className="overflow-hidden">
           <ul className="divide-y divide-border">
             {shown.map((lead) => (
-              <li key={lead.id}>
-                <button
-                  type="button"
-                  onClick={() => setSelectedId(lead.id)}
-                  className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-left transition-colors hover:bg-muted/40"
-                >
-                  <span className="min-w-32 flex-1 truncate text-sm font-medium">
-                    {lead.fullName || 'Без имени'}
-                  </span>
-                  <span className="hidden w-28 truncate text-xs text-muted-foreground sm:block">
-                    {lead.city || '—'}
-                  </span>
-                  <span className="hidden w-40 min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground md:flex">
-                    {lead.curatorId ? (
-                      <>
-                        <Users className="size-3 shrink-0" />
-                        {lead.curatorName ?? '—'}
-                      </>
-                    ) : (
-                      <>
-                        <Briefcase className="size-3 shrink-0" />
-                        {lead.managerName ?? '—'}
-                      </>
-                    )}
-                  </span>
-                  <span className="hidden w-36 text-xs tabular-nums text-muted-foreground lg:block">
-                    {lead.transferredAt
-                      ? formatMskDateTime(lead.transferredAt)
-                      : '—'}
-                  </span>
-                  <LeadStatusBadge
-                    status={lead.status}
-                    previousStatus={lead.previousStatus}
-                  />
-                </button>
-              </li>
+              <HeadLeadRow
+                key={lead.id}
+                lead={lead}
+                view="list"
+                onOpen={openLead}
+              />
             ))}
           </ul>
         </Card>

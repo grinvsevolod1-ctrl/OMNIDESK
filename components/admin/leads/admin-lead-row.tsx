@@ -58,7 +58,13 @@ export const AdminLeadRow = memo(function AdminLeadRow({
   return (
     <li
       className={cn(
-        'flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 sm:px-5',
+        // CSS grid с фиксированными колонками (имя · город · сотрудник ·
+        // статус · дата · действия) — колонки выровнены по одной сетке во
+        // всех строках. Ниже брейкпоинтов лишние колонки скрыты.
+        'grid grid-cols-[minmax(0,1fr)_max-content_auto] items-center gap-x-3 px-4 py-3 transition-colors duration-1000 sm:px-5',
+        'sm:grid-cols-[minmax(0,1fr)_7.5rem_max-content_auto]',
+        'md:grid-cols-[minmax(0,1fr)_7.5rem_minmax(0,9.5rem)_max-content_auto]',
+        'lg:grid-cols-[minmax(0,1fr)_7.5rem_minmax(0,9.5rem)_minmax(7rem,max-content)_8.5rem_auto]',
         // Строки за экраном не рендерятся при скролле (стандарт UI, AGENTS.md).
         '[content-visibility:auto] [contain-intrinsic-size:auto_3.75rem]',
         // Новый лид, появившийся при фоновом обновлении, —
@@ -82,10 +88,7 @@ export const AdminLeadRow = memo(function AdminLeadRow({
       tabIndex={onOpen ? 0 : undefined}
       aria-label={onOpen ? 'Открыть карточку лида' : undefined}
     >
-      <div
-        className="min-w-0 flex-1 basis-48"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="min-w-0" onClick={(e) => e.stopPropagation()}>
         {/* ФИО, должность, телефон редактируются кликом по значению */}
         <TextInlineEditor
           lead={lead}
@@ -128,57 +131,71 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         </div>
       </div>
 
-      <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+      <span
+        onClick={(e) => e.stopPropagation()}
+        className="hidden min-w-0 sm:inline-flex"
+      >
         <CityInlineEditor lead={lead} onSaved={onRefresh} />
       </span>
 
-      {lead.curatorName ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span className="cursor-default text-xs text-muted-foreground">
-                {lead.curatorName}
-              </span>
-            }
-          />
-          <TooltipContent side="top">Менеджер по кадрам</TooltipContent>
-        </Tooltip>
-      ) : (
-        <Badge
-          variant="outline"
-          className="border-transparent bg-destructive/15 text-destructive"
-        >
-          Без менеджера по кадрам
-        </Badge>
-      )}
-
-      {needs ? (
-        <Badge
-          variant="outline"
-          className="border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400"
-        >
-          Нужно обновить
-        </Badge>
-      ) : null}
-      <span onClick={(e) => e.stopPropagation()} className="inline-flex">
-        <StatusInlineEditor lead={lead} onSaved={onRefresh} />
+      {/* Ячейка сотрудника рендерится всегда (md+) — иначе сетка сломается. */}
+      <span className="hidden min-w-0 md:block">
+        {lead.curatorName ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="block cursor-default truncate text-xs text-muted-foreground">
+                  {lead.curatorName}
+                </span>
+              }
+            />
+            <TooltipContent side="top">Менеджер по кадрам</TooltipContent>
+          </Tooltip>
+        ) : (
+          <Badge
+            variant="outline"
+            className="max-w-full border-transparent bg-destructive/15 text-destructive"
+          >
+            <span className="truncate">Без менеджера по кадрам</span>
+          </Badge>
+        )}
       </span>
 
-      {lead.transferredAt ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span className="cursor-default text-xs text-muted-foreground">
-                {formatDateTime(lead.transferredAt)}
-              </span>
-            }
-          />
-          <TooltipContent side="top">Дата передачи</TooltipContent>
-        </Tooltip>
-      ) : null}
+      {/* Статус и «Нужно обновить» — одна ячейка, левые края выровнены. */}
+      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+        {needs ? (
+          <Badge
+            variant="outline"
+            className="border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400"
+          >
+            Нужно обновить
+          </Badge>
+        ) : null}
+        <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+          <StatusInlineEditor lead={lead} onSaved={onRefresh} />
+        </span>
+      </span>
+
+      {/* Ячейка даты рендерится всегда (lg+). */}
+      <span className="hidden min-w-0 lg:block">
+        {lead.transferredAt ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="cursor-default text-xs tabular-nums text-muted-foreground">
+                  {formatDateTime(lead.transferredAt)}
+                </span>
+              }
+            />
+            <TooltipContent side="top">Дата передачи</TooltipContent>
+          </Tooltip>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </span>
 
       <div
-        className="flex items-center"
+        className="flex items-center justify-self-end"
         onClick={(e) => e.stopPropagation()}
       >
         <DropdownMenu>

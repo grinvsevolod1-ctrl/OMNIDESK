@@ -183,7 +183,12 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
   return (
     <li
       className={cn(
-        'flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 transition-colors hover:bg-muted/30 sm:px-5',
+        // CSS grid с фиксированными колонками (имя · город · статус · дата ·
+        // архив) — во всех строках колонки выровнены по одной сетке, ничего
+        // не «плавает». Ниже sm город и дата скрыты — сетка сжимается.
+        'grid cursor-pointer grid-cols-[minmax(0,1fr)_max-content_2.25rem] items-center gap-x-3 px-4 py-2.5 transition-colors hover:bg-muted/30 sm:px-5',
+        'sm:grid-cols-[minmax(0,1fr)_7.5rem_max-content_2.25rem]',
+        'lg:grid-cols-[minmax(0,1fr)_7.5rem_minmax(7rem,max-content)_8.5rem_2.25rem]',
         // Строки за экраном не рендерятся при скролле (стандарт UI, AGENTS.md).
         '[content-visibility:auto] [contain-intrinsic-size:auto_3.5rem]',
         needs && 'bg-amber-500/[0.04]',
@@ -191,7 +196,7 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
       )}
       onClick={() => onOpen(lead.id)}
     >
-      <div className="min-w-0 flex-1 basis-44">
+      <div className="min-w-0">
         {/* ФИО, должность, телефон правятся кликом — как у админа.
             stopPropagation живёт на самих контролах (см. lead-inline-edit),
             клик по пустому месту строки открывает полную карточку. */}
@@ -225,35 +230,43 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
         </div>
       </div>
 
-      <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+      <span
+        onClick={(e) => e.stopPropagation()}
+        className="hidden min-w-0 sm:inline-flex"
+      >
         <CityInlineEditor lead={lead} onSaved={onRefresh} />
       </span>
 
       {statusEditor}
 
-      {isArchived && lead.archivedAt ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span className="cursor-default text-xs text-muted-foreground">
-                {formatDateTime(lead.archivedAt)}
-              </span>
-            }
-          />
-          <TooltipContent side="top">В архиве с</TooltipContent>
-        </Tooltip>
-      ) : lead.transferredAt ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span className="cursor-default text-xs text-muted-foreground">
-                {formatDateTime(lead.transferredAt)}
-              </span>
-            }
-          />
-          <TooltipContent side="top">Дата передачи</TooltipContent>
-        </Tooltip>
-      ) : null}
+      {/* Ячейка даты рендерится всегда (lg+) — иначе сетка сломается. */}
+      <span className="hidden min-w-0 lg:block">
+        {isArchived && lead.archivedAt ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="cursor-default text-xs tabular-nums text-muted-foreground">
+                  {formatDateTime(lead.archivedAt)}
+                </span>
+              }
+            />
+            <TooltipContent side="top">В архиве с</TooltipContent>
+          </Tooltip>
+        ) : lead.transferredAt ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="cursor-default text-xs tabular-nums text-muted-foreground">
+                  {formatDateTime(lead.transferredAt)}
+                </span>
+              }
+            />
+            <TooltipContent side="top">Дата передачи</TooltipContent>
+          </Tooltip>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </span>
 
       {archiveButton}
     </li>
