@@ -41,16 +41,22 @@ import {
   Lock,
   LockOpen,
   Radio,
+  ScanSearch,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Target,
 } from 'lucide-react'
 import {
+  secretDrillFindingAction,
+  secretPathLeaksAction,
   secretPingAction,
   secretS3ScanAction,
   secretSecurityAssessAction,
   secretSecurityAuditAction,
   type DnsHygiene,
+  type DrillKind,
+  type DrillResult,
   type PathLeak,
   type PingResult,
   type ReflectionCheck,
@@ -93,6 +99,14 @@ export function SecretPingTab() {
   // Результат S3-скана (запускается автоматически, если адрес похож на бакет).
   const [s3Result, setS3Result] = useState<S3ScanResult | null>(null)
 
+  // Ленивая проверка путей (по кнопке — это 10+ отдельных GET).
+  const [pathsPending, setPathsPending] = useState(false)
+
+  // «Пробив» находок: по ключу вида `kind:arg` — статус и результат.
+  const [drills, setDrills] = useState<
+    Record<string, { pending: boolean; result?: DrillResult; report?: string }>
+  >({})
+
   async function runFullScan() {
     const target = url.trim()
     if (!target) {
@@ -106,6 +120,7 @@ export function SecretPingTab() {
     setS3Result(null)
     setAssessment(null)
     setAssessOpen(false)
+    setDrills({})
     setScanned(true)
     try {
       // Всегда меряем доступность. Затем, в зависимости от типа адреса,
@@ -185,6 +200,59 @@ export function SecretPingTab() {
     }
   }
 
+  /** Ленивая проверка типовых путей — по кнопке, отдельным запросом. */
+  async function checkPaths() {
+    const target = url.trim()
+    if (!target || !audit) return
+    setPathsPending(true)
+    try {
+      const res = await secretPathLeaksAction(target)
+      if (res.ok && res.data) {
+        const data = res.data
+        setAudit((prev) =>
+          prev ? { ...prev, pathLeaks: data, pathLeaksChecked: true } : prev,
+        )
+      } else {
+        toast.error(res.message)
+      }
+    } catch {
+      toast.error('Не удалось проверить пути')
+    } finally {
+      setPathsPending(false)
+    }
+  }
+
+  /** «Пробить» находку: подтверждающие проверки + AI-заключение по ней. */
+  async function runDrill(kind: DrillKind, arg: string | null) {
+    const target = url.trim()
+    if (!target) return
+    const key = `${kind}:${arg ?? ''}`
+    setDrills((prev) => ({ ...prev, [key]: { pending: true } }))
+    try {
+      const res = await secretDrillFindingAction(target, kind, arg)
+      if (res.ok && res.data) {
+        setDrills((prev) => ({
+          ...prev,
+          [key]: { pending: false, result: res.data, report: res.report },
+        }))
+      } else {
+        toast.error(res.message)
+        setDrills((prev) => {
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+      }
+    } catch {
+      toast.error('Не удалось пробить находку')
+      setDrills((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+    }
+  }
+
   return (
     <div className="flex flex-col gap-5">
       {/* ---- Единый ввод адреса + одна кнопка ---- */}
@@ -196,9 +264,10 @@ export function SecretPingTab() {
         <p className="mb-4 text-xs text-muted-foreground text-pretty">
           Один адрес — полный отчёт со сводной оценкой: доступность и задержка,
           заголовки защиты, TLS-сертификат, отражение ввода (reflected XSS),
-          типовые утечки путей, DNS/почтовая гигиена (SPF/DMARC/DKIM/CAA), cookie
-          и раскрытие версий ПО. Если адрес похож на S3 — бакет сканируется
-          автоматически. Всё пассивно — только чтение ответа.
+          DNS/почтовая гигиена (SPF/DMARC/DKIM/CAA), cookie и раскрытие версий
+          ПО. Проверка типовых путей и «пробив» каждой находки — по кнопке.
+          Если адрес похож на S3 — бакет сканируется автоматически. Всё
+          пассивно — только чтение ответа.
         </p>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -280,7 +349,13 @@ export function SecretPingTab() {
           title="Безопасность"
           right={<ScoreBadge score={audit.score} />}
         >
-          <AuditBody audit={audit} />
+          <AuditBody
+            audit={audit}
+            drills={drills}
+            pathsPending={pathsPending}
+            onCheckPaths={() => void checkPaths()}
+            onDrill={(kind, arg) => void runDrill(kind, arg)}
+          />
 
           {/* AI-заключение — раскрываемая секция под аудитом */}
           <div className="mt-4 border-t border-border/60 pt-3">
@@ -347,9 +422,11 @@ export function SecretPingTab() {
         <p className="px-1 text-sm text-muted-foreground text-pretty">
           Введите свой домен или адрес страницы состояния и нажмите «Проверить».
           Панель за один проход измерит доступность, соберёт аудит безопасности и
-          проверит отражение ввода, а по кнопке ниже отчёта AI даст рекомендации
-          по харденингу. Если адрес похож на S3-бакет — вместо веб-аудита
-          автоматически запускается проверка публичного листинга бакета.
+          проверит отражение ввода. Проверку типовых путей можно запустить
+          кнопкой, а любую находку — «пробить»: движок проведёт подтверждающие
+          read-only проверки и AI даст заключение именно по ней. Если адрес похож
+          на S3-бакет — вместо веб-аудита автоматически запускается проверка
+          публичного листинга бакета.
         </p>
       )}
     </div>
@@ -396,10 +473,169 @@ const HEADER_LABELS: Record<string, string> = {
   'cross-origin-resource-policy': 'CORP',
 }
 
-function AuditBody({ audit }: { audit: SecurityAudit }) {
+/** Карта состояний «пробива»: ключ `kind:arg`. */
+type DrillMap = Record<
+  string,
+  { pending: boolean; result?: DrillResult; report?: string }
+>
+
+/** Кнопка «Пробить» + раскрываемый результат под находкой. */
+function DrillButton({
+  kind,
+  arg,
+  label,
+  drills,
+  onDrill,
+}: {
+  kind: DrillKind
+  arg: string | null
+  label: string
+  drills: DrillMap
+  onDrill: (kind: DrillKind, arg: string | null) => void
+}) {
+  const state = drills[`${kind}:${arg ?? ''}`]
+  return (
+    <div className="mt-2">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onDrill(kind, arg)}
+        disabled={state?.pending}
+        className="press-scale h-7 gap-1.5 text-xs"
+      >
+        {state?.pending ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Target className="size-3.5" />
+        )}
+        {label}
+      </Button>
+      {state?.result && (
+        <DrillResultCard result={state.result} report={state.report} />
+      )}
+    </div>
+  )
+}
+
+/** Тон вердикта «пробива». */
+const VERDICT_TONE: Record<
+  DrillResult['verdict'],
+  { border: string; text: string; label: string }
+> = {
+  exploitable: {
+    border: 'border-destructive/40 bg-destructive/10',
+    text: 'text-destructive',
+    label: 'Подтверждено — эксплуатируемо',
+  },
+  likely: {
+    border: 'border-amber-500/40 bg-amber-500/10',
+    text: 'text-amber-500',
+    label: 'Подтверждено — вероятно',
+  },
+  'not-exploitable': {
+    border: 'border-emerald-500/30 bg-emerald-500/5',
+    text: 'text-emerald-500',
+    label: 'Не подтверждено',
+  },
+  inconclusive: {
+    border: 'border-border/60 bg-background/40',
+    text: 'text-muted-foreground',
+    label: 'Не удалось определить',
+  },
+}
+
+const STEP_MARK: Record<DrillResult['steps'][number]['outcome'], typeof CircleCheck> = {
+  confirmed: ShieldAlert,
+  refuted: ShieldCheck,
+  info: CircleAlert,
+}
+
+const STEP_TONE: Record<DrillResult['steps'][number]['outcome'], string> = {
+  confirmed: 'text-destructive',
+  refuted: 'text-emerald-500',
+  info: 'text-muted-foreground',
+}
+
+/** Раскрытый результат «пробива»: вердикт → шаги → доказательство → AI. */
+function DrillResultCard({
+  result,
+  report,
+}: {
+  result: DrillResult
+  report?: string
+}) {
+  const tone = VERDICT_TONE[result.verdict]
+  return (
+    <div className={cn('mt-2 rounded-lg border p-3', tone.border)}>
+      <div className="flex items-center gap-2">
+        <Target className={cn('size-4 shrink-0', tone.text)} />
+        <span className="text-xs font-medium text-foreground">
+          Пробив: {result.title}
+        </span>
+        <span className={cn('ml-auto text-xs font-semibold', tone.text)}>
+          {tone.label}
+        </span>
+      </div>
+
+      {/* Цепочка выполненных проверок */}
+      <ol className="mt-2 flex flex-col gap-1.5">
+        {result.steps.map((s, i) => {
+          const Mark = STEP_MARK[s.outcome]
+          return (
+            <li key={i} className="flex items-start gap-2 text-[11px]">
+              <Mark className={cn('mt-0.5 size-3.5 shrink-0', STEP_TONE[s.outcome])} />
+              <span className="min-w-0">
+                <span className="font-medium text-foreground">{s.label}: </span>
+                <span className="text-muted-foreground">{s.detail}</span>
+              </span>
+            </li>
+          )
+        })}
+      </ol>
+
+      {/* Доказательство (значения замаскированы сервером) */}
+      {result.evidence && (
+        <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-border/60 bg-background/60 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-all">
+          {result.evidence}
+        </pre>
+      )}
+
+      {/* AI-заключение по конкретной находке */}
+      {report && (
+        <div className="mt-3 border-t border-border/60 pt-2">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <Sparkles className="size-3.5 text-primary" />
+            Заключение по находке
+          </div>
+          <Markdown text={report} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AuditBody({
+  audit,
+  drills,
+  pathsPending,
+  onCheckPaths,
+  onDrill,
+}: {
+  audit: SecurityAudit
+  drills: DrillMap
+  pathsPending: boolean
+  onCheckPaths: () => void
+  onDrill: (kind: DrillKind, arg: string | null) => void
+}) {
   // Бейдж отражает ТОЛЬКО схему соединения. Наличие http→https-редиректа —
   // отдельный факт, он показан соседней строкой, смешивать их нельзя.
   const httpsOk = audit.scheme === 'https'
+
+  // HSTS-заголовок для условной кнопки «пробить отсутствие HSTS».
+  const hstsHeader = audit.securityHeaders.find(
+    (h) => h.key === 'strict-transport-security',
+  )
+  const missingHsts = httpsOk && hstsHeader && !hstsHeader.present
 
   return (
     <>
@@ -435,6 +671,26 @@ function AuditBody({ audit }: { audit: SecurityAudit }) {
         )}
       </div>
 
+      {/* Пробив транспорта: отсутствие редиректа на https / отсутствие HSTS */}
+      {audit.httpsUpgrade === 'no' && (
+        <DrillButton
+          kind="no-https-upgrade"
+          arg={null}
+          label="Пробить: нет редиректа на HTTPS"
+          drills={drills}
+          onDrill={onDrill}
+        />
+      )}
+      {missingHsts && (
+        <DrillButton
+          kind="missing-hsts"
+          arg={null}
+          label="Пробить: отсутствие HSTS"
+          drills={drills}
+          onDrill={onDrill}
+        />
+      )}
+
       {/* Заголовки безопасности */}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {audit.securityHeaders.map((h) => (
@@ -460,13 +716,24 @@ function AuditBody({ audit }: { audit: SecurityAudit }) {
       </div>
 
       {/* TLS-сертификат */}
-      <TlsCard tls={audit.tls} />
+      <TlsCard tls={audit.tls} drills={drills} onDrill={onDrill} />
 
       {/* Отражение ввода (reflected XSS) */}
-      <ReflectionCard reflection={audit.reflection} />
+      <ReflectionCard
+        reflection={audit.reflection}
+        drills={drills}
+        onDrill={onDrill}
+      />
 
-      {/* Утечки типовых путей */}
-      <PathLeaksCard leaks={audit.pathLeaks} />
+      {/* Утечки типовых путей — проверяются лениво, по кнопке */}
+      <PathLeaksCard
+        leaks={audit.pathLeaks}
+        checked={audit.pathLeaksChecked}
+        pending={pathsPending}
+        onCheck={onCheckPaths}
+        drills={drills}
+        onDrill={onDrill}
+      />
 
       {/* DNS / почтовая гигиена */}
       <DnsCard dns={audit.dns} />
@@ -484,6 +751,13 @@ function AuditBody({ audit }: { audit: SecurityAudit }) {
               </div>
             ))}
           </div>
+          <DrillButton
+            kind="software-disclosure"
+            arg={null}
+            label="Пробить: раскрытие версий"
+            drills={drills}
+            onDrill={onDrill}
+          />
         </div>
       )}
 
@@ -558,7 +832,15 @@ const REFLECTION_TONE: Record<
   },
 }
 
-function ReflectionCard({ reflection }: { reflection: ReflectionCheck }) {
+function ReflectionCard({
+  reflection,
+  drills,
+  onDrill,
+}: {
+  reflection: ReflectionCheck
+  drills: DrillMap
+  onDrill: (kind: DrillKind, arg: string | null) => void
+}) {
   const tone = REFLECTION_TONE[reflection.risk]
   const alarming = reflection.risk === 'medium' || reflection.risk === 'high'
 
@@ -582,6 +864,17 @@ function ReflectionCard({ reflection }: { reflection: ReflectionCheck }) {
       <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
         {reflection.note}
       </p>
+      {/* Пробить можно всегда, когда проверка отработала: движок сам подтвердит,
+          отражается ли ввод и экранируются ли спецсимволы. */}
+      {reflection.tested && (
+        <DrillButton
+          kind="reflection"
+          arg={null}
+          label="Пробить отражение ввода"
+          drills={drills}
+          onDrill={onDrill}
+        />
+      )}
     </div>
   )
 }
@@ -631,8 +924,18 @@ const TLS_TONE: Record<TlsCheck['status'], { border: string; text: string; label
   unknown: { border: 'border-border/60 bg-background/40', text: 'text-muted-foreground', label: 'Не проверено' },
 }
 
-function TlsCard({ tls }: { tls: TlsCheck }) {
+function TlsCard({
+  tls,
+  drills,
+  onDrill,
+}: {
+  tls: TlsCheck
+  drills: DrillMap
+  onDrill: (kind: DrillKind, arg: string | null) => void
+}) {
   const tone = TLS_TONE[tls.status]
+  // Пробивать имеет смысл, только если есть на что смотреть (warn/bad).
+  const drillable = tls.tested && (tls.status === 'warn' || tls.status === 'bad')
   return (
     <div className={cn('mt-4 rounded-lg border p-3', tone.border)}>
       <div className="flex items-center gap-2">
@@ -658,14 +961,72 @@ function TlsCard({ tls }: { tls: TlsCheck }) {
       ) : (
         <p className="mt-1.5 text-[11px] text-muted-foreground">{tls.note}</p>
       )}
+      {drillable && (
+        <DrillButton
+          kind="tls"
+          arg={null}
+          label="Пробить сертификат"
+          drills={drills}
+          onDrill={onDrill}
+        />
+      )}
     </div>
   )
 }
 
 /* -------------------------- Утечки путей -------------------------------- */
 
-function PathLeaksCard({ leaks }: { leaks: PathLeak[] }) {
-  if (leaks.length === 0) return null
+function PathLeaksCard({
+  leaks,
+  checked,
+  pending,
+  onCheck,
+  drills,
+  onDrill,
+}: {
+  leaks: PathLeak[]
+  checked: boolean
+  pending: boolean
+  onCheck: () => void
+  drills: DrillMap
+  onDrill: (kind: DrillKind, arg: string | null) => void
+}) {
+  // Пути проверяются лениво (это десяток отдельных GET). Пока не проверяли —
+  // показываем нейтральную карточку с кнопкой запуска.
+  if (!checked) {
+    return (
+      <div className="mt-4 rounded-lg border border-border/60 bg-background/40 p-3">
+        <div className="flex items-center gap-2">
+          <FileWarning className="size-4 shrink-0 text-muted-foreground" />
+          <span className="text-xs font-medium text-foreground">
+            Типовые пути
+          </span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            Не проверялись
+          </span>
+        </div>
+        <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
+          Проверка доступности .env, .git, бэкапов, server-status и т.п. — это
+          отдельные запросы, поэтому запускается по кнопке.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onCheck}
+          disabled={pending}
+          className="press-scale mt-2 h-7 gap-1.5 text-xs"
+        >
+          {pending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <ScanSearch className="size-3.5" />
+          )}
+          Проверить пути
+        </Button>
+      </div>
+    )
+  }
+
   const exposed = leaks.filter((p) => p.exposed && p.severity !== 'info')
   const clean = exposed.length === 0
 
@@ -702,18 +1063,28 @@ function PathLeaksCard({ leaks }: { leaks: PathLeak[] }) {
           Чувствительные пути (.env, .git, бэкапы) наружу не отдаются.
         </p>
       ) : (
-        <div className="mt-2 flex flex-col gap-1">
+        <div className="mt-2 flex flex-col gap-3">
           {exposed.map((p) => (
-            <div
-              key={p.path}
-              className={cn(
-                'flex items-center gap-2 font-mono text-[11px]',
-                p.severity === 'critical' ? 'text-destructive' : 'text-amber-500',
-              )}
-            >
-              <CircleAlert className="size-3.5 shrink-0" />
-              {p.path}
-              <span className="text-muted-foreground">HTTP {p.status}</span>
+            <div key={p.path}>
+              <div
+                className={cn(
+                  'flex items-center gap-2 font-mono text-[11px]',
+                  p.severity === 'critical'
+                    ? 'text-destructive'
+                    : 'text-amber-500',
+                )}
+              >
+                <CircleAlert className="size-3.5 shrink-0" />
+                {p.path}
+                <span className="text-muted-foreground">HTTP {p.status}</span>
+              </div>
+              <DrillButton
+                kind="path-leak"
+                arg={p.path}
+                label="Пробить путь"
+                drills={drills}
+                onDrill={onDrill}
+              />
             </div>
           ))}
         </div>

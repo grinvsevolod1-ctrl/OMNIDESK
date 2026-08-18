@@ -1260,6 +1260,477 @@ export async function secretSecurityAssessAction(
 }
 
 /* ===================================================================== */
+/*  Движок «пробива» находок (drill-down верификация)                     */
+/*                                                                        */
+/*  Когда аудит нашёл слабое место, оператор может «пробить» его — то есть */
+/*  провести дополнительные ПОДТВЕРЖДАЮЩИЕ проверки, чтобы понять, это     */
+/*  реальная эксплуатируемая проблема или ложная тревога, и получить      */
+/*  доказательство. СТРОГО read-only и defensive: только наблюдаем        */
+/*  публичные ответы своего домена, НЕ применяем эксплойт-пейлоады, НЕ    */
+/*  перебираем, НЕ мутируем данные. Секреты маскируются. Часть скрытой    */
+/*  панели: гейт requireGod, без audit() (инвариант AGENTS.md §4).        */
+/* ===================================================================== */
+
+/** Виды находок, которые умеет «пробивать» движок. */
+export type DrillKind =
+  | 'path-leak' // открытый чувствительный путь (.env/.git/бэкап…)
+  | 'reflection' // отражение ввода (reflected XSS)
+  | 'missing-hsts' // нет HSTS при работающем HTTPS
+  | 'no-https-upgrade' // http не редиректит на https
+  | 'software-disclosure' // раскрытие версий ПО
+  | 'tls' // проблема с сертификатом
+
+/** Один шаг проверки-подтверждения с наблюдаемым результатом. */
+export interface DrillStep {
+  /** Что именно проверяли. */
+  label: string
+  /** Наблюдаемый результат (человекочитаемо, секреты замаскированы). */
+  detail: string
+  /** Итог шага: подтверждает проблему / опровергает / нейтрально. */
+  outcome: 'confirmed' | 'refuted' | 'info'
+}
+
+export interface DrillResult {
+  kind: DrillKind
+  /** Заголовок находки, которую пробивали. */
+  title: string
+  /** Итоговый вердикт: подтверждена ли эксплуатируемость. */
+  verdict: 'exploitable' | 'likely' | 'not-exploitable' | 'inconclusive'
+  /** Цепочка выполненных проверок. */
+  steps: DrillStep[]
+  /** Короткое доказательство/выдержка (замаскировано), если есть. */
+  evidence: string | null
+}
+
+export interface DrillActionResult {
+  ok: boolean
+  message: string
+  data?: DrillResult
+  /** AI-заключение по конкретной находке (markdown). */
+  report?: string
+}
+
+/** Замаскировать похожее на секрет значение, оставив хвост для узнавания. */
+function maskSecret(v: string): string {
+  const t = v.trim()
+  if (t.length <= 8) return '••••'
+  return `${t.slice(0, 2)}••••${t.slice(-2)} (${t.length} симв.)`
+}
+
+/** Простой GET с наблюдением тела (для подтверждения находки). */
+async function probeGet(
+  target: string,
+  cap = 8192,
+): Promise<{ status: number | null; ct: string; body: string; headers: Headers | null }> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetch(target, {
+      method: 'GET',
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': BROWSER_UA },
+    })
+    const ct = (res.headers.get('content-type') ?? '').toLowerCase()
+    const body = await readCapped(res, cap)
+    return { status: res.status, ct, body, headers: res.headers }
+  } catch {
+    return { status: null, ct: '', body: '', headers: null }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * «Пробить» конкретную находку: провести подтверждающие read-only проверки.
+ * `origin` — базовый origin финального URL; `arg` — контекст находки
+ * (например, путь для path-leak).
+ */
+async function drillFinding(
+  kind: DrillKind,
+  origin: string,
+  arg: string | null,
+): Promise<DrillResult> {
+  switch (kind) {
+    case 'path-leak':
+      return drillPathLeak(origin, arg)
+    case 'reflection':
+      return drillReflection(origin)
+    case 'software-disclosure':
+      return drillDisclosure(origin)
+    case 'missing-hsts':
+      return drillMissingHsts(origin)
+    case 'no-https-upgrade':
+      return drillHttpsUpgrade(origin)
+    case 'tls':
+      return drillTls(origin)
+    default:
+      return {
+        kind,
+        title: 'Неизвестная находка',
+        verdict: 'inconclusive',
+        steps: [],
+        evidence: null,
+      }
+  }
+}
+
+/** Пробив открытого пути: читаем файл, подтверждаем формат, ищем секреты. */
+async function drillPathLeak(origin: string, path: string | null): Promise<DrillResult> {
+  const steps: DrillStep[] = []
+  const p = path ?? '/.env'
+  const url = `${origin}${p}`
+  const res = await probeGet(url, 16384)
+
+  steps.push({
+    label: `GET ${p}`,
+    detail:
+      res.status === null
+        ? 'Хост не ответил'
+        : `HTTP ${res.status}, content-type: ${res.ct || 'не указан'}`,
+    outcome: res.status === 200 ? 'confirmed' : 'refuted',
+  })
+
+  if (res.status !== 200 || !res.body) {
+    return {
+      kind: 'path-leak',
+      title: `Открытый путь ${p}`,
+      verdict: 'not-exploitable',
+      steps,
+      evidence: null,
+    }
+  }
+
+  const isHtmlBody = res.ct.includes('html') || /^\s*<!doctype html|^\s*<html/i.test(res.body)
+  if (isHtmlBody) {
+    steps.push({
+      label: 'Анализ тела',
+      detail: 'Ответ — HTML-страница (вероятно SPA/catch-all), а не файл.',
+      outcome: 'refuted',
+    })
+    return {
+      kind: 'path-leak',
+      title: `Открытый путь ${p}`,
+      verdict: 'not-exploitable',
+      steps,
+      evidence: null,
+    }
+  }
+
+  // Ищем признаки реальных секретов в .env-подобном/конфиг-теле.
+  const secretHits: string[] = []
+  const kvRe = /^([A-Z][A-Z0-9_]{2,})\s*=\s*(.+)$/gm
+  let m: RegExpExecArray | null
+  let count = 0
+  while ((m = kvRe.exec(res.body)) && count < 40) {
+    count++
+    const key = m[1]
+    if (/KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD|DSN|DATABASE_URL|PRIVATE/i.test(key)) {
+      secretHits.push(`${key}=${maskSecret(m[2])}`)
+    }
+  }
+
+  const gitLike = /\[core\]|ref:\s|^[0-9a-f]{40}\b/m.test(res.body)
+
+  if (secretHits.length > 0) {
+    steps.push({
+      label: 'Поиск секретов',
+      detail: `Найдены переменные, похожие на секреты: ${secretHits.length} шт. (значения замаскированы).`,
+      outcome: 'confirmed',
+    })
+    return {
+      kind: 'path-leak',
+      title: `Открытый путь ${p}`,
+      verdict: 'exploitable',
+      steps,
+      evidence: secretHits.slice(0, 8).join('\n'),
+    }
+  }
+
+  if (gitLike) {
+    steps.push({
+      label: 'Анализ тела',
+      detail: 'Ответ похож на служебный файл git — репозиторий может быть выкачиваемым.',
+      outcome: 'confirmed',
+    })
+    return {
+      kind: 'path-leak',
+      title: `Открытый путь ${p}`,
+      verdict: 'exploitable',
+      steps,
+      evidence: res.body.slice(0, 300),
+    }
+  }
+
+  steps.push({
+    label: 'Анализ тела',
+    detail: 'Путь отдаёт содержимое, но явных секретов не обнаружено.',
+    outcome: 'info',
+  })
+  return {
+    kind: 'path-leak',
+    title: `Открытый путь ${p}`,
+    verdict: 'likely',
+    steps,
+    evidence: res.body.slice(0, 300),
+  }
+}
+
+/** Пробив reflected XSS: проверяем маркер и экранирование в разных контекстах. */
+async function drillReflection(origin: string): Promise<DrillResult> {
+  const steps: DrillStep[] = []
+  const marker = `zz${Math.random().toString(36).slice(2, 8)}zz`
+  // Безопасный «канареечный» пробник со спецсимволами — НЕ рабочий эксплойт,
+  // просто проверяем, экранирует ли сервер < > " при отражении.
+  const probe = `${marker}<'">`
+  const url = `${origin}/?omnidesk_probe=${encodeURIComponent(probe)}`
+  const res = await probeGet(url, 65536)
+
+  steps.push({
+    label: 'GET с канареечным параметром',
+    detail: res.status === null ? 'Хост не ответил' : `HTTP ${res.status}`,
+    outcome: 'info',
+  })
+
+  if (res.status === null) {
+    return { kind: 'reflection', title: 'Отражение ввода', verdict: 'inconclusive', steps, evidence: null }
+  }
+
+  const reflected = res.body.includes(marker)
+  steps.push({
+    label: 'Поиск маркера в ответе',
+    detail: reflected ? 'Маркер найден — ввод отражается в теле ответа.' : 'Маркер не найден — ввод не отражается.',
+    outcome: reflected ? 'confirmed' : 'refuted',
+  })
+
+  if (!reflected) {
+    return { kind: 'reflection', title: 'Отражение ввода', verdict: 'not-exploitable', steps, evidence: null }
+  }
+
+  const rawSpecials = res.body.includes(`${marker}<'">`)
+  const escaped = res.body.includes('&lt;') || res.body.includes('&gt;') || res.body.includes('&#')
+  const inHtmlContext = res.ct.includes('html')
+
+  steps.push({
+    label: 'Проверка экранирования',
+    detail: rawSpecials
+      ? 'Спецсимволы (< > " \') вернулись СЫРЫМИ — экранирование отсутствует.'
+      : escaped
+        ? 'Спецсимволы экранированы (&lt; / &gt;) — базовая защита есть.'
+        : 'Спецсимволы не отражены дословно — контекст неопасен.',
+    outcome: rawSpecials ? 'confirmed' : 'refuted',
+  })
+
+  let verdict: DrillResult['verdict'] = 'likely'
+  if (rawSpecials && inHtmlContext) verdict = 'exploitable'
+  else if (!rawSpecials) verdict = 'not-exploitable'
+
+  return {
+    kind: 'reflection',
+    title: 'Отражение ввода (reflected XSS)',
+    verdict,
+    steps,
+    evidence: rawSpecials ? `Отражено без экранирования: ${marker}<'">` : null,
+  }
+}
+
+/** Пробив раскрытия ПО: собираем версии из заголовков разных ответов. */
+async function drillDisclosure(origin: string): Promise<DrillResult> {
+  const steps: DrillStep[] = []
+  const res = await probeGet(origin, 1024)
+  const found: string[] = []
+  if (res.headers) {
+    for (const h of ['server', 'x-powered-by', 'x-aspnet-version', 'x-generator']) {
+      const v = res.headers.get(h)
+      if (v) found.push(`${h}: ${v}`)
+    }
+  }
+  steps.push({
+    label: 'Чтение заголовков ответа',
+    detail: found.length ? found.join('; ') : 'Заголовки с версиями ПО не обнаружены.',
+    outcome: found.length ? 'confirmed' : 'refuted',
+  })
+  const versioned = found.some((f) => /\d+\.\d+/.test(f))
+  if (versioned) {
+    steps.push({
+      label: 'Оценка риска',
+      detail: 'Раскрыты точные версии ПО — упрощает подбор известных уязвимостей под них.',
+      outcome: 'confirmed',
+    })
+  }
+  return {
+    kind: 'software-disclosure',
+    title: 'Раскрытие версий ПО',
+    verdict: versioned ? 'likely' : found.length ? 'inconclusive' : 'not-exploitable',
+    steps,
+    evidence: found.length ? found.join('\n') : null,
+  }
+}
+
+/** Пробив отсутствия HSTS: подтверждаем, что HTTPS работает, а заголовка нет. */
+async function drillMissingHsts(origin: string): Promise<DrillResult> {
+  const steps: DrillStep[] = []
+  const res = await probeGet(origin, 512)
+  const hsts = res.headers?.get('strict-transport-security') ?? null
+  steps.push({
+    label: 'GET по HTTPS',
+    detail: res.status === null ? 'Хост не ответил' : `HTTP ${res.status}`,
+    outcome: 'info',
+  })
+  steps.push({
+    label: 'Strict-Transport-Security',
+    detail: hsts ? `Заголовок присутствует: ${hsts}` : 'Заголовок отсутствует — возможна атака downgrade/SSL-stripping при первом заходе.',
+    outcome: hsts ? 'refuted' : 'confirmed',
+  })
+  return {
+    kind: 'missing-hsts',
+    title: 'Отсутствует HSTS',
+    verdict: hsts ? 'not-exploitable' : 'likely',
+    steps,
+    evidence: null,
+  }
+}
+
+/** Пробив http→https: проверяем, редиректит ли http и не отдаёт ли контент. */
+async function drillHttpsUpgrade(origin: string): Promise<DrillResult> {
+  const steps: DrillStep[] = []
+  let httpUrl: string
+  try {
+    const u = new URL(origin)
+    u.protocol = 'http:'
+    if (u.port === '443') u.port = ''
+    httpUrl = u.toString()
+  } catch {
+    return { kind: 'no-https-upgrade', title: 'Нет upgrade на HTTPS', verdict: 'inconclusive', steps, evidence: null }
+  }
+  const res = await probeGet(httpUrl, 2048)
+  const loc = res.headers?.get('location') ?? null
+  const redirectsToHttps = res.status !== null && res.status >= 300 && res.status < 400 && !!loc && loc.startsWith('https://')
+
+  steps.push({
+    label: `GET ${httpUrl}`,
+    detail: res.status === null ? 'http не ответил (возможно, порт 80 закрыт — это ок)' : `HTTP ${res.status}${loc ? `, Location: ${loc}` : ''}`,
+    outcome: 'info',
+  })
+
+  if (res.status === null) {
+    return { kind: 'no-https-upgrade', title: 'Нет upgrade на HTTPS', verdict: 'not-exploitable', steps, evidence: null }
+  }
+
+  if (redirectsToHttps) {
+    steps.push({ label: 'Итог', detail: 'http корректно редиректит на https.', outcome: 'refuted' })
+    return { kind: 'no-https-upgrade', title: 'Нет upgrade на HTTPS', verdict: 'not-exploitable', steps, evidence: null }
+  }
+
+  const servesContent = res.status === 200 && res.body.length > 0
+  steps.push({
+    label: 'Итог',
+    detail: servesContent
+      ? 'http отдаёт контент по коду 200 без редиректа на https — трафик может идти в открытом виде.'
+      : 'http не редиректит на https.',
+    outcome: 'confirmed',
+  })
+  return {
+    kind: 'no-https-upgrade',
+    title: 'Нет upgrade на HTTPS',
+    verdict: servesContent ? 'exploitable' : 'likely',
+    steps,
+    evidence: null,
+  }
+}
+
+/** Пробив TLS: перечитываем сертификат и формулируем конкретную проблему. */
+async function drillTls(origin: string): Promise<DrillResult> {
+  const steps: DrillStep[] = []
+  let host: string
+  try {
+    host = new URL(origin).hostname
+  } catch {
+    return { kind: 'tls', title: 'Проблема TLS', verdict: 'inconclusive', steps, evidence: null }
+  }
+  const tls = await checkTls(new URL(origin))
+  steps.push({
+    label: `TLS-хендшейк с ${host}`,
+    detail: tls.tested ? `протокол ${tls.protocol ?? 'н/д'}, издатель ${tls.issuer ?? 'н/д'}` : tls.note,
+    outcome: 'info',
+  })
+  const problems: string[] = []
+  if (tls.tested) {
+    if (!tls.authorized) problems.push('цепочка не доверенная')
+    if (!tls.hostnameMatch) problems.push('имя хоста не совпадает с сертификатом')
+    if (tls.daysLeft !== null && tls.daysLeft < 0) problems.push('сертификат просрочен')
+    else if (tls.daysLeft !== null && tls.daysLeft < 14) problems.push(`истекает через ${tls.daysLeft} дн.`)
+    if (tls.protocol && /^TLSv1(\.[01])?$/.test(tls.protocol)) problems.push(`устаревший протокол ${tls.protocol}`)
+  }
+  steps.push({
+    label: 'Проверка сертификата',
+    detail: problems.length ? `Проблемы: ${problems.join('; ')}.` : 'Явных проблем с сертификатом не обнаружено.',
+    outcome: problems.length ? 'confirmed' : 'refuted',
+  })
+  return {
+    kind: 'tls',
+    title: 'Проблема TLS-сертификата',
+    verdict: problems.length ? 'likely' : 'not-exploitable',
+    steps,
+    evidence: problems.length ? problems.join('\n') : null,
+  }
+}
+
+/**
+ * Экшен «пробить находку»: подтверждающие read-only проверки + AI-заключение
+ * именно по этой находке. Гейт requireGod, SSRF-guard.
+ */
+export async function secretDrillFindingAction(
+  rawUrl: string,
+  kind: DrillKind,
+  arg: string | null,
+): Promise<DrillActionResult> {
+  await requireGod()
+  const url = normalizeUrl(rawUrl)
+  if (!url) {
+    return { ok: false, message: 'Некорректный адрес.' }
+  }
+  const blocked = await guardPublicHost(url.hostname)
+  if (blocked) return { ok: false, message: blocked }
+
+  // Финальный origin после редиректов, чтобы бить по реальному хосту.
+  let origin = `${url.protocol}//${url.host}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': BROWSER_UA },
+    })
+    void res.body?.cancel()
+    const fin = new URL(res.url || url.toString())
+    origin = `${fin.protocol}//${fin.host}`
+  } catch {
+    /* если не ответил — drill сам это отразит */
+  } finally {
+    clearTimeout(timer)
+  }
+
+  const result = await drillFinding(kind, origin, arg)
+
+  // AI-заключение по конкретной находке (ленивый импорт того же модуля).
+  let report: string | undefined
+  try {
+    const { assessFinding } = await import('@/lib/god-pentest')
+    const r = await assessFinding({ host: url.hostname, origin, drill: result })
+    if (r.ok) report = r.report
+  } catch {
+    /* заключение опционально */
+  }
+
+  return { ok: true, message: 'Готово', data: result, report }
+}
+
+/* ===================================================================== */
 /*  Сканирование S3-бакетов (пассивное, защитное)                         */
 /*                                                                        */
 /*  Проверка ПУБЛИЧНОЙ доступности своего S3-бакета: делаем несколько     */
@@ -1323,7 +1794,7 @@ export interface S3ScanActionResult {
 const BUCKET_NAME_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
 
 /**
- * Достать имя бакета (и по возможност�� регион) из ввода: принимает как
+ * Достать имя бакета (и по возможности регион) из ввода: принимает как
  * голое имя (`my-bucket`), так и любой S3-URL
  * (`my-bucket.s3.amazonaws.com`, `s3.eu-west-1.amazonaws.com/my-bucket`, …).
  */
