@@ -1,19 +1,20 @@
 'use client'
 
 /**
- * God-панель, вкладка «Ping» — единая проверка своего домена/URL.
+ * God-панель, вкладка «Ping» — единая проверка своего домена одним действием.
  *
- * Владелец вводит ОДИН адрес и жмёт одну кнопку «Проверить». Панель за один
- * проход:
- *   1) меряет доступность и задержку (несколько HTTP-запросов),
- *   2) собирает пассивный аудит безопасности (заголовки защиты, флаги cookie,
- *      раскрытие версий ПО, upgrade http→https),
- *   3) проверяет отражение ввода (риск reflected XSS) безобидным маркером.
- * Ниже — единый отчёт. AI-заключение по харденингу — раскрываемая секция под
- * аудитом (модель зовётся лениво, только при раскрытии).
- *
- * Отдельно — вспомогательное сканирование S3-бакета (принимает имя бакета,
- * а не домен, поэтому вынесено в свою секцию).
+ * НА ЭКРАНЕ ВСЕГО ДВА ЭЛЕМЕНТА: поле для домена и кнопка «Запустить». Один
+ * клик запускает весь конвейер на сервере (`secretFullScanAction`):
+ *   1) доступность и задержка (несколько HTTP-запросов),
+ *   2) полный пассивный аудит: заголовки защиты, разбор силы CSP/HSTS, CORS,
+ *      опасные HTTP-методы, mixed content, CDN/WAF и кэш, cookie (флаги +
+ *      префиксы), раскрытие версий ПО, TLS-сертификат, отражение ввода,
+ *      DNS/почтовая гигиена (SPF/DMARC/DKIM/CAA),
+ *   3) поиск утечек типовых путей (.env/.git/бэкапы/…),
+ *   4) авто-«пробив» подтверждённых находок (read-only верификация),
+ *   5) оппортунистический скан одноимённого S3-бакета,
+ *   6) AI-заключение по харденингу.
+ * Пока идёт проверка — пошаговый прогресс-бар. В конце — единый полный отчёт.
  *
  * Часть скрытой панели: подчиняется инвариантам AGENTS.md §4 (обычная админка
  * и Admin AI о вкладке не знают, сервер-экшены не пишут в audit). Все проверки
@@ -21,14 +22,11 @@
  * ответ, ничего не эксплуатирует, не пишет и не удаляет.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
-  Activity,
-  ArrowRight,
   Boxes,
   Bug,
-  ChevronDown,
   CircleAlert,
   CircleCheck,
   Copy,
@@ -40,23 +38,26 @@ import {
   Loader2,
   Lock,
   LockOpen,
+  Network,
   Radio,
-  ScanSearch,
-  ShieldAlert,
+  Rocket,
+   ShieldAlert,
   ShieldCheck,
   Sparkles,
   Target,
 } from 'lucide-react'
 import {
-  secretDrillFindingAction,
-  secretPathLeaksAction,
-  secretPingAction,
-  secretS3ScanAction,
-  secretSecurityAssessAction,
-  secretSecurityAuditAction,
+  secretFullScanAction,
+  type AutoDrill,
+  type CorsCheck,
+  type CspAnalysis,
   type DnsHygiene,
-  type DrillKind,
   type DrillResult,
+  type FullScanResult,
+  type HstsAnalysis,
+  type InfraCheck,
+  type MethodsCheck,
+  type MixedContentCheck,
   type PathLeak,
   type PingResult,
   type ReflectionCheck,
@@ -70,209 +71,92 @@ import { Input } from '@/components/ui/input'
 import { Markdown } from '@/components/admin/secret-markdown'
 import { cn } from '@/lib/utils'
 
-const ATTEMPT_OPTIONS = [1, 2, 4, 6]
+/* ------------------------------ Прогресс -------------------------------- */
 
-/** Похож ли ввод на адрес S3-бакета (для авто-скана в едином прогоне). */
-function looksLikeS3(raw: string): boolean {
-  const s = raw.trim().toLowerCase()
-  return (
-    /\.s3[.-][a-z0-9-]*\.?amazonaws\.com/.test(s) ||
-    /(^|\/\/)s3[.-][a-z0-9-]*\.?amazonaws\.com\//.test(s)
-  )
-}
+/** Фазы конвейера — для пошагового прогресс-бара (порядок = порядок работы). */
+const SCAN_PHASES = [
+  'Проверка доступности и задержки',
+  'Сбор заголовков и TLS-сертификата',
+  'Разбор CSP / HSTS / CORS / методов',
+  'DNS и почтовая гигиена',
+  'Поиск утечек типовых путей',
+  'Пробив подтверждённых находок',
+  'Проверка S3-бакета',
+  'AI-заключение по харденингу',
+] as const
 
 export function SecretPingTab() {
   const [url, setUrl] = useState('')
-  const [attempts, setAttempts] = useState(4)
-
-  // Единый прогон: ping + аудит (+ отражение) одной кнопкой.
-  const [scanPending, setScanPending] = useState(false)
-  const [pingResult, setPingResult] = useState<PingResult | null>(null)
-  const [audit, setAudit] = useState<SecurityAudit | null>(null)
+  const [pending, setPending] = useState(false)
+  const [phase, setPhase] = useState(0)
+  const [result, setResult] = useState<FullScanResult | null>(null)
   const [scanned, setScanned] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // AI-заключение — ленивая раскрываемая секция под аудитом.
-  const [assessOpen, setAssessOpen] = useState(false)
-  const [assessPending, setAssessPending] = useState(false)
-  const [assessment, setAssessment] = useState<string | null>(null)
+  // Пока идёт единый серверный проход, продвигаем прогресс по фазам «на глаз»
+  // (сервер не стримит) — но останавливаемся на предпоследней, а финал (100%)
+  // ставим по факту ответа. Это даёт честное ощущение «текущего процесса».
+  useEffect(() => {
+    if (!pending) {
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+        timerRef.current = null
+      }
+      return
+    }
+    timerRef.current = setInterval(() => {
+      setPhase((p) => (p < SCAN_PHASES.length - 2 ? p + 1 : p))
+    }, 1400)
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [pending])
 
-  // Результат S3-скана (запускается автоматически, если адрес похож на бакет).
-  const [s3Result, setS3Result] = useState<S3ScanResult | null>(null)
-
-  // Ленивая проверка путей (по кнопке — это 10+ отдельных GET).
-  const [pathsPending, setPathsPending] = useState(false)
-
-  // «Пробив» находок: по ключу вида `kind:arg` — статус и результат.
-  const [drills, setDrills] = useState<
-    Record<string, { pending: boolean; result?: DrillResult; report?: string }>
-  >({})
-
-  async function runFullScan() {
+  async function runScan() {
     const target = url.trim()
     if (!target) {
       toast.error('Введите домен или URL')
       return
     }
-    const isS3 = looksLikeS3(target)
-    setScanPending(true)
-    setPingResult(null)
-    setAudit(null)
-    setS3Result(null)
-    setAssessment(null)
-    setAssessOpen(false)
-    setDrills({})
+    setPending(true)
+    setPhase(0)
+    setResult(null)
     setScanned(true)
     try {
-      // Всегда меряем доступность. Затем, в зависимости от типа адреса,
-      // либо сканируем S3-бакет, либо собираем веб-аудит (веб-аудит на
-      // адресе бакета бессмысленен, поэтому для S3 его пропускаем).
-      const tasks: Promise<void>[] = [
-        secretPingAction(target, attempts).then((ping) => {
-          if (ping.ok && ping.data) {
-            setPingResult(ping.data)
-            if (ping.data.received === 0) toast.error(ping.message)
-          } else {
-            toast.error(ping.message)
-          }
-        }),
-      ]
-
-      if (isS3) {
-        tasks.push(
-          secretS3ScanAction(target).then((res) => {
-            if (res.ok && res.data) {
-              setS3Result(res.data)
-              if (res.data.verdict === 'public') toast.error(res.message)
-            } else {
-              toast.error(res.message)
-            }
-          }),
-        )
+      const res = await secretFullScanAction(target)
+      if (res.ok && res.data) {
+        setResult(res.data)
+        if (!res.data.audit.responded) toast.error(res.message)
       } else {
-        tasks.push(
-          secretSecurityAuditAction(target).then((sec) => {
-            if (sec.data) setAudit(sec.data)
-            if (!sec.ok && !sec.data) toast.error(sec.message)
-          }),
-        )
+        toast.error(res.message)
       }
-
-      await Promise.all(tasks)
     } catch {
       toast.error('Внутренняя ошибка при проверке')
     } finally {
-      setScanPending(false)
-    }
-  }
-
-  async function toggleAssess() {
-    const next = !assessOpen
-    setAssessOpen(next)
-    if (!next || assessment || assessPending) return
-
-    const target = url.trim()
-    if (!target) return
-    setAssessPending(true)
-    try {
-      const res = await secretSecurityAssessAction(target)
-      if (res.audit) setAudit(res.audit)
-      if (res.ok && res.report) {
-        setAssessment(res.report)
-      } else {
-        toast.error(res.message)
-        setAssessOpen(false)
-      }
-    } catch {
-      toast.error('Внутренняя ошибка при формировании заключения')
-      setAssessOpen(false)
-    } finally {
-      setAssessPending(false)
-    }
-  }
-
-  async function copyAssessment() {
-    if (!assessment) return
-    try {
-      await navigator.clipboard.writeText(assessment)
-      toast.success('Заключение скопировано')
-    } catch {
-      toast.error('Не удалось скопировать')
-    }
-  }
-
-  /** Ленивая проверка типовых путей — по кнопке, отдельным запросом. */
-  async function checkPaths() {
-    const target = url.trim()
-    if (!target || !audit) return
-    setPathsPending(true)
-    try {
-      const res = await secretPathLeaksAction(target)
-      if (res.ok && res.data) {
-        const data = res.data
-        setAudit((prev) =>
-          prev ? { ...prev, pathLeaks: data, pathLeaksChecked: true } : prev,
-        )
-      } else {
-        toast.error(res.message)
-      }
-    } catch {
-      toast.error('Не удалось проверить пути')
-    } finally {
-      setPathsPending(false)
-    }
-  }
-
-  /** «Пробить» находку: подтверждающие проверки + AI-заключение по ней. */
-  async function runDrill(kind: DrillKind, arg: string | null) {
-    const target = url.trim()
-    if (!target) return
-    const key = `${kind}:${arg ?? ''}`
-    setDrills((prev) => ({ ...prev, [key]: { pending: true } }))
-    try {
-      const res = await secretDrillFindingAction(target, kind, arg)
-      if (res.ok && res.data) {
-        setDrills((prev) => ({
-          ...prev,
-          [key]: { pending: false, result: res.data, report: res.report },
-        }))
-      } else {
-        toast.error(res.message)
-        setDrills((prev) => {
-          const next = { ...prev }
-          delete next[key]
-          return next
-        })
-      }
-    } catch {
-      toast.error('Не удалось пробить находку')
-      setDrills((prev) => {
-        const next = { ...prev }
-        delete next[key]
-        return next
-      })
+      setPhase(SCAN_PHASES.length - 1)
+      setPending(false)
     }
   }
 
   return (
     <div className="flex flex-col gap-5">
-      {/* ---- Единый ввод адрес�� + одна кнопка ---- */}
+      {/* ---- Два элемента: поле домена + кнопка запуска ---- */}
       <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
         <div className="mb-1 flex items-center gap-2 text-sm font-medium text-foreground">
           <Radio className="size-4 text-primary" />
           Проверка домена
         </div>
         <p className="mb-4 text-xs text-muted-foreground text-pretty">
-          Один адрес — полный отчёт со сводной оценкой: доступность и задержка,
-          заголовки защиты, TLS-сертификат, отражение ввода (reflected XSS),
-          DNS/почтовая гигиена (SPF/DMARC/DKIM/CAA), cookie и раскрытие версий
-          ПО. Проверка типовых путей и «пробив» каждой находки — по кнопке.
-          Если адрес похож на S3 — бакет сканируется автоматически. Всё
-          пассивно — только чтение ответа.
+          Введите домен и нажмите «Запустить» — панель за один проход выполнит
+          все проверки (доступность, заголовки, CSP/HSTS/CORS, методы, mixed
+          content, CDN/кэш, TLS, отражение ввода, DNS, утечки путей), сама
+          «пробьёт» находки, проверит одноимённый S3-бакет и составит
+          AI-заключение. Всё пассивно — только чтение ответа.
         </p>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1">
-            <Activity className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Globe className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -281,153 +165,199 @@ export function SecretPingTab() {
                   e.key === 'Enter' &&
                   !e.nativeEvent.isComposing &&
                   e.keyCode !== 229 &&
-                  !scanPending
+                  !pending
                 ) {
-                  void runFullScan()
+                  void runScan()
                 }
               }}
-              placeholder="example.com или https://example.com/health"
+              placeholder="example.com"
               spellCheck={false}
               autoCapitalize="none"
               autoCorrect="off"
               className="pl-9 font-mono text-sm"
-              aria-label="Домен или URL для проверки"
+              aria-label="Домен для проверки"
             />
           </div>
 
           <Button
-            onClick={() => void runFullScan()}
-            disabled={scanPending}
+            onClick={() => void runScan()}
+            disabled={pending}
             className="press-scale gap-1.5"
           >
-            {scanPending ? (
+            {pending ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
-              <ArrowRight className="size-4" />
+              <Rocket className="size-4" />
             )}
-            Проверить
+            Запустить
           </Button>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Попыток ping:</span>
-          {ATTEMPT_OPTIONS.map((n) => (
-            <button
-              key={n}
-              type="button"
-              onClick={() => setAttempts(n)}
-              className={cn(
-                'press-scale rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
-                attempts === n
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-              )}
-            >
-              {n}
-            </button>
-          ))}
         </div>
       </div>
 
-      {/* ---- Единый отчёт: доступность → безопасность → AI ---- */}
-      {scanPending && !pingResult && !audit && !s3Result && (
-        <div className="flex items-center gap-2 rounded-xl border border-border bg-card/40 p-4 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" />
-          Проверяю доступность и конфигурацию…
-        </div>
-      )}
+      {/* ---- Прогресс конвейера ---- */}
+      {pending && <ScanProgress phase={phase} />}
 
-      {pingResult && (
+      {/* ---- Единый полный отчёт ---- */}
+      {result && !pending && <FullReport result={result} />}
+
+      {!scanned && !pending && (
+        <p className="px-1 text-sm text-muted-foreground text-pretty">
+          Введите свой домен и нажмите «Запустить». Одним действием панель
+          проверит доступность, соберёт полный аудит безопасности, найдёт утечки
+          путей, «пробьёт» каждую находку read-only проверками, проверит
+          одноимённый S3-бакет и даст AI-заключение по харденингу.
+        </p>
+      )}
+    </div>
+  )
+}
+
+/* --------------------------- Прогресс-бар ------------------------------- */
+
+function ScanProgress({ phase }: { phase: number }) {
+  const total = SCAN_PHASES.length
+  const pct = Math.round(((phase + 1) / total) * 100)
+  return (
+    <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+        <Loader2 className="size-4 animate-spin text-primary" />
+        {SCAN_PHASES[phase]}
+        <span className="ml-auto font-mono text-xs text-muted-foreground">
+          {pct}%
+        </span>
+      </div>
+
+      {/* Полоса прогресса */}
+      <div
+        className="h-2 w-full overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Прогресс проверки"
+      >
+        <div
+          className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      {/* Список фаз с отметками */}
+      <ol className="mt-3 flex flex-col gap-1.5">
+        {SCAN_PHASES.map((label, i) => {
+          const done = i < phase
+          const active = i === phase
+          return (
+            <li
+              key={label}
+              className={cn(
+                'flex items-center gap-2 text-[11px]',
+                done && 'text-muted-foreground',
+                active && 'text-foreground',
+                !done && !active && 'text-muted-foreground/50',
+              )}
+            >
+              {done ? (
+                <CircleCheck className="size-3.5 shrink-0 text-emerald-500" />
+              ) : active ? (
+                <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+              ) : (
+                <span className="size-3.5 shrink-0 rounded-full border border-current/40" />
+              )}
+              {label}
+            </li>
+          )
+        })}
+      </ol>
+    </div>
+  )
+}
+
+/* --------------------------- Полный отчёт ------------------------------- */
+
+function FullReport({ result }: { result: FullScanResult }) {
+  const { ping, audit, drills, s3, report, reportError } = result
+
+  async function copyReport() {
+    if (!report) return
+    try {
+      await navigator.clipboard.writeText(report)
+      toast.success('Заключение скопировано')
+    } catch {
+      toast.error('Не удалось скопировать')
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      {/* Доступность */}
+      {ping && (
         <SectionCard icon={Gauge} title="Доступность и задержка">
-          <PingReport result={pingResult} />
+          <PingReport result={ping} />
         </SectionCard>
       )}
 
-      {audit && (
+      {/* Безопасность */}
+      {audit.responded ? (
         <SectionCard
           icon={ShieldCheck}
           title="Безопасность"
           right={<ScoreBadge score={audit.score} />}
         >
-          <AuditBody
-            audit={audit}
-            drills={drills}
-            pathsPending={pathsPending}
-            onCheckPaths={() => void checkPaths()}
-            onDrill={(kind, arg) => void runDrill(kind, arg)}
-          />
-
-          {/* AI-заключение — раскрываемая секция под аудитом */}
-          <div className="mt-4 border-t border-border/60 pt-3">
-            <button
-              type="button"
-              onClick={() => void toggleAssess()}
-              className="press-scale flex w-full items-center gap-2 text-sm font-medium text-foreground"
-              aria-expanded={assessOpen}
-            >
-              <Sparkles className="size-4 text-primary" />
-              AI-заключение по защищённости
-              {assessPending && (
-                <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-              )}
-              <ChevronDown
-                className={cn(
-                  'ml-auto size-4 text-muted-foreground transition-transform',
-                  assessOpen && 'rotate-180',
-                )}
-              />
-            </button>
-
-            {assessOpen && (
-              <div className="mt-3">
-                {assessPending ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="size-4 animate-spin" />
-                    Анализирую конфигурацию и составляю рекомендации…
-                  </div>
-                ) : assessment ? (
-                  <div>
-                    <div className="mb-2 flex justify-end">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => void copyAssessment()}
-                        className="size-7"
-                        aria-label="Скопировать заключение"
-                      >
-                        <Copy className="size-3.5" />
-                      </Button>
-                    </div>
-                    <Markdown text={assessment} />
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Не удалось получить заключение. Попробуйте ещё раз.
-                  </p>
-                )}
-              </div>
-            )}
+          <AuditBody audit={audit} />
+        </SectionCard>
+      ) : (
+        <SectionCard icon={ShieldAlert} title="Безопасность">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <CircleAlert className="size-4 text-destructive" />
+            Хост не ответил — проверки не выполнялись
+            {audit.error ? ` (${audit.error})` : ''}.
           </div>
         </SectionCard>
       )}
 
-      {/* S3-бакет: сканируется автоматически, если адрес похож на бакет. */}
-      {s3Result && (
-        <SectionCard icon={Boxes} title="S3-бакет">
-          <S3Report result={s3Result} />
+      {/* Пробитые находки */}
+      {drills.length > 0 && (
+        <SectionCard icon={Target} title="Пробитые находки">
+          <div className="flex flex-col gap-3">
+            {drills.map((d) => (
+              <AutoDrillCard key={`${d.kind}:${d.arg ?? ''}`} drill={d} />
+            ))}
+          </div>
         </SectionCard>
       )}
 
-      {!scanned && !scanPending && (
-        <p className="px-1 text-sm text-muted-foreground text-pretty">
-          Введите свой домен или адрес страницы состояния и нажмите «Проверить».
-          Панель за один проход измерит доступность, соберёт аудит безопасности и
-          проверит отражение ввода. Проверку типовых путей можно запустить
-          кнопкой, а любую находку — «пробить»: движок проведёт подтверждающие
-          read-only проверки и AI даст заключение именно по ней. Если адрес похож
-          на S3-бакет — вместо веб-аудита автоматически запускается проверка
-          публичного листинга бакета.
-        </p>
+      {/* S3-бакет — только если реально существует */}
+      {s3 && (
+        <SectionCard icon={Boxes} title="S3-бакет (по имени домена)">
+          <S3Report result={s3} />
+        </SectionCard>
+      )}
+
+      {/* AI-заключение */}
+      {audit.responded && (
+        <SectionCard icon={Sparkles} title="AI-заключение по защищённости">
+          {report ? (
+            <div>
+              <div className="mb-2 flex justify-end">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => void copyReport()}
+                  className="size-7"
+                  aria-label="Скопировать заключение"
+                >
+                  <Copy className="size-3.5" />
+                </Button>
+              </div>
+              <Markdown text={report} />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-pretty">
+              {reportError ?? 'Заключение недоступно.'}
+            </p>
+          )}
+        </SectionCard>
       )}
     </div>
   )
@@ -473,169 +403,10 @@ const HEADER_LABELS: Record<string, string> = {
   'cross-origin-resource-policy': 'CORP',
 }
 
-/** Карта состояний «пробива»: ключ `kind:arg`. */
-type DrillMap = Record<
-  string,
-  { pending: boolean; result?: DrillResult; report?: string }
->
-
-/** Кнопка «Пробить» + раскрываемый результат под находкой. */
-function DrillButton({
-  kind,
-  arg,
-  label,
-  drills,
-  onDrill,
-}: {
-  kind: DrillKind
-  arg: string | null
-  label: string
-  drills: DrillMap
-  onDrill: (kind: DrillKind, arg: string | null) => void
-}) {
-  const state = drills[`${kind}:${arg ?? ''}`]
-  return (
-    <div className="mt-2">
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => onDrill(kind, arg)}
-        disabled={state?.pending}
-        className="press-scale h-7 gap-1.5 text-xs"
-      >
-        {state?.pending ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <Target className="size-3.5" />
-        )}
-        {label}
-      </Button>
-      {state?.result && (
-        <DrillResultCard result={state.result} report={state.report} />
-      )}
-    </div>
-  )
-}
-
-/** Тон вердикта «пробива». */
-const VERDICT_TONE: Record<
-  DrillResult['verdict'],
-  { border: string; text: string; label: string }
-> = {
-  exploitable: {
-    border: 'border-destructive/40 bg-destructive/10',
-    text: 'text-destructive',
-    label: 'Подтверждено — эксплуатируемо',
-  },
-  likely: {
-    border: 'border-amber-500/40 bg-amber-500/10',
-    text: 'text-amber-500',
-    label: 'Подтверждено — вероятно',
-  },
-  'not-exploitable': {
-    border: 'border-emerald-500/30 bg-emerald-500/5',
-    text: 'text-emerald-500',
-    label: 'Не подтверждено',
-  },
-  inconclusive: {
-    border: 'border-border/60 bg-background/40',
-    text: 'text-muted-foreground',
-    label: 'Не удалось определить',
-  },
-}
-
-const STEP_MARK: Record<DrillResult['steps'][number]['outcome'], typeof CircleCheck> = {
-  confirmed: ShieldAlert,
-  refuted: ShieldCheck,
-  info: CircleAlert,
-}
-
-const STEP_TONE: Record<DrillResult['steps'][number]['outcome'], string> = {
-  confirmed: 'text-destructive',
-  refuted: 'text-emerald-500',
-  info: 'text-muted-foreground',
-}
-
-/** Раскрытый результат «пробива»: вердикт → шаги → доказательство → AI. */
-function DrillResultCard({
-  result,
-  report,
-}: {
-  result: DrillResult
-  report?: string
-}) {
-  const tone = VERDICT_TONE[result.verdict]
-  return (
-    <div className={cn('mt-2 rounded-lg border p-3', tone.border)}>
-      <div className="flex items-center gap-2">
-        <Target className={cn('size-4 shrink-0', tone.text)} />
-        <span className="text-xs font-medium text-foreground">
-          Пробив: {result.title}
-        </span>
-        <span className={cn('ml-auto text-xs font-semibold', tone.text)}>
-          {tone.label}
-        </span>
-      </div>
-
-      {/* Цепочка выполненных проверок */}
-      <ol className="mt-2 flex flex-col gap-1.5">
-        {result.steps.map((s, i) => {
-          const Mark = STEP_MARK[s.outcome]
-          return (
-            <li key={i} className="flex items-start gap-2 text-[11px]">
-              <Mark className={cn('mt-0.5 size-3.5 shrink-0', STEP_TONE[s.outcome])} />
-              <span className="min-w-0">
-                <span className="font-medium text-foreground">{s.label}: </span>
-                <span className="text-muted-foreground">{s.detail}</span>
-              </span>
-            </li>
-          )
-        })}
-      </ol>
-
-      {/* Доказательство (значения замаскированы сервером) */}
-      {result.evidence && (
-        <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-border/60 bg-background/60 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-all">
-          {result.evidence}
-        </pre>
-      )}
-
-      {/* AI-заключение по конкретной находке */}
-      {report && (
-        <div className="mt-3 border-t border-border/60 pt-2">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <Sparkles className="size-3.5 text-primary" />
-            Заключение по находке
-          </div>
-          <Markdown text={report} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-function AuditBody({
-  audit,
-  drills,
-  pathsPending,
-  onCheckPaths,
-  onDrill,
-}: {
-  audit: SecurityAudit
-  drills: DrillMap
-  pathsPending: boolean
-  onCheckPaths: () => void
-  onDrill: (kind: DrillKind, arg: string | null) => void
-}) {
+function AuditBody({ audit }: { audit: SecurityAudit }) {
   // Бейдж отражает ТОЛЬКО схему соединения. Наличие http→https-редиректа —
   // отдельный факт, он показан соседней строкой, смешивать их нельзя.
   const httpsOk = audit.scheme === 'https'
-
-  // HSTS-заголовок для условной кнопки «пробить отсутствие HSTS».
-  const hstsHeader = audit.securityHeaders.find(
-    (h) => h.key === 'strict-transport-security',
-  )
-  const missingHsts = httpsOk && hstsHeader && !hstsHeader.present
 
   return (
     <>
@@ -671,26 +442,6 @@ function AuditBody({
         )}
       </div>
 
-      {/* Пробив транспорта: отсутствие редиректа на https / отсутствие HSTS */}
-      {audit.httpsUpgrade === 'no' && (
-        <DrillButton
-          kind="no-https-upgrade"
-          arg={null}
-          label="Пробить: нет редиректа на HTTPS"
-          drills={drills}
-          onDrill={onDrill}
-        />
-      )}
-      {missingHsts && (
-        <DrillButton
-          kind="missing-hsts"
-          arg={null}
-          label="Пробить: отсутствие HSTS"
-          drills={drills}
-          onDrill={onDrill}
-        />
-      )}
-
       {/* Заголовки безопасности */}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {audit.securityHeaders.map((h) => (
@@ -715,25 +466,29 @@ function AuditBody({
         ))}
       </div>
 
+      {/* Разбор силы политик CSP / HSTS */}
+      <PolicyCard csp={audit.csp} hsts={audit.hsts} />
+
+      {/* CORS */}
+      <CorsCard cors={audit.cors} />
+
+      {/* Опасные HTTP-методы */}
+      <MethodsCard methods={audit.methods} />
+
+      {/* Mixed content */}
+      <MixedContentCard mixed={audit.mixedContent} />
+
+      {/* CDN / WAF / кэш */}
+      <InfraCard infra={audit.infra} />
+
       {/* TLS-сертификат */}
-      <TlsCard tls={audit.tls} drills={drills} onDrill={onDrill} />
+      <TlsCard tls={audit.tls} />
 
       {/* Отражение ввода (reflected XSS) */}
-      <ReflectionCard
-        reflection={audit.reflection}
-        drills={drills}
-        onDrill={onDrill}
-      />
+      <ReflectionCard reflection={audit.reflection} />
 
-      {/* Утечки типовых путей — проверяются лениво, по кнопке */}
-      <PathLeaksCard
-        leaks={audit.pathLeaks}
-        checked={audit.pathLeaksChecked}
-        pending={pathsPending}
-        onCheck={onCheckPaths}
-        drills={drills}
-        onDrill={onDrill}
-      />
+      {/* Утечки типовых путей */}
+      <PathLeaksCard leaks={audit.pathLeaks} checked={audit.pathLeaksChecked} />
 
       {/* DNS / почтовая гигиена */}
       <DnsCard dns={audit.dns} />
@@ -751,13 +506,6 @@ function AuditBody({
               </div>
             ))}
           </div>
-          <DrillButton
-            kind="software-disclosure"
-            arg={null}
-            label="Пробить: раскрытие версий"
-            drills={drills}
-            onDrill={onDrill}
-          />
         </div>
       )}
 
@@ -800,11 +548,345 @@ function AuditBody({
               </tbody>
             </table>
           </div>
+          {audit.cookiePrefixIssues.length > 0 && (
+            <ul className="mt-2 flex flex-col gap-1">
+              {audit.cookiePrefixIssues.map((s) => (
+                <li
+                  key={s}
+                  className="flex items-start gap-1.5 text-[11px] text-amber-500"
+                >
+                  <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+                  {s}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </>
   )
 }
+
+/* ---------------------- Карточки новых проверок ------------------------- */
+
+const STRENGTH_TONE: Record<
+  CspAnalysis['strength'],
+  { text: string; label: string }
+> = {
+  none: { text: 'text-destructive', label: 'отсутствует' },
+  weak: { text: 'text-destructive', label: 'слабая' },
+  moderate: { text: 'text-amber-500', label: 'средняя' },
+  strong: { text: 'text-emerald-500', label: 'строгая' },
+}
+
+function PolicyCard({ csp, hsts }: { csp: CspAnalysis; hsts: HstsAnalysis }) {
+  const cspTone = STRENGTH_TONE[csp.strength]
+  const hstsTone = STRENGTH_TONE[hsts.strength]
+  return (
+    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className={cn('size-4 shrink-0', cspTone.text)} />
+          <span className="text-xs font-medium text-foreground">CSP</span>
+          <span className={cn('ml-auto text-xs font-semibold', cspTone.text)}>
+            {cspTone.label}
+          </span>
+        </div>
+        <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
+          {csp.note}
+        </p>
+      </div>
+      <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+        <div className="flex items-center gap-2">
+          <Lock className={cn('size-4 shrink-0', hstsTone.text)} />
+          <span className="text-xs font-medium text-foreground">HSTS</span>
+          <span className={cn('ml-auto text-xs font-semibold', hstsTone.text)}>
+            {hstsTone.label}
+          </span>
+        </div>
+        <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
+          {hsts.note}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+const RISK_TONE: Record<
+  CorsCheck['risk'],
+  { border: string; text: string; label: string }
+> = {
+  none: {
+    border: 'border-emerald-500/30 bg-emerald-500/5',
+    text: 'text-emerald-500',
+    label: 'Безопасно',
+  },
+  low: {
+    border: 'border-amber-500/30 bg-amber-500/5',
+    text: 'text-amber-500',
+    label: 'Низкий риск',
+  },
+  medium: {
+    border: 'border-amber-500/40 bg-amber-500/10',
+    text: 'text-amber-500',
+    label: 'Средний риск',
+  },
+  high: {
+    border: 'border-destructive/40 bg-destructive/10',
+    text: 'text-destructive',
+    label: 'Высокий риск',
+  },
+}
+
+function CorsCard({ cors }: { cors: CorsCheck }) {
+  if (!cors.tested) return null
+  const tone = RISK_TONE[cors.risk]
+  return (
+    <div className={cn('mt-4 rounded-lg border p-3', tone.border)}>
+      <div className="flex items-center gap-2">
+        <Network className={cn('size-4 shrink-0', tone.text)} />
+        <span className="text-xs font-medium text-foreground">
+          CORS-политика
+        </span>
+        <span className={cn('ml-auto text-xs font-semibold', tone.text)}>
+          {tone.label}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
+        {cors.note}
+      </p>
+      {cors.acao && (
+        <div className="mt-1.5 font-mono text-[10px] text-muted-foreground">
+          ACAO: {cors.acao}
+          {cors.acac ? ' · credentials: true' : ''}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MethodsCard({ methods }: { methods: MethodsCheck }) {
+  if (!methods.tested) return null
+  const risky = methods.dangerous.length > 0 || methods.traceEnabled
+  return (
+    <div
+      className={cn(
+        'mt-4 rounded-lg border p-3',
+        risky
+          ? 'border-amber-500/40 bg-amber-500/10'
+          : 'border-emerald-500/30 bg-emerald-500/5',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <Target
+          className={cn(
+            'size-4 shrink-0',
+            risky ? 'text-amber-500' : 'text-emerald-500',
+          )}
+        />
+        <span className="text-xs font-medium text-foreground">HTTP-методы</span>
+        <span
+          className={cn(
+            'ml-auto text-xs font-semibold',
+            risky ? 'text-amber-500' : 'text-emerald-500',
+          )}
+        >
+          {risky ? 'Есть лишние' : 'В порядке'}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
+        {methods.note}
+      </p>
+      {methods.allow.length > 0 && (
+        <div className="mt-1.5 font-mono text-[10px] text-muted-foreground">
+          Allow: {methods.allow.join(', ')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MixedContentCard({ mixed }: { mixed: MixedContentCheck }) {
+  if (!mixed.tested) return null
+  const bad = mixed.count > 0
+  return (
+    <div
+      className={cn(
+        'mt-4 rounded-lg border p-3',
+        bad
+          ? 'border-destructive/40 bg-destructive/10'
+          : 'border-emerald-500/30 bg-emerald-500/5',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <Bug
+          className={cn(
+            'size-4 shrink-0',
+            bad ? 'text-destructive' : 'text-emerald-500',
+          )}
+        />
+        <span className="text-xs font-medium text-foreground">
+          Mixed content
+        </span>
+        <span
+          className={cn(
+            'ml-auto text-xs font-semibold',
+            bad ? 'text-destructive' : 'text-emerald-500',
+          )}
+        >
+          {bad ? `Найдено: ${mixed.count}` : 'Не найдено'}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
+        {mixed.note}
+      </p>
+      {mixed.samples.length > 0 && (
+        <div className="mt-1.5 flex flex-col gap-0.5">
+          {mixed.samples.map((s) => (
+            <div
+              key={s}
+              className="truncate font-mono text-[10px] text-destructive"
+            >
+              {s}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InfraCard({ infra }: { infra: InfraCheck }) {
+  const hasAny =
+    infra.cdn || infra.waf || infra.server || infra.cacheControl
+  if (!hasAny) return null
+  return (
+    <div
+      className={cn(
+        'mt-4 rounded-lg border p-3',
+        infra.privateCacheable
+          ? 'border-amber-500/40 bg-amber-500/10'
+          : 'border-border/60 bg-background/40',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <Database
+          className={cn(
+            'size-4 shrink-0',
+            infra.privateCacheable ? 'text-amber-500' : 'text-primary',
+          )}
+        />
+        <span className="text-xs font-medium text-foreground">
+          Инфраструктура и кэш
+        </span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-muted-foreground">
+        {infra.cdn && <span>CDN: {infra.cdn}</span>}
+        {infra.waf && <span>WAF: {infra.waf}</span>}
+        {infra.server && <span>Server: {infra.server}</span>}
+        {infra.cacheControl && (
+          <span
+            className={infra.privateCacheable ? 'text-amber-500' : undefined}
+          >
+            Cache-Control: {infra.cacheControl}
+          </span>
+        )}
+      </div>
+      {infra.privateCacheable && (
+        <p className="mt-1.5 text-[11px] text-amber-500 text-pretty">
+          Ответ с cookie помечен публично кэшируемым — риск утечки между
+          пользователями через CDN.
+        </p>
+      )}
+    </div>
+  )
+}
+
+/* ----------------------- Авто-«пробитая» находка ------------------------ */
+
+const VERDICT_TONE: Record<
+  DrillResult['verdict'],
+  { border: string; text: string; label: string }
+> = {
+  exploitable: {
+    border: 'border-destructive/40 bg-destructive/10',
+    text: 'text-destructive',
+    label: 'Подтверждено — эксплуатируемо',
+  },
+  likely: {
+    border: 'border-amber-500/40 bg-amber-500/10',
+    text: 'text-amber-500',
+    label: 'Подтверждено — вероятно',
+  },
+  'not-exploitable': {
+    border: 'border-emerald-500/30 bg-emerald-500/5',
+    text: 'text-emerald-500',
+    label: 'Не подтверждено',
+  },
+  inconclusive: {
+    border: 'border-border/60 bg-background/40',
+    text: 'text-muted-foreground',
+    label: 'Не удалось определить',
+  },
+}
+
+const STEP_MARK: Record<
+  DrillResult['steps'][number]['outcome'],
+  typeof CircleCheck
+> = {
+  confirmed: ShieldAlert,
+  refuted: ShieldCheck,
+  info: CircleAlert,
+}
+
+const STEP_TONE: Record<DrillResult['steps'][number]['outcome'], string> = {
+  confirmed: 'text-destructive',
+  refuted: 'text-emerald-500',
+  info: 'text-muted-foreground',
+}
+
+function AutoDrillCard({ drill }: { drill: AutoDrill }) {
+  const result = drill.result
+  const tone = VERDICT_TONE[result.verdict]
+  return (
+    <div className={cn('rounded-lg border p-3', tone.border)}>
+      <div className="flex items-center gap-2">
+        <Target className={cn('size-4 shrink-0', tone.text)} />
+        <span className="text-xs font-medium text-foreground">
+          {result.title}
+        </span>
+        <span className={cn('ml-auto text-xs font-semibold', tone.text)}>
+          {tone.label}
+        </span>
+      </div>
+
+      <ol className="mt-2 flex flex-col gap-1.5">
+        {result.steps.map((s, i) => {
+          const Mark = STEP_MARK[s.outcome]
+          return (
+            <li key={i} className="flex items-start gap-2 text-[11px]">
+              <Mark
+                className={cn('mt-0.5 size-3.5 shrink-0', STEP_TONE[s.outcome])}
+              />
+              <span className="min-w-0">
+                <span className="font-medium text-foreground">{s.label}: </span>
+                <span className="text-muted-foreground">{s.detail}</span>
+              </span>
+            </li>
+          )
+        })}
+      </ol>
+
+      {result.evidence && (
+        <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-border/60 bg-background/60 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-all">
+          {result.evidence}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+/* ------------------------- Отражение ввода ------------------------------ */
 
 const REFLECTION_TONE: Record<
   ReflectionCheck['risk'],
@@ -832,18 +914,9 @@ const REFLECTION_TONE: Record<
   },
 }
 
-function ReflectionCard({
-  reflection,
-  drills,
-  onDrill,
-}: {
-  reflection: ReflectionCheck
-  drills: DrillMap
-  onDrill: (kind: DrillKind, arg: string | null) => void
-}) {
+function ReflectionCard({ reflection }: { reflection: ReflectionCheck }) {
   const tone = REFLECTION_TONE[reflection.risk]
   const alarming = reflection.risk === 'medium' || reflection.risk === 'high'
-
   return (
     <div className={cn('mt-4 rounded-lg border p-3', tone.border)}>
       <div className="flex items-center gap-2">
@@ -855,26 +928,13 @@ function ReflectionCard({
         <span className="text-xs font-medium text-foreground">
           Отражение ввода (reflected XSS)
         </span>
-        <span
-          className={cn('ml-auto text-xs font-semibold', tone.text)}
-        >
+        <span className={cn('ml-auto text-xs font-semibold', tone.text)}>
           {reflection.tested ? tone.label : 'Не проверено'}
         </span>
       </div>
       <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
         {reflection.note}
       </p>
-      {/* Пробить можно всегда, когда проверка отработала: движок сам подтвердит,
-          отражается ли ввод и экранируются ли спецсимволы. */}
-      {reflection.tested && (
-        <DrillButton
-          kind="reflection"
-          arg={null}
-          label="Пробить отражение ввода"
-          drills={drills}
-          onDrill={onDrill}
-        />
-      )}
     </div>
   )
 }
@@ -887,9 +947,8 @@ function FlagMark({ on }: { on: boolean }) {
   )
 }
 
-/* --------------------------- Сводн��я оценка ----------------------------- */
+/* --------------------------- Сводная оценка ----------------------------- */
 
-/** Тон бейджа по буквенной оценке. */
 function gradeTone(grade: SecurityScore['grade']): string {
   if (grade === 'A' || grade === 'B') return 'bg-emerald-500/10 text-emerald-500'
   if (grade === 'C' || grade === 'D') return 'bg-amber-500/10 text-amber-500'
@@ -917,30 +976,41 @@ function ScoreBadge({ score }: { score: SecurityScore }) {
 
 /* ----------------------------- TLS-карточка ----------------------------- */
 
-const TLS_TONE: Record<TlsCheck['status'], { border: string; text: string; label: string }> = {
-  ok: { border: 'border-emerald-500/30 bg-emerald-500/5', text: 'text-emerald-500', label: 'Сертификат в порядке' },
-  warn: { border: 'border-amber-500/40 bg-amber-500/10', text: 'text-amber-500', label: 'Требует внимания' },
-  bad: { border: 'border-destructive/40 bg-destructive/10', text: 'text-destructive', label: 'Проблема с сертификатом' },
-  unknown: { border: 'border-border/60 bg-background/40', text: 'text-muted-foreground', label: 'Не проверено' },
+const TLS_TONE: Record<
+  TlsCheck['status'],
+  { border: string; text: string; label: string }
+> = {
+  ok: {
+    border: 'border-emerald-500/30 bg-emerald-500/5',
+    text: 'text-emerald-500',
+    label: 'Сертификат в порядке',
+  },
+  warn: {
+    border: 'border-amber-500/40 bg-amber-500/10',
+    text: 'text-amber-500',
+    label: 'Требует внимания',
+  },
+  bad: {
+    border: 'border-destructive/40 bg-destructive/10',
+    text: 'text-destructive',
+    label: 'Проблема с сертификатом',
+  },
+  unknown: {
+    border: 'border-border/60 bg-background/40',
+    text: 'text-muted-foreground',
+    label: 'Не проверено',
+  },
 }
 
-function TlsCard({
-  tls,
-  drills,
-  onDrill,
-}: {
-  tls: TlsCheck
-  drills: DrillMap
-  onDrill: (kind: DrillKind, arg: string | null) => void
-}) {
+function TlsCard({ tls }: { tls: TlsCheck }) {
   const tone = TLS_TONE[tls.status]
-  // Пробивать имеет смысл, только если есть на что смотреть (warn/bad).
-  const drillable = tls.tested && (tls.status === 'warn' || tls.status === 'bad')
   return (
     <div className={cn('mt-4 rounded-lg border p-3', tone.border)}>
       <div className="flex items-center gap-2">
         <KeyRound className={cn('size-4 shrink-0', tone.text)} />
-        <span className="text-xs font-medium text-foreground">TLS-сертификат</span>
+        <span className="text-xs font-medium text-foreground">
+          TLS-сертификат
+        </span>
         <span className={cn('ml-auto text-xs font-semibold', tone.text)}>
           {tone.label}
         </span>
@@ -961,15 +1031,6 @@ function TlsCard({
       ) : (
         <p className="mt-1.5 text-[11px] text-muted-foreground">{tls.note}</p>
       )}
-      {drillable && (
-        <DrillButton
-          kind="tls"
-          arg={null}
-          label="Пробить сертификат"
-          drills={drills}
-          onDrill={onDrill}
-        />
-      )}
     </div>
   )
 }
@@ -979,57 +1040,13 @@ function TlsCard({
 function PathLeaksCard({
   leaks,
   checked,
-  pending,
-  onCheck,
-  drills,
-  onDrill,
 }: {
   leaks: PathLeak[]
   checked: boolean
-  pending: boolean
-  onCheck: () => void
-  drills: DrillMap
-  onDrill: (kind: DrillKind, arg: string | null) => void
 }) {
-  // Пути проверяются лениво (это десяток отдельных GET). Пока не проверяли —
-  // показываем нейтральную карточку с кнопкой запуска.
-  if (!checked) {
-    return (
-      <div className="mt-4 rounded-lg border border-border/60 bg-background/40 p-3">
-        <div className="flex items-center gap-2">
-          <FileWarning className="size-4 shrink-0 text-muted-foreground" />
-          <span className="text-xs font-medium text-foreground">
-            Типовые пути
-          </span>
-          <span className="ml-auto text-xs text-muted-foreground">
-            Не проверялись
-          </span>
-        </div>
-        <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
-          Проверка доступности .env, .git, бэкапов, server-status и т.п. — это
-          отдельные запросы, поэтому запускается по кнопке.
-        </p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onCheck}
-          disabled={pending}
-          className="press-scale mt-2 h-7 gap-1.5 text-xs"
-        >
-          {pending ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <ScanSearch className="size-3.5" />
-          )}
-          Проверить пути
-        </Button>
-      </div>
-    )
-  }
-
+  if (!checked) return null
   const exposed = leaks.filter((p) => p.exposed && p.severity !== 'info')
   const clean = exposed.length === 0
-
   return (
     <div
       className={cn(
@@ -1046,9 +1063,7 @@ function PathLeaksCard({
             clean ? 'text-emerald-500' : 'text-destructive',
           )}
         />
-        <span className="text-xs font-medium text-foreground">
-          Типовые пути
-        </span>
+        <span className="text-xs font-medium text-foreground">Типовые пути</span>
         <span
           className={cn(
             'ml-auto text-xs font-semibold',
@@ -1063,28 +1078,20 @@ function PathLeaksCard({
           Чувствительные пути (.env, .git, бэкапы) наружу не отдаются.
         </p>
       ) : (
-        <div className="mt-2 flex flex-col gap-3">
+        <div className="mt-2 flex flex-col gap-2">
           {exposed.map((p) => (
-            <div key={p.path}>
-              <div
-                className={cn(
-                  'flex items-center gap-2 font-mono text-[11px]',
-                  p.severity === 'critical'
-                    ? 'text-destructive'
-                    : 'text-amber-500',
-                )}
-              >
-                <CircleAlert className="size-3.5 shrink-0" />
-                {p.path}
-                <span className="text-muted-foreground">HTTP {p.status}</span>
-              </div>
-              <DrillButton
-                kind="path-leak"
-                arg={p.path}
-                label="Пробить путь"
-                drills={drills}
-                onDrill={onDrill}
-              />
+            <div
+              key={p.path}
+              className={cn(
+                'flex items-center gap-2 font-mono text-[11px]',
+                p.severity === 'critical'
+                  ? 'text-destructive'
+                  : 'text-amber-500',
+              )}
+            >
+              <CircleAlert className="size-3.5 shrink-0" />
+              {p.path}
+              <span className="text-muted-foreground">HTTP {p.status}</span>
             </div>
           ))}
         </div>
@@ -1153,7 +1160,6 @@ const S3_OUTCOME_LABELS: Record<
 
 function S3Report({ result }: { result: S3ScanResult }) {
   const isPublic = result.verdict === 'public'
-
   const verdictLabel =
     result.verdict === 'public'
       ? 'Публичный листинг открыт'
@@ -1165,7 +1171,6 @@ function S3Report({ result }: { result: S3ScanResult }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Вердикт */}
       <div
         className={cn(
           'flex items-start gap-3 rounded-xl border p-4',
@@ -1209,7 +1214,6 @@ function S3Report({ result }: { result: S3ScanResult }) {
         </div>
       </div>
 
-      {/* Сводка */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           icon={Boxes}
@@ -1241,7 +1245,6 @@ function S3Report({ result }: { result: S3ScanResult }) {
         />
       </div>
 
-      {/* Примеры ключей при открытом листинге */}
       {result.sampleKeys.length > 0 && (
         <div className="rounded-xl border border-destructive/30 bg-card/40 p-4">
           <div className="mb-2 flex items-center gap-2 text-xs font-medium text-destructive">
@@ -1261,7 +1264,6 @@ function S3Report({ result }: { result: S3ScanResult }) {
         </div>
       )}
 
-      {/* Пробы эндпоинтов */}
       <div className="overflow-hidden rounded-xl border border-border">
         <table className="w-full text-sm">
           <thead>
@@ -1319,12 +1321,12 @@ function S3Report({ result }: { result: S3ScanResult }) {
   )
 }
 
+/* ---------------------------- Доступность ------------------------------- */
+
 function PingReport({ result }: { result: PingResult }) {
   const allLost = result.received === 0
-
   return (
     <div className="flex flex-col gap-4">
-      {/* Заголовок хоста */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-mono text-sm font-medium text-foreground">
           {result.host}
@@ -1336,7 +1338,6 @@ function PingReport({ result }: { result: PingResult }) {
         )}
       </div>
 
-      {/* Сводка */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           icon={CircleCheck}
@@ -1379,7 +1380,6 @@ function PingReport({ result }: { result: PingResult }) {
         />
       </div>
 
-      {/* Попытки */}
       <div className="overflow-hidden rounded-xl border border-border">
         <table className="w-full text-sm">
           <thead>

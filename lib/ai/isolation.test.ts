@@ -61,7 +61,13 @@ const FORBIDDEN = [
   'god-panel',
   'god-sites',
   'god_sites',
+  // Вкладка «Пинг» god-панели: пентест-заключение, скоринг и её server-action —
+  // тоже god-структуры, co-pilot и мозг продавца не должны их импортировать.
+  'god-pentest',
+  'god-audit-score',
+  'admin-secret/ping',
   'secret-panel',
+  'secret-ping',
   'wijegniwjgwjog',
   'sim_threads',
   'sim-threads',

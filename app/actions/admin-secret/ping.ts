@@ -364,7 +364,7 @@ export interface CookieFlags {
  * маркер (случайная строка + символы `<>"'`), НЕ являющийся скриптом и ничего
  * не выполняющий. Мы лишь смотрим, вернул ли сервер этот ввод в теле ответа и
  * экранировал ли спецсимволы. Отражение без экранирования — классический
- * признак риска reflected XSS. Это диагностика конфигурации, а не эксплойт.
+ * признак риска reflected XSS. Это диагностика конфиг��рации, а не эксплойт.
  */
 export interface ReflectionCheck {
   /** Удалось ли выполнить проверку (был ответ с телом). */
@@ -1708,7 +1708,7 @@ async function hasCaa(domain: string): Promise<boolean> {
 }
 
 /**
- * Публичный экшен: собрать пассивный аудит безопасности своего домена.
+ * Публичн��й экшен: собрать пассивный аудит безопасности своего домена.
  * Гейт requireGod, без audit() — как остальные god-экшены.
  */
 export async function secretSecurityAuditAction(
@@ -2288,7 +2288,7 @@ export async function secretDrillFindingAction(
 /*  GET-запросов к публичным REST-эндпоинтам Amazon S3 и по коду ответа + */
 /*  телу (ListBucketResult / AccessDenied / NoSuchBucket) определяем,     */
 /*  открыт ли листинг наружу — типичная мисконфигурация. Инструмент       */
-/*  ТОЛЬКО читает публично наблюдаемый ответ: не пишет, не удаляет, не    */
+/*  ТОЛЬ��О читает публично наблюдаемый ответ: не пишет, не удаляет, не    */
 /*  использует учётные данные, не перебирает пути. Часть скрытой панели:  */
 /*  гейт requireGod, без audit() (инвариант AGENTS.md §4).                */
 /* ===================================================================== */
@@ -2593,5 +2593,204 @@ export async function secretS3ScanAction(
       probes,
       verdict,
     },
+  }
+}
+
+/* ===================================================================== */
+/*  Единый авто-скан: «домен + кнопка» → полный отчёт                      */
+/*                                                                        */
+/*  Одним серверным проходом выполняет ВСЕ проверки, автоматически        */
+/*  «пробивает» подтверждённые находки, оппортунистически проверяет       */
+/*  одноимённый S3-бакет и формирует AI-заключение по харденингу. Гейт    */
+/*  requireGod, без audit() (инвариант AGENTS.md §4). Аудит целиком       */
+/*  собирается сервером и не доверяется клиенту.                          */
+/* ===================================================================== */
+
+/** Одна авто-«пробитая» находка в составе полного скана. */
+export interface AutoDrill {
+  kind: DrillKind
+  arg: string | null
+  result: DrillResult
+}
+
+/** Полный результат авто-скана — всё, что нужно для единого отчёта. */
+export interface FullScanResult {
+  /** Доступность и задержка. */
+  ping: PingResult | null
+  /** Пассивный аудит + все дополнительные проверки + утечки путей. */
+  audit: SecurityAudit
+  /** Автоматически «пробитые» подтверждённые находки. */
+  drills: AutoDrill[]
+  /** Скан одноимённого S3-бакета — только если бакет реально существует. */
+  s3: S3ScanResult | null
+  /** AI-заключение по харденингу (markdown) или null, если недоступно. */
+  report: string | null
+  /** Причина, по которой заключение не сгенерировано (если report === null). */
+  reportError: string | null
+}
+
+export interface FullScanActionResult {
+  ok: boolean
+  message: string
+  data?: FullScanResult
+}
+
+/** Собрать список находок из аудита, которые имеет смысл авто-«пробить». */
+function findingsToDrill(
+  audit: SecurityAudit,
+): { kind: DrillKind; arg: string | null }[] {
+  const out: { kind: DrillKind; arg: string | null }[] = []
+  // Открытые чувствительные пути — самое важное, пробиваем каждый.
+  for (const leak of audit.pathLeaks) {
+    if (leak.exposed && leak.severity !== 'info') {
+      out.push({ kind: 'path-leak', arg: leak.path })
+    }
+  }
+  if (audit.reflection.tested && audit.reflection.risk !== 'none') {
+    out.push({ kind: 'reflection', arg: null })
+  }
+  if (audit.scheme === 'https' && !audit.hsts.present) {
+    out.push({ kind: 'missing-hsts', arg: null })
+  }
+  if (audit.httpsUpgrade === 'no') {
+    out.push({ kind: 'no-https-upgrade', arg: null })
+  }
+  if (audit.disclosure.length > 0) {
+    out.push({ kind: 'software-disclosure', arg: null })
+  }
+  if (audit.tls.tested && (audit.tls.status === 'bad' || audit.tls.status === 'warn')) {
+    out.push({ kind: 'tls', arg: null })
+  }
+  // Ограничиваем число проверок, чтобы не устроить лавину запросов.
+  return out.slice(0, 8)
+}
+
+/**
+ * Полный автоматический скан по одному домену. Выполняет доступность, полный
+ * пассивный аудит (со всеми проверками), утечки путей, авто-«пробив»
+ * подтверждённых находок, оппортунистический скан S3-бакета и AI-заключение.
+ */
+export async function secretFullScanAction(
+  rawUrl: string,
+): Promise<FullScanActionResult> {
+  await requireGod()
+
+  const url = normalizeUrl(rawUrl)
+  if (!url) {
+    return {
+      ok: false,
+      message: 'Некорректный адрес. Введите домен или http(s)-URL.',
+    }
+  }
+  const blocked = await guardPublicHost(url.hostname)
+  if (blocked) return { ok: false, message: blocked }
+
+  // 1) Доступность и задержка.
+  let ping: PingResult | null = null
+  let ip: string | null = null
+  try {
+    const res = await lookup(url.hostname)
+    ip = res.address
+  } catch {
+    ip = null
+  }
+  {
+    const attempts: PingAttempt[] = []
+    for (let i = 0; i < DEFAULT_ATTEMPTS; i++) {
+      attempts.push(await pingOnce(url, i + 1, i === 0))
+    }
+    const okAttempts = attempts.filter((a) => a.ms !== null)
+    const times = okAttempts.map((a) => a.ms as number)
+    const warmTimes = okAttempts.filter((a) => !a.cold).map((a) => a.ms as number)
+    ping = {
+      url: url.toString(),
+      host: url.hostname,
+      ip,
+      attempts,
+      received: okAttempts.length,
+      lost: attempts.length - okAttempts.length,
+      min: times.length ? Math.min(...times) : null,
+      avg: times.length
+        ? Math.round(times.reduce((s, t) => s + t, 0) / times.length)
+        : null,
+      max: times.length ? Math.max(...times) : null,
+      warmAvg: warmTimes.length
+        ? Math.round(warmTimes.reduce((s, t) => s + t, 0) / warmTimes.length)
+        : null,
+    }
+  }
+
+  // 2) Полный пассивный аудит (заголовки, CSP/HSTS/CORS/методы/mixed/TLS/DNS…).
+  const audit = await collectAudit(url)
+  if (!audit.responded) {
+    // Хост не ответил — возвращаем то, что есть (ping мог показать причину).
+    return {
+      ok: true,
+      message: `Хост не ответил: ${audit.error ?? 'нет соединения'}`,
+      data: { ping, audit, drills: [], s3: null, report: null, reportError: null },
+    }
+  }
+
+  // 3) Утечки путей + пересчёт сводной оценки (глубокий проход).
+  try {
+    const leaks = await checkPathLeaks(new URL(audit.finalUrl))
+    audit.pathLeaks = leaks
+    audit.pathLeaksChecked = true
+    audit.score = computeScore(audit)
+  } catch {
+    /* пути не критичны — продолжаем */
+  }
+
+  // 4) Авто-«пробив» подтверждённых находок (read-only, без AI на каждую).
+  const origin = (() => {
+    try {
+      const f = new URL(audit.finalUrl)
+      return `${f.protocol}//${f.host}`
+    } catch {
+      return `${url.protocol}//${url.host}`
+    }
+  })()
+  const drills: AutoDrill[] = []
+  for (const f of findingsToDrill(audit)) {
+    try {
+      const result = await drillFinding(f.kind, origin, f.arg)
+      drills.push({ kind: f.kind, arg: f.arg, result })
+    } catch {
+      /* пропускаем сбойную проверку */
+    }
+  }
+
+  // 5) Оппортунистический скан одноимённого S3-бакета (только если существует).
+  let s3: S3ScanResult | null = null
+  try {
+    const candidate = registrableDomain(url.hostname)
+    const r = await secretS3ScanAction(candidate)
+    if (r.ok && r.data && (r.data.verdict === 'public' || r.data.verdict === 'private')) {
+      s3 = r.data
+    }
+  } catch {
+    /* S3 опционален */
+  }
+
+  // 6) AI-заключение по харденингу (автоматически в конце).
+  let report: string | null = null
+  let reportError: string | null = null
+  if (reserveAiSlot()) {
+    try {
+      const { assessSecurity } = await import('@/lib/god-pentest')
+      const res = await assessSecurity(audit)
+      if (res.ok) report = res.report
+      else reportError = res.message
+    } catch {
+      reportError = 'Не удалось связаться с AI Gateway.'
+    }
+  } else {
+    reportError = 'AI-заключение пропущено: слишком часто (лимит запросов).'
+  }
+
+  return {
+    ok: true,
+    message: 'Готово',
+    data: { ping, audit, drills, s3, report, reportError },
   }
 }
