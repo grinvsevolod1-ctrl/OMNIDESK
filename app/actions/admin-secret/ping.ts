@@ -85,6 +85,50 @@ const DEFAULT_ATTEMPTS = 4
 const TIMEOUT_MS = 10_000
 
 /**
+ * Глобальный «бюджет» одного полного скана. Весь конвейер (ping + аудит +
+ * утечки путей + drill + recon + перебор поддоменов + S3) раньше запускал сотни
+ * исходящих соединений через несвязанные Promise.all и мог висеть очень долго.
+ * Ограничиваем: (1) общий дедлайн, после которого новые пробы не стартуют,
+ * (2) пул параллелизма для тяжёлых fan-out'ов.
+ */
+const SCAN_BUDGET_MS = 90_000
+const MAX_CONCURRENCY = 12
+
+/**
+ * Дедлайн передаётся ЯВНО (не через модульную переменную): server actions могут
+ * выполняться конкурентно, и общий mutable-стейт «протёк» бы между сканами.
+ * true, если общий бюджет скана исчерпан — новые фазы/пробы стартовать не нужно.
+ */
+function scanExpired(deadline: number): boolean {
+  return Date.now() > deadline
+}
+
+/**
+ * Выполнить асинхронную операцию над каждым элементом с ограничением на число
+ * одновременно выполняемых операций. Порядок результатов сохраняется, как у
+ * Promise.all. Заменяет «запусти всё разом», не меняя семантику для вызывающих.
+ */
+async function mapPool<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let cursor = 0
+  const workers = new Array(Math.min(Math.max(1, limit), items.length || 1))
+    .fill(0)
+    .map(async () => {
+      for (;;) {
+        const i = cursor++
+        if (i >= items.length) return
+        results[i] = await fn(items[i], i)
+      }
+    })
+  await Promise.all(workers)
+  return results
+}
+
+/**
  * Реалистичный браузерный User-Agent. Кастомные UA часто режутся WAF/CDN
  * (403/таймаут), из-за чего живой сайт выглядел бы недоступным — поэтому
  * все пассивные проверки представляются обычным браузером.
@@ -1274,7 +1318,7 @@ async function checkReflection(
         risk: headerReflected ? 'medium' : 'none',
         note: headerReflected
           ? 'Ответ не HTML, но ввод отражается в заголовке ответа — потенциальный риск'
-          : 'Ответ не HTML — от��ажение ввода в разметку неприменимо.',
+          : 'Ответ не HTML — отражение ввода в разметку неприменимо.',
       }
     }
 
@@ -1568,8 +1612,10 @@ const SENSITIVE_PATHS: SensitivePath[] = [
  */
 async function checkPathLeaks(finalUrl: URL): Promise<PathLeak[]> {
   const origin = `${finalUrl.protocol}//${finalUrl.host}`
-  const results = await Promise.all(
-    SENSITIVE_PATHS.map(async ({ path, severity, confirm }) => {
+  const results = await mapPool(
+    SENSITIVE_PATHS,
+    MAX_CONCURRENCY,
+    async ({ path, severity, confirm }) => {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
       try {
@@ -1595,7 +1641,7 @@ async function checkPathLeaks(finalUrl: URL): Promise<PathLeak[]> {
       } finally {
         clearTimeout(timer)
       }
-    }),
+    },
   )
   return results
 }
@@ -2232,31 +2278,8 @@ export interface S3Probe {
   code: string | null
 }
 
-export interface S3ScanResult {
-  /** Имя бакета (после нормализации ввода). */
-  bucket: string
-  /** Регион бакета, если удалось определить по редиректу/заголовку. */
-  region: string | null
-  /** Существует ли бакет: true/false или null (не удалось определить). */
-  exists: boolean | null
-  /** Открыт ли листинг объектов наружу (критичная мисконфигурация). */
-  publicListing: boolean
-  /** Число найденных объектов в листинге (если он открыт). */
-  objectCount: number | null
-  /** Обрезан ли листинг (объектов больше, чем показано). */
-  truncated: boolean
-  /** Первые несколько ключей объектов (для наглядности). */
-  sampleKeys: string[]
-  probes: S3Probe[]
-  /** Итоговый вердикт. */
-  verdict: 'public' | 'private' | 'not-found' | 'unknown'
-}
-
-export interface S3ScanActionResult {
-  ok: boolean
-  message: string
-  data?: S3ScanResult
-}
+// S3ScanResult / S3ScanActionResult удалены вместе с secretS3ScanAction.
+// Авто-скан агрегирует находки в тип из scanDomainBuckets() (ниже).
 
 /** Валидное имя S3-бакета: 3–63 символа, [a-z0-9.-], край — буква/цифра. */
 const BUCKET_NAME_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
@@ -2330,12 +2353,6 @@ async function s3Get(url: string): Promise<S3Response> {
   }
 }
 
-/** Достать <Code>…</Code> из XML-ошибки S3. */
-function extractCode(body: string): string | null {
-  const m = body.match(/<Code>([^<]+)<\/Code>/)
-  return m ? m[1] : null
-}
-
 /** Классифицировать ответ S3-эндпоинта. */
 function classifyOutcome(r: S3Response): S3Probe['outcome'] {
   if (r.status === null) return 'error'
@@ -2346,30 +2363,9 @@ function classifyOutcome(r: S3Response): S3Probe['outcome'] {
   return 'other'
 }
 
-function toProbe(style: string, url: string, r: S3Response): S3Probe {
-  return {
-    style,
-    url,
-    status: r.status,
-    ms: r.ms,
-    outcome: classifyOutcome(r),
-    code: extractCode(r.body),
-  }
-}
-
-/** Достать первые ключи объектов из ListBucketResult. */
-function extractKeys(body: string, limit = 10): string[] {
-  const keys: string[] = []
-  const re = /<Key>([^<]+)<\/Key>/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(body)) && keys.length < limit) keys.push(m[1])
-  return keys
-}
-
-/** Полное число ключей в ответе (для счётчика). */
-function countKeys(body: string): number {
-  return (body.match(/<Key>/g) ?? []).length
-}
+// toProbe / extractCode / extractKeys / countKeys удалены: они обслуживали
+// подробный ручной S3-отчёт (secretS3ScanAction). Авто-скан использует только
+// classifyOutcome() для вердикта по одноимённым бакетам.
 
 // secretS3ScanAction удалён: одноимённые бакеты проверяет secretFullScanAction
 // через scanDomainBuckets() в общем проходе. Отдельный публичный endpoint не нужен.
@@ -2528,7 +2524,7 @@ async function detectCms(origin: string): Promise<CmsDetection> {
   let name: string | null = null
   let version: string | null = null
 
-  // meta generator — самый н��дёжный источник.
+  // meta generator — самый надёжный источник.
   const gen = body.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']/i)
   if (gen) evidence.push(`meta generator: ${gen[1]}`)
 
@@ -2647,7 +2643,7 @@ async function probeAuthEndpoints(origin: string): Promise<AuthProbe[]> {
         risk = 'low'
         note = 'эндпоинт доступен без авторизации (токен не обнаружен в ответе)'
       } else {
-        note = `э��дпоинт существует, ответ ${r.status}`
+        note = `эндпоинт существует, ответ ${r.status}`
       }
     }
     out.push({ path: '/auth/guest', status: r.status, methods: [], risk, note })
@@ -2749,8 +2745,10 @@ const COMMON_SUBDOMAINS = [
  */
 async function enumerateSubdomains(host: string): Promise<SubdomainResult[]> {
   const org = registrableDomain(host)
-  const results = await Promise.all(
-    COMMON_SUBDOMAINS.map(async (sub): Promise<SubdomainResult | null> => {
+  const results = await mapPool(
+    COMMON_SUBDOMAINS,
+    MAX_CONCURRENCY,
+    async (sub): Promise<SubdomainResult | null> => {
       const fqdn = `${sub}.${org}`
       let ip: string | null = null
       try {
@@ -2773,7 +2771,7 @@ async function enumerateSubdomains(host: string): Promise<SubdomainResult[]> {
               ? `отвечает (${status})`
               : `ошибка сервера (${status})`
       return { host: fqdn, ip, status, note }
-    }),
+    },
   )
   return results.filter((r): r is SubdomainResult => r !== null)
 }
@@ -2934,8 +2932,10 @@ async function scanDomainBuckets(host: string): Promise<S3BucketFinding[]> {
     ]),
   ).filter((b) => BUCKET_NAME_RE.test(b))
 
-  const findings = await Promise.all(
-    candidates.map(async (bucket): Promise<S3BucketFinding | null> => {
+  const findings = await mapPool(
+    candidates,
+    MAX_CONCURRENCY,
+    async (bucket): Promise<S3BucketFinding | null> => {
       const { verdict, region } = await probeBucketState(bucket)
       if (verdict === 'not-found' || verdict === 'unknown') return null
       const note =
@@ -2943,7 +2943,7 @@ async function scanDomainBuckets(host: string): Promise<S3BucketFinding[]> {
           ? 'бакет существует, листинг ОТКРЫТ наружу — критично'
           : 'бакет существует, листинг закрыт (приватный)'
       return { bucket, region, verdict, note }
-    }),
+    },
   )
   return findings.filter((f): f is S3BucketFinding => f !== null)
 }
@@ -3051,6 +3051,11 @@ export async function secretFullScanAction(
   const blocked = await guardPublicHost(url.hostname)
   if (blocked) return { ok: false, message: blocked }
 
+  // Общий бюджет времени на весь конвейер: поздние необязательные фазы
+  // (drill/recon/S3) пропускаются, если он исчерпан, чтобы server action не
+  // висел неопределённо долго на медленном/защищённом хосте.
+  const deadline = Date.now() + SCAN_BUDGET_MS
+
   // 1) Доступность и задержка.
   let ping: PingResult | null = null
   let ip: string | null = null
@@ -3130,6 +3135,7 @@ export async function secretFullScanAction(
   })()
   const drills: AutoDrill[] = []
   for (const f of findingsToDrill(audit)) {
+    if (scanExpired(deadline)) break
     try {
       const result = await drillFinding(f.kind, origin, f.arg)
       drills.push({ kind: f.kind, arg: f.arg, result })
@@ -3141,19 +3147,23 @@ export async function secretFullScanAction(
   // 5) Разведка периметра: CMS/фреймворк, API-эндпоинты, auth-пробы, GraphQL
   //    introspection, поддомены, открытые редиректы (всё read-only).
   let recon: ReconResult | null = null
-  try {
-    recon = await collectRecon(origin, url.hostname)
-  } catch {
-    /* recon опционален — не срываем весь отчёт */
+  if (!scanExpired(deadline)) {
+    try {
+      recon = await collectRecon(origin, url.hostname)
+    } catch {
+      /* recon опционален — не срываем весь отчёт */
+    }
   }
 
   // 6) Детекция S3-бакетов по типовым паттернам имени (только состояние, без
   //    выгрузки ключей/содержимого) — карта открытой поверхности хранилища.
   let s3: S3BucketFinding[] = []
-  try {
-    s3 = await scanDomainBuckets(url.hostname)
-  } catch {
-    /* S3 опционален */
+  if (!scanExpired(deadline)) {
+    try {
+      s3 = await scanDomainBuckets(url.hostname)
+    } catch {
+      /* S3 опционален */
+    }
   }
 
   // 7) AI-заключение по харденингу (автоматически в конце). Передаём аудит +

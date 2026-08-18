@@ -29,6 +29,7 @@ import {
   Bug,
   CircleAlert,
   CircleCheck,
+  CircleX,
   Copy,
   Database,
   FileWarning,
@@ -106,6 +107,10 @@ export function SecretPingTab() {
   const [result, setResult] = useState<FullScanResult | null>(null)
   const [scanned, setScanned] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Поколение текущего запуска: «Стоп» инкрементит его, и запоздалый ответ
+  // сервера от прежнего запуска отбрасывается (server action нельзя оборвать
+  // по-настоящему, но результат можно честно проигнорировать).
+  const runIdRef = useRef(0)
 
   // Сервер не стримит прогресс, поэтому продвигаем фазы «на глаз» с ЗАМЕДЛЕНИЕМ:
   // ранние фазы (пинг/заголовки) идут быстро, поздние (recon/поддомены/S3/AI) —
@@ -120,7 +125,7 @@ export function SecretPingTab() {
       }
       return
     }
-    setElapsed(0)
+    // elapsed сбрасывается в runScan (в обработчике, а не в теле эффекта).
     const startedAt = Date.now()
     const elapsedTimer = setInterval(() => {
       setElapsed(Math.round((Date.now() - startedAt) / 1000))
@@ -154,12 +159,16 @@ export function SecretPingTab() {
       toast.error('Подтвердите право тестировать этот домен')
       return
     }
+    const runId = ++runIdRef.current
     setPending(true)
     setPhase(0)
+    setElapsed(0)
     setResult(null)
     setScanned(true)
     try {
       const res = await secretFullScanAction(target, authorized, cookie.trim() || undefined)
+      // Пользователь нажал «Стоп» (или запустил новый скан) — игнорируем ответ.
+      if (runId !== runIdRef.current) return
       if (res.ok && res.data) {
         setResult(res.data)
         if (!res.data.audit.responded) {
@@ -177,11 +186,23 @@ export function SecretPingTab() {
         toast.error(res.message)
       }
     } catch {
+      if (runId !== runIdRef.current) return
       toast.error('Внутренняя ошибка при проверке')
     } finally {
-      setPhase(SCAN_PHASES.length - 1)
-      setPending(false)
+      if (runId === runIdRef.current) {
+        setPhase(SCAN_PHASES.length - 1)
+        setPending(false)
+      }
     }
+  }
+
+  // «Стоп»: server action продолжит выполняться на сервере, но клиент перестаёт
+  // ждать результат — сбрасываем прогресс и помечаем запуск устаревшим.
+  function cancelScan() {
+    runIdRef.current += 1
+    setPending(false)
+    setPhase(0)
+    toast.info('Скан остановлен. Запущенные на сервере пробы завершатся сами.')
   }
 
   return (
@@ -226,18 +247,31 @@ export function SecretPingTab() {
             />
           </div>
 
-          <Button
-            onClick={() => void runScan()}
-            disabled={pending || !authorized}
-            className="press-scale gap-1.5"
-          >
-            {pending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Rocket className="size-4" />
+          <div className="flex gap-2">
+            <Button
+              onClick={() => void runScan()}
+              disabled={pending || !authorized}
+              className="press-scale gap-1.5"
+            >
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Rocket className="size-4" />
+              )}
+              Запустить
+            </Button>
+            {pending && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={cancelScan}
+                className="press-scale gap-1.5"
+              >
+                <CircleX className="size-4" />
+                Стоп
+              </Button>
             )}
-            Запустить
-          </Button>
+          </div>
         </div>
 
         {/* Необязательные cookie для обхода Cloudflare-челленджа */}
