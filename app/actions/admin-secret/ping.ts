@@ -234,6 +234,28 @@ export interface CookieFlags {
   sameSite: string | null
 }
 
+/**
+ * Пассивная проверка отражённого XSS: в URL добавляется ОДИН безобидный
+ * маркер (случайная строка + символы `<>"'`), НЕ являющийся скриптом и ничего
+ * не выполняющий. Мы лишь смотрим, вернул ли сервер этот ввод в теле ответа и
+ * экранировал ли спецсимволы. Отражение без экранирования — классический
+ * признак риска reflected XSS. Это диагностика конфигурации, а не эксплойт.
+ */
+export interface ReflectionCheck {
+  /** Удалось ли выполнить проверку (был ответ с телом). */
+  tested: boolean
+  /** Отразил ли сервер наш маркер в HTML-ответе. */
+  reflected: boolean
+  /** Отражены ли спецсимволы `<>"` в СЫРОМ (неэкранированном) виде. */
+  rawSpecials: boolean
+  /** Есть ли CSP, способный смягчить исполнение инлайн-скриптов. */
+  cspPresent: boolean
+  /** Итоговая оценка риска отражённого XSS. */
+  risk: 'none' | 'low' | 'medium' | 'high'
+  /** Короткое пояснение для UI. */
+  note: string
+}
+
 export interface SecurityAudit {
   url: string
   host: string
@@ -245,6 +267,8 @@ export interface SecurityAudit {
   securityHeaders: HeaderCheck[]
   disclosure: HeaderCheck[]
   cookies: CookieFlags[]
+  /** Пассивная проверка отражения ввода (риск reflected XSS). */
+  reflection: ReflectionCheck
   latencyMs: number | null
   error: string | null
 }
@@ -304,6 +328,11 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
       cookies = []
     }
 
+    const securityHeaders = readHeaders(SECURITY_HEADER_KEYS)
+    const cspPresent = securityHeaders.some(
+      (h) => h.key === 'content-security-policy' && h.present,
+    )
+
     return {
       url: url.toString(),
       host: url.hostname,
@@ -311,9 +340,10 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
       status: res.status,
       scheme: finalUrl.protocol.replace(':', ''),
       httpsUpgrade: await checkHttpsUpgrade(url),
-      securityHeaders: readHeaders(SECURITY_HEADER_KEYS),
+      securityHeaders,
       disclosure: readHeaders(DISCLOSURE_HEADER_KEYS).filter((h) => h.present),
       cookies,
+      reflection: await checkReflection(url, cspPresent),
       latencyMs,
       error: null,
     }
@@ -335,6 +365,14 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
       })),
       disclosure: [],
       cookies: [],
+      reflection: {
+        tested: false,
+        reflected: false,
+        rawSpecials: false,
+        cspPresent: false,
+        risk: 'none',
+        note: 'Проверка не выполнена — хост не ответил.',
+      },
       latencyMs: null,
       error: aborted ? 'Таймаут' : 'Нет соединения',
     }
@@ -365,6 +403,90 @@ async function checkHttpsUpgrade(url: URL): Promise<'yes' | 'no' | 'unknown'> {
     return res.status < 400 ? 'no' : 'unknown'
   } catch {
     return 'unknown'
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Пассивная проверка отражённого XSS (reflected XSS).
+ *
+ * Добавляем в URL ОДИН безобидный маркер: случайная строка + символы `<>"'`.
+ * Это НЕ скрипт и ничего не исполняет — просто «краска», по которой видно,
+ * вернул ли сервер наш ввод в теле ответа и экранировал ли спецсимволы.
+ * Отражение без экранирования — типичный признак риска reflected XSS.
+ * Инструмент только читает ответ (с ограничением объёма), ничего не эксплуатирует.
+ */
+async function checkReflection(
+  url: URL,
+  cspPresent: boolean,
+): Promise<ReflectionCheck> {
+  // Случайное буквенно-цифровое ядро (для точного поиска) + спецсимволы.
+  const core = `od${Math.random().toString(36).slice(2, 10)}xr`
+  const probeValue = `${core}<>"'`
+
+  const probeUrl = new URL(url.toString())
+  probeUrl.searchParams.set('__od_probe', probeValue)
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetch(probeUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': 'OMNIDESK-Audit/1.0' },
+    })
+
+    // Проверяем отражение только в HTML — в JSON/бинарнике это не про XSS.
+    const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
+    const isHtml =
+      contentType.includes('text/html') ||
+      contentType.includes('application/xhtml')
+    if (!isHtml) {
+      void res.body?.cancel()
+      return {
+        tested: true,
+        reflected: false,
+        rawSpecials: false,
+        cspPresent,
+        risk: 'none',
+        note: 'Ответ не HTML — отражение ввода в разметку неприменимо.',
+      }
+    }
+
+    const body = await readCapped(res, 262_144)
+    const reflected = body.includes(core)
+    // Спецсимволы сразу после ядра, отданные «как есть», — сырое отражение.
+    const rawSpecials =
+      body.includes(`${core}<`) ||
+      body.includes(`${core}"`) ||
+      body.includes(`${core}'`) ||
+      body.includes(`${core}>`)
+
+    let risk: ReflectionCheck['risk'] = 'none'
+    let note = 'Ввод в ответе не отражается — reflected XSS маловероятен.'
+    if (reflected && rawSpecials) {
+      risk = cspPresent ? 'medium' : 'high'
+      note = cspPresent
+        ? 'Ввод отражается без экранирования. CSP частично смягчает риск, но экранирование обязательно.'
+        : 'Ввод отражается без экранирования и без CSP — высокий риск reflected XSS.'
+    } else if (reflected) {
+      risk = 'low'
+      note = 'Ввод отражается, но спецсимволы экранированы — базовая защита есть.'
+    }
+
+    return { tested: true, reflected, rawSpecials, cspPresent, risk, note }
+  } catch {
+    return {
+      tested: false,
+      reflected: false,
+      rawSpecials: false,
+      cspPresent,
+      risk: 'none',
+      note: 'Проверку отражения выполнить не удалось.',
+    }
   } finally {
     clearTimeout(timer)
   }
@@ -452,6 +574,7 @@ export async function secretSecurityAssessAction(
     securityHeaders: audit.securityHeaders,
     disclosure: audit.disclosure,
     cookies: audit.cookies,
+    reflection: audit.reflection,
     latencyMs: audit.latencyMs,
   })
 

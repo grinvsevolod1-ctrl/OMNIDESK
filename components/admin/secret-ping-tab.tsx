@@ -1,14 +1,24 @@
 'use client'
 
 /**
- * God-панель, вкладка «Ping» — проверка доступности своего домена/URL.
+ * God-панель, вкладка «Ping» — единая проверка своего домена/URL.
  *
- * Владелец вводит адрес, панель делает несколько HTTP-запросов и показывает
- * статус-код и задержку каждой попытки + сводку (min/avg/max, потери).
- * Часть скрытой панели: подчиняется инвариантам AGENTS.md §4 (обычная
- * админка и Admin AI о вкладке не знают, сервер-экшен не пишет в audit).
+ * Владелец вводит ОДИН адрес и жмёт одну кнопку «Проверить». Панель за один
+ * проход:
+ *   1) меряет доступность и задержку (несколько HTTP-запросов),
+ *   2) собирает пассивный аудит безопасности (заголовки защиты, флаги cookie,
+ *      раскрытие версий ПО, upgrade http→https),
+ *   3) проверяет отражение ввода (риск reflected XSS) безобидным маркером.
+ * Ниже — единый отчёт. AI-заключение по харденингу — раскрываемая секция под
+ * аудитом (модель зовётся лениво, только при раскрытии).
  *
- * Это простой uptime-чекер: читаются только статус-код и время ответа.
+ * Отдельно — вспомогательное сканирование S3-бакета (принимает имя бакета,
+ * а не домен, поэтому вынесено в свою секцию).
+ *
+ * Часть скрытой панели: подчиняется инвариантам AGENTS.md §4 (обычная админка
+ * и Admin AI о вкладке не знают, сервер-экшены не пишут в audit). Все проверки
+ * строго ПАССИВНЫЕ и защитные: инструмент только читает публично наблюдаемый
+ * ответ, ничего не эксплуатирует, не пишет и не удаляет.
  */
 
 import { useState } from 'react'
@@ -17,6 +27,8 @@ import {
   Activity,
   ArrowRight,
   Boxes,
+  Bug,
+  ChevronDown,
   CircleAlert,
   CircleCheck,
   Copy,
@@ -36,6 +48,7 @@ import {
   secretSecurityAssessAction,
   secretSecurityAuditAction,
   type PingResult,
+  type ReflectionCheck,
   type S3ScanResult,
   type SecurityAudit,
 } from '@/app/actions/admin-secret'
@@ -49,73 +62,65 @@ const ATTEMPT_OPTIONS = [1, 2, 4, 6]
 export function SecretPingTab() {
   const [url, setUrl] = useState('')
   const [attempts, setAttempts] = useState(4)
-  const [pending, setPending] = useState(false)
-  const [result, setResult] = useState<PingResult | null>(null)
 
-  const [auditPending, setAuditPending] = useState(false)
+  // Единый прогон: ping + аудит (+ отражение) одной кнопкой.
+  const [scanPending, setScanPending] = useState(false)
+  const [pingResult, setPingResult] = useState<PingResult | null>(null)
   const [audit, setAudit] = useState<SecurityAudit | null>(null)
+  const [scanned, setScanned] = useState(false)
+
+  // AI-заключение — ленивая раскрываемая секция под аудитом.
+  const [assessOpen, setAssessOpen] = useState(false)
   const [assessPending, setAssessPending] = useState(false)
   const [assessment, setAssessment] = useState<string | null>(null)
 
+  // S3 — отдельная вспомогательная секция.
   const [bucket, setBucket] = useState('')
   const [s3Pending, setS3Pending] = useState(false)
   const [s3Result, setS3Result] = useState<S3ScanResult | null>(null)
 
-  async function runPing() {
+  async function runFullScan() {
     const target = url.trim()
     if (!target) {
       toast.error('Введите домен или URL')
       return
     }
-    setPending(true)
-    setResult(null)
+    setScanPending(true)
+    setPingResult(null)
+    setAudit(null)
+    setAssessment(null)
+    setAssessOpen(false)
+    setScanned(true)
     try {
-      const res = await secretPingAction(target, attempts)
-      if (res.ok && res.data) {
-        setResult(res.data)
-        if (res.data.received === 0) toast.error(res.message)
+      const [ping, sec] = await Promise.all([
+        secretPingAction(target, attempts),
+        secretSecurityAuditAction(target),
+      ])
+
+      if (ping.ok && ping.data) {
+        setPingResult(ping.data)
+        if (ping.data.received === 0) toast.error(ping.message)
       } else {
-        toast.error(res.message)
+        toast.error(ping.message)
       }
+
+      if (sec.data) setAudit(sec.data)
+      if (!sec.ok && !sec.data) toast.error(sec.message)
     } catch {
       toast.error('Внутренняя ошибка при проверке')
     } finally {
-      setPending(false)
+      setScanPending(false)
     }
   }
 
-  async function runAudit() {
-    const target = url.trim()
-    if (!target) {
-      toast.error('Введите домен или URL')
-      return
-    }
-    setAuditPending(true)
-    setAudit(null)
-    setAssessment(null)
-    try {
-      const res = await secretSecurityAuditAction(target)
-      if (res.ok && res.data) {
-        setAudit(res.data)
-      } else {
-        if (res.data) setAudit(res.data)
-        toast.error(res.message)
-      }
-    } catch {
-      toast.error('Внутренняя ошибка при аудите')
-    } finally {
-      setAuditPending(false)
-    }
-  }
+  async function toggleAssess() {
+    const next = !assessOpen
+    setAssessOpen(next)
+    if (!next || assessment || assessPending) return
 
-  async function runAssess() {
     const target = url.trim()
-    if (!target) {
-      toast.error('Введите домен или URL')
-      return
-    }
+    if (!target) return
     setAssessPending(true)
-    setAssessment(null)
     try {
       const res = await secretSecurityAssessAction(target)
       if (res.audit) setAudit(res.audit)
@@ -123,9 +128,11 @@ export function SecretPingTab() {
         setAssessment(res.report)
       } else {
         toast.error(res.message)
+        setAssessOpen(false)
       }
     } catch {
       toast.error('Внутренняя ошибка при формировании заключения')
+      setAssessOpen(false)
     } finally {
       setAssessPending(false)
     }
@@ -166,12 +173,17 @@ export function SecretPingTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      {/* ---- Ввод адреса ---- */}
+      {/* ---- Единый ввод адреса + одна кнопка ---- */}
       <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
-        <div className="mb-4 flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <Radio className="size-4" />
-          Проверка доступности
+        <div className="mb-1 flex items-center gap-2 text-sm font-medium text-foreground">
+          <Radio className="size-4 text-primary" />
+          Проверка домена
         </div>
+        <p className="mb-4 text-xs text-muted-foreground text-pretty">
+          Один адрес — полный отчёт: доступность и задержка, заголовки защиты,
+          cookie, раскрытие версий ПО и проверка отражения ввода (reflected XSS).
+          Всё пассивно — только чтение ответа.
+        </p>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1">
@@ -184,9 +196,9 @@ export function SecretPingTab() {
                   e.key === 'Enter' &&
                   !e.nativeEvent.isComposing &&
                   e.keyCode !== 229 &&
-                  !pending
+                  !scanPending
                 ) {
-                  void runPing()
+                  void runFullScan()
                 }
               }}
               placeholder="example.com или https://example.com/health"
@@ -199,11 +211,11 @@ export function SecretPingTab() {
           </div>
 
           <Button
-            onClick={() => void runPing()}
-            disabled={pending}
+            onClick={() => void runFullScan()}
+            disabled={scanPending}
             className="press-scale gap-1.5"
           >
-            {pending ? (
+            {scanPending ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
               <ArrowRight className="size-4" />
@@ -213,7 +225,7 @@ export function SecretPingTab() {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Попыток:</span>
+          <span className="text-xs text-muted-foreground">Попыток ping:</span>
           {ATTEMPT_OPTIONS.map((n) => (
             <button
               key={n}
@@ -229,46 +241,109 @@ export function SecretPingTab() {
               {n}
             </button>
           ))}
-
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void runAudit()}
-              disabled={auditPending}
-              className="press-scale gap-1.5"
-            >
-              {auditPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <ShieldCheck className="size-3.5" />
-              )}
-              Аудит безопасности
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void runAssess()}
-              disabled={assessPending}
-              className="press-scale gap-1.5"
-            >
-              {assessPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="size-3.5" />
-              )}
-              AI-заключение
-            </Button>
-          </div>
         </div>
       </div>
 
-      {/* ---- Сканирование S3-бакета ---- */}
-      <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
-        <div className="mb-4 flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <Boxes className="size-4" />
+      {/* ---- Единый отчёт: доступность → безопасность → AI ---- */}
+      {scanPending && !pingResult && !audit && (
+        <div className="flex items-center gap-2 rounded-xl border border-border bg-card/40 p-4 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          Проверяю доступность и конфигурацию…
+        </div>
+      )}
+
+      {pingResult && (
+        <SectionCard icon={Gauge} title="Доступность и задержка">
+          <PingReport result={pingResult} />
+        </SectionCard>
+      )}
+
+      {audit && (
+        <SectionCard
+          icon={ShieldCheck}
+          title="Безопасность"
+          right={
+            <span className="font-mono text-xs text-muted-foreground">
+              {audit.securityHeaders.filter((h) => h.present).length}/
+              {audit.securityHeaders.length} заголовков
+            </span>
+          }
+        >
+          <AuditBody audit={audit} />
+
+          {/* AI-заключение — раскрываемая секция под аудитом */}
+          <div className="mt-4 border-t border-border/60 pt-3">
+            <button
+              type="button"
+              onClick={() => void toggleAssess()}
+              className="press-scale flex w-full items-center gap-2 text-sm font-medium text-foreground"
+              aria-expanded={assessOpen}
+            >
+              <Sparkles className="size-4 text-primary" />
+              AI-заключение по защищённости
+              {assessPending && (
+                <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+              )}
+              <ChevronDown
+                className={cn(
+                  'ml-auto size-4 text-muted-foreground transition-transform',
+                  assessOpen && 'rotate-180',
+                )}
+              />
+            </button>
+
+            {assessOpen && (
+              <div className="mt-3">
+                {assessPending ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    Анализирую конфигурацию и составляю рекомендации…
+                  </div>
+                ) : assessment ? (
+                  <div>
+                    <div className="mb-2 flex justify-end">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void copyAssessment()}
+                        className="size-7"
+                        aria-label="Скопировать заключение"
+                      >
+                        <Copy className="size-3.5" />
+                      </Button>
+                    </div>
+                    <Markdown text={assessment} />
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Не удалось получить заключение. Попробуйте ещё раз.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </SectionCard>
+      )}
+
+      {!scanned && !scanPending && (
+        <p className="px-1 text-sm text-muted-foreground text-pretty">
+          Введите свой домен или адрес страницы состояния и нажмите «Проверить».
+          Панель за один проход измерит доступность, соберёт аудит безопасности и
+          проверит отражение ввода, а по кнопке ниже отчёта AI даст рекомендации
+          по харденингу.
+        </p>
+      )}
+
+      {/* ---- Отдельно: сканирование S3-бакета ---- */}
+      <div className="mt-1 rounded-xl border border-border bg-card/40 p-4 md:p-5">
+        <div className="mb-1 flex items-center gap-2 text-sm font-medium text-foreground">
+          <Boxes className="size-4 text-primary" />
           Сканирование S3-бакета
         </div>
+        <p className="mb-4 text-xs text-muted-foreground text-pretty">
+          Отдельная проверка своего S3-бакета: только читает публичный ответ S3,
+          чтобы понять, открыт ли листинг наружу. Ничего не пишет и не удаляет.
+        </p>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1">
@@ -309,57 +384,37 @@ export function SecretPingTab() {
           </Button>
         </div>
 
-        <p className="mt-3 text-xs text-muted-foreground text-pretty">
-          Пассивная проверка: только читает публичный ответ S3, чтобы понять,
-          открыт ли листинг наружу. Ничего не пишет и не удаляет.
-        </p>
-      </div>
-
-      {/* ---- Результат сканирования S3 ---- */}
-      {s3Result && <S3Report result={s3Result} />}
-
-      {/* ---- Результат ping ---- */}
-      {result && <PingReport result={result} />}
-
-      {/* ---- Аудит безопасности ---- */}
-      {audit && <AuditReport audit={audit} />}
-
-      {/* ---- AI-заключение ---- */}
-      {(assessment || assessPending) && (
-        <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
-          <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
-            <Sparkles className="size-4" />
-            Заключение по защищённости
-            {assessment && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => void copyAssessment()}
-                className="ml-auto size-7"
-                aria-label="Скопировать заключение"
-              >
-                <Copy className="size-3.5" />
-              </Button>
-            )}
+        {s3Result && (
+          <div className="mt-4">
+            <S3Report result={s3Result} />
           </div>
-          {assessPending ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Анализирую конфигурацию…
-            </div>
-          ) : (
-            assessment && <Markdown text={assessment} />
-          )}
-        </div>
-      )}
+        )}
+      </div>
+    </div>
+  )
+}
 
-      {!result && !audit && !pending && !auditPending && !assessPending && (
-        <p className="px-1 text-sm text-muted-foreground text-pretty">
-          Введите свой домен или адрес страницы состояния. «Проверить» измерит
-          HTTP-статус и задержку, «Аудит безопасности» соберёт заголовки защиты
-          и флаги cookie, а «AI-заключение» даст рекомендации по харденингу.
-        </p>
-      )}
+/* --------------------------- Оболочка секции ---------------------------- */
+
+function SectionCard({
+  icon: Icon,
+  title,
+  right,
+  children,
+}: {
+  icon: typeof Gauge
+  title: string
+  right?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
+      <div className="mb-4 flex items-center gap-2 text-sm font-medium text-foreground">
+        <Icon className="size-4 text-primary" />
+        {title}
+        {right && <span className="ml-auto">{right}</span>}
+      </div>
+      {children}
     </div>
   )
 }
@@ -379,21 +434,11 @@ const HEADER_LABELS: Record<string, string> = {
   'cross-origin-resource-policy': 'CORP',
 }
 
-function AuditReport({ audit }: { audit: SecurityAudit }) {
-  const present = audit.securityHeaders.filter((h) => h.present).length
-  const total = audit.securityHeaders.length
+function AuditBody({ audit }: { audit: SecurityAudit }) {
   const httpsOk = audit.scheme === 'https' && audit.httpsUpgrade !== 'no'
 
   return (
-    <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
-      <div className="mb-4 flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        <ShieldCheck className="size-4" />
-        Аудит безопасности
-        <span className="ml-auto font-mono text-xs">
-          {present}/{total} заголовков защиты
-        </span>
-      </div>
-
+    <>
       {/* Транспорт */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span
@@ -404,7 +449,11 @@ function AuditReport({ audit }: { audit: SecurityAudit }) {
               : 'bg-destructive/10 text-destructive',
           )}
         >
-          {httpsOk ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
+          {httpsOk ? (
+            <Lock className="size-3.5" />
+          ) : (
+            <LockOpen className="size-3.5" />
+          )}
           {audit.scheme.toUpperCase()}
         </span>
         <span className="text-xs text-muted-foreground">
@@ -445,6 +494,9 @@ function AuditReport({ audit }: { audit: SecurityAudit }) {
           </div>
         ))}
       </div>
+
+      {/* Отражение ввода (reflected XSS) */}
+      <ReflectionCard reflection={audit.reflection} />
 
       {/* Раскрытие версий ПО */}
       {audit.disclosure.length > 0 && (
@@ -503,6 +555,60 @@ function AuditReport({ audit }: { audit: SecurityAudit }) {
           </div>
         </div>
       )}
+    </>
+  )
+}
+
+const REFLECTION_TONE: Record<
+  ReflectionCheck['risk'],
+  { border: string; text: string; label: string }
+> = {
+  none: {
+    border: 'border-emerald-500/30 bg-emerald-500/5',
+    text: 'text-emerald-500',
+    label: 'Риск не обнаружен',
+  },
+  low: {
+    border: 'border-emerald-500/30 bg-emerald-500/5',
+    text: 'text-emerald-500',
+    label: 'Низкий риск',
+  },
+  medium: {
+    border: 'border-amber-500/40 bg-amber-500/10',
+    text: 'text-amber-500',
+    label: 'Средний риск',
+  },
+  high: {
+    border: 'border-destructive/40 bg-destructive/10',
+    text: 'text-destructive',
+    label: 'Высокий риск',
+  },
+}
+
+function ReflectionCard({ reflection }: { reflection: ReflectionCheck }) {
+  const tone = REFLECTION_TONE[reflection.risk]
+  const alarming = reflection.risk === 'medium' || reflection.risk === 'high'
+
+  return (
+    <div className={cn('mt-4 rounded-lg border p-3', tone.border)}>
+      <div className="flex items-center gap-2">
+        {alarming ? (
+          <Bug className={cn('size-4 shrink-0', tone.text)} />
+        ) : (
+          <ShieldCheck className={cn('size-4 shrink-0', tone.text)} />
+        )}
+        <span className="text-xs font-medium text-foreground">
+          Отражение ввода (reflected XSS)
+        </span>
+        <span
+          className={cn('ml-auto text-xs font-semibold', tone.text)}
+        >
+          {reflection.tested ? tone.label : 'Не проверено'}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground text-pretty">
+        {reflection.note}
+      </p>
     </div>
   )
 }
@@ -517,7 +623,10 @@ function FlagMark({ on }: { on: boolean }) {
 
 /* ------------------------------ S3 UI ----------------------------------- */
 
-const S3_OUTCOME_LABELS: Record<S3ScanResult['probes'][number]['outcome'], string> = {
+const S3_OUTCOME_LABELS: Record<
+  S3ScanResult['probes'][number]['outcome'],
+  string
+> = {
   'public-listing': 'листинг открыт',
   'access-denied': 'доступ закрыт',
   'not-found': 'не найден',
@@ -528,12 +637,6 @@ const S3_OUTCOME_LABELS: Record<S3ScanResult['probes'][number]['outcome'], strin
 
 function S3Report({ result }: { result: S3ScanResult }) {
   const isPublic = result.verdict === 'public'
-  const tone =
-    result.verdict === 'public'
-      ? 'bad'
-      : result.verdict === 'private'
-        ? 'good'
-        : 'muted'
 
   const verdictLabel =
     result.verdict === 'public'
@@ -570,7 +673,8 @@ function S3Report({ result }: { result: S3ScanResult }) {
               'text-sm font-semibold',
               isPublic && 'text-destructive',
               result.verdict === 'private' && 'text-emerald-500',
-              (result.verdict === 'not-found' || result.verdict === 'unknown') &&
+              (result.verdict === 'not-found' ||
+                result.verdict === 'unknown') &&
                 'text-foreground',
             )}
           >
@@ -594,9 +698,7 @@ function S3Report({ result }: { result: S3ScanResult }) {
         <StatCard
           icon={Boxes}
           label="Существует"
-          value={
-            result.exists === null ? '—' : result.exists ? 'да' : 'нет'
-          }
+          value={result.exists === null ? '—' : result.exists ? 'да' : 'нет'}
           tone="muted"
         />
         <StatCard
