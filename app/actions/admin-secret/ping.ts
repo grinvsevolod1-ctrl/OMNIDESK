@@ -128,14 +128,54 @@ async function guardPublicHost(hostname: string): Promise<string | null> {
     return 'Адрес указывает на внутренний/приватный IP — проверка заблокирована.'
   }
   try {
-    const { address } = await lookup(hostname)
-    if (isPrivateIp(address)) {
+    // all:true — проверяем ВСЕ адреса (и A, и AAAA): хост с несколькими
+    // записями, где хотя бы одна приватная (DNS-rebinding), блокируется.
+    const records = await lookup(hostname, { all: true })
+    if (records.some((r) => isPrivateIp(r.address))) {
       return 'Адрес разрешается во внутренний/приватный IP — проверка заблокирована.'
     }
   } catch {
     return null
   }
   return null
+}
+
+/**
+ * SSRF-безопасный fetch со СЛЕЖЕНИЕМ за редиректами вручную: каждый переход
+ * повторно проверяется guardPublicHost, поэтому публичный хост не сможет
+ * увести нас 302-редиректом на 169.254.169.254 или внутренний адрес (что
+ * возможно при redirect:'follow'). Возвращает финальный ответ и итоговый URL.
+ */
+async function guardedFetch(
+  target: URL | string,
+  init: RequestInit,
+  maxRedirects = 5,
+): Promise<{ res: Response; finalUrl: URL }> {
+  let current = new URL(target.toString())
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const blocked = await guardPublicHost(current.hostname)
+    if (blocked) throw new Error('ssrf-blocked')
+    const res = await fetch(current, { ...init, redirect: 'manual' })
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location')
+      if (loc) {
+        void res.body?.cancel()
+        let next: URL
+        try {
+          next = new URL(loc, current)
+        } catch {
+          return { res, finalUrl: current }
+        }
+        if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+          throw new Error('ssrf-bad-scheme')
+        }
+        current = next
+        continue
+      }
+    }
+    return { res, finalUrl: current }
+  }
+  throw new Error('too-many-redirects')
 }
 
 /**
@@ -165,7 +205,7 @@ function normalizeUrl(raw: string): URL | null {
  *
  * Один запрос: GET с таймаутом; читается ТОЛЬКО статус-код и время ответа,
  * тело ответа не загружается (соединение закрывается через AbortController
- * сразу после получения заголовков).
+ * сразу пос��е получения заголовков).
  */
 export async function secretPingAction(
   rawUrl: string,
@@ -249,9 +289,6 @@ async function pingOnce(
       redirect: 'manual',
       cache: 'no-store',
       signal: controller.signal,
-      // keepalive просит undici переиспользовать соединение между попытками —
-      // так последующие замеры не платят заново за TCP/TLS-хендшейк.
-      keepalive: true,
       headers: { 'user-agent': BROWSER_UA },
     })
     const ms = Math.round(performance.now() - started)
@@ -359,7 +396,7 @@ export interface TlsCheck {
   issuer: string | null
   /** Дата окончания действия (ISO), если прочитана. */
   validTo: string | null
-  /** Осталось дней до истечения (может быть отрицательным). */
+  /** Осталось д��ей до истечения (может быть отрицательным). */
   daysLeft: number | null
   /** Совпадает ли имя хоста с сертификатом. */
   hostnameMatch: boolean
@@ -399,19 +436,110 @@ export interface DnsHygiene {
   caa: boolean
 }
 
+/** Разбор силы политики CSP (не только факт наличия). */
+export interface CspAnalysis {
+  present: boolean
+  /** Есть 'unsafe-inline' в script-src/default-src — сводит на нет защиту от XSS. */
+  unsafeInline: boolean
+  /** Есть 'unsafe-eval'. */
+  unsafeEval: boolean
+  /** Источник со звёздочкой (`*`) в script-src/default-src. */
+  wildcard: boolean
+  /** Задан object-src 'none' (блокирует легаси-плагины). */
+  objectNone: boolean
+  /** Задан frame-ancestors (защита от кликджекинга через CSP). */
+  frameAncestors: boolean
+  strength: 'none' | 'weak' | 'moderate' | 'strong'
+  note: string
+}
+
+/** Разбор силы политики HSTS (max-age/includeSubDomains/preload). */
+export interface HstsAnalysis {
+  present: boolean
+  /** Значение max-age в секундах, если распарсено. */
+  maxAge: number | null
+  includeSubDomains: boolean
+  preload: boolean
+  strength: 'none' | 'weak' | 'moderate' | 'strong'
+  note: string
+}
+
+/** Проверка CORS-мисконфигурации (ACAO/ACAC при подставном Origin). */
+export interface CorsCheck {
+  tested: boolean
+  /** Значение Access-Control-Allow-Origin в ответе. */
+  acao: string | null
+  /** Access-Control-Allow-Credentials: true. */
+  acac: boolean
+  /** Сервер отражает переданный нами Origin обратно. */
+  reflectsOrigin: boolean
+  /** ACAO: * (любой источник). */
+  wildcard: boolean
+  risk: 'none' | 'low' | 'medium' | 'high'
+  note: string
+}
+
+/** Проверка разрешённых HTTP-методов (OPTIONS/Allow + TRACE). */
+export interface MethodsCheck {
+  tested: boolean
+  /** Методы из заголовка Allow / Access-Control-Allow-Methods. */
+  allow: string[]
+  /** Потенциально опасные из разрешённых (PUT/DELETE/TRACE/CONNECT/PATCH). */
+  dangerous: string[]
+  /** TRACE включён (риск Cross-Site Tracing). */
+  traceEnabled: boolean
+  note: string
+}
+
+/** Проверка mixed content: http-ресурсы на https-странице. */
+export interface MixedContentCheck {
+  tested: boolean
+  count: number
+  /** Несколько примеров http-URL (для наглядности). */
+  samples: string[]
+  note: string
+}
+
+/** Определение CDN/WAF и анализ заголовков кэша. */
+export interface InfraCheck {
+  cdn: string | null
+  waf: string | null
+  server: string | null
+  cacheControl: string | null
+  /** Приватный ответ (с cookie) помечен публично кэшируемым — риск утечки. */
+  privateCacheable: boolean
+  note: string
+}
+
 export interface SecurityAudit {
   url: string
   host: string
   finalUrl: string
   status: number | null
+  /** Ответил ли хост вообще (иначе проверки НЕ выполнялись — не «провалены»). */
+  responded: boolean
   scheme: string
   /** Редиректит ли http:// на https:// ('yes' | 'no' | 'unknown'). */
   httpsUpgrade: 'yes' | 'no' | 'unknown'
   securityHeaders: HeaderCheck[]
   disclosure: HeaderCheck[]
   cookies: CookieFlags[]
+  /** Cookie, нарушающие соглашения префиксов __Host-/__Secure-. */
+  cookiePrefixIssues: string[]
   /** Пассивная проверка отражения ввода (риск reflected XSS). */
   reflection: ReflectionCheck
+  /** Разбор силы CSP. */
+  csp: CspAnalysis
+  /** Разбор силы HSTS. */
+  hsts: HstsAnalysis
+  /** CORS-мисконфигурация. */
+  cors: CorsCheck
+  /** Разрешённые HTTP-методы. */
+  methods: MethodsCheck
+  /** Mixed content на https-странице. */
+  mixedContent: MixedContentCheck
+  /** CDN/WAF и заголовки кэша. */
+  infra: InfraCheck
   /** Проверка TLS-сертификата (только https). */
   tls: TlsCheck
   /** Типовые утечки путей (пустой массив, пока не запрошено отдельно). */
@@ -446,23 +574,103 @@ function parseCookieFlags(raw: string): CookieFlags {
   }
 }
 
+/** Пустые (не выполненные) под-проверки — для ветки «хост не ответил». */
+function untestedChecks() {
+  return {
+    reflection: {
+      tested: false,
+      reflected: false,
+      rawSpecials: false,
+      headerReflected: false,
+      cspPresent: false,
+      risk: 'none',
+      note: 'Проверка не выполнена — хост не ответил.',
+    } as ReflectionCheck,
+    tls: {
+      tested: false,
+      protocol: null,
+      issuer: null,
+      validTo: null,
+      daysLeft: null,
+      hostnameMatch: false,
+      authorized: false,
+      status: 'unknown',
+      note: 'Проверка не выполнена — хост не ответил.',
+    } as TlsCheck,
+    dns: {
+      tested: false,
+      spf: false,
+      dmarc: false,
+      dmarcPolicy: null,
+      dkim: false,
+      caa: false,
+    } as DnsHygiene,
+    csp: {
+      present: false,
+      unsafeInline: false,
+      unsafeEval: false,
+      wildcard: false,
+      objectNone: false,
+      frameAncestors: false,
+      strength: 'none',
+      note: 'Проверка не выполнена — хост не ответил.',
+    } as CspAnalysis,
+    hsts: {
+      present: false,
+      maxAge: null,
+      includeSubDomains: false,
+      preload: false,
+      strength: 'none',
+      note: 'Проверка не выполнена — хост не ответил.',
+    } as HstsAnalysis,
+    cors: {
+      tested: false,
+      acao: null,
+      acac: false,
+      reflectsOrigin: false,
+      wildcard: false,
+      risk: 'none',
+      note: 'Проверка не выполнена — хост не ответил.',
+    } as CorsCheck,
+    methods: {
+      tested: false,
+      allow: [],
+      dangerous: [],
+      traceEnabled: false,
+      note: 'Проверка не выполнена — хост не ответил.',
+    } as MethodsCheck,
+    mixedContent: {
+      tested: false,
+      count: 0,
+      samples: [],
+      note: 'Проверка не выполнена — хост не ответил.',
+    } as MixedContentCheck,
+    infra: {
+      cdn: null,
+      waf: null,
+      server: null,
+      cacheControl: null,
+      privateCacheable: false,
+      note: 'Проверка не выполнена — хост не ответил.',
+    } as InfraCheck,
+  }
+}
+
 /** Собрать пассивный аудит по URL. Вызывается только из гейт-экшена. */
 async function collectAudit(url: URL): Promise<SecurityAudit> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   const started = performance.now()
   try {
-    const res = await fetch(url, {
+    // SSRF-safe: следим за редиректами вручную, проверяя каждый переход.
+    const { res, finalUrl } = await guardedFetch(url, {
       method: 'GET',
-      redirect: 'follow',
       cache: 'no-store',
       signal: controller.signal,
       headers: { 'user-agent': BROWSER_UA },
     })
     const latencyMs = Math.round(performance.now() - started)
-    void res.body?.cancel()
 
-    const finalUrl = new URL(res.url || url.toString())
     const readHeaders = (keys: readonly string[]): HeaderCheck[] =>
       keys.map((key) => {
         const value = res.headers.get(key)
@@ -482,34 +690,70 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
     }
 
     const securityHeaders = readHeaders(SECURITY_HEADER_KEYS)
-    const cspPresent = securityHeaders.some(
-      (h) => h.key === 'content-security-policy' && h.present,
-    )
+    const cspValue =
+      securityHeaders.find((h) => h.key === 'content-security-policy')?.value ??
+      null
+    const hstsValue =
+      securityHeaders.find((h) => h.key === 'strict-transport-security')
+        ?.value ?? null
+    const cspPresent = cspValue !== null
     const disclosure = readHeaders(DISCLOSURE_HEADER_KEYS).filter(
       (h) => h.present,
     )
 
-    // Дополнительные проверки — параллельно. Утечки путей НЕ включаем: это
-    // 10+ отдельных GET, поэтому они выполняются лениво по кнопке
-    // (secretPathLeaksAction), чтобы обычный аудит был лёгким и быстрым.
-    const [httpsUpgrade, reflection, tls, dns] = await Promise.all([
-      checkHttpsUpgrade(url),
-      checkReflection(url, cspPresent),
-      checkTls(finalUrl),
-      checkDnsHygiene(url.hostname),
-    ])
+    // Синхронный разбор из уже полученных заголовков (без сетевых запросов).
+    const csp = analyzeCsp(cspValue)
+    const hsts = analyzeHsts(hstsValue, finalUrl.protocol === 'https:')
+    const cookiePrefixIssues = cookiePrefixProblems(cookies)
+    const infra = detectInfra(res.headers, cookies)
+
+    // Читаем тело (с ограничением) для проверки mixed content — только для HTML.
+    const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
+    const isHtmlResp =
+      contentType.includes('text/html') || contentType.includes('xhtml')
+    let bodyForScan = ''
+    if (isHtmlResp) {
+      bodyForScan = await readCapped(res, 262_144)
+    } else {
+      void res.body?.cancel()
+    }
+    const mixedContent = scanMixedContent(
+      bodyForScan,
+      finalUrl.protocol === 'https:',
+      isHtmlResp,
+    )
+
+    // Дополнительные проверки, требующие сети — параллельно. Утечки путей НЕ
+    // включаем: это 10+ отдельных GET, они выполняются отдельным экшеном.
+    const [httpsUpgrade, reflection, tls, dns, cors, methods] =
+      await Promise.all([
+        checkHttpsUpgrade(url),
+        checkReflection(url, cspPresent),
+        checkTls(finalUrl),
+        checkDnsHygiene(url.hostname),
+        checkCors(finalUrl),
+        checkMethods(finalUrl),
+      ])
 
     const audit: SecurityAudit = {
       url: url.toString(),
       host: url.hostname,
       finalUrl: finalUrl.toString(),
       status: res.status,
+      responded: true,
       scheme: finalUrl.protocol.replace(':', ''),
       httpsUpgrade,
       securityHeaders,
       disclosure,
       cookies,
+      cookiePrefixIssues,
       reflection,
+      csp,
+      hsts,
+      cors,
+      methods,
+      mixedContent,
+      infra,
       tls,
       pathLeaks: [],
       pathLeaksChecked: false,
@@ -524,11 +768,13 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
     const aborted =
       err instanceof Error &&
       (err.name === 'AbortError' || err.name === 'TimeoutError')
+    const u = untestedChecks()
     return {
       url: url.toString(),
       host: url.hostname,
       finalUrl: url.toString(),
       status: null,
+      responded: false,
       scheme: url.protocol.replace(':', ''),
       httpsUpgrade: 'unknown',
       securityHeaders: SECURITY_HEADER_KEYS.map((key) => ({
@@ -538,39 +784,353 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
       })),
       disclosure: [],
       cookies: [],
-      reflection: {
-        tested: false,
-        reflected: false,
-        rawSpecials: false,
-        headerReflected: false,
-        cspPresent: false,
-        risk: 'none',
-        note: 'Проверка не выполнена — хост не ответил.',
-      },
-      tls: {
-        tested: false,
-        protocol: null,
-        issuer: null,
-        validTo: null,
-        daysLeft: null,
-        hostnameMatch: false,
-        authorized: false,
-        status: 'unknown',
-        note: 'Проверка не выполнена — хост не ответил.',
-      },
+      cookiePrefixIssues: [],
+      reflection: u.reflection,
+      csp: u.csp,
+      hsts: u.hsts,
+      cors: u.cors,
+      methods: u.methods,
+      mixedContent: u.mixedContent,
+      infra: u.infra,
+      tls: u.tls,
       pathLeaks: [],
       pathLeaksChecked: false,
-      dns: {
-        tested: false,
-        spf: false,
-        dmarc: false,
-        dmarcPolicy: null,
-        dkim: false,
-        caa: false,
-      },
-      score: { value: 0, grade: 'F', deductions: [] },
+      dns: u.dns,
+      score: computeScore({
+        responded: false,
+        scheme: url.protocol.replace(':', ''),
+        httpsUpgrade: 'unknown',
+        securityHeaders: [],
+        disclosure: [],
+        reflection: { risk: 'none' },
+        tls: { tested: false, status: 'unknown', note: '' },
+        pathLeaks: [],
+        cookies: [],
+        cookiePrefixIssues: [],
+        csp: u.csp,
+        hsts: u.hsts,
+        cors: u.cors,
+        methods: u.methods,
+        mixedContent: u.mixedContent,
+        dns: u.dns,
+      }),
       latencyMs: null,
       error: aborted ? 'Таймаут' : 'Нет соединения',
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/* ------------------------- Разбор CSP / HSTS (sync) --------------------- */
+
+/** Разобрать директивы CSP в мапу. */
+function parseCspDirectives(value: string): Map<string, string[]> {
+  const map = new Map<string, string[]>()
+  for (const part of value.split(';')) {
+    const tokens = part.trim().split(/\s+/).filter(Boolean)
+    if (!tokens.length) continue
+    const name = tokens[0].toLowerCase()
+    map.set(name, tokens.slice(1))
+  }
+  return map
+}
+
+/** Оценить силу политики CSP по её содержимому, а не только наличию. */
+function analyzeCsp(value: string | null): CspAnalysis {
+  if (!value) {
+    return {
+      present: false,
+      unsafeInline: false,
+      unsafeEval: false,
+      wildcard: false,
+      objectNone: false,
+      frameAncestors: false,
+      strength: 'none',
+      note: 'Content-Security-Policy отсутствует — нет защиты от инъекций на уровне браузера.',
+    }
+  }
+  const dir = parseCspDirectives(value)
+  const scriptSrc = dir.get('script-src') ?? dir.get('default-src') ?? []
+  const lc = scriptSrc.map((s) => s.toLowerCase())
+  const unsafeInline = lc.includes("'unsafe-inline'")
+  const unsafeEval = lc.includes("'unsafe-eval'")
+  const wildcard = lc.includes('*') || lc.includes('http:') || lc.includes('https:')
+  const objectNone = (dir.get('object-src') ?? []).some(
+    (s) => s.toLowerCase() === "'none'",
+  )
+  const frameAncestors = dir.has('frame-ancestors')
+
+  let strength: CspAnalysis['strength'] = 'strong'
+  const problems: string[] = []
+  if (unsafeInline) problems.push("'unsafe-inline' в скриптах")
+  if (unsafeEval) problems.push("'unsafe-eval'")
+  if (wildcard) problems.push('источник со звёздочкой (*)')
+  if (!scriptSrc.length) problems.push('не задан script-src/default-src')
+
+  if (unsafeInline || wildcard || !scriptSrc.length) strength = 'weak'
+  else if (unsafeEval || !frameAncestors) strength = 'moderate'
+
+  const note =
+    problems.length > 0
+      ? `CSP присутствует, но ослаблена: ${problems.join(', ')}.`
+      : 'CSP присутствует и выглядит строгой.'
+  return {
+    present: true,
+    unsafeInline,
+    unsafeEval,
+    wildcard,
+    objectNone,
+    frameAncestors,
+    strength,
+    note,
+  }
+}
+
+/** Оценить силу политики HSTS: max-age, includeSubDomains, preload. */
+function analyzeHsts(value: string | null, isHttps: boolean): HstsAnalysis {
+  if (!value) {
+    return {
+      present: false,
+      maxAge: null,
+      includeSubDomains: false,
+      preload: false,
+      strength: 'none',
+      note: isHttps
+        ? 'HSTS отсутствует — возможен downgrade/SSL-stripping при первом заходе.'
+        : 'HSTS неприменим без HTTPS.',
+    }
+  }
+  const lc = value.toLowerCase()
+  const m = lc.match(/max-age\s*=\s*(\d+)/)
+  const maxAge = m ? Number(m[1]) : null
+  const includeSubDomains = lc.includes('includesubdomains')
+  const preload = lc.includes('preload')
+
+  let strength: HstsAnalysis['strength'] = 'strong'
+  const notes: string[] = []
+  if (maxAge === null || maxAge === 0) {
+    strength = 'weak'
+    notes.push('max-age не задан или равен 0')
+  } else if (maxAge < 15_552_000) {
+    strength = 'moderate'
+    notes.push('max-age меньше рекомендованных 180 дней')
+  }
+  if (!includeSubDomains && strength !== 'weak') {
+    strength = strength === 'strong' ? 'moderate' : strength
+    notes.push('нет includeSubDomains')
+  }
+  const note =
+    notes.length > 0
+      ? `HSTS присутствует, но: ${notes.join(', ')}.`
+      : 'HSTS присутствует с хорошим max-age.'
+  return { present: true, maxAge, includeSubDomains, preload, strength, note }
+}
+
+/** Cookie, нарушающие соглашения префиксов __Host-/__Secure-. */
+function cookiePrefixProblems(cookies: CookieFlags[]): string[] {
+  const issues: string[] = []
+  for (const c of cookies) {
+    const name = c.name
+    if (name.startsWith('__Host-')) {
+      if (!c.secure) issues.push(`${name}: префикс __Host- требует Secure`)
+    } else if (name.startsWith('__Secure-')) {
+      if (!c.secure) issues.push(`${name}: префикс __Secure- требует Secure`)
+    }
+  }
+  return issues
+}
+
+/** Определить CDN/WAF по характерным заголовкам и разобрать кэш. */
+function detectInfra(headers: Headers, cookies: CookieFlags[]): InfraCheck {
+  const has = (k: string) => headers.get(k) !== null
+  const server = headers.get('server')
+  let cdn: string | null = null
+  let waf: string | null = null
+
+  if (has('cf-ray') || /cloudflare/i.test(server ?? '')) {
+    cdn = 'Cloudflare'
+    if (has('cf-mitigated') || has('cf-ray')) waf = 'Cloudflare'
+  } else if (has('x-vercel-id') || /vercel/i.test(server ?? '')) {
+    cdn = 'Vercel'
+  } else if (has('x-amz-cf-id') || /cloudfront/i.test(headers.get('via') ?? '')) {
+    cdn = 'Amazon CloudFront'
+  } else if (has('x-served-by') || has('x-fastly-request-id') || /fastly/i.test(server ?? '')) {
+    cdn = 'Fastly'
+  } else if (has('x-akamai-transformed') || /akamai/i.test(server ?? '')) {
+    cdn = 'Akamai'
+  } else if (/sucuri/i.test(server ?? '') || has('x-sucuri-id')) {
+    waf = 'Sucuri'
+  } else if (has('x-amzn-waf-action')) {
+    waf = 'AWS WAF'
+  }
+
+  const cacheControl = headers.get('cache-control')
+  const lc = (cacheControl ?? '').toLowerCase()
+  const setsCookies = cookies.length > 0
+  // Ответ с cookie, помеченный публично кэшируемым, может утечь между клиентами.
+  const publiclyCacheable =
+    lc.includes('public') ||
+    (/s-maxage=\d+/.test(lc) && !lc.includes('private') && !lc.includes('no-store'))
+  const privateCacheable = setsCookies && publiclyCacheable
+
+  const parts: string[] = []
+  if (cdn) parts.push(`CDN: ${cdn}`)
+  if (waf) parts.push(`WAF: ${waf}`)
+  if (!cdn && !waf) parts.push('CDN/WAF по заголовкам не определён')
+  if (privateCacheable)
+    parts.push('ответ с cookie помечен публично кэшируемым — риск утечки')
+
+  return {
+    cdn,
+    waf,
+    server,
+    cacheControl,
+    privateCacheable,
+    note: parts.join('; ') + '.',
+  }
+}
+
+/** Найти http-ресурсы (mixed content) на https-странице. */
+function scanMixedContent(
+  body: string,
+  isHttps: boolean,
+  isHtml: boolean,
+): MixedContentCheck {
+  if (!isHttps || !isHtml || !body) {
+    return {
+      tested: isHttps && isHtml,
+      count: 0,
+      samples: [],
+      note: !isHttps
+        ? 'Страница не по HTTPS — mixed content неприменим.'
+        : !isHtml
+          ? 'Ответ не HTML — проверка mixed content неприменима.'
+          : 'Mixed content не обнаружен.',
+    }
+  }
+  const re = /(?:src|href|action)\s*=\s*["'](http:\/\/[^"']+)["']/gi
+  const samples: string[] = []
+  const seen = new Set<string>()
+  let m: RegExpExecArray | null
+  let count = 0
+  while ((m = re.exec(body)) && count < 200) {
+    const u = m[1]
+    // http://schema.org и подобные пространства имён — не загрузка ресурса.
+    if (/^http:\/\/(www\.)?w3\.org|^http:\/\/schema\.org/i.test(u)) continue
+    count++
+    if (samples.length < 5 && !seen.has(u)) {
+      seen.add(u)
+      samples.push(u)
+    }
+  }
+  return {
+    tested: true,
+    count,
+    samples,
+    note:
+      count > 0
+        ? `Найдено http-ресурсов на https-странице: ${count}.`
+        : 'Mixed content не обнаружен.',
+  }
+}
+
+/**
+ * CORS-проверка: шлём запрос с подставным Origin и смотрим, отражает ли сервер
+ * его в Access-Control-Allow-Origin и разрешает ли credentials. Отражение
+ * произвольного Origin вместе с ACAC:true — классическая опасная мисконфигурация.
+ */
+async function checkCors(finalUrl: URL): Promise<CorsCheck> {
+  const probeOrigin = 'https://od-cors-probe.example'
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetch(finalUrl, {
+      method: 'GET',
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': BROWSER_UA, origin: probeOrigin },
+    })
+    void res.body?.cancel()
+    const acao = res.headers.get('access-control-allow-origin')
+    const acac =
+      (res.headers.get('access-control-allow-credentials') ?? '').toLowerCase() ===
+      'true'
+    const wildcard = acao === '*'
+    const reflectsOrigin = acao === probeOrigin
+
+    let risk: CorsCheck['risk'] = 'none'
+    let note = 'CORS не отражает произвольный источник — безопасно.'
+    if (reflectsOrigin && acac) {
+      risk = 'high'
+      note =
+        'Сервер отражает произвольный Origin И разрешает credentials — критичная CORS-мисконфигурация (кража данных с аутентификацией).'
+    } else if (reflectsOrigin) {
+      risk = 'medium'
+      note =
+        'Сервер отражает произвольный Origin в ACAO — потенциальная утечка данных для сторонних сайтов.'
+    } else if (wildcard && acac) {
+      risk = 'medium'
+      note = 'ACAO:* вместе с credentials — спецификация это игнорирует, но конфигурация ошибочна.'
+    } else if (wildcard) {
+      risk = 'low'
+      note = 'ACAO:* — открытый доступ к ответам (ок для публичного API, риск для приватного).'
+    }
+    return { tested: true, acao, acac, reflectsOrigin, wildcard, risk, note }
+  } catch {
+    return {
+      tested: false,
+      acao: null,
+      acac: false,
+      reflectsOrigin: false,
+      wildcard: false,
+      risk: 'none',
+      note: 'CORS-проверку выполнить не удалось.',
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const DANGEROUS_METHODS = ['PUT', 'DELETE', 'TRACE', 'CONNECT', 'PATCH']
+
+/** Проверка разрешённых HTTP-методов через OPTIONS (+ детект TRACE). */
+async function checkMethods(finalUrl: URL): Promise<MethodsCheck> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetch(finalUrl, {
+      method: 'OPTIONS',
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': BROWSER_UA },
+    })
+    void res.body?.cancel()
+    const allowRaw =
+      res.headers.get('allow') ??
+      res.headers.get('access-control-allow-methods') ??
+      ''
+    const allow = allowRaw
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean)
+    const dangerous = allow.filter((m) => DANGEROUS_METHODS.includes(m))
+    const traceEnabled = allow.includes('TRACE')
+    const note = allow.length
+      ? dangerous.length
+        ? `Разрешены потенциально опасные методы: ${dangerous.join(', ')}.`
+        : 'Опасных методов среди разрешённых не обнаружено.'
+      : 'Сервер не сообщил список методов (заголовок Allow пуст).'
+    return { tested: true, allow, dangerous, traceEnabled, note }
+  } catch {
+    return {
+      tested: false,
+      allow: [],
+      dangerous: [],
+      traceEnabled: false,
+      note: 'Проверку методов выполнить не удалось.',
     }
   } finally {
     clearTimeout(timer)
@@ -627,9 +1187,8 @@ async function checkReflection(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
-    const res = await fetch(probeUrl, {
+    const { res } = await guardedFetch(probeUrl, {
       method: 'GET',
-      redirect: 'follow',
       cache: 'no-store',
       signal: controller.signal,
       headers: {
@@ -1019,15 +1578,14 @@ export async function secretPathLeaksAction(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
-    const res = await fetch(url, {
+    const { res, finalUrl: fin } = await guardedFetch(url, {
       method: 'GET',
-      redirect: 'follow',
       cache: 'no-store',
       signal: controller.signal,
       headers: { 'user-agent': BROWSER_UA },
     })
     void res.body?.cancel()
-    finalUrl = new URL(res.url || url.toString())
+    finalUrl = fin
   } catch {
     return { ok: false, message: 'Хост не ответил — пути не проверены.' }
   } finally {
@@ -1175,9 +1733,20 @@ export async function secretSecurityAuditAction(
 
 /* ------------------------- AI-заключение (харденинг) --------------------- */
 
-// Мягкий rate-limit на дорогой вызов модели: 6 заключений в минуту суммарно
-// (как у god-отчёта). In-memory, best-effort — панель однопроцессная.
-const assessTimestamps: number[] = []
+// Мягкий rate-limit на дорогие вызовы модели: 6 AI-заключений в минуту
+// СУММАРНО (assess + drill). In-memory, best-effort — панель однопроцессная.
+const aiCallTimestamps: number[] = []
+
+/** Проверить и зарезервировать слот AI-вызова. true — можно, false — перебор. */
+function reserveAiSlot(limit = 6, windowMs = 60_000): boolean {
+  const now = Date.now()
+  while (aiCallTimestamps.length && now - aiCallTimestamps[0] > windowMs) {
+    aiCallTimestamps.shift()
+  }
+  if (aiCallTimestamps.length >= limit) return false
+  aiCallTimestamps.push(now)
+  return true
+}
 
 export interface PentestActionResult {
   ok: boolean
@@ -1208,17 +1777,12 @@ export async function secretSecurityAssessAction(
   const blocked = await guardPublicHost(url.hostname)
   if (blocked) return { ok: false, message: blocked }
 
-  const now = Date.now()
-  while (assessTimestamps.length && now - assessTimestamps[0] > 60_000) {
-    assessTimestamps.shift()
-  }
-  if (assessTimestamps.length >= 6) {
+  if (!reserveAiSlot()) {
     return {
       ok: false,
       message: 'Слишком часто. Подождите минуту и попробуйте снова.',
     }
   }
-  assessTimestamps.push(now)
 
   const audit = await collectAudit(url)
   if (audit.error && audit.status === null) {
@@ -1237,23 +1801,9 @@ export async function secretSecurityAssessAction(
   }
 
   // Ленивый импорт: тянет server-only + gateway-пл'юмбинг только при запросе.
+  // Аудит собран сервером (не доверяется клиенту), поэтому передаём целиком.
   const { assessSecurity } = await import('@/lib/god-pentest')
-  const res = await assessSecurity({
-    host: audit.host,
-    finalUrl: audit.finalUrl,
-    status: audit.status,
-    scheme: audit.scheme,
-    httpsUpgrade: audit.httpsUpgrade,
-    securityHeaders: audit.securityHeaders,
-    disclosure: audit.disclosure,
-    cookies: audit.cookies,
-    reflection: audit.reflection,
-    tls: audit.tls,
-    pathLeaks: audit.pathLeaks,
-    dns: audit.dns,
-    score: audit.score,
-    latencyMs: audit.latencyMs,
-  })
+  const res = await assessSecurity(audit)
 
   if (!res.ok) return { ok: false, message: res.message, audit }
   return { ok: true, message: 'Готово', report: res.report, audit }
@@ -1484,7 +2034,7 @@ async function drillReflection(origin: string): Promise<DrillResult> {
   // Безопасный «канареечный» пробник со спецсимволами — НЕ рабочий эксплойт,
   // просто проверяем, экранирует ли сервер < > " при отражении.
   const probe = `${marker}<'">`
-  const url = `${origin}/?omnidesk_probe=${encodeURIComponent(probe)}`
+  const url = `${origin}/?__od_probe=${encodeURIComponent(probe)}`
   const res = await probeGet(url, 65536)
 
   steps.push({
@@ -1619,7 +2169,7 @@ async function drillHttpsUpgrade(origin: string): Promise<DrillResult> {
   }
 
   if (redirectsToHttps) {
-    steps.push({ label: 'Итог', detail: 'http корректно редиректит на https.', outcome: 'refuted' })
+    steps.push({ label: 'Итог', detail: 'http корре��тно редиректит на https.', outcome: 'refuted' })
     return { kind: 'no-https-upgrade', title: 'Нет upgrade на HTTPS', verdict: 'not-exploitable', steps, evidence: null }
   }
 
@@ -1685,6 +2235,7 @@ export async function secretDrillFindingAction(
   rawUrl: string,
   kind: DrillKind,
   arg: string | null,
+  withAi = true,
 ): Promise<DrillActionResult> {
   await requireGod()
   const url = normalizeUrl(rawUrl)
@@ -1699,15 +2250,12 @@ export async function secretDrillFindingAction(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
-    const res = await fetch(url, {
+    const { finalUrl: fin } = await guardedFetch(url, {
       method: 'GET',
-      redirect: 'follow',
       cache: 'no-store',
       signal: controller.signal,
       headers: { 'user-agent': BROWSER_UA },
     })
-    void res.body?.cancel()
-    const fin = new URL(res.url || url.toString())
     origin = `${fin.protocol}//${fin.host}`
   } catch {
     /* если не ответил — drill сам это отразит */
@@ -1717,14 +2265,17 @@ export async function secretDrillFindingAction(
 
   const result = await drillFinding(kind, origin, arg)
 
-  // AI-заключение по конкретной находке (ленивый импорт того же модуля).
+  // AI-заключение по конкретной находке — опционально и под общим rate-limit
+  // (в авто-скане выключено: итоговое заключение покрывает все находки).
   let report: string | undefined
-  try {
-    const { assessFinding } = await import('@/lib/god-pentest')
-    const r = await assessFinding({ host: url.hostname, origin, drill: result })
-    if (r.ok) report = r.report
-  } catch {
-    /* заключение опционально */
+  if (withAi && reserveAiSlot()) {
+    try {
+      const { assessFinding } = await import('@/lib/god-pentest')
+      const r = await assessFinding({ host: url.hostname, origin, drill: result })
+      if (r.ok) report = r.report
+    } catch {
+      /* заключение опционально */
+    }
   }
 
   return { ok: true, message: 'Готово', data: result, report }
