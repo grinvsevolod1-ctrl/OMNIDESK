@@ -44,6 +44,11 @@ export interface PingAttempt {
   ms: number | null
   /** Человекочитаемая причина ошибки, если ответа не было. */
   error: string | null
+  /**
+   * «Холодная» попытка — первая в серии: включает установку TCP/TLS-соединения,
+   * поэтому её задержка объективно выше и её нельзя считать типичной.
+   */
+  cold?: boolean
 }
 
 export interface PingResult {
@@ -62,6 +67,11 @@ export interface PingResult {
   min: number | null
   avg: number | null
   max: number | null
+  /**
+   * Средняя задержка БЕЗ учёта первой (холодной) попытки — «тёплый» пинг,
+   * когда соединение уже установлено. null, если тёплых попыток нет.
+   */
+  warmAvg: number | null
 }
 
 export interface PingActionResult {
@@ -188,15 +198,19 @@ export async function secretPingAction(
     ip = null
   }
 
+  // Последовательные попытки; первая — «холодная» (установка TCP/TLS).
   const attempts: PingAttempt[] = []
   for (let i = 0; i < attemptsCount; i++) {
-    attempts.push(await pingOnce(url, i + 1))
+    attempts.push(await pingOnce(url, i + 1, i === 0))
   }
 
   const okAttempts = attempts.filter((a) => a.ms !== null)
   const times = okAttempts.map((a) => a.ms as number)
   const received = okAttempts.length
   const lost = attempts.length - received
+
+  // Тёплая средняя — по успешным попыткам, исключая холодную (первую).
+  const warmTimes = okAttempts.filter((a) => !a.cold).map((a) => a.ms as number)
 
   return {
     ok: true,
@@ -213,12 +227,19 @@ export async function secretPingAction(
         ? Math.round(times.reduce((s, t) => s + t, 0) / times.length)
         : null,
       max: times.length ? Math.max(...times) : null,
+      warmAvg: warmTimes.length
+        ? Math.round(warmTimes.reduce((s, t) => s + t, 0) / warmTimes.length)
+        : null,
     },
   }
 }
 
 /** Один замер: время от запроса до заголовков ответа. */
-async function pingOnce(url: URL, seq: number): Promise<PingAttempt> {
+async function pingOnce(
+  url: URL,
+  seq: number,
+  cold: boolean,
+): Promise<PingAttempt> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   const started = performance.now()
@@ -228,12 +249,15 @@ async function pingOnce(url: URL, seq: number): Promise<PingAttempt> {
       redirect: 'manual',
       cache: 'no-store',
       signal: controller.signal,
+      // keepalive просит undici переиспользовать соединение между попытками —
+      // так последующие замеры не платят заново за TCP/TLS-хендшейк.
+      keepalive: true,
       headers: { 'user-agent': BROWSER_UA },
     })
     const ms = Math.round(performance.now() - started)
     // Закрываем тело, чтобы не тянуть его целиком — нам нужен только статус.
     void res.body?.cancel()
-    return { seq, ok: true, status: res.status, ms, error: null }
+    return { seq, ok: true, status: res.status, ms, error: null, cold }
   } catch (err) {
     const aborted =
       err instanceof Error &&
@@ -244,6 +268,7 @@ async function pingOnce(url: URL, seq: number): Promise<PingAttempt> {
       status: null,
       ms: null,
       error: aborted ? 'Таймаут' : 'Нет соединения',
+      cold,
     }
   } finally {
     clearTimeout(timer)
@@ -389,8 +414,10 @@ export interface SecurityAudit {
   reflection: ReflectionCheck
   /** Проверка TLS-сертификата (только https). */
   tls: TlsCheck
-  /** Типовые утечки путей. */
+  /** Типовые утечки путей (пустой массив, пока не запрошено отдельно). */
   pathLeaks: PathLeak[]
+  /** Проверялись ли пути (ленивая проверка по кнопке, отдельным экшеном). */
+  pathLeaksChecked: boolean
   /** Почтовая/DNS-гигиена домена. */
   dns: DnsHygiene
   /** Сводная оценка защищённости. */
@@ -462,12 +489,13 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
       (h) => h.present,
     )
 
-    // Все дополнительные проверки — параллельно, чтобы не растягивать аудит.
-    const [httpsUpgrade, reflection, tls, pathLeaks, dns] = await Promise.all([
+    // Дополнительные проверки — параллельно. Утечки путей НЕ включаем: это
+    // 10+ отдельных GET, поэтому они выполняются лениво по кнопке
+    // (secretPathLeaksAction), чтобы обычный аудит был лёгким и быстрым.
+    const [httpsUpgrade, reflection, tls, dns] = await Promise.all([
       checkHttpsUpgrade(url),
       checkReflection(url, cspPresent),
       checkTls(finalUrl),
-      checkPathLeaks(finalUrl),
       checkDnsHygiene(url.hostname),
     ])
 
@@ -483,7 +511,8 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
       cookies,
       reflection,
       tls,
-      pathLeaks,
+      pathLeaks: [],
+      pathLeaksChecked: false,
       dns,
       score: { value: 0, grade: 'F', deductions: [] },
       latencyMs,
@@ -530,6 +559,7 @@ async function collectAudit(url: URL): Promise<SecurityAudit> {
         note: 'Проверка не выполнена — хост не ответил.',
       },
       pathLeaks: [],
+      pathLeaksChecked: false,
       dns: {
         tested: false,
         spf: false,
@@ -892,6 +922,12 @@ const SENSITIVE_PATHS: SensitivePath[] = [
       ct.includes('zip') || ct.includes('octet-stream') || b.startsWith('PK'),
   },
   { path: '/.well-known/security.txt', severity: 'info' },
+  { path: '/robots.txt', severity: 'info', confirm: (b, ct) => !isHtml(ct) },
+  {
+    path: '/sitemap.xml',
+    severity: 'info',
+    confirm: (b, ct) => ct.includes('xml') || /<urlset|<sitemapindex/i.test(b),
+  },
   {
     path: '/server-status',
     severity: 'warn',
@@ -901,6 +937,14 @@ const SENSITIVE_PATHS: SensitivePath[] = [
     path: '/phpinfo.php',
     severity: 'warn',
     confirm: (b) => /phpinfo\(\)|PHP Version|php_uname/i.test(b),
+  },
+  {
+    // Spring Boot Actuator — открытый наружу набор диагностических эндпоинтов.
+    path: '/actuator',
+    severity: 'warn',
+    confirm: (b, ct) =>
+      (ct.includes('json') || /^\s*\{/.test(b)) &&
+      (/"_links"/.test(b) || /"status"\s*:\s*"UP"/.test(b)),
   },
 ]
 
@@ -942,6 +986,56 @@ async function checkPathLeaks(finalUrl: URL): Promise<PathLeak[]> {
     }),
   )
   return results
+}
+
+export interface PathLeaksActionResult {
+  ok: boolean
+  message: string
+  data?: PathLeak[]
+}
+
+/**
+ * Ленивая проверка типовых утечек путей (по кнопке в UI). Вынесена из общего
+ * аудита, потому что это 10+ отдельных GET. Гейт requireGod, SSRF-guard,
+ * только чтение публичного ответа. Итоговый URL определяется одним запросом,
+ * чтобы учесть редиректы (http→https, www).
+ */
+export async function secretPathLeaksAction(
+  rawUrl: string,
+): Promise<PathLeaksActionResult> {
+  await requireGod()
+  const url = normalizeUrl(rawUrl)
+  if (!url) {
+    return {
+      ok: false,
+      message: 'Некорректный адрес. Введите домен или http(s)-URL.',
+    }
+  }
+  const blocked = await guardPublicHost(url.hostname)
+  if (blocked) return { ok: false, message: blocked }
+
+  // Определяем финальный URL (после редиректов), чтобы пути били по нужному хосту.
+  let finalUrl = url
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': BROWSER_UA },
+    })
+    void res.body?.cancel()
+    finalUrl = new URL(res.url || url.toString())
+  } catch {
+    return { ok: false, message: 'Хост не ответил — пути не проверены.' }
+  } finally {
+    clearTimeout(timer)
+  }
+
+  const leaks = await checkPathLeaks(finalUrl)
+  return { ok: true, message: 'Готово', data: leaks }
 }
 
 /* ------------------------- DNS / почтовая гигиена ----------------------- */
@@ -1131,6 +1225,17 @@ export async function secretSecurityAssessAction(
     return { ok: false, message: `Хост не ответил: ${audit.error}`, audit }
   }
 
+  // AI-заключение — это «глубокий» проход, поэтому дотягиваем и утечки путей
+  // (в обычном аудите они ленивые), затем пересчитываем сводную оценку.
+  try {
+    const leaks = await checkPathLeaks(new URL(audit.finalUrl))
+    audit.pathLeaks = leaks
+    audit.pathLeaksChecked = true
+    audit.score = computeScore(audit)
+  } catch {
+    /* пути не критичны для заключения — продолжаем без них */
+  }
+
   // Ленивый импорт: тянет server-only + gateway-пл'юмбинг только при запросе.
   const { assessSecurity } = await import('@/lib/god-pentest')
   const res = await assessSecurity({
@@ -1218,7 +1323,7 @@ export interface S3ScanActionResult {
 const BUCKET_NAME_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
 
 /**
- * Достать имя бакета (и по возможности регион) из ввода: принимает как
+ * Достать имя бакета (и по возможност�� регион) из ввода: принимает как
  * голое имя (`my-bucket`), так и любой S3-URL
  * (`my-bucket.s3.amazonaws.com`, `s3.eu-west-1.amazonaws.com/my-bucket`, …).
  */
