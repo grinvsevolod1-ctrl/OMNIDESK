@@ -54,6 +54,7 @@ import {
   type AuthProbe,
   type AutoDrill,
   type CmsDetection,
+  type CockpitProbe,
   type CorsCheck,
   type CspAnalysis,
   type DnsHygiene,
@@ -70,7 +71,7 @@ import {
   type PingResult,
   type ReconResult,
   type ReflectionCheck,
-  type S3ScanResult,
+  type S3BucketFinding,
   type SecurityAudit,
   type SecurityScore,
   type SubdomainResult,
@@ -94,12 +95,13 @@ const SCAN_PHASES = [
   'Обнаружение CMS и API-эндпоинтов',
   'Разведка поддоменов',
   'GraphQL и открытые редиректы',
-  'Проверка S3-бакета',
+  'Cockpit и детекция S3-бакетов',
   'AI-заключение по харденингу',
 ] as const
 
 export function SecretPingTab() {
   const [url, setUrl] = useState('')
+  const [authorized, setAuthorized] = useState(false)
   const [pending, setPending] = useState(false)
   const [phase, setPhase] = useState(0)
   const [result, setResult] = useState<FullScanResult | null>(null)
@@ -131,12 +133,16 @@ export function SecretPingTab() {
       toast.error('Введите домен или URL')
       return
     }
+    if (!authorized) {
+      toast.error('Подтвердите право тестировать этот домен')
+      return
+    }
     setPending(true)
     setPhase(0)
     setResult(null)
     setScanned(true)
     try {
-      const res = await secretFullScanAction(target)
+      const res = await secretFullScanAction(target, authorized)
       if (res.ok && res.data) {
         setResult(res.data)
         if (!res.data.audit.responded) toast.error(res.message)
@@ -178,7 +184,8 @@ export function SecretPingTab() {
                   e.key === 'Enter' &&
                   !e.nativeEvent.isComposing &&
                   e.keyCode !== 229 &&
-                  !pending
+                  !pending &&
+                  authorized
                 ) {
                   void runScan()
                 }
@@ -194,7 +201,7 @@ export function SecretPingTab() {
 
           <Button
             onClick={() => void runScan()}
-            disabled={pending}
+            disabled={pending || !authorized}
             className="press-scale gap-1.5"
           >
             {pending ? (
@@ -205,6 +212,23 @@ export function SecretPingTab() {
             Запустить
           </Button>
         </div>
+
+        {/* Обязательное подтверждение права тестировать домен */}
+        <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-lg border border-border/60 bg-background/40 p-3">
+          <input
+            type="checkbox"
+            checked={authorized}
+            onChange={(e) => setAuthorized(e.target.checked)}
+            className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
+            aria-label="Подтверждение права тестировать домен"
+          />
+          <span className="text-xs text-muted-foreground text-pretty">
+            Я подтверждаю, что владею этим доменом или имею явное разрешение на
+            его тестирование. Скан выполняет активные пробы (перебор поддоменов,
+            эндпоинтов, имён S3-бакетов) — запускайте его только против своей
+            инфраструктуры.
+          </span>
+        </label>
       </div>
 
       {/* ---- Прогресс конвейера ---- */}
@@ -343,10 +367,10 @@ function FullReport({ result }: { result: FullScanResult }) {
       {/* Разведка периметра */}
       {recon && <ReconSections recon={recon} />}
 
-      {/* S3-бакет — только если реально существует */}
-      {s3 && (
-        <SectionCard icon={Boxes} title="S3-бакет (по имени домена)">
-          <S3Report result={s3} />
+      {/* S3-бакеты — только состояние по типовым паттернам имени, без ключей */}
+      {s3.length > 0 && (
+        <SectionCard icon={Boxes} title="S3-бакеты (детекция по паттернам имени)">
+          <S3BucketsReport findings={s3} />
         </SectionCard>
       )}
 
@@ -437,6 +461,12 @@ function ReconSections({ recon }: { recon: ReconResult }) {
       <SectionCard icon={Network} title="API-эндпоинты">
         <EndpointsReport endpoints={recon.endpoints} authProbes={recon.authProbes} />
       </SectionCard>
+
+      {recon.cockpit.length > 0 && (
+        <SectionCard icon={Database} title="Cockpit / headless-CMS">
+          <CockpitReport probes={recon.cockpit} />
+        </SectionCard>
+      )}
 
       <SectionCard icon={GitBranch} title="GraphQL">
         <GraphqlReport gql={recon.graphql} />
@@ -659,6 +689,112 @@ function OpenRedirectReport({ check }: { check: OpenRedirectCheck }) {
       {check.evidence && (
         <div className="font-mono text-[11px] text-destructive">{check.evidence}</div>
       )}
+    </div>
+  )
+}
+
+function CockpitReport({ probes }: { probes: CockpitProbe[] }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {probes.map((p) => (
+        <div
+          key={p.path}
+          className={cn(
+            'flex items-start gap-2 rounded-lg border px-3 py-2',
+            p.openWithoutAuth
+              ? 'border-destructive/40 bg-destructive/10'
+              : 'border-border/60 bg-background/40',
+          )}
+        >
+          {p.openWithoutAuth ? (
+            <LockOpen className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+          ) : (
+            <Lock className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[11px] text-foreground">{p.path}</span>
+              {p.status !== null && (
+                <span className="font-mono text-[11px] text-muted-foreground">HTTP {p.status}</span>
+              )}
+              <span
+                className={cn(
+                  'ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium',
+                  p.openWithoutAuth
+                    ? 'bg-destructive/10 text-destructive'
+                    : 'bg-emerald-500/10 text-emerald-500',
+                )}
+              >
+                {p.openWithoutAuth ? 'без авторизации' : p.requiresAuth ? 'требует авторизации' : 'иное'}
+              </span>
+            </div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground text-pretty">{p.note}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/* ------------------------------- S3 UI ---------------------------------- */
+
+/**
+ * Детекция S3-бакетов по типовым паттернам имени. Показывает ТОЛЬКО состояние
+ * (открыт/закрыт листинг) — ключи объектов и содержимое не запрашиваются.
+ */
+function S3BucketsReport({ findings }: { findings: S3BucketFinding[] }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground text-pretty">
+        Проверены типовые варианты имени бакета для домена. Фиксируется только
+        факт существования и открытость листинга — содержимое не читается.
+      </p>
+      {findings.map((f) => {
+        const isPublic = f.verdict === 'public'
+        return (
+          <div
+            key={f.bucket}
+            className={cn(
+              'flex items-start gap-3 rounded-lg border p-3',
+              isPublic
+                ? 'border-destructive/40 bg-destructive/10'
+                : 'border-emerald-500/40 bg-emerald-500/10',
+            )}
+          >
+            {isPublic ? (
+              <ShieldAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+            ) : (
+              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="font-mono text-xs text-foreground">{f.bucket}</span>
+                {f.region && (
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    регион: {f.region}
+                  </span>
+                )}
+                <span
+                  className={cn(
+                    'ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium',
+                    isPublic ? 'bg-destructive/10 text-destructive' : 'bg-emerald-500/10 text-emerald-500',
+                  )}
+                >
+                  {isPublic ? 'листинг открыт' : 'листинг закрыт'}
+                </span>
+              </div>
+              <div
+                className={cn(
+                  'mt-0.5 text-[11px] text-pretty',
+                  isPublic ? 'text-destructive' : 'text-muted-foreground',
+                )}
+              >
+                {f.note}
+              </div>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -1414,183 +1550,6 @@ function DnsCard({ dns }: { dns: DnsHygiene }) {
             )}
           </div>
         ))}
-      </div>
-    </div>
-  )
-}
-
-/* ------------------------------ S3 UI ----------------------------------- */
-
-const S3_OUTCOME_LABELS: Record<
-  S3ScanResult['probes'][number]['outcome'],
-  string
-> = {
-  'public-listing': 'листинг открыт',
-  'access-denied': 'доступ закрыт',
-  'not-found': 'не найден',
-  redirect: 'редирект',
-  error: 'ошибка сети',
-  other: 'прочее',
-}
-
-function S3Report({ result }: { result: S3ScanResult }) {
-  const isPublic = result.verdict === 'public'
-  const verdictLabel =
-    result.verdict === 'public'
-      ? 'Публичный листинг открыт'
-      : result.verdict === 'private'
-        ? 'Листинг закрыт (приватный бакет)'
-        : result.verdict === 'not-found'
-          ? 'Бакет не найден'
-          : 'Состояние не определено'
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div
-        className={cn(
-          'flex items-start gap-3 rounded-xl border p-4',
-          isPublic
-            ? 'border-destructive/40 bg-destructive/10'
-            : result.verdict === 'private'
-              ? 'border-emerald-500/40 bg-emerald-500/10'
-              : 'border-border bg-card/40',
-        )}
-      >
-        {isPublic ? (
-          <ShieldAlert className="mt-0.5 size-5 shrink-0 text-destructive" />
-        ) : result.verdict === 'private' ? (
-          <ShieldCheck className="mt-0.5 size-5 shrink-0 text-emerald-500" />
-        ) : (
-          <Boxes className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
-        )}
-        <div className="min-w-0">
-          <div
-            className={cn(
-              'text-sm font-semibold',
-              isPublic && 'text-destructive',
-              result.verdict === 'private' && 'text-emerald-500',
-              (result.verdict === 'not-found' ||
-                result.verdict === 'unknown') &&
-                'text-foreground',
-            )}
-          >
-            {verdictLabel}
-          </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-xs text-muted-foreground">
-            <span className="text-foreground">{result.bucket}</span>
-            {result.region && <span>регион: {result.region}</span>}
-            {result.publicListing && result.objectCount !== null && (
-              <span>
-                объектов: {result.objectCount}
-                {result.truncated ? '+' : ''}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard
-          icon={Boxes}
-          label="Существует"
-          value={result.exists === null ? '—' : result.exists ? 'да' : 'нет'}
-          tone="muted"
-        />
-        <StatCard
-          icon={isPublic ? ShieldAlert : ShieldCheck}
-          label="Листинг"
-          value={result.publicListing ? 'открыт' : 'закрыт'}
-          tone={result.publicListing ? 'bad' : 'good'}
-        />
-        <StatCard
-          icon={Database}
-          label="Объектов"
-          value={
-            result.objectCount !== null
-              ? `${result.objectCount}${result.truncated ? '+' : ''}`
-              : '—'
-          }
-          tone="muted"
-        />
-        <StatCard
-          icon={Database}
-          label="Регион"
-          value={result.region ?? '—'}
-          tone="muted"
-        />
-      </div>
-
-      {result.sampleKeys.length > 0 && (
-        <div className="rounded-xl border border-destructive/30 bg-card/40 p-4">
-          <div className="mb-2 flex items-center gap-2 text-xs font-medium text-destructive">
-            <CircleAlert className="size-3.5" />
-            Видимые объекты (первые {result.sampleKeys.length})
-          </div>
-          <div className="flex flex-col gap-1">
-            {result.sampleKeys.map((k) => (
-              <div
-                key={k}
-                className="truncate font-mono text-[11px] text-muted-foreground"
-              >
-                {k}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="overflow-hidden rounded-xl border border-border">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border bg-muted/40 text-left text-xs text-muted-foreground">
-              <th className="px-4 py-2 font-medium">Эндпоинт</th>
-              <th className="px-4 py-2 font-medium">Статус</th>
-              <th className="px-4 py-2 font-medium">Задержка</th>
-              <th className="px-4 py-2 font-medium">Результат</th>
-            </tr>
-          </thead>
-          <tbody>
-            {result.probes.map((p) => (
-              <tr
-                key={p.url}
-                className="border-b border-border/60 last:border-b-0"
-              >
-                <td className="px-4 py-2 font-mono text-xs text-muted-foreground">
-                  {p.style}
-                </td>
-                <td className="px-4 py-2 font-mono">
-                  {p.status !== null ? (
-                    <StatusBadge status={p.status} />
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-2 font-mono">
-                  {p.ms !== null ? (
-                    `${p.ms} мс`
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-2 text-xs">
-                  <span
-                    className={cn(
-                      'inline-flex items-center gap-1.5',
-                      p.outcome === 'public-listing' && 'text-destructive',
-                      p.outcome === 'access-denied' && 'text-emerald-500',
-                      p.outcome !== 'public-listing' &&
-                        p.outcome !== 'access-denied' &&
-                        'text-muted-foreground',
-                    )}
-                  >
-                    {S3_OUTCOME_LABELS[p.outcome]}
-                    {p.code ? ` (${p.code})` : ''}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
     </div>
   )

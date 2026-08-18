@@ -2672,6 +2672,21 @@ export interface OpenRedirectCheck {
   note: string
 }
 
+/**
+ * Проба Cockpit CMS / headless-API эндпоинта. ТОЛЬКО статус: определяем, что
+ * эндпоинт существует и требует ли он авторизации. Записи НЕ читаются и НЕ
+ * сохраняются — это детекция открытой поверхности, а не выгрузка данных.
+ */
+export interface CockpitProbe {
+  path: string
+  status: number | null
+  exists: boolean
+  requiresAuth: boolean
+  /** Открыт без авторизации — потенциально утечка данных. */
+  openWithoutAuth: boolean
+  note: string
+}
+
 /** Свод результатов разведки периметра. */
 export interface ReconResult {
   cms: CmsDetection
@@ -2680,6 +2695,8 @@ export interface ReconResult {
   graphql: GraphqlCheck
   subdomains: SubdomainResult[]
   openRedirect: OpenRedirectCheck
+  /** Cockpit / headless-CMS эндпоинты — только статусы доступности. */
+  cockpit: CockpitProbe[]
 }
 
 /** Лёгкий GET/OPTIONS с guard'ом хоста и коротким таймаутом; читает тело. */
@@ -2993,16 +3010,137 @@ async function checkOpenRedirect(origin: string): Promise<OpenRedirectCheck> {
 }
 
 /** Выполнить всю разведку периметра параллельно (насколько возможно). */
+/**
+ * Проверить типовые Cockpit / headless-CMS эндпоинты. ТОЛЬКО статус (HEAD/GET
+ * без чтения записей): существует ли эндпоинт и требует ли он авторизации.
+ * Никакие коллекции/записи/PII не читаются и не сохраняются.
+ */
+async function probeCockpit(origin: string): Promise<CockpitProbe[]> {
+  const PATHS = [
+    '/api/collections',
+    '/api/collections/get',
+    '/api/content/items',
+    '/api/gql',
+    '/api/pages',
+    '/api/singletons',
+  ]
+  const probes = await Promise.all(
+    PATHS.map(async (path): Promise<CockpitProbe> => {
+      // Только заголовки: тело (записи) намеренно не читаем.
+      const r = await reconFetch(`${origin}${path}`, { method: 'GET' })
+      const status = r.status
+      const exists = status !== null && status !== 404
+      const requiresAuth = status === 401 || status === 403
+      const openWithoutAuth = status !== null && status >= 200 && status < 300
+      const note =
+        status === null
+          ? 'нет ответа'
+          : status === 404
+            ? 'не найден'
+            : requiresAuth
+              ? 'существует, требует авторизации (ок)'
+              : openWithoutAuth
+                ? 'доступен БЕЗ авторизации — проверьте, не утекают ли данные'
+                : `ответ ${status}`
+      return { path, status, exists, requiresAuth, openWithoutAuth, note }
+    }),
+  )
+  // Возвращаем только реально существующие эндпоинты, чтобы не шуметь.
+  return probes.filter((p) => p.exists)
+}
+
 async function collectRecon(origin: string, host: string): Promise<ReconResult> {
-  const [cms, endpoints, authProbes, graphql, subdomains, openRedirect] = await Promise.all([
+  const [cms, endpoints, authProbes, graphql, subdomains, openRedirect, cockpit] = await Promise.all([
     detectCms(origin),
     probeApiEndpoints(origin),
     probeAuthEndpoints(origin),
     checkGraphql(origin),
     enumerateSubdomains(host),
     checkOpenRedirect(origin),
+    probeCockpit(origin),
   ])
-  return { cms, endpoints, authProbes, graphql, subdomains, openRedirect }
+  return { cms, endpoints, authProbes, graphql, subdomains, openRedirect, cockpit }
+}
+
+/* ===================================================================== */
+/*  S3: детекция бакетов по типовым паттернам имени (БЕЗ выгрузки ключей)  */
+/*                                                                        */
+/*  Автоскан перебирает распространённые варианты имени бакета для домена  */
+/*  и фиксирует ТОЛЬКО состояние: существует / открыт листинг / закрыт.    */
+/*  Ключи объектов и содержимое НЕ читаются и НЕ сохраняются — в отличие   */
+/*  от ручного S3-экшена это чистая детекция поверхности.                  */
+/* ===================================================================== */
+
+/** Находка по одному кандидату-бакету (только состояние, без ключей). */
+export interface S3BucketFinding {
+  bucket: string
+  region: string | null
+  verdict: 'public' | 'private' | 'not-found' | 'unknown'
+  note: string
+}
+
+/**
+ * Определить состояние бакета БЕЗ чтения ключей: один virtual-hosted GET,
+ * при необходимости — региональный. Возвращает только вердикт и регион.
+ */
+async function probeBucketState(bucket: string): Promise<{ verdict: S3BucketFinding['verdict']; region: string | null }> {
+  const outcomes: S3Probe['outcome'][] = []
+  let region: string | null = null
+
+  const r1 = await s3Get(`https://${bucket}.s3.amazonaws.com/`)
+  if (r1.region) region = r1.region
+  outcomes.push(classifyOutcome(r1))
+
+  // Если глобальный редиректнул на регион — уточняем одним запросом.
+  if (region && !outcomes.includes('public-listing')) {
+    const r2 = await s3Get(`https://${bucket}.s3.${region}.amazonaws.com/`)
+    if (r2.region) region = r2.region
+    outcomes.push(classifyOutcome(r2))
+  }
+
+  let verdict: S3BucketFinding['verdict'] = 'unknown'
+  if (outcomes.includes('public-listing')) verdict = 'public'
+  else if (outcomes.includes('access-denied')) verdict = 'private'
+  else if (outcomes.includes('not-found')) verdict = 'not-found'
+  return { verdict, region }
+}
+
+/**
+ * Перебрать типовые паттерны имени бакета для домена и вернуть только те, что
+ * реально существуют (public/private). Несуществующие отбрасываются, ключи
+ * объектов не читаются.
+ */
+async function scanDomainBuckets(host: string): Promise<S3BucketFinding[]> {
+  const org = registrableDomain(host)
+  const base = org.split('.')[0]
+  if (!base) return []
+  const candidates = Array.from(
+    new Set([
+      base,
+      `${base}-prod`,
+      `${base}-production`,
+      `${base}-static`,
+      `${base}-assets`,
+      `${base}-media`,
+      `${base}-uploads`,
+      `${base}-backup`,
+      `${base}-backups`,
+      org.replace(/\./g, '-'),
+    ]),
+  ).filter((b) => BUCKET_NAME_RE.test(b))
+
+  const findings = await Promise.all(
+    candidates.map(async (bucket): Promise<S3BucketFinding | null> => {
+      const { verdict, region } = await probeBucketState(bucket)
+      if (verdict === 'not-found' || verdict === 'unknown') return null
+      const note =
+        verdict === 'public'
+          ? 'бакет существует, листинг ОТКРЫТ наружу — критично'
+          : 'бакет существует, листинг закрыт (приватный)'
+      return { bucket, region, verdict, note }
+    }),
+  )
+  return findings.filter((f): f is S3BucketFinding => f !== null)
 }
 
 /* ===================================================================== */
@@ -3032,8 +3170,8 @@ export interface FullScanResult {
   drills: AutoDrill[]
   /** Разведка периметра: CMS, API, GraphQL, поддомены, открытые редиректы. */
   recon: ReconResult | null
-  /** Скан одноимённого S3-бакета — только если бакет реально существует. */
-  s3: S3ScanResult | null
+  /** Найденные S3-бакеты по типовым паттернам имени (только состояние, без ключей). */
+  s3: S3BucketFinding[]
   /** AI-заключение по харденингу (markdown) или null, если недоступно. */
   report: string | null
   /** Причина, по которой заключение не сгенерировано (если report === null). */
@@ -3083,8 +3221,19 @@ function findingsToDrill(
  */
 export async function secretFullScanAction(
   rawUrl: string,
+  authorized: boolean,
 ): Promise<FullScanActionResult> {
   await requireGod()
+
+  // Подтверждение права тестировать домен — обязательный шлюз перед активными
+  // recon-пробами (перебор поддоменов/бакетов/эндпоинтов).
+  if (!authorized) {
+    return {
+      ok: false,
+      message:
+        'Подтвердите, что вы владеете доменом или имеете разрешение на его тестирование.',
+    }
+  }
 
   const url = normalizeUrl(rawUrl)
   if (!url) {
@@ -3138,7 +3287,7 @@ export async function secretFullScanAction(
     return {
       ok: true,
       message: `Хост не ответил: ${audit.error ?? 'нет соединения'}`,
-      data: { ping, audit, drills: [], recon: null, s3: null, report: null, reportError: null },
+      data: { ping, audit, drills: [], recon: null, s3: [], report: null, reportError: null },
     }
   }
 
@@ -3180,14 +3329,11 @@ export async function secretFullScanAction(
     /* recon опционален — не срываем весь отчёт */
   }
 
-  // 6) Оппортунистический скан одноимённого S3-бакета (только если существует).
-  let s3: S3ScanResult | null = null
+  // 6) Детекция S3-бакетов по типовым паттернам имени (только состояние, без
+  //    выгрузки ключей/содержимого) — карта открытой поверхности хранилища.
+  let s3: S3BucketFinding[] = []
   try {
-    const candidate = registrableDomain(url.hostname)
-    const r = await secretS3ScanAction(candidate)
-    if (r.ok && r.data && (r.data.verdict === 'public' || r.data.verdict === 'private')) {
-      s3 = r.data
-    }
+    s3 = await scanDomainBuckets(url.hostname)
   } catch {
     /* S3 опционален */
   }
@@ -3199,7 +3345,7 @@ export async function secretFullScanAction(
   if (reserveAiSlot()) {
     try {
       const { assessSecurity } = await import('@/lib/god-pentest')
-      const res = await assessSecurity({ ...audit, recon: reconSummaryForAi(recon) })
+      const res = await assessSecurity({ ...audit, recon: reconSummaryForAi(recon, s3) })
       if (res.ok) report = res.report
       else reportError = res.message
     } catch {
@@ -3216,23 +3362,25 @@ export async function secretFullScanAction(
   }
 }
 
-/** Сжать recon в компактную сводку для AI-контекста (без сырых тел). */
-function reconSummaryForAi(recon: ReconResult | null): ReconSummary | undefined {
-  if (!recon) return undefined
+/** Сжать recon + S3 в компактную сводку для AI-контекста (без сырых тел). */
+function reconSummaryForAi(recon: ReconResult | null, s3: S3BucketFinding[]): ReconSummary | undefined {
+  if (!recon && s3.length === 0) return undefined
   return {
-    cms: recon.cms.name
+    cms: recon?.cms.name
       ? `${recon.cms.name}${recon.cms.version ? ` ${recon.cms.version}` : ''}` +
         (recon.cms.adminPaths.length ? ` (панель: ${recon.cms.adminPaths.join(', ')})` : '')
       : null,
-    endpoints: recon.endpoints
+    endpoints: (recon?.endpoints ?? [])
       .filter((e) => e.present)
       .map((e) => `${e.path} — ${e.note}`),
-    authProbes: recon.authProbes
+    authProbes: (recon?.authProbes ?? [])
       .filter((a) => a.status !== null && a.status !== 404)
       .map((a) => `${a.path} [${a.risk}] — ${a.note}`),
-    graphqlIntrospection: recon.graphql.introspectionEnabled,
-    graphqlNote: recon.graphql.note,
-    subdomains: recon.subdomains.map((s) => `${s.host} (${s.note})`),
-    openRedirect: recon.openRedirect.vulnerable ? recon.openRedirect.note : null,
+    graphqlIntrospection: recon?.graphql.introspectionEnabled ?? false,
+    graphqlNote: recon?.graphql.note ?? '',
+    subdomains: (recon?.subdomains ?? []).map((s) => `${s.host} (${s.note})`),
+    openRedirect: recon?.openRedirect.vulnerable ? recon.openRedirect.note : null,
+    cockpit: (recon?.cockpit ?? []).map((c) => `${c.path} [${c.status}] — ${c.note}`),
+    s3Buckets: s3.map((b) => `${b.bucket} — ${b.verdict}${b.region ? ` (${b.region})` : ''}`),
   }
 }
