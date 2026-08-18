@@ -255,7 +255,7 @@ export function SecretPingTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      {/* ---- Единый ввод адреса + одна кнопка ---- */}
+      {/* ---- Единый ввод адрес�� + одна кнопка ---- */}
       <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
         <div className="mb-1 flex items-center gap-2 text-sm font-medium text-foreground">
           <Radio className="size-4 text-primary" />
@@ -887,7 +887,7 @@ function FlagMark({ on }: { on: boolean }) {
   )
 }
 
-/* --------------------------- Сводная оценка ----------------------------- */
+/* --------------------------- Сводн��я оценка ----------------------------- */
 
 /** Тон бейджа по буквенной оценке. */
 function gradeTone(grade: SecurityScore['grade']): string {
@@ -1352,9 +1352,20 @@ function PingReport({ result }: { result: PingResult }) {
         />
         <StatCard
           icon={Gauge}
-          label="Средняя"
-          value={result.avg !== null ? `${result.avg} мс` : '—'}
+          label={result.warmAvg !== null ? 'Тёплая средняя' : 'Средняя'}
+          value={
+            result.warmAvg !== null
+              ? `${result.warmAvg} мс`
+              : result.avg !== null
+                ? `${result.avg} мс`
+                : '—'
+          }
           tone="muted"
+          hint={
+            result.warmAvg !== null
+              ? `Без учёта холодной попытки. Общая средняя: ${result.avg} мс`
+              : undefined
+          }
         />
         <StatCard
           icon={Gauge}
@@ -1387,6 +1398,14 @@ function PingReport({ result }: { result: PingResult }) {
               >
                 <td className="px-4 py-2 font-mono text-muted-foreground">
                   {a.seq}
+                  {a.cold && (
+                    <span
+                      className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground"
+                      title="Холодная попытка: включает установку TCP/TLS-соединения, задержка объективно выше"
+                    >
+                      cold
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-2 font-mono">
                   {a.status !== null ? (
@@ -1429,14 +1448,16 @@ function StatCard({
   label,
   value,
   tone,
+  hint,
 }: {
   icon: typeof Gauge
   label: string
   value: string
   tone: 'good' | 'bad' | 'muted'
+  hint?: string
 }) {
   return (
-    <div className="rounded-xl border border-border bg-card/40 p-3">
+    <div className="rounded-xl border border-border bg-card/40 p-3" title={hint}>
       <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
         <Icon className="size-3.5" />
         {label}
