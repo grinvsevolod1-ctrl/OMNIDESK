@@ -6,6 +6,9 @@ import { connect as tlsConnect } from 'node:tls'
 import type { PeerCertificate } from 'node:tls'
 import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
+import { computeScore, type SecurityScore } from '@/lib/god-audit-score'
+
+export type { SecurityScore }
 
 /* ===================================================================== */
 /*  Ping — god-панель, вкладка «Ping»                                     */
@@ -311,16 +314,6 @@ export interface DnsHygiene {
   /** Найден ли DKIM хотя бы по одному распространённому селектору. */
   dkim: boolean
   caa: boolean
-}
-
-/** Сводная оценка защищённости домена. */
-export interface SecurityScore {
-  /** 0–100. */
-  value: number
-  /** Буквенная оценка A–F. */
-  grade: 'A' | 'B' | 'C' | 'D' | 'E' | 'F'
-  /** Разбивка снятых баллов: причина → сколько снято. */
-  deductions: { reason: string; points: number }[]
 }
 
 export interface SecurityAudit {
@@ -907,89 +900,6 @@ async function hasCaa(domain: string): Promise<boolean> {
   }
 }
 
-/* ------------------------- Сводная оценка (score) ----------------------- */
-
-/** Присутствует ли заголовок безопасности по ключу. */
-function headerPresent(audit: SecurityAudit, key: string): boolean {
-  return audit.securityHeaders.some((h) => h.key === key && h.present)
-}
-
-/**
- * Вычислить сводную оценку защищённости: старт 100, вычитаем баллы за
- * недостатки. Чистая функция от собранного аудита — легко тестируется.
- */
-export function computeScore(audit: SecurityAudit): SecurityScore {
-  const deductions: { reason: string; points: number }[] = []
-  const cut = (reason: string, points: number) => {
-    if (points > 0) deductions.push({ reason, points })
-  }
-
-  // Транспорт.
-  if (audit.scheme !== 'https') cut('Соединение без HTTPS', 20)
-  if (audit.httpsUpgrade === 'no') cut('Нет редиректа http→https', 8)
-
-  // Заголовки безопасности.
-  if (!headerPresent(audit, 'strict-transport-security'))
-    cut('Нет HSTS (Strict-Transport-Security)', 10)
-  if (!headerPresent(audit, 'content-security-policy'))
-    cut('Нет Content-Security-Policy', 12)
-  if (!headerPresent(audit, 'x-content-type-options'))
-    cut('Нет X-Content-Type-Options', 5)
-  if (!headerPresent(audit, 'x-frame-options'))
-    cut('Нет X-Frame-Options', 5)
-  if (!headerPresent(audit, 'referrer-policy'))
-    cut('Нет Referrer-Policy', 3)
-  if (!headerPresent(audit, 'permissions-policy'))
-    cut('Нет Permissions-Policy', 3)
-
-  // Раскрытие версий ПО.
-  if (audit.disclosure.length > 0)
-    cut('Раскрытие версий ПО в заголовках', Math.min(audit.disclosure.length * 3, 9))
-
-  // Reflected XSS.
-  if (audit.reflection.risk === 'high') cut('Высокий риск reflected XSS', 25)
-  else if (audit.reflection.risk === 'medium') cut('Средний риск reflected XSS', 15)
-  else if (audit.reflection.risk === 'low') cut('Отражение ввода (низкий риск)', 5)
-
-  // TLS.
-  if (audit.tls.tested) {
-    if (audit.tls.status === 'bad') cut(`TLS: ${audit.tls.note}`, 25)
-    else if (audit.tls.status === 'warn') cut(`TLS: ${audit.tls.note}`, 10)
-  }
-
-  // Утечки путей.
-  const critical = audit.pathLeaks.filter(
-    (p) => p.exposed && p.severity === 'critical',
-  ).length
-  const warn = audit.pathLeaks.filter(
-    (p) => p.exposed && p.severity === 'warn',
-  ).length
-  if (critical > 0) cut('Открыты критичные пути (.env/.git)', Math.min(critical * 12, 30))
-  if (warn > 0) cut('Открыты чувствительные пути', Math.min(warn * 5, 15))
-
-  // Cookie без флагов.
-  const badCookies = audit.cookies.filter(
-    (c) => !c.secure || !c.httpOnly,
-  ).length
-  if (badCookies > 0)
-    cut('Cookie без Secure/HttpOnly', Math.min(badCookies * 3, 9))
-
-  // DNS/почта.
-  if (audit.dns.tested) {
-    if (!audit.dns.spf) cut('Нет SPF-записи', 4)
-    if (!audit.dns.dmarc) cut('Нет DMARC-записи', 5)
-    else if (audit.dns.dmarcPolicy === 'none') cut('DMARC policy=none', 2)
-    if (!audit.dns.caa) cut('Нет CAA-записи', 2)
-  }
-
-  const totalCut = deductions.reduce((s, d) => s + d.points, 0)
-  const value = Math.max(0, Math.min(100, 100 - totalCut))
-  const grade: SecurityScore['grade'] =
-    value >= 90 ? 'A' : value >= 80 ? 'B' : value >= 70 ? 'C' : value >= 55 ? 'D' : value >= 40 ? 'E' : 'F'
-
-  return { value, grade, deductions }
-}
-
 /**
  * Публичный экшен: собрать пассивный аудит безопасности своего домена.
  * Гейт requireGod, без audit() — как остальные god-экшены.
@@ -1330,7 +1240,7 @@ export async function secretS3ScanAction(
   if (r1.region) region = r1.region
   probes.push(toProbe('virtual-hosted', vhUrl, r1))
 
-  // 2) Если зн��ем регион (из редиректа/заголовка) — точный региональный запрос.
+  // 2) Если знаем регион (из редиректа/заголовка) — точный региональный запрос.
   let listing: S3Response | null =
     classifyOutcome(r1) === 'public-listing' ? r1 : null
   if (region) {
