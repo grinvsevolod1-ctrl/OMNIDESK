@@ -20,6 +20,8 @@ export function MessageBubble({
   onReply,
   onEdit,
   onDelete,
+  showTail = true,
+  tight = false,
 }: {
   msg: PersonalMessage
   /** The message this one replies to, already resolved by the parent. */
@@ -29,17 +31,28 @@ export function MessageBubble({
   onReply: (msg: PersonalMessage) => void
   onEdit: (msg: PersonalMessage) => void
   onDelete: (msg: PersonalMessage) => void
+  /** Последнее сообщение в серии одного автора — рисуем «хвост» пузыря. */
+  showTail?: boolean
+  /** Не первое в серии — прижимаем к предыдущему (плотная группа). */
+  tight?: boolean
 }) {
   return (
     <div
-      className={cn('group flex', msg.outgoing ? 'justify-end' : 'justify-start')}
+      className={cn(
+        'group flex',
+        tight ? 'mt-0.5' : 'mt-2',
+        msg.outgoing ? 'justify-end' : 'justify-start',
+      )}
     >
       <div
         className={cn(
-          'relative max-w-[78%] rounded-2xl px-3 py-2',
+          'relative max-w-[78%] rounded-2xl px-3 py-1.5 shadow-sm ring-1',
           msg.outgoing
-            ? 'rounded-br-sm bg-primary text-primary-foreground'
-            : 'rounded-bl-sm bg-muted text-foreground',
+            ? 'bg-primary text-primary-foreground ring-transparent'
+            : 'bg-card text-foreground ring-border/60',
+          // «Хвост» — маленький угол на стороне отправителя только у последнего
+          // пузыря в серии; промежуточные остаются полностью скруглёнными.
+          showTail && (msg.outgoing ? 'rounded-br-sm' : 'rounded-bl-sm'),
         )}
       >
         {reply && (
@@ -48,7 +61,7 @@ export function MessageBubble({
               'mb-1.5 rounded-md border-l-2 px-2 py-1 text-xs',
               msg.outgoing
                 ? 'border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/90'
-                : 'border-primary/60 bg-background/50 text-muted-foreground',
+                : 'border-primary/60 bg-muted/70 text-muted-foreground',
             )}
           >
             <p className="line-clamp-2">

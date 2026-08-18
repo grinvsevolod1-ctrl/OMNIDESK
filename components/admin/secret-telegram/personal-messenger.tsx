@@ -10,6 +10,7 @@ import {
   FileText,
   ImageIcon,
   Loader2,
+  MessagesSquare,
   Paperclip,
   Pencil,
   Reply,
@@ -308,15 +309,18 @@ export function PersonalMessenger({
       {/* Тред */}
       <section className={cn('flex min-w-0 flex-1 flex-col', !m.peer && 'hidden md:flex')}>
         {!m.peer || !activeDialog ? (
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              Выберите диалог, чтобы начать общение
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-muted/40 px-6 text-center">
+            <span className="flex size-16 items-center justify-center rounded-full bg-background shadow-sm ring-1 ring-border/60">
+              <MessagesSquare className="size-7 text-muted-foreground" />
+            </span>
+            <p className="max-w-56 text-sm text-muted-foreground text-pretty">
+              Выберите диалог слева, чтобы открыть переписку
             </p>
           </div>
         ) : (
           <>
             {/* Шапка треда */}
-            <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
+            <div className="flex items-center gap-3 border-b border-border bg-card px-4 py-2.5">
               <Button
                 variant="ghost"
                 size="icon"
@@ -342,7 +346,10 @@ export function PersonalMessenger({
             </div>
 
             {/* Сообщения */}
-            <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-y-auto px-4 py-3">
+            <div
+              ref={scrollRef}
+              className="relative min-h-0 flex-1 overflow-y-auto bg-muted/40 px-4 py-3"
+            >
               {m.threadLoading ? (
                 <div className="flex h-full items-center justify-center text-muted-foreground">
                   <Loader2 className="size-5 animate-spin" />
@@ -368,31 +375,48 @@ export function PersonalMessenger({
                   )}
                   {grouped.map((group) => (
                     <div key={group.day}>
-                      <div className="my-3 flex justify-center">
-                        <span className="rounded-full bg-muted px-3 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      <div className="sticky top-0 z-10 my-3 flex justify-center">
+                        <span className="rounded-full bg-background/80 px-3 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm ring-1 ring-border/50 backdrop-blur">
                           {group.day}
                         </span>
                       </div>
-                      <div className="flex flex-col gap-1.5">
-                        {group.items.map((msg) => (
-                          <MessageBubble
-                            key={msg.id}
-                            msg={msg}
-                            reply={repliedTo(msg.replyToId)}
-                            channelId={channelId}
-                            peerId={activeDialog.peerId}
-                            onReply={(target) => {
-                              setReplyTo(target)
-                              setEditing(null)
-                            }}
-                            onEdit={startEdit}
-                            onDelete={(target) => {
-                              if (confirm('Удалить сообщение у всех?')) {
-                                void m.deleteMessage(Number(target.id))
-                              }
-                            }}
-                          />
-                        ))}
+                      <div className="flex flex-col">
+                        {group.items.map((msg, j) => {
+                          // Серия — подряд идущие сообщения одного автора в
+                          // пределах ~5 минут: прижимаем плотно, «хвост» рисуем
+                          // только у последнего пузыря серии.
+                          const prev = group.items[j - 1]
+                          const next = group.items[j + 1]
+                          const sameAsPrev =
+                            !!prev &&
+                            prev.outgoing === msg.outgoing &&
+                            msg.date - prev.date < 300
+                          const sameAsNext =
+                            !!next &&
+                            next.outgoing === msg.outgoing &&
+                            next.date - msg.date < 300
+                          return (
+                            <MessageBubble
+                              key={msg.id}
+                              msg={msg}
+                              reply={repliedTo(msg.replyToId)}
+                              channelId={channelId}
+                              peerId={activeDialog.peerId}
+                              tight={sameAsPrev}
+                              showTail={!sameAsNext}
+                              onReply={(target) => {
+                                setReplyTo(target)
+                                setEditing(null)
+                              }}
+                              onEdit={startEdit}
+                              onDelete={(target) => {
+                                if (confirm('Удалить сообщение у всех?')) {
+                                  void m.deleteMessage(Number(target.id))
+                                }
+                              }}
+                            />
+                          )
+                        })}
                       </div>
                     </div>
                   ))}
@@ -402,7 +426,7 @@ export function PersonalMessenger({
                 <Button
                   variant="secondary"
                   size="icon"
-                  className="sticky bottom-2 left-full size-9 rounded-full shadow-md"
+                  className="sticky bottom-2 left-full size-9 rounded-full border border-border bg-card shadow-md ring-1 ring-border/50 hover:bg-muted"
                   aria-label="Вниз"
                   onClick={() => {
                     stickRef.current = true
@@ -415,7 +439,7 @@ export function PersonalMessenger({
             </div>
 
             {/* Композер */}
-            <div className="border-t border-border p-3">
+            <div className="border-t border-border bg-card p-3">
               {(replyTo || editing || pendingFile) && (
                 <div className="mb-2 flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-xs">
                   {editing ? (

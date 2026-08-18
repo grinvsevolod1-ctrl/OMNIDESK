@@ -182,8 +182,8 @@ export function DialogList({
               type="button"
               onClick={() => onSelectPeer(d.peerId)}
               className={cn(
-                'flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/60',
-                activePeer === d.peerId && 'bg-muted',
+                'flex w-full items-center gap-3 border-l-2 border-transparent px-3 py-2.5 text-left transition-colors hover:bg-muted/60',
+                activePeer === d.peerId && 'border-primary bg-muted',
               )}
             >
               <DialogAvatar channelId={channelId} dialog={d} />
