@@ -135,6 +135,14 @@ export interface GodSite {
   lastSeenAt: string | null
   createdAt: string
   updatedAt: string
+  /**
+   * Permanent «яндекс N» extension label (migration 136) — null until the
+   * first download assigns it. Surfaced so the list can identify which
+   * archive belongs to which site without re-downloading.
+   */
+  extLabelSeq: number | null
+  /** Per-site download counter → manifest version «1.0.K». 0 = never built. */
+  extVersion: number
 }
 
 export type MutationResult =

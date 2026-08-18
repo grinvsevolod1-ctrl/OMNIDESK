@@ -56,6 +56,10 @@ export interface SiteListItem {
   currency: string
   autoSpendEnabled: boolean
   autoDailyBudget: number
+  /** «яндекс N» label of the downloaded extension; null = never downloaded. */
+  extLabelSeq: number | null
+  /** Download counter → manifest «1.0.K»; 0 = extension never built. */
+  extVersion: number
 }
 
 function toListItem(s: GodSite): SiteListItem {
@@ -73,6 +77,8 @@ function toListItem(s: GodSite): SiteListItem {
     currency: s.state.currency,
     autoSpendEnabled: s.state.autoSpend?.enabled === true,
     autoDailyBudget: s.state.autoSpend?.dailyBudget ?? 0,
+    extLabelSeq: s.extLabelSeq,
+    extVersion: s.extVersion,
   }
 }
 

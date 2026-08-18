@@ -1,7 +1,16 @@
 'use client'
 
-import { Trash2 } from 'lucide-react'
-import type { SiteCampaign } from '@/lib/god-sites'
+import { useState } from 'react'
+import { CalendarClock, ChevronDown, CopyPlus, Trash2 } from 'lucide-react'
+import type {
+  PeriodMetricField,
+  PeriodOverride,
+  SiteCampaign,
+  SitePeriod,
+} from '@/lib/god-sites'
+// VALUE import from god-sites-types (not god-sites): the DB layer is
+// `server-only` and would poison this client component's bundle.
+import { PERIOD_METRIC_FIELDS } from '@/lib/god-sites-types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -15,20 +24,63 @@ import {
 } from '@/components/admin/secret-sites/site-editor-helpers'
 
 /**
+ * Periods that accept manual metric overlays. `today` is deliberately
+ * absent — the projection never applies it (today is always the live view)
+ * and the validator drops it, so offering it here would be a silent no-op.
+ */
+const OVERRIDE_PERIODS: { period: SitePeriod; label: string }[] = [
+  { period: 'yesterday', label: 'Вчера' },
+  { period: 'week', label: 'Неделя' },
+  { period: 'month', label: 'Месяц' },
+  { period: 'all', label: 'Всё время' },
+]
+
+/** Labels for the override inputs — same wording as the base metric grid. */
+const OVERRIDE_FIELD_LABELS: Record<PeriodMetricField, string> = {
+  cost: 'Расход',
+  shows: 'Показы',
+  clicks: 'Клики',
+  goals: 'Конверсии',
+  bounce: 'Отказы, %',
+  revenue: 'Доход',
+}
+
+/**
  * Editor for a single campaign row of a managed site: name, run/stop, raw
- * metric inputs and a read-only derived-metrics footer. Stateless — the
- * parent editor owns campaign state and passes patch/remove callbacks, so a
- * long site can map over campaigns without re-rendering the whole form.
+ * metric inputs, optional per-period metric overrides and a read-only
+ * derived-metrics footer. Stateless w.r.t. campaign data — the parent editor
+ * owns the state and passes patch/remove callbacks, so a long site can map
+ * over campaigns without re-rendering the whole form.
  */
 export function CampaignCard({
   campaign: c,
+  overrides,
   onPatch,
+  onOverridePatch,
+  onDuplicate,
   onRemove,
 }: {
   campaign: SiteCampaign
+  /** This campaign's per-period overlays (period → override), possibly sparse. */
+  overrides: Partial<Record<SitePeriod, PeriodOverride | undefined>>
   onPatch: (patch: Partial<SiteCampaign>) => void
+  /** value === undefined clears the override (field returns to auto). */
+  onOverridePatch: (
+    period: SitePeriod,
+    field: PeriodMetricField,
+    value: number | undefined,
+  ) => void
+  onDuplicate: () => void
   onRemove: () => void
 }) {
+  const overrideCount = OVERRIDE_PERIODS.reduce(
+    (n, { period }) => n + Object.keys(overrides[period] ?? {}).length,
+    0,
+  )
+  // Open by default when overrides already exist — hidden curated data that
+  // silently shapes the vitrine is worse than a slightly taller card.
+  const [periodsOpen, setPeriodsOpen] = useState(overrideCount > 0)
+  const [activePeriod, setActivePeriod] = useState<SitePeriod>('week')
   return (
     <Card key={c.id} className="flex flex-col gap-0 overflow-hidden p-0">
       {/* Campaign header */}
@@ -73,6 +125,16 @@ export function CampaignCard({
           <Button
             size="sm"
             variant="ghost"
+            onClick={onDuplicate}
+            title="Дублировать кампанию (копия создаётся остановленной)"
+            className="press-scale size-8 p-0 text-muted-foreground hover:text-foreground"
+          >
+            <CopyPlus className="size-4" />
+            <span className="sr-only">Дублировать кампанию</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
             onClick={() => {
               if (window.confirm(`Удалить кампанию «${c.name}»?`)) {
                 onRemove()
@@ -82,6 +144,7 @@ export function CampaignCard({
             className="press-scale size-8 p-0 text-muted-foreground hover:text-destructive"
           >
             <Trash2 className="size-4" />
+            <span className="sr-only">Удалить кампанию</span>
           </Button>
         </div>
       </div>
@@ -129,6 +192,103 @@ export function CampaignCard({
               />
             </div>
           ))}
+        </div>
+
+        {/* Per-period metric overrides — the backend (validation + projection)
+            has supported these all along; this is the first UI for them.
+            Empty input = inherit (auto/simulated value for that period). */}
+        <div className="flex flex-col gap-3 rounded-lg border bg-muted/20">
+          <button
+            type="button"
+            onClick={() => setPeriodsOpen((v) => !v)}
+            aria-expanded={periodsOpen}
+            className="flex items-center gap-2 px-3 py-2.5 text-left"
+          >
+            <CalendarClock className="size-4 shrink-0 text-muted-foreground" />
+            <span className="text-xs font-semibold">Метрики по периодам</span>
+            {overrideCount > 0 && (
+              <Badge variant="outline" className="font-mono text-[10px]">
+                {overrideCount}
+              </Badge>
+            )}
+            <span className="text-xs text-muted-foreground">
+              — точечно переопределить «Вчера / Неделя / Месяц / Всё время»
+            </span>
+            <ChevronDown
+              className={`ml-auto size-4 shrink-0 text-muted-foreground transition-transform ${
+                periodsOpen ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+
+          {periodsOpen && (
+            <div className="flex flex-col gap-3 px-3 pb-3">
+              <div className="flex flex-wrap gap-1">
+                {OVERRIDE_PERIODS.map(({ period, label }) => {
+                  const count = Object.keys(overrides[period] ?? {}).length
+                  const active = activePeriod === period
+                  return (
+                    <button
+                      key={period}
+                      type="button"
+                      onClick={() => setActivePeriod(period)}
+                      aria-pressed={active}
+                      className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                        active
+                          ? 'border-primary/40 bg-primary/10 font-medium text-foreground'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                      }`}
+                    >
+                      {label}
+                      {count > 0 && (
+                        <span className="ml-1.5 font-mono text-[10px] text-primary">
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                {PERIOD_METRIC_FIELDS.map((f) => {
+                  const ov = overrides[activePeriod]?.[f]
+                  return (
+                    <div key={f} className="flex flex-col gap-1.5">
+                      <Label
+                        htmlFor={`c-${c.id}-ov-${activePeriod}-${f}`}
+                        className="text-xs"
+                      >
+                        {OVERRIDE_FIELD_LABELS[f]}
+                      </Label>
+                      <Input
+                        id={`c-${c.id}-ov-${activePeriod}-${f}`}
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={ov ?? ''}
+                        placeholder="авто"
+                        onChange={(e) =>
+                          onOverridePatch(
+                            activePeriod,
+                            f,
+                            e.target.value === ''
+                              ? undefined
+                              : Number(e.target.value) || 0,
+                          )
+                        }
+                        className="font-mono"
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground text-pretty">
+                Пустое поле = «авто»: витрина покажет значение из базовых метрик
+                или из авто-скрутки. Заполненное — жёстко переопределяет метрику
+                для выбранного периода (приоритетнее симуляции).
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

@@ -1,10 +1,11 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
   CircleDot,
+  ClipboardCopy,
   Download,
   Lightbulb,
   Loader2,
@@ -23,7 +24,9 @@ import {
 import { downloadBase64Zip } from '@/components/admin/secret-sites/download-zip'
 import type {
   GodSite,
+  PeriodMetricField,
   SiteCampaign,
+  SitePeriod,
   SiteRecommendation,
   SiteState,
 } from '@/lib/god-sites'
@@ -52,12 +55,9 @@ import { Switch } from '@/components/ui/switch'
 export function SiteEditor({
   site,
   onClose,
-  beta = false,
 }: {
   site: GodSite
   onClose: () => void
-  /** Beta "Сайты бета" tab: enables the one-click extension download. */
-  beta?: boolean
 }) {
   const [pending, startTransition] = useTransition()
   const [state, setState] = useState<SiteState>(site.state)
@@ -93,6 +93,20 @@ export function SiteEditor({
 
   const recommendations = state.recommendations ?? []
 
+  // The «Назад» button already guards a dirty exit, but browser navigation
+  // (reload, tab close, back gesture) bypassed it and silently dropped the
+  // draft. beforeunload closes that hole for reload/close.
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // Chrome requires returnValue to be set for the prompt to appear.
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
   function patchCampaign(idx: number, patch: Partial<SiteCampaign>) {
     setState((s) => ({
       ...s,
@@ -109,6 +123,89 @@ export function SiteEditor({
     }))
   }
 
+  /**
+   * Set or clear ONE per-period metric override for a campaign. Empty maps
+   * collapse upward (override → campaign → period → the whole key), so a
+   * fully-cleared state serializes without `periodOverrides` at all — same
+   * shape the validator produces, keeping the dirty check honest.
+   */
+  function patchOverride(
+    campaignId: string,
+    period: SitePeriod,
+    field: PeriodMetricField,
+    value: number | undefined,
+  ) {
+    setState((s) => {
+      const po = { ...(s.periodOverrides ?? {}) }
+      const byId = { ...(po[period] ?? {}) }
+      const ov = { ...(byId[campaignId] ?? {}) }
+      if (value === undefined) delete ov[field]
+      else ov[field] = value
+      if (Object.keys(ov).length > 0) byId[campaignId] = ov
+      else delete byId[campaignId]
+      if (Object.keys(byId).length > 0) po[period] = byId
+      else delete po[period]
+      return {
+        ...s,
+        ...(Object.keys(po).length > 0
+          ? { periodOverrides: po }
+          : { periodOverrides: undefined }),
+      }
+    })
+  }
+
+  /** Drop every period override belonging to a campaign (used on delete). */
+  function dropOverridesFor(s: SiteState, campaignId: string): SiteState {
+    if (!s.periodOverrides) return s
+    const po: NonNullable<SiteState['periodOverrides']> = {}
+    for (const [period, byId] of Object.entries(s.periodOverrides)) {
+      if (!byId) continue
+      const rest = Object.fromEntries(
+        Object.entries(byId).filter(([cid]) => cid !== campaignId),
+      )
+      if (Object.keys(rest).length > 0) po[period as SitePeriod] = rest
+    }
+    return {
+      ...s,
+      ...(Object.keys(po).length > 0
+        ? { periodOverrides: po }
+        : { periodOverrides: undefined }),
+    }
+  }
+
+  /**
+   * Duplicate a campaign: fresh id, «(копия)» suffix, stopped by default so
+   * the vitrine doesn't instantly show two identical running campaigns.
+   * Period overrides are copied too — the typical use is "same campaign,
+   * different region", where curated history should carry over.
+   */
+  function duplicateCampaign(idx: number) {
+    setState((s) => {
+      const src = s.campaigns[idx]
+      if (!src) return s
+      const copy: SiteCampaign = {
+        ...src,
+        id: newCampaign().id,
+        name: `${src.name} (копия)`,
+        status: 'stopped',
+      }
+      const campaigns = [
+        ...s.campaigns.slice(0, idx + 1),
+        copy,
+        ...s.campaigns.slice(idx + 1),
+      ]
+      if (!s.periodOverrides) return { ...s, campaigns }
+      const po = { ...s.periodOverrides }
+      for (const period of Object.keys(po) as SitePeriod[]) {
+        const byId = po[period]
+        if (byId?.[src.id]) {
+          po[period] = { ...byId, [copy.id]: { ...byId[src.id] } }
+        }
+      }
+      return { ...s, campaigns, periodOverrides: po }
+    })
+  }
+
   function back() {
     if (
       dirty &&
@@ -120,23 +217,17 @@ export function SiteEditor({
   }
 
   /**
-   * Build & download the browser extension for THIS site. Warn first: the
-   * server rotates the API key, so any previously downloaded archive stops
-   * working the moment this one is generated. Unsaved edits are flagged too —
-   * the extension bakes in the CURRENT saved state, not the dirty draft.
+   * Build & download the browser extension for THIS site. Downloads do NOT
+   * rotate the API key (migration 137): the permanent token is baked in and
+   * every archive ever downloaded keeps working. The only warning left is
+   * about unsaved edits — the extension reads live state from the API, but
+   * the operator likely expects their draft to be visible right away.
    */
   function downloadExtension() {
     if (
       dirty &&
       !window.confirm(
-        'Есть несохранённые изменения — расширение соберётся по последнему сохранённому состоянию. Продолжить?',
-      )
-    ) {
-      return
-    }
-    if (
-      !window.confirm(
-        'Скачивание выдаст новый токен: все ранее скачанные архивы этого сайта перестанут работать. Продолжить?',
+        'Есть несохранённые изменения — витрина покажет последнее сохранённое состояние, пока вы не нажмёте «Сохранить всё». Продолжить?',
       )
     ) {
       return
@@ -271,23 +362,21 @@ export function SiteEditor({
           >
             {dirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены'}
           </span>
-          {beta && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={downloadExtension}
-              disabled={pending}
-              className="press-scale gap-1.5"
-              title="Собрать и скачать готовое расширение под этот сайт"
-            >
-              {pending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Download className="size-4" />
-              )}
-              Скачать расширение
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={downloadExtension}
+            disabled={pending}
+            className="press-scale gap-1.5"
+            title="Собрать и скачать готовое расширение под этот сайт (токен постоянный — старые архивы продолжают работать)"
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Download className="size-4" />
+            )}
+            Скачать расширение
+          </Button>
           <Button
             size="sm"
             onClick={save}
@@ -312,22 +401,40 @@ export function SiteEditor({
           <p className="text-sm text-pretty">
             <span className="font-medium">Конфликт версий.</span>{' '}
             Данные сайта изменились, пока редактор был открыт — сохранение
-            отклонено, чтобы не затереть новое.
+            отклонено, чтобы не затереть новое. Перезагрузка отбросит локальные
+            правки — при необходимости сначала скопируйте черновик.
           </p>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={reloadFresh}
-            disabled={pending}
-            className="press-scale shrink-0 gap-1.5"
-          >
-            {pending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <RefreshCw className="size-4" />
-            )}
-            Перезагрузить данные
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                void navigator.clipboard
+                  .writeText(JSON.stringify(state, null, 2))
+                  .then(() => toast.success('Черновик скопирован (JSON)'))
+                  .catch(() => toast.error('Не удалось скопировать'))
+              }}
+              className="press-scale gap-1.5"
+              title="Скопировать текущие несохранённые правки как JSON"
+            >
+              <ClipboardCopy className="size-4" />
+              Скопировать черновик
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={reloadFresh}
+              disabled={pending}
+              className="press-scale gap-1.5"
+            >
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              Перезагрузить данные
+            </Button>
+          </div>
         </div>
       )}
 
@@ -370,7 +477,11 @@ export function SiteEditor({
                 <span className="font-mono font-medium text-foreground">
                   {nf.format(vitrineBalance)} {state.currency}
                 </span>{' '}
-                — с учётом скрутки за сегодня
+                — с учётом скрутки за сегодня.{' '}
+                <span className="text-warning">
+                  При включённой авто-скрутке точное значение может разойтись с
+                  параллельным списанием — надёжнее «Пополнить» ниже.
+                </span>
               </p>
             )}
           </div>
@@ -413,7 +524,9 @@ export function SiteEditor({
             <Button
               size="sm"
               onClick={topUp}
-              disabled={pending || Number(topUpAmount.replace(',', '.')) <= 0}
+              // `!(x > 0)` — NaN от мусорного ввода тоже дизейблит кнопку,
+              // тогда как `x <= 0` для NaN даёт false и кнопка «врала».
+              disabled={pending || !(Number(topUpAmount.replace(',', '.')) > 0)}
               className="press-scale gap-1.5"
             >
               {pending ? (
@@ -736,12 +849,26 @@ export function SiteEditor({
         <CampaignCard
           key={c.id}
           campaign={c}
+          overrides={Object.fromEntries(
+            Object.entries(state.periodOverrides ?? {}).map(
+              ([period, byId]) => [period, byId?.[c.id]],
+            ),
+          )}
           onPatch={(patch) => patchCampaign(idx, patch)}
+          onOverridePatch={(period, field, value) =>
+            patchOverride(c.id, period, field, value)
+          }
+          onDuplicate={() => duplicateCampaign(idx)}
           onRemove={() =>
-            setState((s) => ({
-              ...s,
-              campaigns: s.campaigns.filter((_, i) => i !== idx),
-            }))
+            setState((s) =>
+              dropOverridesFor(
+                {
+                  ...s,
+                  campaigns: s.campaigns.filter((_, i) => i !== idx),
+                },
+                c.id,
+              ),
+            )
           }
         />
       ))}

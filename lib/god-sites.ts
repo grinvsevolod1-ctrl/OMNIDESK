@@ -64,6 +64,8 @@ interface SiteRow {
   last_seen_at: string | null
   created_at: string
   updated_at: string
+  ext_label_seq: number | null
+  ext_version: number
 }
 
 function toSite(r: SiteRow): GodSite {
@@ -76,6 +78,8 @@ function toSite(r: SiteRow): GodSite {
     lastSeenAt: r.last_seen_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    extLabelSeq: r.ext_label_seq == null ? null : Number(r.ext_label_seq),
+    extVersion: Number(r.ext_version ?? 0),
   }
 }
 

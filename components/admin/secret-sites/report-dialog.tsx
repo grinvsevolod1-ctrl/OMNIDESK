@@ -39,17 +39,48 @@ export function ReportDialog({
   onOpenChange,
   siteId,
   siteTitle,
+  sites,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   /** When set — report covers only this site; otherwise all sites. */
   siteId?: string
   siteTitle?: string
+  /**
+   * When provided (and no fixed siteId), the operator can narrow the report
+   * to specific cabinets via toggle chips. Default = all selected.
+   */
+  sites?: { id: string; title: string }[]
 }) {
   const [pending, startTransition] = useTransition()
   const [thread, setThread] = useState<Msg[]>([])
   const [input, setInput] = useState('')
+  // Deselected cabinet ids — inverted so newly appearing sites are included
+  // by default without any state sync.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  const selectable = !siteId && (sites?.length ?? 0) > 1
+  const selectedCount = selectable
+    ? (sites?.length ?? 0) - excluded.size
+    : sites?.length ?? 0
+
+  function toggleSite(id: string) {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else if (next.size < (sites?.length ?? 0) - 1) next.add(id)
+      // Refuse to exclude the LAST remaining cabinet — an empty selection
+      // would silently mean «все кабинеты», the opposite of the intent.
+      return next
+    })
+  }
+
+  function selectedIds(): string[] | undefined {
+    if (siteId) return [siteId]
+    if (!selectable || excluded.size === 0) return undefined
+    return (sites ?? []).filter((s) => !excluded.has(s.id)).map((s) => s.id)
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })

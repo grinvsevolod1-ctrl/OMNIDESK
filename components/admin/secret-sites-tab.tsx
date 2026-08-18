@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
   Copy,
+  Download,
   FileText,
   Globe,
   KeyRound,
@@ -14,20 +15,25 @@ import {
   MoreVertical,
   Pencil,
   Plus,
+  Puzzle,
+  Search,
   Trash2,
   Zap,
 } from 'lucide-react'
 import {
   secretDeleteSiteAction,
+  secretDownloadExtensionAction,
   secretGetSiteAction,
   secretGetSiteKeyAction,
   secretListSitesAction,
   secretRotateSiteKeyAction,
   type SiteListItem,
 } from '@/app/actions/admin-secret'
+import { downloadBase64Zip } from '@/components/admin/secret-sites/download-zip'
 import type { GodSite } from '@/lib/god-sites'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,15 +78,13 @@ function isOnline(lastSeenAt: string | null): boolean {
 
 export function SecretSitesTab({
   sites: initialSites,
-  beta = false,
 }: {
   sites: SiteListItem[]
-  /** Beta tab: unlocks the one-click extension download in the editor. */
-  beta?: boolean
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const [createOpen, setCreateOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const [newKey, setNewKey] = useState<{
     title: string
     slug: string
@@ -149,6 +153,29 @@ export function SecretSitesTab({
     })
   }
 
+  /**
+   * One-click extension download straight from the list card — previously
+   * this required opening the full editor. Rebuilds the archive with the
+   * PERMANENT token (migration 137 — old archives keep working) and bumps
+   * the manifest version.
+   */
+  function downloadExtension(id: string) {
+    startTransition(async () => {
+      try {
+        const res = await secretDownloadExtensionAction(id)
+        if (res.ok && res.base64 && res.fileName) {
+          downloadBase64Zip(res.base64, res.fileName)
+          toast.success(res.message)
+        } else {
+          toast.error(res.message)
+        }
+      } catch {
+        toast.error('Не удалось собрать расширение')
+      }
+      void mutateSites()
+    })
+  }
+
   function removeSite(id: string) {
     startTransition(async () => {
       try {
@@ -162,11 +189,23 @@ export function SecretSitesTab({
     })
   }
 
+  // Client-side filter over title / slug / «яндекс N» label. Kept outside
+  // early returns so hook order is stable across the editor toggle.
+  const visibleSites = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return sites
+    return sites.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.slug.toLowerCase().includes(q) ||
+        (s.extLabelSeq != null && `яндекс ${s.extLabelSeq}`.includes(q)),
+    )
+  }, [sites, search])
+
   if (openSite) {
     return (
       <SiteEditor
         site={openSite}
-        beta={beta}
         onClose={() => {
           setOpenSite(null)
           router.refresh()
@@ -180,18 +219,25 @@ export function SecretSitesTab({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <p className="max-w-xl text-sm text-muted-foreground text-pretty">
           Внешние страницы-витрины. Витрина только читает данные — всё, что вы
-          правите здесь, она покажет при следующем опросе или сразу по SSE.
-          {beta && (
-            <>
-              {' '}
-              <span className="font-medium text-foreground">
-                Откройте сайт и нажмите «Скачать расширение» — получите готовый
-                архив под этот сайт (токен вшивается автоматически).
-              </span>
-            </>
-          )}
+          правите здесь, она покажет при следующем опросе или сразу по SSE.{' '}
+          <span className="font-medium text-foreground">
+            «Скачать расширение» — готовый архив под сайт, токен вшивается
+            автоматически и остаётся постоянным.
+          </span>
         </p>
         <div className="flex items-center gap-2">
+          {sites.length > 3 && (
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Поиск: название, slug, яндекс N"
+                aria-label="Поиск по сайтам"
+                className="h-8 w-56 pl-8 text-sm"
+              />
+            </div>
+          )}
           {sites.length > 0 && (
             <Button
               size="sm"
@@ -220,9 +266,15 @@ export function SecretSitesTab({
           title="Нет управляемых сайтов"
           description="Создайте сайт — получите постоянный токен и подключите витрину за минуту."
         />
+      ) : visibleSites.length === 0 ? (
+        <EmptyState
+          icon={Search}
+          title="Ничего не найдено"
+          description={`По запросу «${search.trim()}» нет сайтов — проверьте название или slug.`}
+        />
       ) : (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {sites.map((s) => {
+          {visibleSites.map((s) => {
             const online = isOnline(s.lastSeenAt)
             return (
               <Card key={s.id} className="flex flex-col gap-0 overflow-hidden p-0">
@@ -253,8 +305,17 @@ export function SecretSitesTab({
                           </span>
                         )}
                       </div>
-                      <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-                        {s.slug}
+                      <p className="mt-0.5 flex items-center gap-2 truncate font-mono text-xs text-muted-foreground">
+                        <span className="truncate">{s.slug}</span>
+                        {s.extLabelSeq != null && (
+                          <span
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px]"
+                            title={`Расширение «яндекс ${s.extLabelSeq}», версия 1.0.${s.extVersion}`}
+                          >
+                            <Puzzle className="size-2.5" />
+                            {`яндекс ${s.extLabelSeq} · v1.0.${s.extVersion}`}
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -273,6 +334,13 @@ export function SecretSitesTab({
                       }
                     />
                     <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => downloadExtension(s.id)}
+                        className="gap-2"
+                      >
+                        <Download className="size-4" />
+                        Скачать расширение
+                      </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => showKey(s.id, s.title, s.slug)}
                         className="gap-2"
@@ -388,7 +456,11 @@ export function SecretSitesTab({
       />
       <ApiKeyDialog data={newKey} onClose={() => setNewKey(null)} />
 
-      <ReportDialog open={reportOpen} onOpenChange={setReportOpen} />
+      <ReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        sites={sites.map((s) => ({ id: s.id, title: s.title }))}
+      />
     </div>
   )
 }
