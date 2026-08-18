@@ -2553,6 +2553,106 @@ function looksLikeApiResponse(contentType: string | null, body: string): boolean
   return /^[[{]/.test(head) || /^<\?xml/i.test(head)
 }
 
+/** Быстрый некриптографический хеш тела (FNV-1a) для сравнения ответов. */
+function bodyHash(s: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return h >>> 0
+}
+
+/**
+ * Baseline-снимок SPA-фолбэка. Запрашиваем заведомо несуществующий путь: если
+ * сервер отдаёт HTML c кодом <400 — это SPA, который возвращает index.html на
+ * ЛЮБОЙ путь. Тогда любой «живой» эндпоинт с телом, совпадающим с этим снимком,
+ * — на самом деле та же заглушка, даже без явных маркеров каркаса.
+ */
+interface SpaBaseline {
+  /** true, если неизвестные пути отдают HTML-заглушку (это SPA). */
+  isSpaFallback: boolean
+  status: number | null
+  hash: number
+  length: number
+  contentType: string | null
+}
+
+async function captureSpaBaseline(origin: string, cookie?: string | null): Promise<SpaBaseline> {
+  const rand = Math.random().toString(36).slice(2, 12)
+  const r = await reconFetch(`${origin}/__od_nope_${rand}`, {
+    readBody: true,
+    headers: cookieHeaders(cookie),
+  })
+  const isSpaFallback =
+    r.status !== null && r.status >= 200 && r.status < 400 && looksLikeSpaHtml(r.contentType, r.body)
+  return {
+    isSpaFallback,
+    status: r.status,
+    hash: bodyHash(r.body),
+    length: r.body.length,
+    contentType: r.contentType,
+  }
+}
+
+/**
+ * Совпадает ли ответ с baseline-заглушкой SPA. Точное совпадение (хеш+длина) —
+ * это байт-в-байт тот же index.html. Иначе: если baseline — SPA и ответ тоже
+ * HTML с близкой длиной (допуск на динамические nonce/csrf), считаем заглушкой.
+ */
+function matchesSpaBaseline(b: SpaBaseline, contentType: string | null, body: string): boolean {
+  if (!b.isSpaFallback) return false
+  if (bodyHash(body) === b.hash && body.length === b.length) return true
+  if (!looksLikeSpaHtml(contentType, body)) return false
+  const tol = Math.max(64, Math.round(b.length * 0.05))
+  return Math.abs(body.length - b.length) <= tol
+}
+
+/**
+ * Soft-404: многие API отдают HTTP 200 с телом-ошибкой вида
+ * `{"error":"not found"}` / `{"code":"NOT_FOUND"}`. Такой ответ — НЕ признак
+ * работающего эндпоинта, поэтому его нельзя засчитывать как «доступен».
+ */
+function looksLikeSoft404(body: string): boolean {
+  const head = body.trimStart().slice(0, 2048)
+  if (!head) return false
+  return (
+    /"(?:status(?:code)?|code)"\s*:\s*"?404"?/i.test(head) ||
+    /"code"\s*:\s*"(?:NOT_?FOUND|ENOENT|RESOURCE_NOT_FOUND|NO_SUCH[A-Z_]*)"/i.test(head) ||
+    /"(?:message|error|detail|title)"\s*:\s*"[^"]*(?:not\s*found|no\s*such|does\s*not\s*exist|unknown\s*(?:route|endpoint|resource))/i.test(
+      head,
+    ) ||
+    /"error"\s*:\s*true/i.test(head)
+  )
+}
+
+/** Заголовок cookie для запроса (пустой объект, если cookie не задан). */
+function cookieHeaders(cookie?: string | null): Record<string, string> {
+  const c = cookie?.trim()
+  return c ? { cookie: c } : {}
+}
+
+/**
+ * Дифференциальная проба авторизации. Кандидат «доступен без авторизации» уже
+ * получен АНОНИМНЫМ запросом (без cookie). Повторяем с авторизационным cookie
+ * владельца и сравниваем тела:
+ *  • 'no-cookie'  — cookie не задан, дифф невозможен;
+ *  • 'same'       — ответ не зависит от сессии (публичный/статический — не риск);
+ *  • 'differs'    — эндпоинт сессионно-зависим, аноним видит ОТДЕЛЬНЫЙ ответ.
+ */
+async function differentialAuth(
+  url: string,
+  cookie: string | null | undefined,
+  unauthBody: string,
+): Promise<'no-cookie' | 'same' | 'differs'> {
+  const c = cookie?.trim()
+  if (!c) return 'no-cookie'
+  const authed = await reconFetch(url, { readBody: true, headers: { cookie: c } })
+  if (authed.status === null) return 'no-cookie'
+  const same = authed.body.length === unauthBody.length && bodyHash(authed.body) === bodyHash(unauthBody)
+  return same ? 'same' : 'differs'
+}
+
 /** Достать версию из meta generator / заголовков. */
 function extractVersion(body: string, name: RegExp): string | null {
   const m = body.match(name)
@@ -2645,28 +2745,35 @@ async function detectCms(origin: string): Promise<CmsDetection> {
 }
 
 /** Проверить наличие типовых API-эндпоинтов. */
-async function probeApiEndpoints(origin: string): Promise<EndpointProbe[]> {
+async function probeApiEndpoints(origin: string, baseline: SpaBaseline): Promise<EndpointProbe[]> {
   const PATHS = ['/api', '/api/v1', '/graphql', '/rest', '/auth', '/.well-known/openid-configuration', '/swagger.json', '/openapi.json']
   return Promise.all(
     PATHS.map(async (path): Promise<EndpointProbe> => {
       // Читаем тело: без него нельзя отличить настоящий API от SPA-заглушки.
       const r = await reconFetch(`${origin}${path}`, { readBody: true })
       const alive = r.status !== null && r.status !== 404
-      // SPA-фолбэк (HTML с кодом <400) — это НЕ API-эндпоинт.
+      const below400 = alive && r.status !== null && r.status < 400
+      // SPA-фолбэк: явные HTML-маркеры ИЛИ совпадение с baseline-заглушкой
+      // (ловит SPA даже без маркеров — тот же index.html на любой путь).
       const isSpa =
-        alive && r.status !== null && r.status < 400 && looksLikeSpaHtml(r.contentType, r.body)
+        below400 &&
+        (looksLikeSpaHtml(r.contentType, r.body) || matchesSpaBaseline(baseline, r.contentType, r.body))
+      // Soft-404: HTTP 200 с телом-ошибкой «not found» — не живой эндпоинт.
+      const isSoft404 = below400 && !isSpa && looksLikeSoft404(r.body)
       let note: string
       if (r.status === null) note = 'нет ответа'
       else if (r.status === 404) note = 'не найден'
       else if (r.status === 401 || r.status === 403) note = 'существует, требует авторизации'
       else if (r.status < 400) {
         if (isSpa) note = 'SPA-роут (HTML-заглушка, не API)'
+        else if (isSoft404) note = 'soft-404 (200 с телом-ошибкой «not found») — эндпоинта нет'
         else if (looksLikeApiResponse(r.contentType, r.body)) note = 'доступен без авторизации'
         else note = `отвечает (${r.status}), но ответ не похож на API`
       } else note = `ответ ${r.status}`
-      // present = «живой API-эндпоинт»: SPA-заглушки исключаем, чтобы они не
-      // попадали ни в UI-отчёт, ни в контекст AI-заключения.
-      return { path, status: r.status, contentType: r.contentType, present: alive && !isSpa, note }
+      // present = «живой API-эндпоинт»: SPA-заглушки и soft-404 исключаем, чтобы
+      // они не попадали ни в UI-отчёт, ни в контекст AI-заключения.
+      const present = alive && !isSpa && !isSoft404
+      return { path, status: r.status, contentType: r.contentType, present, note }
     }),
   )
 }
@@ -2676,7 +2783,7 @@ async function probeApiEndpoints(origin: string): Promise<EndpointProbe[]> {
  * OPTIONS. Для /auth/guest фиксируем, не выдаётся ли токен анониму; для смены
  * пароля — только наличие и методы (реальную смену НЕ выполняем).
  */
-async function probeAuthEndpoints(origin: string): Promise<AuthProbe[]> {
+async function probeAuthEndpoints(origin: string, baseline: SpaBaseline): Promise<AuthProbe[]> {
   const out: AuthProbe[] = []
 
   // /auth/guest — гостевая авторизация. Читаем тело, ищем JWT-подобный токен.
@@ -2685,8 +2792,11 @@ async function probeAuthEndpoints(origin: string): Promise<AuthProbe[]> {
     let risk: AuthProbe['risk'] = 'none'
     let note = 'эндпоинт не отвечает или отсутствует'
     if (r.status !== null && r.status !== 404) {
-      // SPA-заглушка (HTML c кодом <400) — это не auth-эндпоинт.
-      if (r.status < 400 && looksLikeSpaHtml(r.contentType, r.body)) {
+      // SPA-заглушка: явные маркеры ИЛИ совпадение с baseline-снимком.
+      if (
+        r.status < 400 &&
+        (looksLikeSpaHtml(r.contentType, r.body) || matchesSpaBaseline(baseline, r.contentType, r.body))
+      ) {
         note = 'SPA-роут (HTML-заглушка, не API) — гостевой авторизации нет'
       } else {
         const looksJwt = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/.test(r.body)
@@ -2715,12 +2825,14 @@ async function probeAuthEndpoints(origin: string): Promise<AuthProbe[]> {
     let risk: AuthProbe['risk'] = 'none'
     let note = 'эндпоинт не отвечает или отсутствует'
     const alive = status !== null && status !== 404
-    // Если GET вернул 2xx и это HTML SPA-заглушка — эндпоинта смены пароля нет.
+    // Если GET вернул 2xx и это HTML SPA-заглушка (по маркерам или baseline) —
+    // эндпоинта смены пароля нет.
     const isSpa =
       get.status !== null &&
       get.status >= 200 &&
       get.status < 400 &&
-      looksLikeSpaHtml(get.contentType, get.body)
+      (looksLikeSpaHtml(get.contentType, get.body) ||
+        matchesSpaBaseline(baseline, get.contentType, get.body))
     if (isSpa) {
       note = 'SPA-роут (HTML-заглушка, не API) — эндпоинта смены пароля нет'
     } else if (alive) {
@@ -2883,7 +2995,11 @@ async function checkOpenRedirect(origin: string): Promise<OpenRedirectCheck> {
  * без чтения записей): существует ли эндпоинт и требует ли он авторизации.
  * Никакие коллекции/записи/PII не читаются и не сохраняются.
  */
-async function probeCockpit(origin: string): Promise<CockpitProbe[]> {
+async function probeCockpit(
+  origin: string,
+  baseline: SpaBaseline,
+  cookie?: string | null,
+): Promise<CockpitProbe[]> {
   const PATHS = [
     '/api/collections',
     '/api/collections/get',
@@ -2894,18 +3010,41 @@ async function probeCockpit(origin: string): Promise<CockpitProbe[]> {
   ]
   const probes = await Promise.all(
     PATHS.map(async (path): Promise<CockpitProbe> => {
+      const url = `${origin}${path}`
       // Читаем тело, чтобы отсеять SPA-заглушку: без этого index.html с кодом
       // 200 на каждый путь ложно помечался как «открытый API без авторизации».
-      const r = await reconFetch(`${origin}${path}`, { method: 'GET', readBody: true })
+      const r = await reconFetch(url, { method: 'GET', readBody: true })
       const status = r.status
       const alive = status !== null && status !== 404
       const requiresAuth = status === 401 || status === 403
       const is2xx = status !== null && status >= 200 && status < 300
-      // SPA-фолбэк (2xx + HTML) — это не Cockpit-эндпоинт: не «существует».
-      const isSpa = is2xx && looksLikeSpaHtml(r.contentType, r.body)
-      // «Открыт без авторизации» — только для настоящего API-ответа.
-      const openWithoutAuth = is2xx && !isSpa && looksLikeApiResponse(r.contentType, r.body)
-      const exists = alive && !isSpa
+      // SPA-фолбэк: явные HTML-маркеры ИЛИ совпадение с baseline-заглушкой.
+      const isSpa =
+        is2xx &&
+        (looksLikeSpaHtml(r.contentType, r.body) || matchesSpaBaseline(baseline, r.contentType, r.body))
+      // Soft-404: 200 с телом-ошибкой «not found» — эндпоинта фактически нет.
+      const isSoft404 = is2xx && !isSpa && looksLikeSoft404(r.body)
+      // Кандидат «открыт без авторизации» — только настоящий API-ответ.
+      const openCandidate = is2xx && !isSpa && !isSoft404 && looksLikeApiResponse(r.contentType, r.body)
+
+      // Дифференциальная проба: подтверждаем риск, только если анонимный ответ
+      // реально отличается от авторизованного (иначе это публичный/статический
+      // ответ, не зависящий от сессии — ложное срабатывание).
+      let openWithoutAuth = openCandidate
+      let diffNote = ''
+      if (openCandidate) {
+        const diff = await differentialAuth(url, cookie, r.body)
+        if (diff === 'same') {
+          openWithoutAuth = false
+          diffNote = ' — публичный ответ, не зависит от сессии (одинаков с/без cookie)'
+        } else if (diff === 'differs') {
+          diffNote = ' — аноним получает данные, ОТЛИЧНЫЕ от авторизованного ответа'
+        } else {
+          diffNote = ' (дифф-проба недоступна: cookie не задан)'
+        }
+      }
+
+      const exists = alive && !isSpa && !isSoft404
       const note =
         status === null
           ? 'нет ответа'
@@ -2913,27 +3052,34 @@ async function probeCockpit(origin: string): Promise<CockpitProbe[]> {
             ? 'не найден'
             : isSpa
               ? 'SPA-роут (HTML-заглушка, не API)'
-              : requiresAuth
-                ? 'существует, требует авторизации (ок)'
-                : openWithoutAuth
-                  ? 'доступен БЕЗ авторизации — проверьте, не утекают ли данные'
-                  : `отвечает (${status}), но ответ не похож на API`
+              : isSoft404
+                ? 'soft-404 (200 с телом-ошибкой «not found») — эндпоинта нет'
+                : requiresAuth
+                  ? 'существует, требует авторизации (ок)'
+                  : openWithoutAuth
+                    ? `доступен БЕЗ авторизации — проверьте, не утекают ли данные${diffNote}`
+                    : openCandidate
+                      ? `отвечает как API${diffNote}`
+                      : `отвечает (${status}), но ответ не похож на API`
       return { path, status, exists, requiresAuth, openWithoutAuth, note }
     }),
   )
-  // Возвращаем только реально существующие эндпоинты (SPA-заглушки отсеяны).
+  // Возвращаем только реально существующие эндпоинты (заглушки/soft-404 отсеяны).
   return probes.filter((p) => p.exists)
 }
 
-async function collectRecon(origin: string, host: string): Promise<ReconResult> {
+async function collectRecon(origin: string, host: string, cookie?: string | null): Promise<ReconResult> {
+  // Baseline-снимок SPA-фолбэка снимаем ПЕРВЫМ (до проб): пробы, зависящие от
+  // «HTML на любой путь», сверяют с ним ответы, чтобы отсеять ложные API.
+  const baseline = await captureSpaBaseline(origin, cookie)
   const [cms, endpoints, authProbes, graphql, subdomains, openRedirect, cockpit] = await Promise.all([
     detectCms(origin),
-    probeApiEndpoints(origin),
-    probeAuthEndpoints(origin),
+    probeApiEndpoints(origin, baseline),
+    probeAuthEndpoints(origin, baseline),
     checkGraphql(origin),
     enumerateSubdomains(host),
     checkOpenRedirect(origin),
-    probeCockpit(origin),
+    probeCockpit(origin, baseline, cookie),
   ])
   return { cms, endpoints, authProbes, graphql, subdomains, openRedirect, cockpit }
 }
@@ -3222,7 +3368,7 @@ export async function secretFullScanAction(
   let recon: ReconResult | null = null
   if (!scanExpired(deadline)) {
     try {
-      recon = await collectRecon(origin, url.hostname)
+      recon = await collectRecon(origin, url.hostname, cookie)
     } catch {
       /* recon опционален — не срываем весь отчёт */
     }
