@@ -16,22 +16,27 @@ import { toast } from 'sonner'
 import {
   Activity,
   ArrowRight,
+  Boxes,
   CircleAlert,
   CircleCheck,
   Copy,
+  Database,
   Gauge,
   Loader2,
   Lock,
   LockOpen,
   Radio,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react'
 import {
   secretPingAction,
+  secretS3ScanAction,
   secretSecurityAssessAction,
   secretSecurityAuditAction,
   type PingResult,
+  type S3ScanResult,
   type SecurityAudit,
 } from '@/app/actions/admin-secret'
 import { Button } from '@/components/ui/button'
@@ -51,6 +56,10 @@ export function SecretPingTab() {
   const [audit, setAudit] = useState<SecurityAudit | null>(null)
   const [assessPending, setAssessPending] = useState(false)
   const [assessment, setAssessment] = useState<string | null>(null)
+
+  const [bucket, setBucket] = useState('')
+  const [s3Pending, setS3Pending] = useState(false)
+  const [s3Result, setS3Result] = useState<S3ScanResult | null>(null)
 
   async function runPing() {
     const target = url.trim()
@@ -119,6 +128,29 @@ export function SecretPingTab() {
       toast.error('Внутренняя ошибка при формировании заключения')
     } finally {
       setAssessPending(false)
+    }
+  }
+
+  async function runS3Scan() {
+    const target = bucket.trim()
+    if (!target) {
+      toast.error('Введите имя S3-бакета или URL')
+      return
+    }
+    setS3Pending(true)
+    setS3Result(null)
+    try {
+      const res = await secretS3ScanAction(target)
+      if (res.ok && res.data) {
+        setS3Result(res.data)
+        if (res.data.verdict === 'public') toast.error(res.message)
+      } else {
+        toast.error(res.message)
+      }
+    } catch {
+      toast.error('Внутренняя ошибка при сканировании')
+    } finally {
+      setS3Pending(false)
     }
   }
 
@@ -230,6 +262,61 @@ export function SecretPingTab() {
           </div>
         </div>
       </div>
+
+      {/* ---- Сканирование S3-бакета ---- */}
+      <div className="rounded-xl border border-border bg-card/40 p-4 md:p-5">
+        <div className="mb-4 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <Boxes className="size-4" />
+          Сканирование S3-бакета
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Database className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={bucket}
+              onChange={(e) => setBucket(e.target.value)}
+              onKeyDown={(e) => {
+                if (
+                  e.key === 'Enter' &&
+                  !e.nativeEvent.isComposing &&
+                  e.keyCode !== 229 &&
+                  !s3Pending
+                ) {
+                  void runS3Scan()
+                }
+              }}
+              placeholder="my-bucket или my-bucket.s3.amazonaws.com"
+              spellCheck={false}
+              autoCapitalize="none"
+              autoCorrect="off"
+              className="pl-9 font-mono text-sm"
+              aria-label="Имя S3-бакета или URL"
+            />
+          </div>
+
+          <Button
+            onClick={() => void runS3Scan()}
+            disabled={s3Pending}
+            className="press-scale gap-1.5"
+          >
+            {s3Pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <ArrowRight className="size-4" />
+            )}
+            Сканировать
+          </Button>
+        </div>
+
+        <p className="mt-3 text-xs text-muted-foreground text-pretty">
+          Пассивная проверка: только читает публичный ответ S3, чтобы понять,
+          открыт ли листинг наружу. Ничего не пишет и не удаляет.
+        </p>
+      </div>
+
+      {/* ---- Результат сканирования S3 ---- */}
+      {s3Result && <S3Report result={s3Result} />}
 
       {/* ---- Результат ping ---- */}
       {result && <PingReport result={result} />}
@@ -425,6 +512,192 @@ function FlagMark({ on }: { on: boolean }) {
     <CircleCheck className="size-3.5 text-emerald-500" />
   ) : (
     <CircleAlert className="size-3.5 text-destructive" />
+  )
+}
+
+/* ------------------------------ S3 UI ----------------------------------- */
+
+const S3_OUTCOME_LABELS: Record<S3ScanResult['probes'][number]['outcome'], string> = {
+  'public-listing': 'листинг открыт',
+  'access-denied': 'доступ закрыт',
+  'not-found': 'не найден',
+  redirect: 'редирект',
+  error: 'ошибка сети',
+  other: 'прочее',
+}
+
+function S3Report({ result }: { result: S3ScanResult }) {
+  const isPublic = result.verdict === 'public'
+  const tone =
+    result.verdict === 'public'
+      ? 'bad'
+      : result.verdict === 'private'
+        ? 'good'
+        : 'muted'
+
+  const verdictLabel =
+    result.verdict === 'public'
+      ? 'Публичный листинг открыт'
+      : result.verdict === 'private'
+        ? 'Листинг закрыт (приватный бакет)'
+        : result.verdict === 'not-found'
+          ? 'Бакет не найден'
+          : 'Состояние не определено'
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Вердикт */}
+      <div
+        className={cn(
+          'flex items-start gap-3 rounded-xl border p-4',
+          isPublic
+            ? 'border-destructive/40 bg-destructive/10'
+            : result.verdict === 'private'
+              ? 'border-emerald-500/40 bg-emerald-500/10'
+              : 'border-border bg-card/40',
+        )}
+      >
+        {isPublic ? (
+          <ShieldAlert className="mt-0.5 size-5 shrink-0 text-destructive" />
+        ) : result.verdict === 'private' ? (
+          <ShieldCheck className="mt-0.5 size-5 shrink-0 text-emerald-500" />
+        ) : (
+          <Boxes className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+        )}
+        <div className="min-w-0">
+          <div
+            className={cn(
+              'text-sm font-semibold',
+              isPublic && 'text-destructive',
+              result.verdict === 'private' && 'text-emerald-500',
+              (result.verdict === 'not-found' || result.verdict === 'unknown') &&
+                'text-foreground',
+            )}
+          >
+            {verdictLabel}
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-xs text-muted-foreground">
+            <span className="text-foreground">{result.bucket}</span>
+            {result.region && <span>регион: {result.region}</span>}
+            {result.publicListing && result.objectCount !== null && (
+              <span>
+                объектов: {result.objectCount}
+                {result.truncated ? '+' : ''}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Сводка */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatCard
+          icon={Boxes}
+          label="Существует"
+          value={
+            result.exists === null ? '—' : result.exists ? 'да' : 'нет'
+          }
+          tone="muted"
+        />
+        <StatCard
+          icon={isPublic ? ShieldAlert : ShieldCheck}
+          label="Листинг"
+          value={result.publicListing ? 'открыт' : 'закрыт'}
+          tone={result.publicListing ? 'bad' : 'good'}
+        />
+        <StatCard
+          icon={Database}
+          label="Объектов"
+          value={
+            result.objectCount !== null
+              ? `${result.objectCount}${result.truncated ? '+' : ''}`
+              : '—'
+          }
+          tone="muted"
+        />
+        <StatCard
+          icon={Database}
+          label="Регион"
+          value={result.region ?? '—'}
+          tone="muted"
+        />
+      </div>
+
+      {/* Примеры ключей при открытом листинге */}
+      {result.sampleKeys.length > 0 && (
+        <div className="rounded-xl border border-destructive/30 bg-card/40 p-4">
+          <div className="mb-2 flex items-center gap-2 text-xs font-medium text-destructive">
+            <CircleAlert className="size-3.5" />
+            Видимые объекты (первые {result.sampleKeys.length})
+          </div>
+          <div className="flex flex-col gap-1">
+            {result.sampleKeys.map((k) => (
+              <div
+                key={k}
+                className="truncate font-mono text-[11px] text-muted-foreground"
+              >
+                {k}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Пробы эндпоинтов */}
+      <div className="overflow-hidden rounded-xl border border-border">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-muted/40 text-left text-xs text-muted-foreground">
+              <th className="px-4 py-2 font-medium">Эндпоинт</th>
+              <th className="px-4 py-2 font-medium">Статус</th>
+              <th className="px-4 py-2 font-medium">Задержка</th>
+              <th className="px-4 py-2 font-medium">Результат</th>
+            </tr>
+          </thead>
+          <tbody>
+            {result.probes.map((p) => (
+              <tr
+                key={p.url}
+                className="border-b border-border/60 last:border-b-0"
+              >
+                <td className="px-4 py-2 font-mono text-xs text-muted-foreground">
+                  {p.style}
+                </td>
+                <td className="px-4 py-2 font-mono">
+                  {p.status !== null ? (
+                    <StatusBadge status={p.status} />
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-2 font-mono">
+                  {p.ms !== null ? (
+                    `${p.ms} мс`
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-xs">
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1.5',
+                      p.outcome === 'public-listing' && 'text-destructive',
+                      p.outcome === 'access-denied' && 'text-emerald-500',
+                      p.outcome !== 'public-listing' &&
+                        p.outcome !== 'access-denied' &&
+                        'text-muted-foreground',
+                    )}
+                  >
+                    {S3_OUTCOME_LABELS[p.outcome]}
+                    {p.code ? ` (${p.code})` : ''}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
 

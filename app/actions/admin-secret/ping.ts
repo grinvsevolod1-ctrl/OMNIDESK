@@ -458,3 +458,318 @@ export async function secretSecurityAssessAction(
   if (!res.ok) return { ok: false, message: res.message, audit }
   return { ok: true, message: 'Готово', report: res.report, audit }
 }
+
+/* ===================================================================== */
+/*  Сканирование S3-бакетов (пассивное, защитное)                         */
+/*                                                                        */
+/*  Проверка ПУБЛИЧНОЙ доступности своего S3-бакета: делаем несколько     */
+/*  GET-запросов к публичным REST-эндпоинтам Amazon S3 и по коду ответа + */
+/*  телу (ListBucketResult / AccessDenied / NoSuchBucket) определяем,     */
+/*  открыт ли листинг наружу — типичная мисконфигурация. Инструмент       */
+/*  ТОЛЬКО читает публично наблюдаемый ответ: не пишет, не удаляет, не    */
+/*  использует учётные данные, не перебирает пути. Часть скрытой панели:  */
+/*  гейт requireGod, без audit() (инвариант AGENTS.md §4).                */
+/* ===================================================================== */
+
+/** Результат обращения к одному S3-эндпоинту. */
+export interface S3Probe {
+  /** Стиль адреса: 'virtual-hosted' | 'regional' | 'path-style'. */
+  style: string
+  /** Реальный URL, к которому обращались. */
+  url: string
+  /** HTTP-статус ответа или null при сетевой ошибке/таймауте. */
+  status: number | null
+  /** Задержка ответа, мс. */
+  ms: number | null
+  /** Классификация ответа. */
+  outcome:
+    | 'public-listing'
+    | 'access-denied'
+    | 'not-found'
+    | 'redirect'
+    | 'error'
+    | 'other'
+  /** Код ошибки S3 из тела (AccessDenied/NoSuchBucket/PermanentRedirect…). */
+  code: string | null
+}
+
+export interface S3ScanResult {
+  /** Имя бакета (после нормализации ввода). */
+  bucket: string
+  /** Регион бакета, если удалось определить по редиректу/заголовку. */
+  region: string | null
+  /** Существует ли бакет: true/false или null (не удалось определить). */
+  exists: boolean | null
+  /** Открыт ли листинг объектов наружу (критичная мисконфигурация). */
+  publicListing: boolean
+  /** Число найденных объектов в листинге (если он открыт). */
+  objectCount: number | null
+  /** Обрезан ли листинг (объектов больше, чем показано). */
+  truncated: boolean
+  /** Первые несколько ключей объектов (для наглядности). */
+  sampleKeys: string[]
+  probes: S3Probe[]
+  /** Итоговый вердикт. */
+  verdict: 'public' | 'private' | 'not-found' | 'unknown'
+}
+
+export interface S3ScanActionResult {
+  ok: boolean
+  message: string
+  data?: S3ScanResult
+}
+
+/** Валидное имя S3-бакета: 3–63 символа, [a-z0-9.-], край — буква/цифра. */
+const BUCKET_NAME_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
+
+/**
+ * Достать имя бакета (и по возможности регион) из ввода: принимает как
+ * голое имя (`my-bucket`), так и любой S3-URL
+ * (`my-bucket.s3.amazonaws.com`, `s3.eu-west-1.amazonaws.com/my-bucket`, …).
+ */
+function parseBucket(raw: string): { bucket: string; region: string | null } | null {
+  const trimmed = raw.trim().toLowerCase()
+  if (!trimmed || trimmed.length > 300) return null
+
+  let host = ''
+  let pathBucket: string | null = null
+  const looksLikeUrl = /^https?:\/\//.test(trimmed) || trimmed.includes('/') || trimmed.includes('.amazonaws.com')
+  if (looksLikeUrl) {
+    try {
+      const u = new URL(/^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`)
+      host = u.hostname
+      pathBucket = u.pathname.split('/').filter(Boolean)[0] ?? null
+    } catch {
+      host = ''
+    }
+  }
+
+  let bucket: string | null = null
+  let region: string | null = null
+
+  if (host.endsWith('.amazonaws.com')) {
+    // virtual-hosted: {bucket}.s3.amazonaws.com | {bucket}.s3.{region}.amazonaws.com
+    const vh = host.match(/^(.+?)\.s3[.-](?:([a-z0-9-]+)\.)?amazonaws\.com$/)
+    if (vh) {
+      bucket = vh[1]
+      region = vh[2] ?? null
+    } else {
+      // path-style: s3.amazonaws.com/{bucket} | s3.{region}.amazonaws.com/{bucket}
+      const ps = host.match(/^s3[.-](?:([a-z0-9-]+)\.)?amazonaws\.com$/)
+      if (ps) {
+        region = ps[1] ?? null
+        bucket = pathBucket
+      }
+    }
+  } else if (!host) {
+    // Голое имя бакета (или name/prefix).
+    bucket = trimmed.split('/')[0]
+  } else {
+    // Не-S3 хост — не поддерживаем.
+    return null
+  }
+
+  if (!bucket || !BUCKET_NAME_RE.test(bucket)) return null
+  return { bucket, region: region && /^[a-z0-9-]+$/.test(region) ? region : null }
+}
+
+/** Прочитать тело ответа с ограничением по объёму (защита от гигантских листингов). */
+async function readCapped(res: Response, maxBytes = 65_536): Promise<string> {
+  const reader = res.body?.getReader()
+  if (!reader) return ''
+  const decoder = new TextDecoder()
+  let text = ''
+  let total = 0
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.length
+      text += decoder.decode(value, { stream: true })
+    }
+  } catch {
+    /* частичное тело — достаточно для классификации */
+  } finally {
+    void reader.cancel()
+  }
+  return text
+}
+
+interface S3Response {
+  status: number | null
+  ms: number | null
+  region: string | null
+  body: string
+  error: string | null
+}
+
+/** Один GET к S3-эндпоинту: статус, задержка, регион из заголовка, тело. */
+async function s3Get(url: string): Promise<S3Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const started = performance.now()
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { 'user-agent': 'OMNIDESK-S3Scan/1.0' },
+    })
+    const ms = Math.round(performance.now() - started)
+    const region = res.headers.get('x-amz-bucket-region')
+    const body = await readCapped(res)
+    return { status: res.status, ms, region, body, error: null }
+  } catch (err) {
+    const aborted =
+      err instanceof Error &&
+      (err.name === 'AbortError' || err.name === 'TimeoutError')
+    return {
+      status: null,
+      ms: null,
+      region: null,
+      body: '',
+      error: aborted ? 'Таймаут' : 'Нет соединения',
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Достать <Code>…</Code> из XML-ошибки S3. */
+function extractCode(body: string): string | null {
+  const m = body.match(/<Code>([^<]+)<\/Code>/)
+  return m ? m[1] : null
+}
+
+/** Классифицировать ответ S3-эндпоинта. */
+function classifyOutcome(r: S3Response): S3Probe['outcome'] {
+  if (r.status === null) return 'error'
+  if (r.status === 200 && r.body.includes('<ListBucketResult')) return 'public-listing'
+  if (r.status === 403) return 'access-denied'
+  if (r.status === 404) return 'not-found'
+  if (r.status === 301 || r.status === 307) return 'redirect'
+  return 'other'
+}
+
+function toProbe(style: string, url: string, r: S3Response): S3Probe {
+  return {
+    style,
+    url,
+    status: r.status,
+    ms: r.ms,
+    outcome: classifyOutcome(r),
+    code: extractCode(r.body),
+  }
+}
+
+/** Достать первые ключи объектов из ListBucketResult. */
+function extractKeys(body: string, limit = 10): string[] {
+  const keys: string[] = []
+  const re = /<Key>([^<]+)<\/Key>/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(body)) && keys.length < limit) keys.push(m[1])
+  return keys
+}
+
+/** Полное число ключей в ответе (для счётчика). */
+function countKeys(body: string): number {
+  return (body.match(/<Key>/g) ?? []).length
+}
+
+/**
+ * Публичный экшен: проверить публичную доступность S3-бакета своего проекта.
+ * Гейт requireGod, без audit() — как остальные god-экшены.
+ */
+export async function secretS3ScanAction(
+  rawBucket: string,
+): Promise<S3ScanActionResult> {
+  await requireGod()
+
+  const parsed = parseBucket(rawBucket)
+  if (!parsed) {
+    return {
+      ok: false,
+      message:
+        'Некорректное имя бакета. Введите имя S3-бакета или его URL.',
+    }
+  }
+
+  const { bucket } = parsed
+  let region = parsed.region
+  const probes: S3Probe[] = []
+
+  // 1) Глобальный virtual-hosted эндпоинт — заодно узнаём регион по редиректу.
+  const vhUrl = `https://${bucket}.s3.amazonaws.com/`
+  const r1 = await s3Get(vhUrl)
+  if (r1.region) region = r1.region
+  probes.push(toProbe('virtual-hosted', vhUrl, r1))
+
+  // 2) Если знаем регион (из редиректа/заголовка) — точный региональный запрос.
+  let listing: S3Response | null =
+    classifyOutcome(r1) === 'public-listing' ? r1 : null
+  if (region) {
+    const regUrl = `https://${bucket}.s3.${region}.amazonaws.com/`
+    const r2 = await s3Get(regUrl)
+    if (r2.region) region = r2.region
+    probes.push(toProbe('regional', regUrl, r2))
+    if (classifyOutcome(r2) === 'public-listing') listing = r2
+  }
+
+  // 3) Path-style эндпоинт — на случай нестандартных настроек.
+  if (!listing) {
+    const psBase = region ? `s3.${region}.amazonaws.com` : 's3.amazonaws.com'
+    const psUrl = `https://${psBase}/${bucket}/`
+    const r3 = await s3Get(psUrl)
+    if (r3.region) region = r3.region
+    probes.push(toProbe('path-style', psUrl, r3))
+    if (classifyOutcome(r3) === 'public-listing') listing = r3
+  }
+
+  // Свести вердикт по всем пробам.
+  const outcomes = probes.map((p) => p.outcome)
+  const publicListing = outcomes.includes('public-listing')
+  let exists: boolean | null = null
+  let verdict: S3ScanResult['verdict'] = 'unknown'
+  if (publicListing) {
+    exists = true
+    verdict = 'public'
+  } else if (outcomes.includes('access-denied')) {
+    exists = true
+    verdict = 'private'
+  } else if (outcomes.includes('not-found')) {
+    exists = false
+    verdict = 'not-found'
+  }
+
+  const sampleKeys = listing ? extractKeys(listing.body) : []
+  const objectCount = listing ? countKeys(listing.body) : null
+  const truncated = listing
+    ? listing.body.includes('<IsTruncated>true</IsTruncated>')
+    : false
+
+  const message =
+    verdict === 'public'
+      ? 'Внимание: листинг бакета открыт наружу'
+      : verdict === 'private'
+        ? 'Бакет существует, публичный листинг закрыт'
+        : verdict === 'not-found'
+          ? 'Бакет не найден'
+          : 'Не удалось однозначно определить состояние бакета'
+
+  return {
+    ok: true,
+    message,
+    data: {
+      bucket,
+      region,
+      exists,
+      publicListing,
+      objectCount,
+      truncated,
+      sampleKeys,
+      probes,
+      verdict,
+    },
+  }
+}
