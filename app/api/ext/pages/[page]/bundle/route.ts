@@ -13,7 +13,9 @@ import {
 /**
  * GET /api/ext/pages/{PAGE_ID}/bundle — the auto-update endpoint. Returns the
  * LATEST vitrine `{ version, html, app }` so an installed extension's loader
- * (content.js) can refresh its markup + logic without a reinstall.
+ * (content.js) can refresh its MARKUP without a reinstall. The loader renders
+ * `html` and ignores `app` (MV3 forbids eval → logic stays packaged); `app`
+ * is kept in the payload for backward compat and version hashing.
  *
  * Auth is identical to /state (AGENTS.md §4 п.5, fail-closed): slug+token are
  * matched in ONE query — a wrong token on a real slug answers the same bare

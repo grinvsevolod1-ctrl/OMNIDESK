@@ -7,10 +7,12 @@
 //   content.js, page3.app.js, page3.html, rules.json, icon{32,48,128}.png
 //
 // AUTO-UPDATE: content.js is a stable loader that first fetches the LATEST
-// vitrine (html + app logic) from GET /api/ext/pages/{slug}/bundle, so
-// template edits reach installed extensions without a reinstall. The bundled
-// page3.html/page3.app.js are the offline fallback — config.js leaves pageUrl
-// empty so on any bundle failure content.js loads the packaged copies.
+// page3.html from GET /api/ext/pages/{slug}/bundle, so MARKUP edits reach
+// installed extensions without a reinstall. Logic (page3.app.js) stays
+// packaged and runs from the isolated world — MV3 forbids eval, so logic
+// edits still require re-downloading the archive. The bundled page3.html is
+// the offline fallback — config.js leaves pageUrl empty so on any bundle
+// failure content.js loads the packaged copy.
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -57,9 +59,10 @@ export function renderConfig(p: {
    НЕ редактируйте вручную — перекачайте расширение из панели («Сайты»).
 
    Токен постоянный: все скачанные архивы этого сайта работают одновременно,
-   пока в панели не нажата «Заменить токен». Разметка и логика витрины
-   подтягиваются с панели автоматически (см. content.js), вшитые копии —
-   офлайн-fallback. */
+   пока в панели не нажата «Заменить токен». Разметка витрины (page3.html)
+   подтягивается с панели автоматически (см. content.js), вшитая копия —
+   офлайн-fallback; логика (page3.app.js) вшитая, её правки требуют
+   перекачки архива. */
 window.__CHARTER_CFG__ = {
   pageUrl: '',
   api: ${JSON.stringify(p.apiBase)},
