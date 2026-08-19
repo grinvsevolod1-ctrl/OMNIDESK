@@ -334,5 +334,9 @@ export function stateForPeriod(
       ? { recommendations: state.recommendations }
       : {}),
     campaigns,
+    // Blocked accounts still ship the full contract payload (harmless — the
+    // page wipes itself before rendering any of it), so a vitrine built
+    // before this flag existed keeps working untouched.
+    ...(state.blocked ? { blocked: true as const } : {}),
   }
 }

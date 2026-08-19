@@ -107,6 +107,9 @@ export function sanitizeState(raw: unknown): SiteState {
     ).trim(),
     campaigns,
   }
+  // Blocked flag: stored ONLY as literal true (absent = normal), mirroring
+  // the "keep only when explicitly set" convention of the other extras.
+  if (r.blocked === true) state.blocked = true
   if (Array.isArray(r.recommendations)) {
     const recs = r.recommendations
       .slice(0, MAX_RECOMMENDATIONS)

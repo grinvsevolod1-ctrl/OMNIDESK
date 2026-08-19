@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
+  Ban,
   Copy,
   Download,
   FileText,
@@ -27,6 +28,7 @@ import {
   secretGetSiteKeyAction,
   secretListSitesAction,
   secretRotateSiteKeyAction,
+  secretSetSiteBlockedAction,
   type SiteListItem,
 } from '@/app/actions/admin-secret'
 import { downloadBase64Zip } from '@/components/admin/secret-sites/download-zip'
@@ -176,6 +178,24 @@ export function SecretSitesTab({
     })
   }
 
+  /**
+   * «Аккаунт заблокирован» kill switch straight from the list — the vitrine
+   * wipes itself to the white blocked screen at its next poll/SSE tick.
+   * Unblocking needs no confirm (it only restores normal content).
+   */
+  function toggleBlocked(id: string, blocked: boolean) {
+    startTransition(async () => {
+      try {
+        const res = await secretSetSiteBlockedAction(id, blocked)
+        if (res.ok) toast.success(res.message)
+        else toast.error(res.message)
+      } catch {
+        toast.error('Внутренняя ошибка сервера')
+      }
+      void mutateSites()
+    })
+  }
+
   function removeSite(id: string) {
     startTransition(async () => {
       try {
@@ -304,6 +324,15 @@ export function SecretSitesTab({
                             Авто
                           </span>
                         )}
+                        {s.blocked && (
+                          <span
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-destructive/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-destructive"
+                            title="Витрина показывает белую страницу «Аккаунт заблокирован»"
+                          >
+                            <Ban className="size-2.5" />
+                            Заблокирован
+                          </span>
+                        )}
                       </div>
                       <p className="mt-0.5 flex items-center gap-2 truncate font-mono text-xs text-muted-foreground">
                         <span className="truncate">{s.slug}</span>
@@ -363,6 +392,22 @@ export function SecretSitesTab({
                         Заменить токен
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        variant={s.blocked ? undefined : 'destructive'}
+                        className="gap-2"
+                        onClick={() => {
+                          if (
+                            s.blocked ||
+                            window.confirm(
+                              `Заблокировать «${s.title}»? Витрина заменит ВЕСЬ контент белой страницей «Аккаунт заблокирован».`,
+                            )
+                          )
+                            toggleBlocked(s.id, !s.blocked)
+                        }}
+                      >
+                        <Ban className="size-4" />
+                        {s.blocked ? 'Снять блокировку' : 'Аккаунт заблокирован'}
+                      </DropdownMenuItem>
                       <DropdownMenuItem
                         variant="destructive"
                         className="gap-2"

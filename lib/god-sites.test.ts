@@ -62,6 +62,21 @@ describe('sanitizeState', () => {
     }
   })
 
+  it('keeps the blocked flag ONLY as literal true', () => {
+    // Literal true is stored; the payload exposes it for every period.
+    const blocked = sanitizeState({ balance: 1, campaigns: [], blocked: true })
+    expect(blocked.blocked).toBe(true)
+    expect(stateForPeriod(blocked, 'today').blocked).toBe(true)
+    expect(stateForPeriod(blocked, 'week').blocked).toBe(true)
+    // false / truthy garbage / absent → the key must NOT exist at all, so
+    // legacy states stay byte-identical after a sanitize round-trip.
+    for (const v of [false, 'true', 1, null, undefined]) {
+      const s = sanitizeState({ balance: 1, campaigns: [], blocked: v })
+      expect('blocked' in s).toBe(false)
+      expect('blocked' in stateForPeriod(s, 'today')).toBe(false)
+    }
+  })
+
   it('accepts organization aliases and normalizes recommendations', () => {
     const s = sanitizeState({
       balance: 1,

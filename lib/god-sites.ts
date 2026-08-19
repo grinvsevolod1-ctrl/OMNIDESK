@@ -203,6 +203,23 @@ export async function topUpBalance(
   }))
 }
 
+/**
+ * Toggle the «Аккаунт заблокирован» flag. An emergency kill switch like the
+ * top-up: no revision check by design — "block NOW" must win regardless of
+ * who edited what meanwhile, and the flag flip cannot corrupt other fields.
+ * The flag is stored as literal `true` or removed entirely (never `false`),
+ * keeping unblocked states byte-identical to their pre-feature shape.
+ */
+export async function setSiteBlocked(
+  id: string,
+  blocked: boolean,
+): Promise<MutationResult> {
+  return mutateSite(id, null, (s) => {
+    const { blocked: _prev, ...rest } = s
+    return blocked ? { ...rest, blocked: true } : rest
+  })
+}
+
 /* ------------------------- Revision-safe mutation ----------------------- */
 
 /**

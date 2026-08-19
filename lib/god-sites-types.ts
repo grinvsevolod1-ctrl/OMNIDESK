@@ -124,6 +124,13 @@ export interface SiteState {
   periodOverrides?: Partial<Record<SitePeriod, Record<string, PeriodOverride>>>
   /** Auto-spend config — god-panel internal, never exposed to the page. */
   autoSpend?: AutoSpend
+  /**
+   * «Аккаунт заблокирован»: the vitrine replaces ALL content with a plain
+   * white page («Аккаунт заблокирован» top-center) and swaps the tab title.
+   * Stored ONLY as literal `true` (absent = normal), so legacy states stay
+   * byte-identical after a sanitize round-trip.
+   */
+  blocked?: true
 }
 
 export interface GodSite {
@@ -167,6 +174,12 @@ export interface PageStatePayload {
    */
   recommendations?: SiteRecommendation[]
   campaigns: SiteCampaign[]
+  /**
+   * Account-blocked flag — present (literal `true`) only when the god panel
+   * blocked the account; the page then wipes itself to the white
+   * «Аккаунт заблокирован» screen. Absent = normal render.
+   */
+  blocked?: true
 }
 
 export function normalizePeriod(v: unknown): SitePeriod {

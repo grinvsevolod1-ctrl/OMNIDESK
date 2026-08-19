@@ -82,6 +82,7 @@ export default async function SecretPage() {
     autoDailyBudget: s.state.autoSpend?.dailyBudget ?? 0,
     extLabelSeq: s.extLabelSeq,
     extVersion: s.extVersion,
+    blocked: s.state.blocked === true,
   }))
 
   const adAccounts: SecretAdAccount[] = finance.adAccounts.map((a) => ({

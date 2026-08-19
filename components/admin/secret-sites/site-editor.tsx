@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
+  Ban,
   CircleDot,
   ClipboardCopy,
   Download,
@@ -19,6 +20,7 @@ import {
   secretDownloadExtensionAction,
   secretGetSiteAction,
   secretSaveSiteStateAction,
+  secretSetSiteBlockedAction,
   secretTopUpSiteAction,
 } from '@/app/actions/admin-secret'
 import { downloadBase64Zip } from '@/components/admin/secret-sites/download-zip'
@@ -306,6 +308,51 @@ export function SiteEditor({
   }
 
   /**
+   * «Аккаунт заблокирован» kill switch — instant server flip (same pattern
+   * as the top-up: no revision race, snapshot synced in place so the toggle
+   * alone never flags the editor dirty). The vitrine wipes itself to the
+   * white blocked screen at its next poll/SSE tick.
+   */
+  function toggleBlocked() {
+    const next = state.blocked !== true
+    if (
+      next &&
+      !window.confirm(
+        'Заблокировать аккаунт? Витрина заменит ВЕСЬ контент белой страницей «Аккаунт заблокирован».',
+      )
+    ) {
+      return
+    }
+    startTransition(async () => {
+      try {
+        const res = await secretSetSiteBlockedAction(site.id, next)
+        if (!res.ok || res.revision === undefined) {
+          toast.error(res.message)
+          return
+        }
+        setRevision(res.revision)
+        setState((s) => {
+          const { blocked: _prev, ...rest } = s
+          return next ? { ...rest, blocked: true } : rest
+        })
+        // The flip is already persisted — sync the snapshot so it doesn't
+        // flag the editor dirty (mirrors the top-up flow).
+        setSavedSnapshot((snap) => {
+          try {
+            const { blocked: _prev, ...rest } = JSON.parse(snap) as SiteState
+            return JSON.stringify(next ? { ...rest, blocked: true } : rest)
+          } catch {
+            return snap
+          }
+        })
+        toast.success(res.message)
+      } catch {
+        toast.error('Внутренняя ошибка сервера')
+      }
+    })
+  }
+
+  /**
    * Conflict recovery: pull the fresh state + revision in place, discarding
    * local edits — no need to close and reopen the editor.
    */
@@ -364,6 +411,29 @@ export function SiteEditor({
           </span>
           <Button
             size="sm"
+            variant={state.blocked ? 'destructive' : 'outline'}
+            onClick={toggleBlocked}
+            disabled={pending}
+            className={`press-scale gap-1.5 ${
+              state.blocked
+                ? ''
+                : 'text-destructive hover:bg-destructive/10 hover:text-destructive'
+            }`}
+            title={
+              state.blocked
+                ? 'Витрина показывает белую страницу «Аккаунт заблокирован» — нажмите, чтобы снять блокировку'
+                : 'Заменить весь контент витрины белой страницей «Аккаунт заблокирован»'
+            }
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Ban className="size-4" />
+            )}
+            {state.blocked ? 'Снять блокировку' : 'Аккаунт заблокирован'}
+          </Button>
+          <Button
+            size="sm"
             variant="outline"
             onClick={downloadExtension}
             disabled={pending}
@@ -392,6 +462,21 @@ export function SiteEditor({
           </Button>
         </div>
       </div>
+
+      {/* Blocked mode: loud persistent banner — the operator must never
+          forget the vitrine is showing the white blocked screen while they
+          quietly edit numbers nobody can see. */}
+      {state.blocked && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3">
+          <Ban className="size-4 shrink-0 text-destructive" />
+          <p className="text-sm text-pretty">
+            <span className="font-medium">Аккаунт заблокирован.</span>{' '}
+            Витрина показывает белую страницу «Аккаунт заблокирован» вместо
+            всего контента — правки ниже сохранятся, но не будут видны до
+            снятия блокировки.
+          </p>
+        </div>
+      )}
 
       {/* Version conflict: someone saved newer data while this editor was
           open. Offer an in-place reload (discards local edits) — the old

@@ -20,6 +20,7 @@ import {
   renameSite,
   rotateSiteKey,
   saveSiteState,
+  setSiteBlocked,
   topUpBalance,
   type GodSite,
 } from '@/lib/god-sites'
@@ -60,6 +61,8 @@ export interface SiteListItem {
   extLabelSeq: number | null
   /** Download counter → manifest «1.0.K»; 0 = extension never built. */
   extVersion: number
+  /** «Аккаунт заблокирован» — vitrine shows the white blocked screen. */
+  blocked: boolean
 }
 
 function toListItem(s: GodSite): SiteListItem {
@@ -79,6 +82,7 @@ function toListItem(s: GodSite): SiteListItem {
     autoDailyBudget: s.state.autoSpend?.dailyBudget ?? 0,
     extLabelSeq: s.extLabelSeq,
     extVersion: s.extVersion,
+    blocked: s.state.blocked === true,
   }
 }
 
@@ -135,6 +139,35 @@ export async function secretTopUpSiteAction(
     ok: true,
     message: 'Баланс пополнен',
     balance: res.state.balance,
+    revision: res.revision,
+  }
+}
+
+/**
+ * Toggle the «Аккаунт заблокирован» kill switch. When on, the vitrine wipes
+ * itself to a white «Аккаунт заблокирован» screen at the next poll/SSE tick.
+ * No revision needed — this is an emergency flip that must always win.
+ */
+export async function secretSetSiteBlockedAction(
+  id: string,
+  blocked: boolean,
+): Promise<ActionResult & { blocked?: boolean; revision?: number }> {
+  await requireGod()
+  const res = await setSiteBlocked(id, blocked)
+  if (!res.ok) {
+    if (res.error === 'invalid') return { ok: false, message: res.message }
+    if (res.error === 'conflict') {
+      // Lost a race against a concurrent write (e.g. auto-spend commit) —
+      // same recovery as the top-up: just press the button again.
+      return { ok: false, message: 'Данные изменились — повторите действие' }
+    }
+    return { ok: false, message: 'Сайт не найден' }
+  }
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: blocked ? 'Аккаунт заблокирован' : 'Блокировка снята',
+    blocked: res.state.blocked === true,
     revision: res.revision,
   }
 }
