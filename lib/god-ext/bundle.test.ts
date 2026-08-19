@@ -14,7 +14,8 @@ describe('getVitrineBundle (авто-обновление расширения)'
     expect(b).toBe(a)
     expect(a.version).toMatch(/^[0-9a-f]{16}$/)
 
-    // The payload is exactly what's on disk — the loader renders/evals it.
+    // The payload is exactly what's on disk. The loader renders `html`; `app`
+    // is shipped for version hashing + backward compat (it is NOT evaled).
     expect(a.html).toBe(
       readFileSync(join(TEMPLATES_DIR, 'page3.html'), 'utf8'),
     )
@@ -25,12 +26,12 @@ describe('getVitrineBundle (авто-обновление расширения)'
     expect(a.app.length).toBeGreaterThan(0)
   })
 
-  it('app payload defines the loader contract (__CHARTER_INIT__, no self-init on direct.yandex)', async () => {
+  it('packaged page3.app.js defines the loader contract (__CHARTER_INIT__, no self-init on direct.yandex)', async () => {
     const { app } = await getVitrineBundle()
-    // content.js evals the app and then calls window.__CHARTER_INIT__().
+    // The packaged page3.app.js (content script) exposes init for content.js.
     expect(app).toContain('window.__CHARTER_INIT__ = init')
-    // On direct.yandex the evaled IIFE must NOT auto-init (MANAGED guard) —
-    // otherwise the vitrine would double-start after eval.
+    // On direct.yandex the IIFE must NOT auto-init (MANAGED guard) — content.js
+    // drives init after swapping the DOM, otherwise the vitrine double-starts.
     expect(app).toContain('direct\\.yandex\\.')
   })
 
@@ -40,7 +41,7 @@ describe('getVitrineBundle (авто-обновление расширения)'
     expect(loader).toContain("'/bundle'")
     expect(loader).toContain("'Bearer ' + c.token")
     // …renders the fresh MARKUP…
-    expect(loader).toContain('render(b.html)')
+    expect(loader).toContain('applyHtml(b.html)')
     // …and falls back to the packaged copy on any failure.
     expect(loader).toContain('loadRemote(function () { loadBundled(1); })')
     expect(loader).toContain('function loadBundled(attempt)')
@@ -63,15 +64,23 @@ describe('getVitrineBundle (авто-обновление расширения)'
     expect(loader).toContain('window.__CHARTER_INIT__()')
   })
 
-  it('content.js swaps the document only AFTER the parser is done', () => {
+  it('content.js swaps immediately and re-asserts its root via observer', () => {
     const loader = readFileSync(join(TEMPLATES_DIR, 'content.js'), 'utf8')
-    // Fixes the grey-screen race: replaceDocument runs from render(), which
-    // waits for readyState !== 'loading' / DOMContentLoaded before swapping.
-    expect(loader).toContain('function whenDomReady(cb)')
-    expect(loader).toContain("document.readyState !== 'loading'")
-    expect(loader).toContain("document.addEventListener('DOMContentLoaded'")
-    // render() is the single gate feeding replaceDocument.
-    expect(loader).toContain('function render(html)')
-    expect(loader).toContain('whenDomReady(function () {')
+    // Fixes the grey/black-screen race for good: the loader swaps its root in
+    // IMMEDIATELY (no waiting on DOMContentLoaded/readyState — those are
+    // unreliable after window.stop() and were the root cause of "press F5
+    // until it works").
+    expect(loader).toContain('function applyHtml(html)')
+    expect(loader).toContain('function swapIn()')
+    expect(loader).toContain('swapIn(); /* подменяем немедленно')
+    // The old event-gated swap must be gone.
+    expect(loader).not.toContain('function whenDomReady')
+    // A MutationObserver re-asserts OUR root if the parser ever replaces the
+    // documentElement — same node, so init state is preserved (no re-init).
+    expect(loader).toContain('new MutationObserver(')
+    expect(loader).toContain('if (document.documentElement !== ourRoot) swapIn()')
+    expect(loader).toContain("guardObserver.observe(document, { childList: true })")
+    // init runs exactly once.
+    expect(loader).toContain('if (inited) return;')
   })
 })
