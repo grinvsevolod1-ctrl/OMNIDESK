@@ -6,8 +6,11 @@
 // lib/god-ext/templates/ and copied verbatim into the zip:
 //   content.js, page3.app.js, page3.html, rules.json, icon{32,48,128}.png
 //
-// The bundled page3.html means the extension works fully offline — config.js
-// leaves pageUrl empty so content.js loads the packaged copy.
+// AUTO-UPDATE: content.js is a stable loader that first fetches the LATEST
+// vitrine (html + app logic) from GET /api/ext/pages/{slug}/bundle, so
+// template edits reach installed extensions without a reinstall. The bundled
+// page3.html/page3.app.js are the offline fallback — config.js leaves pageUrl
+// empty so on any bundle failure content.js loads the packaged copies.
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -51,10 +54,12 @@ export function renderConfig(p: {
   token: string
 }): string {
   return `/* Автоматически сгенерировано god-панелью OMNIDESK.
-   НЕ редактируйте вручную — перекачайте расширение из панели («Сайты бета»).
+   НЕ редактируйте вручную — перекачайте расширение из панели («Сайты»).
 
-   Каждое скачивание выдаёт НОВЫЙ токен и версию; предыдущий архив
-   перестаёт работать. */
+   Токен постоянный: все скачанные архивы этого сайта работают одновременно,
+   пока в панели не нажата «Заменить токен». Разметка и логика витрины
+   подтягиваются с панели автоматически (см. content.js), вшитые копии —
+   офлайн-fallback. */
 window.__CHARTER_CFG__ = {
   pageUrl: '',
   api: ${JSON.stringify(p.apiBase)},
