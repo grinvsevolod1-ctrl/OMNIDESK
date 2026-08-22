@@ -27,6 +27,7 @@ import { toast } from 'sonner'
 import { setLeadArchivedAction } from '@/app/actions/lead-cards'
 import { exportMyLeadsExcelAction } from '@/app/actions/leads-export'
 import { useXlsxExport } from '@/components/shared/use-xlsx-export'
+import { ArchiveLeadDialog } from '@/components/curator/archive-lead-dialog'
 import { CuratorLeadRow } from '@/components/curator/curator-lead-row'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { StatusReminder } from '@/components/curator/status-reminder'
@@ -49,6 +50,7 @@ import {
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
   leadNeedsDailyStatus,
+  leadStatusRank,
 } from '@/lib/lead-status'
 import { cn } from '@/lib/utils'
 
@@ -125,12 +127,23 @@ export function CuratorLeadsView({
   const openLead = useCallback((id: string) => setSelectedId(id), [])
   /** void-обёртка для onRefresh мемоизированных строк (inline-правки). */
   const refreshRows = useCallback(() => void refresh(), [refresh])
+  // «В архив» из строки не переносит лид сразу: открывается диалог
+  // с обязательным выбором причины и комментарием. Возврат из архива — сразу.
+  const [archiveTarget, setArchiveTarget] = useState<LeadCard | null>(null)
   const toggleArchive = useCallback(
     (id: string, archive: boolean) => {
+      if (archive) {
+        setArchiveTarget(
+          leads.find((l) => l.id === id) ??
+            archived?.find((l) => l.id === id) ??
+            null,
+        )
+        return
+      }
       startTransition(async () => {
         const res = await setLeadArchivedAction({
           leadCardId: id,
-          archived: archive,
+          archived: false,
         })
         if (res.ok) {
           toast.success(res.message)
@@ -140,7 +153,7 @@ export function CuratorLeadsView({
         }
       })
     },
-    [refresh],
+    [refresh, leads, archived],
   )
 
   // Выгрузка текущей вкладки (активные/архив) в Excel — общий флоу
@@ -166,13 +179,25 @@ export function CuratorLeadsView({
     }
     const key = (l: LeadCard) =>
       new Date(l.transferredAt ?? l.createdAt).getTime()
-    out = [...out].sort((a, b) =>
-      sort === 'newest' ? key(b) - key(a) : key(a) - key(b),
-    )
-    // Требующие статуса — всегда сверху в активной вкладке.
+    // Основная сортировка активной вкладки — по статусам: NEW всегда
+    // первый, дальше по ходу воронки (обучение → в работе → временно не
+    // работает → не связался → отказался → игнор → кинул). Внутри одного
+    // статуса — по дате (выбранное направление). В архиве — только по дате.
+    out = [...out].sort((a, b) => {
+      if (tab === 'active') {
+        const rank = leadStatusRank(a.status) - leadStatusRank(b.status)
+        if (rank !== 0) return rank
+      }
+      return sort === 'newest' ? key(b) - key(a) : key(a) - key(b)
+    })
+    // Требующие статуса — сверху внутри своего статуса в активной вкладке.
     if (tab === 'active') {
       const needs = (l: LeadCard) => leadNeedsDailyStatus(l)
-      out.sort((a, b) => Number(needs(b)) - Number(needs(a)))
+      out.sort((a, b) => {
+        const rank = leadStatusRank(a.status) - leadStatusRank(b.status)
+        if (rank !== 0) return rank
+        return Number(needs(b)) - Number(needs(a))
+      })
     }
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick re-evaluates the deadline
@@ -407,7 +432,7 @@ export function CuratorLeadsView({
           <EmptyState
             icon={Archive}
             title="Архив пуст"
-            description="Сюда попадают лиды с финальным статусом («Отказался», «Кинул») — вручную или автоматически."
+            description="Сюда попадают лиды с нерабочим статусом («Игнор», «Отказался», «Кинул») — вручную или автоматически."
           />
         ) : (
           <EmptyState
@@ -473,6 +498,17 @@ export function CuratorLeadsView({
         fallbackLead={selectedLead}
         onClose={() => setSelectedId(null)}
         onUpdated={() => void refresh()}
+      />
+
+      {/* Перенос в архив: причина («Игнор»/«Отказался»/«Кинул») + комментарий */}
+      <ArchiveLeadDialog
+        leadCardId={archiveTarget?.id ?? null}
+        leadName={archiveTarget?.fullName}
+        open={archiveTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setArchiveTarget(null)
+        }}
+        onArchived={() => void refresh()}
       />
 
 

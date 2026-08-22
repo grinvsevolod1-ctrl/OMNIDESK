@@ -12,6 +12,12 @@ import { cn } from '@/lib/utils'
  * Строка лида в списке менеджера. memo: фоновый пуллинг каждые 5с обновляет
  * массив лидов — перерисовываются только строки с изменившимися данными.
  * onOpen должен быть стабильным (useCallback в контейнере).
+ *
+ * Раскладка — CSS grid с фиксированными колонками (имя · комментарии ·
+ * город · передан · статус · дата), как у админской и кураторской таблиц:
+ * во всех строках колонки выровнены по одной сетке, бейджи не «плавают»
+ * и не наезжают друг на друга (overflow-hidden + truncate в каждой ячейке).
+ * Ниже брейкпоинтов второстепенные колонки скрываются целиком.
  */
 export const ManagerLeadRow = memo(function ManagerLeadRow({
   lead,
@@ -30,9 +36,14 @@ export const ManagerLeadRow = memo(function ManagerLeadRow({
   return (
     <li
       className={cn(
-        // Вся строка кликабельна и показывает pointer — понятно, что карточку
-        // можно открыть (клик мимо кнопки имени тоже открывает).
-        'flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors duration-1000 hover:bg-muted/40 sm:px-5',
+        'grid cursor-pointer items-center gap-x-3 px-4 py-3 transition-colors duration-1000 hover:bg-muted/40 sm:px-5',
+        // Колонки: имя · [комментарии] · [город] · [передан] · статус · дата.
+        'grid-cols-[minmax(0,1fr)_minmax(0,9.5rem)]',
+        'sm:grid-cols-[minmax(0,1fr)_minmax(0,9.5rem)_8.5rem]',
+        'md:grid-cols-[minmax(0,1fr)_minmax(0,11.5rem)_minmax(0,9.5rem)_8.5rem]',
+        'lg:grid-cols-[minmax(0,1fr)_2.5rem_minmax(0,9rem)_minmax(0,11.5rem)_minmax(0,9.5rem)_8.5rem]',
+        // Строки за экраном не рендерятся при скролле (стандарт UI, AGENTS.md).
+        '[content-visibility:auto] [contain-intrinsic-size:auto_3.75rem]',
         isFresh &&
           'bg-primary/10 duration-150 animate-in fade-in slide-in-from-top-2',
       )}
@@ -40,7 +51,7 @@ export const ManagerLeadRow = memo(function ManagerLeadRow({
     >
       <button
         type="button"
-        className="min-w-0 flex-1 basis-48 text-left"
+        className="min-w-0 text-left"
         onClick={() => onOpen(lead.id)}
         aria-label={`Открыть карточку: ${lead.fullName || 'Без имени'}`}
       >
@@ -52,53 +63,75 @@ export const ManagerLeadRow = memo(function ManagerLeadRow({
         </p>
       </button>
 
-      {lead.curatorCommentCount > 0 ? (
-        <Badge
-          variant="outline"
-          className="gap-1 border-transparent bg-sky-500/15 text-sky-700 dark:text-sky-400"
-        >
-          <MessageSquare className="size-3" />
-          {lead.curatorCommentCount}
-        </Badge>
-      ) : null}
+      {/* Комментарии сотрудника — узкая колонка, рендерится всегда (lg+). */}
+      <span className="hidden min-w-0 lg:inline-flex">
+        {lead.curatorCommentCount > 0 ? (
+          <Badge
+            variant="outline"
+            className="gap-1 border-transparent bg-sky-500/15 text-sky-700 dark:text-sky-400"
+          >
+            <MessageSquare className="size-3" />
+            {lead.curatorCommentCount}
+          </Badge>
+        ) : null}
+      </span>
 
-      {lead.city ? (
-        <Badge
-          variant="outline"
-          className="gap-1 border-transparent bg-muted text-muted-foreground"
-        >
-          <MapPin className="size-3" />
-          {lead.city}
-        </Badge>
-      ) : null}
+      {/* Город — ячейка с overflow-hidden: длинные названия обрезаются,
+          не наезжая на соседние колонки. */}
+      <span className="hidden min-w-0 overflow-hidden lg:inline-flex">
+        {lead.city ? (
+          <Badge
+            variant="outline"
+            className="max-w-full gap-1 border-transparent bg-muted text-muted-foreground"
+          >
+            <MapPin className="size-3 shrink-0" />
+            <span className="truncate">{lead.city}</span>
+          </Badge>
+        ) : null}
+      </span>
 
-      {lead.transferredAt ? (
-        <Badge
-          variant="outline"
-          className="border-transparent bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-        >
-          Передан{lead.curatorName ? `: ${lead.curatorName}` : ''}
-        </Badge>
-      ) : (
-        <Badge
-          variant="outline"
-          className="border-transparent bg-muted text-muted-foreground"
-        >
-          Не передан
-        </Badge>
-      )}
+      {/* Передан кому / не передан. */}
+      <span className="hidden min-w-0 overflow-hidden md:inline-flex">
+        {lead.transferredAt ? (
+          <Badge
+            variant="outline"
+            className="max-w-full border-transparent bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+          >
+            <span className="truncate">
+              Передан{lead.curatorName ? `: ${lead.curatorName}` : ''}
+            </span>
+          </Badge>
+        ) : (
+          <Badge
+            variant="outline"
+            className="border-transparent bg-muted text-muted-foreground"
+          >
+            Не передан
+          </Badge>
+        )}
+      </span>
 
-      {tone && lead.status ? (
-        <Badge
-          variant="outline"
-          className={cn('gap-1.5 border-transparent', tone.bg, tone.text)}
-        >
-          <span className={cn('size-1.5 rounded-full', tone.dot)} />
-          {leadStatusLabel(lead.status)}
-        </Badge>
-      ) : null}
+      {/* Статус — левые края бейджей выровнены по колонке. */}
+      <span className="min-w-0 overflow-hidden">
+        {tone && lead.status ? (
+          <Badge
+            variant="outline"
+            className={cn(
+              'max-w-full gap-1.5 border-transparent',
+              tone.bg,
+              tone.text,
+            )}
+          >
+            <span className={cn('size-1.5 shrink-0 rounded-full', tone.dot)} />
+            <span className="truncate">{leadStatusLabel(lead.status)}</span>
+          </Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </span>
 
-      <span className="text-xs text-muted-foreground">
+      {/* Дата — табличные цифры, выровнена по правому краю. */}
+      <span className="hidden justify-self-end text-right text-xs tabular-nums text-muted-foreground sm:block">
         {formatDateTime(
           lead.transferredAt && showTransferredDate
             ? lead.transferredAt

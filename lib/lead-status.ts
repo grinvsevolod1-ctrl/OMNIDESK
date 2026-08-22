@@ -138,8 +138,11 @@ export function isFinalLeadStatus(
  * в архив возможен с любого текущего статуса, но только через выбор одной
  * из этих причин + обязательный комментарий.
  */
-export const ARCHIVE_LEAD_STATUSES = ['ignore', 'refused', 'left'] as const
-  satisfies readonly LeadStatus[]
+export const ARCHIVE_LEAD_STATUSES = [
+  'ignore',
+  'refused',
+  'left',
+] as const satisfies readonly LeadStatus[]
 
 export function isArchiveLeadStatus(
   value: string | null | undefined,

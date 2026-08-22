@@ -133,7 +133,7 @@ export const AdminLeadRow = memo(function AdminLeadRow({
 
       <span
         onClick={(e) => e.stopPropagation()}
-        className="hidden min-w-0 sm:inline-flex"
+        className="hidden min-w-0 overflow-hidden sm:inline-flex"
       >
         <CityInlineEditor lead={lead} onSaved={onRefresh} />
       </span>

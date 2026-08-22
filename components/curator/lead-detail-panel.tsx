@@ -9,6 +9,7 @@ import {
   returnLeadToFunnelAction,
   setLeadArchivedAction,
 } from '@/app/actions/lead-cards'
+import { ArchiveLeadDialog } from '@/components/curator/archive-lead-dialog'
 import { LeadComments } from '@/components/curator/lead-detail/lead-comments'
 import { LeadDetailFields } from '@/components/curator/lead-detail/lead-fields'
 import { LeadHistory } from '@/components/curator/lead-detail/lead-history'
@@ -23,7 +24,6 @@ import {
   SlideOverSectionSkeleton,
 } from '@/components/shared/slide-over'
 import type { LeadCard } from '@/lib/data/lead-cards'
-import { isFinalLeadStatus } from '@/lib/lead-status'
 
 type LeadCardDetail = NonNullable<
   Awaited<ReturnType<typeof getLeadCardDetailAction>>
@@ -62,6 +62,8 @@ export function LeadDetailPanel({
   // Руководитель «только просмотр»: вся панель в режиме чтения.
   const readOnly = variant === 'head' && !headCanEdit
   const [pending, startTransition] = useTransition()
+  // Диалог «Перенос в архив»: причина + обязательный комментарий.
+  const [archiveOpen, setArchiveOpen] = useState(false)
 
   // Держим последний открытый id, чтобы контент оставался видимым во время
   // анимации закрытия (leadId уже null, панель ещё уезжает).
@@ -114,12 +116,13 @@ export function LeadDetailPanel({
     void mutate()
   }
 
-  function toggleArchive(archived: boolean) {
+  /** Возврат из архива (перенос В архив — только через диалог с причиной). */
+  function unarchive() {
     if (!activeId) return
     startTransition(async () => {
       const res = await setLeadArchivedAction({
         leadCardId: activeId,
-        archived,
+        archived: false,
       })
       if (res.ok) {
         toast.success(res.message)
@@ -225,14 +228,16 @@ export function LeadDetailPanel({
             </PanelSection>
           ) : null}
 
-          {/* Lifecycle: финальные лиды можно архивировать или вернуть ИИ.
-              Руководителю недоступно даже с правом редактирования. */}
-          {variant !== 'head' && isFinalLeadStatus(card.status) ? (
+          {/* Lifecycle: «В архив» доступна с любого статуса (через диалог
+              с причиной и комментарием). Руководителю недоступно даже
+              с правом редактирования. */}
+          {variant !== 'head' ? (
             <PanelSection className="space-y-2">
               <LeadLifecycleActions
                 card={card}
                 pending={pending}
-                onToggleArchive={toggleArchive}
+                onRequestArchive={() => setArchiveOpen(true)}
+                onUnarchive={unarchive}
                 onReturnToFunnel={returnToFunnel}
               />
             </PanelSection>
@@ -263,6 +268,17 @@ export function LeadDetailPanel({
               />
             )}
           </PanelSection>
+
+          <ArchiveLeadDialog
+            leadCardId={card.id}
+            leadName={card.fullName}
+            open={archiveOpen}
+            onOpenChange={setArchiveOpen}
+            onArchived={() => {
+              onUpdated()
+              void mutate()
+            }}
+          />
         </div>
       )}
     </SlideOver>

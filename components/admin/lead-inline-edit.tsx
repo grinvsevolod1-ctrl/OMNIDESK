@@ -247,18 +247,22 @@ export function CityInlineEditor({
         render={
           <button
             type="button"
-            className="inline-flex"
+            // max-w-full + overflow-hidden: длинный «Город (Регион)» обрезается
+            // внутри своей grid-ячейки и не наезжает на соседние колонки.
+            className="inline-flex min-w-0 max-w-full overflow-hidden"
             aria-label="Изменить город"
             onClick={(e) => e.stopPropagation()}
           >
             <Badge
               variant="outline"
-              className="gap-1 border-transparent bg-muted text-muted-foreground transition-colors hover:text-foreground"
+              className="max-w-full gap-1 border-transparent bg-muted text-muted-foreground transition-colors hover:text-foreground"
             >
-              <MapPin className="size-3" />
-              {lead.city || 'Город…'}
+              <MapPin className="size-3 shrink-0" />
+              <span className="truncate">{lead.city || 'Город…'}</span>
               {lead.region ? (
-                <span className="text-[10px] opacity-70">({lead.region})</span>
+                <span className="hidden truncate text-[10px] opacity-70 xl:inline">
+                  ({lead.region})
+                </span>
               ) : null}
             </Badge>
           </button>

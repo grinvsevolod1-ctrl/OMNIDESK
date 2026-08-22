@@ -355,7 +355,7 @@ export async function editLeadComment(input: {
     const row = rows[0]
     if (!row) throw new Error('Комментарий не найден')
     if (!row.author_id || row.author_id !== input.editorId) {
-      throw new Error('Комментарий можно править только ег�� автору.')
+      throw new Error('Комментарий можно править только его автору.')
     }
     if (row.body === newBody) return
 

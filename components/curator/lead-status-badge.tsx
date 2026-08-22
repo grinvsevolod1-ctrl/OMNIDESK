@@ -17,6 +17,26 @@ export function LeadStatusBadge({
   previousStatus?: LeadStatus | null
   className?: string
 }) {
+  // «NEW» — лид только зашёл от менеджера: зелёный бейдж важнее подсказки
+  // «Нужно обновить» (подтверждение статуса всё равно требуется — дневной
+  // гейт это учитывает, но визуально свежий лид всегда помечен как NEW).
+  if (status === 'new') {
+    const tone = LEAD_STATUS_TONE.new
+    return (
+      <Badge
+        variant="outline"
+        className={cn(
+          'gap-1.5 border-transparent font-semibold',
+          tone.bg,
+          tone.text,
+          className,
+        )}
+      >
+        <span className={cn('size-1.5 rounded-full', tone.dot)} />
+        NEW
+      </Badge>
+    )
+  }
   if (needsUpdate) {
     return (
       <div className={cn('flex flex-wrap items-center gap-1.5', className)}>
