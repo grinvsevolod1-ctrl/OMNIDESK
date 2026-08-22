@@ -19,11 +19,9 @@ import {
   SlideOver,
   SlideOverSectionSkeleton,
 } from '@/components/shared/slide-over'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import type { LeadCard } from '@/lib/data/lead-cards'
-import { leadStatusLabel } from '@/lib/lead-status'
 import { formatMskDateTimeFull as formatDateTime } from '@/lib/time'
 
 type LeadCardDetail = NonNullable<

@@ -6,10 +6,8 @@ import {
 } from '@/components/shared/lead-comment-item'
 import { LeadHistoryEvent } from '@/components/shared/lead-history-event'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { leadStatusLabel } from '@/lib/lead-status'
 import { APP_TIME_ZONE } from '@/lib/time'
 import type { LeadCardState } from './use-lead-card'
 
