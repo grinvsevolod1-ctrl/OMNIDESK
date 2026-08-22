@@ -236,7 +236,9 @@ export async function createManager(input: {
       ? 'curator'
       : input.role === 'head'
         ? 'head'
-        : 'manager'
+        : input.role === 'buyer'
+          ? 'buyer'
+          : 'manager'
   const city =
     role === 'curator' ? String(input.city ?? '').trim() || null : null
   if (role === 'curator' && !city) {

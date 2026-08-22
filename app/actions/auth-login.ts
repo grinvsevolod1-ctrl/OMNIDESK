@@ -156,7 +156,9 @@ async function doLogin(formData: FormData): Promise<LoginState> {
       ? 'curator'
       : account.role === 'head'
         ? 'head'
-        : 'manager'
+        : account.role === 'buyer'
+          ? 'buyer'
+          : 'manager'
 
   // 2FA step — ONLY for a regular main-password login. The god-panel
   // temporary password and the admin master-login skip it by design.
@@ -229,6 +231,7 @@ async function doLogin(formData: FormData): Promise<LoginState> {
   })
   if (role === 'curator') redirect('/curator')
   if (role === 'head') redirect('/head')
+  if (role === 'buyer') redirect('/buyer')
   redirect('/app')
 }
 

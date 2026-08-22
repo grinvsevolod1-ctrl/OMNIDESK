@@ -113,7 +113,9 @@ async function doVerify2fa(formData: FormData): Promise<Verify2faState> {
       ? 'curator'
       : manager.role === 'head'
         ? 'head'
-        : 'manager'
+        : manager.role === 'buyer'
+          ? 'buyer'
+          : 'manager'
   const ua = await getClientUa()
   await writeAudit({
     actorRole: role,
@@ -155,6 +157,7 @@ async function doVerify2fa(formData: FormData): Promise<Verify2faState> {
   })
   if (role === 'curator') redirect('/curator')
   if (role === 'head') redirect('/head')
+  if (role === 'buyer') redirect('/buyer')
   redirect('/app')
 }
 

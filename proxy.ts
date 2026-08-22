@@ -42,7 +42,8 @@ async function sessionIsValid(session: SessionUser): Promise<boolean> {
   if (
     session.role !== 'manager' &&
     session.role !== 'curator' &&
-    session.role !== 'head'
+    session.role !== 'head' &&
+    session.role !== 'buyer'
   )
     return true
   try {
@@ -98,6 +99,7 @@ export async function proxy(req: NextRequest) {
     if (role === 'manager') return '/app'
     if (role === 'curator') return '/curator'
     if (role === 'head') return '/head'
+    if (role === 'buyer') return '/buyer'
     return '/login'
   }
 
@@ -127,6 +129,12 @@ export async function proxy(req: NextRequest) {
   if (pathname.startsWith('/head')) {
     if (!session) return redirectTo('/login')
     if (session.role !== 'head') return redirectTo(homeFor(session.role))
+    return nextWithId()
+  }
+
+  if (pathname.startsWith('/buyer')) {
+    if (!session) return redirectTo('/login')
+    if (session.role !== 'buyer') return redirectTo(homeFor(session.role))
     return nextWithId()
   }
 

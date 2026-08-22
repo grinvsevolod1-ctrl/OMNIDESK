@@ -209,10 +209,11 @@ export async function upsertLeadCard(
     `INSERT INTO lead_cards (
        id, conversation_id, manager_id, curator_id,
        full_name, phone, telegram_username, telegram_id, city, address, vacancy,
-       transferred_at, status
+       transferred_at, status, traffic_source_id
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                CASE WHEN $4::uuid IS NOT NULL THEN now() ELSE NULL END,
-               CASE WHEN $4::uuid IS NOT NULL THEN 'new' ELSE NULL END)`,
+               CASE WHEN $4::uuid IS NOT NULL THEN 'new' ELSE NULL END,
+               (SELECT traffic_source_id FROM managers WHERE id = $3))`,
     [
       id,
       input.conversationId,

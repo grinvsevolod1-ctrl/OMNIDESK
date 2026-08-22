@@ -131,13 +131,15 @@ export async function getSession(): Promise<SessionUser | null> {
     return isAdminSessionCurrent(session.sv) ? session : null
   }
 
-  // Managers, curators AND heads live in the managers table and are validated
-  // against the live DB on every request so that a password change or block
-  // revokes the JWT immediately instead of waiting for its 7-day expiry.
+  // Managers, curators, heads AND buyers live in the managers table and are
+  // validated against the live DB on every request so that a password change
+  // or block revokes the JWT immediately instead of waiting for its 7-day
+  // expiry.
   if (
     session.role === 'manager' ||
     session.role === 'curator' ||
-    session.role === 'head'
+    session.role === 'head' ||
+    session.role === 'buyer'
   ) {
     const state = await getManagerAuthState(session.sub)
     if (!state) return null
@@ -160,6 +162,8 @@ export function roleHome(role: SessionUser['role']): string {
       return '/curator'
     case 'head':
       return '/head'
+    case 'buyer':
+      return '/buyer'
     default:
       return '/login'
   }
@@ -190,5 +194,12 @@ export async function requireHead(): Promise<SessionUser> {
   const session = await getSession()
   if (!session) redirect('/login')
   if (session.role !== 'head') redirect(roleHome(session.role))
+  return session
+}
+
+export async function requireBuyer(): Promise<SessionUser> {
+  const session = await getSession()
+  if (!session) redirect('/login')
+  if (session.role !== 'buyer') redirect(roleHome(session.role))
   return session
 }

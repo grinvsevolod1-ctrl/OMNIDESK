@@ -1,7 +1,7 @@
-export type Role = 'admin' | 'manager' | 'curator' | 'head'
+export type Role = 'admin' | 'manager' | 'curator' | 'head' | 'buyer'
 
 /** DB-backed account role stored on the managers table (admin is env-only). */
-export type AccountRole = 'manager' | 'curator' | 'head'
+export type AccountRole = 'manager' | 'curator' | 'head' | 'buyer'
 
 export type ManagerStatus = 'active' | 'blocked'
 
