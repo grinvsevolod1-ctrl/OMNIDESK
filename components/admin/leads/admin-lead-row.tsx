@@ -128,6 +128,18 @@ export const AdminLeadRow = memo(function AdminLeadRow({
               {lead.telegramUsername}
             </a>
           ) : null}
+          {lead.trafficSourceName ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className="inline-flex max-w-32 cursor-default items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    <span className="truncate">{lead.trafficSourceName}</span>
+                  </span>
+                }
+              />
+              <TooltipContent side="top">Источник трафика</TooltipContent>
+            </Tooltip>
+          ) : null}
         </div>
       </div>
 

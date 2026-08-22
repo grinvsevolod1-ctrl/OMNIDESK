@@ -136,7 +136,10 @@ export function SourceDialog({
             </div>
             <div className="flex flex-col gap-2">
               <Label>Медиабайер</Label>
-              <Select value={buyerId} onValueChange={setBuyerId}>
+              <Select
+                value={buyerId}
+                onValueChange={(v) => setBuyerId(v ?? NO_BUYER)}
+              >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Без байера" />
                 </SelectTrigger>

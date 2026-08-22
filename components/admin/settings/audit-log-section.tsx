@@ -27,6 +27,7 @@ const ROLE_LABELS: Record<AuditRow['actorRole'], string> = {
   manager: 'Менеджер',
   curator: 'Менеджер по кадрам',
   head: 'Руководитель',
+  buyer: 'Медиабайер',
 }
 
 function fmtWhen(iso: string): string {

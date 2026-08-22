@@ -26,15 +26,13 @@ import {
   type AssignableManager,
 } from '@/components/admin/sources/edit-source-managers-dialog'
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -203,7 +201,7 @@ export function SourcesTable({
           buyers={buyers}
           source={editing}
           open={!!editing}
-          onOpenChange={(o) => {
+          onOpenChange={(o: boolean) => {
             if (!o) setEditing(null)
           }}
         />
@@ -216,35 +214,45 @@ export function SourcesTable({
           currentManagerIds={editingManagers.managers.map((m) => m.id)}
           allManagers={allManagers}
           open={!!editingManagers}
-          onOpenChange={(o) => {
+          onOpenChange={(o: boolean) => {
             if (!o) setEditingManagers(null)
           }}
         />
       ) : null}
 
-      <AlertDialog
+      <Dialog
         open={!!deleting}
-        onOpenChange={(o) => {
+        onOpenChange={(o: boolean) => {
           if (!o) setDeleting(null)
         }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить источник?</AlertDialogTitle>
-            <AlertDialogDescription>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Удалить источник?</DialogTitle>
+            <DialogDescription>
               {deleting
                 ? `Источник «${deleting.name}» будет удалён. Менеджеры отвяжутся, атрибуция его лидов обнулится. Сами лиды и диалоги не пострадают.`
                 : ''}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={pending}>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} disabled={pending}>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleting(null)}
+              disabled={pending}
+            >
+              Отмена
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDelete}
+              disabled={pending}
+            >
               {pending ? 'Удаляем…' : 'Удалить'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
