@@ -24,9 +24,9 @@ import { CharCounter } from '@/components/ui/char-counter'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
-  LEAD_STATUSES,
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
+  SELECTABLE_LEAD_STATUSES,
   STATUS_COMMENT_MIN_LEN,
   type LeadStatus,
 } from '@/lib/lead-status'
@@ -89,7 +89,7 @@ export const LeadStatusForm = memo(function LeadStatusForm({
     <div className="space-y-3 border-b border-border px-4 py-4 sm:px-5">
       <p className="text-sm font-semibold">Статус на сегодня</p>
       <div className="flex flex-wrap gap-1.5">
-        {LEAD_STATUSES.map((s) => {
+        {SELECTABLE_LEAD_STATUSES.map((s) => {
           const tone = LEAD_STATUS_TONE[s]
           const active = status === s
           return (

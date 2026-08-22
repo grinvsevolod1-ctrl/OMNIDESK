@@ -62,6 +62,7 @@ export {
 
 /* Archive lifecycle. */
 export {
+  archiveLeadWithStatus,
   autoArchiveFinalLeads,
   setLeadArchived,
 } from './lead-cards-archive'

@@ -4,6 +4,7 @@
 import { APP_TIME_ZONE, mskDayKey } from '@/lib/time'
 
 export const LEAD_STATUSES = [
+  'new',
   'awaiting_exit',
   'training',
   'working',
@@ -16,7 +17,17 @@ export const LEAD_STATUSES = [
 
 export type LeadStatus = (typeof LEAD_STATUSES)[number]
 
+/**
+ * Статусы, которые можно выставить вручную. «NEW» назначается только
+ * системой при передаче лида менеджером — в списках выбора не показывается
+ * и сервером отклоняется.
+ */
+export const SELECTABLE_LEAD_STATUSES = LEAD_STATUSES.filter(
+  (s) => s !== 'new',
+) as readonly Exclude<LeadStatus, 'new'>[]
+
 export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
+  new: 'NEW',
   awaiting_exit: 'Ожидает выхода',
   training: 'Обучение',
   working: 'В работе',
@@ -27,11 +38,39 @@ export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   left: 'Кинул',
 }
 
+/**
+ * Порядок статусов для сортировки списков: NEW всегда первый, затем рабочие
+ * статусы по ходу воронки, финальные — в конце. «Без статуса» — сразу после
+ * NEW (лид тоже требует внимания).
+ */
+export const LEAD_STATUS_ORDER: Record<LeadStatus, number> = {
+  new: 0,
+  awaiting_exit: 2,
+  training: 3,
+  working: 4,
+  temporarily_off: 5,
+  no_contact: 6,
+  refused: 7,
+  ignore: 8,
+  left: 9,
+}
+
+/** Ранг статуса для сортировки; NULL/неизвестный — после NEW. */
+export function leadStatusRank(value: string | null | undefined): number {
+  if (isLeadStatus(value)) return LEAD_STATUS_ORDER[value]
+  return 1
+}
+
 /** Tailwind-friendly tone classes for badges (bg + text). */
 export const LEAD_STATUS_TONE: Record<
   LeadStatus,
   { bg: string; text: string; dot: string }
 > = {
+  new: {
+    bg: 'bg-green-500/20',
+    text: 'text-green-700 dark:text-green-400',
+    dot: 'bg-green-500',
+  },
   awaiting_exit: {
     bg: 'bg-sky-500/15',
     text: 'text-sky-700 dark:text-sky-400',
@@ -91,6 +130,22 @@ export function isFinalLeadStatus(
 ): value is (typeof FINAL_LEAD_STATUSES)[number] {
   return (
     !!value && (FINAL_LEAD_STATUSES as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * Нерабочие статусы, с которыми лид отправляется в архив вручную. Перенос
+ * в архив возможен с любого текущего статуса, но только через выбор одной
+ * из этих причин + обязательный комментарий.
+ */
+export const ARCHIVE_LEAD_STATUSES = ['ignore', 'refused', 'left'] as const
+  satisfies readonly LeadStatus[]
+
+export function isArchiveLeadStatus(
+  value: string | null | undefined,
+): value is (typeof ARCHIVE_LEAD_STATUSES)[number] {
+  return (
+    !!value && (ARCHIVE_LEAD_STATUSES as readonly string[]).includes(value)
   )
 }
 

@@ -58,7 +58,8 @@ export async function headSetLeadStatusAction(input: {
   comment: string
 }): Promise<LeadCardActionResult> {
   const session = await requireHead()
-  if (!isLeadStatus(input.status)) {
+  // «NEW» назначается только системой при передаче — вручную не ставится.
+  if (!isLeadStatus(input.status) || input.status === 'new') {
     return { ok: false, message: 'Выберите корректный статус.' }
   }
   if (input.comment.trim().length < STATUS_COMMENT_MIN_LEN) {

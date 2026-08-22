@@ -8,12 +8,18 @@ import { getSession, requireCurator } from '@/lib/auth'
 import { query } from '@/lib/db'
 import {
   addLeadComment,
+  archiveLeadWithStatus,
   getLeadCardById,
   listArchivedLeadsForCurator,
   setLeadArchived,
 } from '@/lib/data/lead-cards'
 import { enrollConversationAi } from '@/lib/data/ai-assist'
-import { isFinalLeadStatus } from '@/lib/lead-status'
+import {
+  isArchiveLeadStatus,
+  isFinalLeadStatus,
+  leadStatusLabel,
+  STATUS_COMMENT_MIN_LEN,
+} from '@/lib/lead-status'
 import {
   assertCuratorNotLocked,
   type LeadCardActionResult,
@@ -59,6 +65,58 @@ export async function setLeadArchivedAction(input: {
     return {
       ok: true,
       message: input.archived ? 'Лид перенесён в архив.' : 'Лид возвращён из архива.',
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка архивации'
+    return { ok: false, message: msg }
+  }
+}
+
+/**
+ * Перенос лида в архив с любого текущего статуса: обязательный выбор
+ * нерабочей причины («Игнор» / «Отказался» / «Кинул») + обязательный
+ * комментарий. Одной транзакцией: смена статуса, комментарий, журнал,
+ * архив. Доступно менеджеру по кадрам (свои лиды) и админу (любой лид).
+ */
+export async function archiveLeadWithReasonAction(input: {
+  leadCardId: string
+  status: string
+  comment: string
+}): Promise<LeadCardActionResult> {
+  const session = await getSession()
+  if (!session) return { ok: false, message: 'Не авторизован' }
+  if (session.role !== 'admin' && session.role !== 'curator') {
+    return { ok: false, message: 'Нет доступа' }
+  }
+  if (!isArchiveLeadStatus(input.status)) {
+    return {
+      ok: false,
+      message:
+        'Выберите причину архива: «Игнор», «Отказался» или «Кинул».',
+    }
+  }
+  if (input.comment.trim().length < STATUS_COMMENT_MIN_LEN) {
+    return {
+      ok: false,
+      message: `Комментарий обязателен — минимум ${STATUS_COMMENT_MIN_LEN} символов.`,
+    }
+  }
+  try {
+    if (session.role === 'curator') {
+      // Архивация — обслуживание рабочего места: дневной гейт действует.
+      await assertCuratorNotLocked(session.sub)
+    }
+    const card = await archiveLeadWithStatus({
+      leadCardId: input.leadCardId,
+      curatorId: session.role === 'curator' ? session.sub : null,
+      status: input.status,
+      comment: input.comment,
+      actorName:
+        session.role === 'admin' ? (session.name ?? 'Администратор') : null,
+    })
+    return {
+      ok: true,
+      message: `Лид «${card.fullName || 'без имени'}» перенесён в архив со статусом «${leadStatusLabel(input.status)}».`,
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Ошибка архивации'

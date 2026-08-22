@@ -153,8 +153,9 @@ export async function upsertLeadCard(
                 WHEN $11::boolean THEN now()
                 ELSE transferred_at
               END,
-              -- Fresh transfer: the new curator must confirm status today.
-              status = CASE WHEN $11::boolean THEN NULL ELSE status END,
+              -- Свежая передача: лид «только зашёл» — статус NEW; куратор
+              -- всё равно обязан подтвердить реальный статус сегодня.
+              status = CASE WHEN $11::boolean THEN 'new' ELSE status END,
               previous_status = CASE
                 WHEN $11::boolean THEN COALESCE(status, previous_status)
                 ELSE previous_status
@@ -208,9 +209,10 @@ export async function upsertLeadCard(
     `INSERT INTO lead_cards (
        id, conversation_id, manager_id, curator_id,
        full_name, phone, telegram_username, telegram_id, city, address, vacancy,
-       transferred_at
+       transferred_at, status
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               CASE WHEN $4::uuid IS NOT NULL THEN now() ELSE NULL END)`,
+               CASE WHEN $4::uuid IS NOT NULL THEN now() ELSE NULL END,
+               CASE WHEN $4::uuid IS NOT NULL THEN 'new' ELSE NULL END)`,
     [
       id,
       input.conversationId,

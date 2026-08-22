@@ -30,9 +30,9 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import type { LeadCard } from '@/lib/data/lead-cards'
 import {
-  LEAD_STATUSES,
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
+  SELECTABLE_LEAD_STATUSES,
   STATUS_COMMENT_MIN_LEN,
   leadStatusLabel,
 } from '@/lib/lead-status'
@@ -124,7 +124,7 @@ export function StatusInlineEditor({
             Статус и комментарий
           </p>
           <div className="flex flex-wrap gap-1">
-            {LEAD_STATUSES.map((s) => {
+            {SELECTABLE_LEAD_STATUSES.map((s) => {
               const t = LEAD_STATUS_TONE[s]
               const active = status === s
               return (

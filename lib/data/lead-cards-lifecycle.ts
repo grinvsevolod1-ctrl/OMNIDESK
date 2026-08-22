@@ -69,8 +69,9 @@ export async function transferLeadToCurator(
       `UPDATE lead_cards
           SET curator_id = $2,
               transferred_at = now(),
-              -- New curator must confirm status for today.
-              status = NULL,
+              -- Для нового куратора лид «только зашёл» — статус NEW;
+              -- подтвердить реальный статус за сегодня всё равно нужно.
+              status = 'new',
               previous_status = COALESCE(status, previous_status),
               status_confirmed_at = NULL,
               status_confirmed_date = NULL,
@@ -123,7 +124,7 @@ export async function updateLeadStatus(input: {
       `Комментарий должен быть не короче ${STATUS_COMMENT_MIN_LEN} символов.`,
     )
   }
-  if (!isLeadStatus(input.status)) {
+  if (!isLeadStatus(input.status) || input.status === 'new') {
     throw new Error('Некорректный статус')
   }
 
@@ -205,7 +206,7 @@ export async function adminSetLeadStatus(input: {
       `Комментарий должен быть не короче ${STATUS_COMMENT_MIN_LEN} символов.`,
     )
   }
-  if (!isLeadStatus(input.status)) {
+  if (!isLeadStatus(input.status) || input.status === 'new') {
     throw new Error('Некорректный статус')
   }
 
@@ -354,7 +355,7 @@ export async function editLeadComment(input: {
     const row = rows[0]
     if (!row) throw new Error('Комментарий не найден')
     if (!row.author_id || row.author_id !== input.editorId) {
-      throw new Error('Комментарий можно править только его автору.')
+      throw new Error('Комментарий можно править только ег�� автору.')
     }
     if (row.body === newBody) return
 
