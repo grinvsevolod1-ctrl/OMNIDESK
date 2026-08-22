@@ -10,6 +10,7 @@ import {
 } from '@/app/actions/heads'
 import {
   listActiveCuratorsAction,
+  transferLeadAdminAction,
   transferMyLeadAction,
 } from '@/app/actions/lead-cards'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,8 @@ import {
  * только когда секция раскрыта. Себя в списке нет: передать лид самому себе
  * нельзя (и сервер это тоже отклонит). variant='head' — руководитель
  * переводит лид между кураторами СВОЕЙ группы (свой action и свой список).
+ * variant='admin' — админ передаёт лид ЛЮБОМУ активному менеджеру по кадрам
+ * (свой action без проверки владельца).
  */
 export function LeadTransferSection({
   leadCardId,
@@ -37,7 +40,7 @@ export function LeadTransferSection({
   /** Владелец карточки: исключается из списка получателей. */
   currentCuratorId: string | null
   onTransferred: () => void
-  variant?: 'curator' | 'head'
+  variant?: 'curator' | 'head' | 'admin'
 }) {
   const [open, setOpen] = useState(false)
   const [target, setTarget] = useState('')
@@ -59,7 +62,12 @@ export function LeadTransferSection({
       const res =
         variant === 'head'
           ? await headTransferLeadAction({ leadCardId, toCuratorId: target })
-          : await transferMyLeadAction({ leadCardId, toCuratorId: target })
+          : variant === 'admin'
+            ? await transferLeadAdminAction({
+                leadCardId,
+                curatorId: target,
+              })
+            : await transferMyLeadAction({ leadCardId, toCuratorId: target })
       if (res.ok) {
         toast.success(res.message)
         onTransferred()
