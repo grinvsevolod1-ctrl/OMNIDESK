@@ -12,6 +12,7 @@ import { memo, useCallback, useMemo, useState } from 'react'
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
+  FileSpreadsheet,
   Radio,
   ListFilter,
   Moon,
@@ -21,6 +22,8 @@ import {
   X,
 } from 'lucide-react'
 import { listBuyerLeadsAction, type BuyerSourceOverview } from '@/app/actions/buyer'
+import { exportBuyerLeadsExcelAction } from '@/app/actions/leads-export'
+import { useXlsxExport } from '@/components/shared/use-xlsx-export'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { EmptyState, PageHeader } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
@@ -180,6 +183,7 @@ export function BuyerOverview({
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
   const [visible, setVisible] = useState(PAGE)
+  const { exporting, runExport } = useXlsxExport()
 
   const refresh = useCallback(async () => {
     setLeads(await listBuyerLeadsAction())
@@ -308,6 +312,17 @@ export function BuyerOverview({
             <ArrowUpNarrowWide className="size-4 shrink-0" />
           )}
           {sort === 'newest' ? 'Новые' : 'Старые'}
+        </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9"
+          disabled={exporting || leads.length === 0}
+          onClick={() => runExport(exportBuyerLeadsExcelAction)}
+        >
+          <FileSpreadsheet className="size-4 shrink-0" />
+          {exporting ? 'Выгружаем…' : 'Excel'}
         </Button>
       </div>
 

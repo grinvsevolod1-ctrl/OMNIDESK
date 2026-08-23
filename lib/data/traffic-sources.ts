@@ -133,7 +133,12 @@ export async function getTrafficSourceById(
   return rows[0] ? toTrafficSource(rows[0]) : null
 }
 
-function validateWindow(dayStart: number, dayEnd: number): void {
+/**
+ * Валидация окна дня [dayStart, dayEnd) в минутах МСК. Ночные окна через
+ * полночь (start > end) не поддерживаем сознательно — «день» всегда внутри
+ * одних суток (см. миграцию 145). Экспортирована для юнит-тестов.
+ */
+export function validateWindow(dayStart: number, dayEnd: number): void {
   if (
     !Number.isInteger(dayStart) ||
     !Number.isInteger(dayEnd) ||

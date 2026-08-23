@@ -10,6 +10,7 @@ import { listManagers } from '@/lib/data'
 import {
   createTrafficSource,
   deleteTrafficSource,
+  getSourceStats,
   getTrafficSourceById,
   listBuyers,
   listManagersOfSource,
@@ -40,12 +41,15 @@ export async function listSourcesAdminAction() {
     listManagers(),
     mapManagerSources(),
   ])
-  const sourceManagers = await Promise.all(
-    sources.map(async (s) => ({
-      sourceId: s.id,
-      managers: await listManagersOfSource(s.id),
-    })),
-  )
+  const [sourceManagers, stats] = await Promise.all([
+    Promise.all(
+      sources.map(async (s) => ({
+        sourceId: s.id,
+        managers: await listManagersOfSource(s.id),
+      })),
+    ),
+    getSourceStats(sources.map((s) => s.id)),
+  ])
   const bySource = new Map(sourceManagers.map((x) => [x.sourceId, x.managers]))
   return {
     sources: sources.map((s) => ({
@@ -54,6 +58,9 @@ export async function listSourcesAdminAction() {
         id: m.id,
         name: m.name,
       })),
+      // Разрез «сегодня»: лидов в дневном окне источника и «долётов».
+      todayDay: stats.get(s.id)?.todayDay ?? 0,
+      todayNight: stats.get(s.id)?.todayNight ?? 0,
     })),
     buyers: buyers.map((b) => ({ id: b.id, name: b.name, status: b.status })),
     allManagers: managers.map((m) => ({

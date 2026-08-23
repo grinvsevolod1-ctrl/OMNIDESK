@@ -5,7 +5,12 @@
  * с фильтрами таблицы (или вся база при пустых фильтрах), батчами по 500 —
  * рассчитано на 1500+ лидов без нагрузки на память.
  */
-import { requireAdmin, requireCurator, requireManager } from '@/lib/auth'
+import {
+  requireAdmin,
+  requireBuyer,
+  requireCurator,
+  requireManager,
+} from '@/lib/auth'
 import {
   listAllTransferredLeads,
   listArchivedLeadsForCurator,
@@ -17,6 +22,7 @@ import {
   listLeadCardsForManager,
   type ManagerLeadFilterStatus,
 } from '@/lib/data/lead-stats'
+import { listLeadCardsForBuyer } from '@/lib/data/traffic-sources'
 import { isLeadStatus, LEAD_STATUS_LABELS } from '@/lib/lead-status'
 
 const BATCH = 500
@@ -270,6 +276,71 @@ export async function exportMyLeadsExcelAction(input: {
       ok: true,
       base64: Buffer.from(buf).toString('base64'),
       fileName: `мои-лиды${input.archived ? '-архив' : ''}-${day}.xlsx`,
+      rows: Math.min(leads.length, MAX_ROWS),
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof Error ? e.message : 'Ошибка выгрузки',
+    }
+  }
+}
+
+/**
+ * Выгрузка лидов медиабайера — все лиды ЕГО источников (скоуп строго
+ * buyer_id = session.sub, как listBuyerLeadsAction). Та же книга, что у
+ * остальных ролей, плюс колонка «Источник» (атрибуция для байера — главное).
+ * Фильтры раздела /buyer клиентские, поэтому выгружается полный список.
+ */
+export async function exportBuyerLeadsExcelAction(): Promise<ExportLeadsResult> {
+  const session = await requireBuyer()
+  try {
+    const leads = await listLeadCardsForBuyer(session.sub)
+
+    const ExcelJS = (await import('exceljs')).default
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet('Мои лиды', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    })
+    ws.columns = [
+      { header: 'Дата создания', key: 'date', width: 17 },
+      { header: 'Источник', key: 'source', width: 22 },
+      { header: 'ФИО', key: 'name', width: 28 },
+      { header: 'Телефон', key: 'phone', width: 17 },
+      { header: 'Telegram', key: 'tg', width: 20 },
+      { header: 'Город', key: 'city', width: 18 },
+      { header: 'Регион', key: 'region', width: 26 },
+      { header: 'Должность', key: 'vacancy', width: 16 },
+      { header: 'Статус', key: 'status', width: 18 },
+      { header: 'Менеджер', key: 'manager', width: 22 },
+    ]
+    ws.getRow(1).font = { bold: true }
+
+    for (const l of leads.slice(0, MAX_ROWS)) {
+      ws.addRow({
+        date: fmtDate(l.createdAt),
+        source: l.trafficSourceName ?? '',
+        name: l.fullName,
+        phone: l.phone,
+        tg: l.telegramUsername ? `@${l.telegramUsername}` : '',
+        city: l.city,
+        region: l.region ?? '',
+        vacancy: l.vacancy,
+        status: l.status ? LEAD_STATUS_LABELS[l.status] : 'Без статуса',
+        manager: l.managerName ?? '',
+      })
+    }
+
+    const buf = await wb.xlsx.writeBuffer()
+    const day = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Moscow',
+    })
+      .format(new Date())
+      .replace(/\./g, '-')
+    return {
+      ok: true,
+      base64: Buffer.from(buf).toString('base64'),
+      fileName: `лиды-источников-${day}.xlsx`,
       rows: Math.min(leads.length, MAX_ROWS),
     }
   } catch (e) {

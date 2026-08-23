@@ -29,22 +29,24 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 | `manager` | `/app` | `components/manager/` | менеджер продаж: инбокс диалогов, автопилот, свои лиды |
 | `curator` | `/curator` | `components/curator/` | **менеджер по кадрам** (в UI и разговоре его называют так): свои лид-карточки, статусы, комментарии |
 | `head` | `/head` | `components/head/` | **руководитель** группы (миграции 141, 143): ведёт кураторов (`head_curators`) И/ИЛИ менеджеров продаж (`head_managers`), видит их лиды (кураторские — только переданные, менеджерские — любые, кроме архива); право `managers.head_can_edit` — «просмотр» / «просмотр и редактирование» (поля, статусы, комментарии; передача — только между кураторами). Создаётся админом на `/admin/heads`, свои настройки — `/head/settings` |
+| `buyer` | `/buyer` | `components/buyer/` | **медиабайер** (миграция 145): приводит трафик, ведёт источники (`traffic_sources`, один байер на источник). Раздел строго read-only: карточки СВОИХ источников со статистикой «день/долёты» (окно [day_start, day_end) в минутах МСК у каждого источника своё) + все лиды его источников с клиентскими фильтрами/поиском. Скоуп каждого запроса — `buyer_id = session.sub`. Создаётся админом на `/admin/buyers`; источники и состав менеджеров — `/admin/sources` (менеджер подключён максимум к одному источнику; лид фиксирует источник НА МОМЕНТ обращения — денормализация сознательная, перенос менеджера историю не переписывает) |
 
 Гейты ролей — `lib/auth.ts` (`requireAdmin` / `requireManager` /
-`requireCurator` / `requireHead`); чужая роль редиректится в свой раздел
-(`roleHome`). Право head_can_edit перечитывается из БД на каждый запрос
+`requireCurator` / `requireHead` / `requireBuyer`); чужая роль редиректится
+в свой раздел (`roleHome`). Право head_can_edit перечитывается из БД на каждый запрос
 (`assertHeadCanEdit` в `app/actions/lead-cards/shared.ts`).
 
 ## 3. Технологический стек
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `143`
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `145`
   (140 — статус «Не связался», 141 — роль head, 142 — правка комментариев:
   только автором в МСК-день создания, прошлый текст — в
   `lead_card_comment_revisions`, бейдж «изменён» виден всем; 143 —
   `head_managers`: руководитель может вести и менеджеров продаж, не только
-  кураторов).
+  кураторов; 144 — статус лида «Новый»; 145 — роль buyer + `traffic_sources`,
+  `managers.traffic_source_id`, `lead_cards.traffic_source_id`).
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: teleproto (Telegram
@@ -55,7 +57,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   (sync-ads, retry-dead-letters, followup, curator-status, console-schedules,
   ai-health, retention), backup-db, db-vacuum, auto-deploy.
 - **Vitest** — юнит-тесты рядом с кодом (`lib/**/*.test.ts` и
-  `worker/src/**/*.test.ts`), сейчас ~298. Интеграционные —
+  `worker/src/**/*.test.ts`), сейчас ~390. Интеграционные —
   `tests/integration/*.test.ts` (`pnpm test:integration`): требуют
   `DATABASE_URL` (без него скипаются), проверяют гонку livechat-диалогов
   (миграция 128), IDOR-скоупинг сообщений/медиа, revocation сессий,
@@ -300,9 +302,11 @@ app/                     Next.js App Router
                            в /app/settings, /curator/settings, /head/settings
                          leads-export.ts — Excel-выгрузки: exportLeadsExcelAction
                            (админ, все лиды), exportMyLeadsExcelAction
-                           (менеджер по кадрам, свои) и
+                           (менеджер по кадрам, свои),
                            exportManagerLeadsExcelAction (менеджер, свои
-                           с фильтрами периода/статуса)
+                           с фильтрами периода/статуса) и
+                           exportBuyerLeadsExcelAction (байер, лиды его
+                           источников с колонкой «Источник»)
                          lead-cards/ — actions лид-карточек (core и др.)
   admin/                 страницы админки
   app/                   страницы менеджера (инбокс, автопилот, лиды, встречи)
@@ -315,6 +319,13 @@ app/                     Next.js App Router
                          смена пароля, push, 2FA (общая карточка
                          shared/twofa-settings, как у менеджера в
                          app/settings)
+  buyer/                 страницы медиабайера (read-only обзор источников
+                         и лидов, раздел 2); actions — app/actions/buyer.ts;
+                         админ-стороны: app/admin/{buyers,sources} +
+                         app/actions/{admin-buyers,admin-sources}.ts;
+                         данные — lib/data/traffic-sources.ts (CRUD источников,
+                         окна дня, getSourceStats «день/долёты»,
+                         listLeadCardsForBuyer)
   api/                   роуты: api/livechat/* (виджет: config — 10s TTL-кэш,
                          ingest — rate limit, avatar), api/cron/* (followup,
                          retry-dead-letters, sync-ads, curator-status,
@@ -380,6 +391,9 @@ components/curator/      UI менеджера по кадрам
                          lead-transfer-section — передача лида коллеге-куратору
                          (transferMyLeadAction: владение проверяется под
                          row-lock, initiated_by_role='curator')
+components/buyer/        UI медиабайера: buyer-overview.tsx — карточки
+                         источников (клик = фильтр), единый поиск, статусы,
+                         сортировка, Excel-экспорт; всё read-only
 components/manager/      UI менеджера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
                          use-inbox-shortcuts.ts (j/k, Alt+стрелки),

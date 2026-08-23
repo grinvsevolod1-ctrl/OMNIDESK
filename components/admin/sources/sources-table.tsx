@@ -9,9 +9,11 @@ import { useRouter } from 'next/navigation'
 import {
   Briefcase,
   Megaphone,
+  Moon,
   MoreHorizontal,
   Pencil,
   Radio,
+  Sun,
   Trash2,
   Users,
 } from 'lucide-react'
@@ -53,6 +55,10 @@ export interface SourceRow {
   notes: string | null
   isActive: boolean
   leadCount: number
+  /** Лидов сегодня в дневном окне источника (МСК). */
+  todayDay: number
+  /** Лидов сегодня вне окна — «долёты». */
+  todayNight: number
   managers: { id: string; name: string }[]
 }
 
@@ -185,6 +191,17 @@ export function SourcesTable({
               <span className="flex items-center gap-1">
                 <Users className="size-3.5" />
                 лидов: <span className="font-mono">{s.leadCount}</span>
+              </span>
+              <span
+                className="flex items-center gap-1"
+                title="Сегодня в дневном окне источника"
+              >
+                <Sun className="size-3.5 text-amber-500" />
+                <span className="font-mono">{s.todayDay}</span>
+              </span>
+              <span className="flex items-center gap-1" title="Сегодня «долёты»">
+                <Moon className="size-3.5 text-sky-500" />
+                <span className="font-mono">{s.todayNight}</span>
               </span>
               {s.notes ? (
                 <span className="min-w-0 truncate" title={s.notes}>
