@@ -58,13 +58,13 @@ export const AdminLeadRow = memo(function AdminLeadRow({
   return (
     <li
       className={cn(
-        // CSS grid с фиксированными колонками (имя · город · сотрудник ·
-        // статус · дата · действия) — колонки выровнены по одной сетке во
-        // всех строках. Ниже брейкпоинтов лишние колонки скрыты.
+        // CSS grid с фиксированными колонками (имя · город · источник ·
+        // сотрудник · статус · дата · действия) — колонки выровнены по одной
+        // сетке во всех строках. Ниже брейкпоинтов лишние колонки скрыты.
         'grid grid-cols-[minmax(0,1fr)_max-content_auto] items-center gap-x-3 px-4 py-3 transition-colors duration-1000 sm:px-5',
-        'sm:grid-cols-[minmax(0,1fr)_7.5rem_max-content_auto]',
-        'md:grid-cols-[minmax(0,1fr)_7.5rem_minmax(0,9.5rem)_max-content_auto]',
-        'lg:grid-cols-[minmax(0,1fr)_7.5rem_minmax(0,9.5rem)_minmax(7rem,max-content)_8.5rem_auto]',
+        'sm:grid-cols-[minmax(0,1fr)_8.5rem_max-content_auto]',
+        'md:grid-cols-[minmax(0,1fr)_8.5rem_minmax(0,9.5rem)_max-content_auto]',
+        'lg:grid-cols-[minmax(0,1fr)_8.5rem_minmax(0,7rem)_minmax(0,9.5rem)_minmax(7rem,max-content)_max-content_auto]',
         // Строки за экраном не рендерятся при скролле (стандарт UI, AGENTS.md).
         '[content-visibility:auto] [contain-intrinsic-size:auto_3.75rem]',
         // Новый лид, появившийся при фоновом обновлении, —
@@ -128,17 +128,11 @@ export const AdminLeadRow = memo(function AdminLeadRow({
               {lead.telegramUsername}
             </a>
           ) : null}
+          {/* Ниже lg источник живёт в подстроке; на lg+ — своя колонка. */}
           {lead.trafficSourceName ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className="inline-flex max-w-32 cursor-default items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                    <span className="truncate">{lead.trafficSourceName}</span>
-                  </span>
-                }
-              />
-              <TooltipContent side="top">Источник трафика</TooltipContent>
-            </Tooltip>
+            <span className="inline-flex max-w-32 items-center rounded-md bg-muted px-1.5 py-0.5 text-[11px] lg:hidden">
+              <span className="truncate">{lead.trafficSourceName}</span>
+            </span>
           ) : null}
         </div>
       </div>
@@ -148,6 +142,24 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         className="hidden min-w-0 overflow-hidden sm:inline-flex"
       >
         <CityInlineEditor lead={lead} onSaved={onRefresh} />
+      </span>
+
+      {/* Источник трафика — своя колонка на lg+: чипы выровнены по сетке. */}
+      <span className="hidden min-w-0 lg:block">
+        {lead.trafficSourceName ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="inline-flex max-w-full cursor-default items-center rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                  <span className="truncate">{lead.trafficSourceName}</span>
+                </span>
+              }
+            />
+            <TooltipContent side="top">Источник трафика</TooltipContent>
+          </Tooltip>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
       </span>
 
       {/* Ячейка сотрудника рендерится всегда (md+) — иначе сетка сломается. */}
@@ -188,13 +200,13 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         </span>
       </span>
 
-      {/* Ячейка даты рендерится всегда (lg+). */}
-      <span className="hidden min-w-0 lg:block">
+      {/* Ячейка даты рендерится всегда (lg+), выровнена по правому краю. */}
+      <span className="hidden text-right lg:block">
         {lead.transferredAt ? (
           <Tooltip>
             <TooltipTrigger
               render={
-                <span className="cursor-default text-xs tabular-nums text-muted-foreground">
+                <span className="cursor-default whitespace-nowrap text-xs tabular-nums text-muted-foreground">
                   {formatDateTime(lead.transferredAt)}
                 </span>
               }

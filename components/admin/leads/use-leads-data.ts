@@ -23,6 +23,30 @@ import {
 
 export { LEADS_PAGE_SIZE }
 
+/**
+ * Слияние свежей выборки с текущей С СОХРАНЕНИЕМ ИДЕНТИЧНОСТИ объектов:
+ * если лид не изменился, возвращается ПРЕЖНИЙ объект (а если не изменилась
+ * вся страница — прежний массив, и setState вообще не перерисовывает).
+ * Без этого каждый пуллинг создавал 20 новых объектов → memo() строк был
+ * бесполезен, а открытая карточка лида получала новый fallbackLead и
+ * перерисовывала всё дерево (комментарии, история, вложения) на каждый тик —
+ * отсюда лаги при открытой карточке.
+ */
+function mergeLeads(prev: LeadCard[], next: LeadCard[]): LeadCard[] {
+  const prevById = new Map(prev.map((l) => [l.id, l]))
+  let changed = prev.length !== next.length
+  const merged = next.map((l, i) => {
+    const old = prevById.get(l.id)
+    if (old && JSON.stringify(old) === JSON.stringify(l)) {
+      if (prev[i] !== old) changed = true
+      return old
+    }
+    changed = true
+    return l
+  })
+  return changed ? merged : prev
+}
+
 /** Единый набор фильтров выборки лидов (без пагинации). */
 export interface LeadsFilters {
   curatorId: string
@@ -127,7 +151,7 @@ export function useLeadsData({
                   curatorId: f.orphanedOnly ? null : f.curatorId || null,
                 }),
           ])
-          setLeads(res.leads)
+          setLeads((prev) => mergeLeads(prev, res.leads))
           setTotal(res.total)
           setOffset(f.offset)
           setStats(st)
@@ -227,7 +251,7 @@ export function useLeadsData({
     const arrived = res.leads
       .map((l) => l.id)
       .filter((id) => !knownIdsRef.current.has(id))
-    setLeads(res.leads)
+    setLeads((prev) => mergeLeads(prev, res.leads))
     setTotal(res.total)
     for (const id of arrived) knownIdsRef.current.add(id)
     if (arrived.length > 0) {

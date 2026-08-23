@@ -255,15 +255,16 @@ export function CityInlineEditor({
           >
             <Badge
               variant="outline"
+              // Регион в строку не выводим: в узкой колонке «Город (Регион)»
+              // обрезался до нечитаемого «У.. (Республика ..». Полное значение —
+              // в title и в popover редактирования.
+              title={
+                lead.region ? `${lead.city} (${lead.region})` : lead.city
+              }
               className="max-w-full gap-1 border-transparent bg-muted text-muted-foreground transition-colors hover:text-foreground"
             >
               <MapPin className="size-3 shrink-0" />
               <span className="truncate">{lead.city || 'Город…'}</span>
-              {lead.region ? (
-                <span className="hidden truncate text-[10px] opacity-70 xl:inline">
-                  ({lead.region})
-                </span>
-              ) : null}
             </Badge>
           </button>
         }

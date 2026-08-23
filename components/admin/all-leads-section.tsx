@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { AdminLeadRow } from '@/components/admin/leads/admin-lead-row'
 import { LeadsFilterBar } from '@/components/admin/leads/leads-filter-bar'
 import { LeadsPagination } from '@/components/admin/leads/leads-pagination'
@@ -15,6 +15,15 @@ import { Card } from '@/components/ui/card'
 import type { CuratorWithLoad, LeadCard } from '@/lib/data/lead-cards'
 import { mskDayKey } from '@/lib/time'
 import { cn } from '@/lib/utils'
+
+/**
+ * memo-обёртка панели: контейнер перерисовывается на каждый пуллинг списка,
+ * а открытая карточка (тяжёлое дерево: комментарии, история, вложения) должна
+ * рендериться заново только когда реально изменились её пропсы. Вместе с
+ * mergeLeads (identity-preserving слияние в use-leads-data) это убирает
+ * лаги открытой карточки.
+ */
+const MemoLeadDetailPanel = memo(LeadDetailPanel)
 
 /**
  * Admin overview of ALL transferred leads. Презентационный контейнер: вся
@@ -62,6 +71,14 @@ export function AllLeadsSection({
   // менеджера по кадрам (комментарии, история, вложения, статус).
   const [openedLeadId, setOpenedLeadId] = useState<string | null>(null)
   const openLead = useCallback((id: string) => setOpenedLeadId(id), [])
+  const closeLead = useCallback(() => setOpenedLeadId(null), [])
+  // Благодаря mergeLeads объект лида стабилен между пуллингами —
+  // find возвращает ту же ссылку, и memo-панель не перерисовывается.
+  const openedLead = useMemo(
+    () =>
+      openedLeadId ? (leads.find((l) => l.id === openedLeadId) ?? null) : null,
+    [openedLeadId, leads],
+  )
 
   return (
     <section className="flex flex-col gap-4">
@@ -162,18 +179,13 @@ export function AllLeadsSection({
           в админ-режиме (статус через админский action, виден владелец).
           Всегда смонтирована (transform-only анимация) и открывается
           мгновенно с данными из строки списка. */}
-      <LeadDetailPanel
+      <MemoLeadDetailPanel
         leadId={openedLeadId}
-        fallbackLead={
-          openedLeadId
-            ? (leads.find((l) => l.id === openedLeadId) ?? null)
-            : null
-        }
+        fallbackLead={openedLead}
         variant="admin"
-        onClose={() => setOpenedLeadId(null)}
+        onClose={closeLead}
         onUpdated={refresh}
       />
-
     </section>
   )
 }
