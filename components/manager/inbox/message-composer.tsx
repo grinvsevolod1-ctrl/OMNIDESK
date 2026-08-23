@@ -159,6 +159,33 @@ export const MessageComposer = memo(function MessageComposer({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
 
+  // Вставка готового текста извне (например, контакт куратора после передачи
+  // лида — см. use-lead-card). Событие адресное: чужие диалоги игнорируют.
+  // Текст ЗАМЕНЯЕТ черновик (сценарий один: отправить контакт кандидату),
+  // фокус — в поле, курсор в конец, чтобы менеджер сразу нажал «Отправить».
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const detail = (
+        e as CustomEvent<{ conversationId?: string; text?: string }>
+      ).detail
+      if (!detail?.text || detail.conversationId !== conversationId) return
+      if (editingRef.current) return // не затираем режим редактирования
+      setText(detail.text)
+      requestAnimationFrame(() => {
+        const el = composerRef.current
+        if (el) {
+          el.focus()
+          const end = el.value.length
+          el.setSelectionRange(end, end)
+        }
+        resizeComposer()
+      })
+    }
+    window.addEventListener('omnidesk:composer-insert', onInsert)
+    return () =>
+      window.removeEventListener('omnidesk:composer-insert', onInsert)
+  }, [conversationId, resizeComposer])
+
   // Entering edit mode: stash the current unsent draft and prefill the input
   // with the message being edited. Leaving edit mode (submit or cancel):
   // restore the stashed draft, Telegram-style.

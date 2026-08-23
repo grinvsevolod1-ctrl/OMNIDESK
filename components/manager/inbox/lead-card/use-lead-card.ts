@@ -145,6 +145,12 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     setCuratorId(null)
     setTransferredAt(null)
     setAutoPicked(false)
+  }
+
+  // Снапшот дефолтов для нового диалога — в эффекте (не в render-сбросе выше:
+  // менять ref во время рендера нельзя). Срабатывает после сброса полей и до
+  // любого взаимодействия менеджера с карточкой.
+  useEffect(() => {
     savedSnapshotRef.current = makeSnapshot({
       fullName: defaults?.fullName ?? '',
       phone: defaults?.phone ?? '',
@@ -154,7 +160,9 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
       address: '',
       vacancy: DEFAULT_VACANCY,
     })
-  }
+    // defaults намеренно только при смене диалога: см. reset-блок выше.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId])
 
   /**
    * Закрытие карточки = автосохранение. Кнопки «Сохранить» в карточке нет:
@@ -247,17 +255,18 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
 
   // Esc closes the card first (capture phase + preventDefault so the
   // inbox-level handler doesn't ALSO close the dialog in the same press);
-  // a second Esc then closes the dialog as usual.
+  // a second Esc then closes the dialog as usual. Закрытие по Esc — тоже
+  // автосохранение (та же логика, что клик по крестику/оверлею).
   useEffect(() => {
     if (!open) return
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
       e.preventDefault()
-      setOpen(false)
+      closeCard()
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [open])
+  }, [open, closeCard])
 
   // Lock body scroll while panel is open on mobile.
   useEffect(() => {
@@ -349,9 +358,36 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
       })
       if (res.ok) {
         toast.success(res.message)
+        savedSnapshotRef.current = makeSnapshot({
+          fullName,
+          phone,
+          telegramUsername,
+          telegramId,
+          city,
+          address,
+          vacancy,
+        })
         if (transfer) {
           setTransferredAt(new Date().toISOString())
           setOpen(false)
+          // После передачи менеджер отправляет кандидату контакт куратора:
+          // подставляем готовый текст в поле ввода этого диалога. Контакт —
+          // «Telegram для кандидатов» из настроек куратора (миграция 146),
+          // фолбэк — его логин в системе.
+          const curator = curators.find((c) => c.id === curatorId)
+          const handle =
+            curator?.telegramContact ??
+            (curator?.username ? `@${curator.username}` : null)
+          if (handle) {
+            window.dispatchEvent(
+              new CustomEvent('omnidesk:composer-insert', {
+                detail: {
+                  conversationId,
+                  text: `Напиши ему ( ${handle} ) мне нужна работа`,
+                },
+              }),
+            )
+          }
         }
         // Подхватить id только что созданной карточки — открывает блок
         // файлов/комментариев без повторного открытия панели.
@@ -417,6 +453,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     open,
     setOpen,
     toggleOpen,
+    closeCard,
     pending,
     // form fields
     fields: {

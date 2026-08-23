@@ -26,7 +26,7 @@ import { ComposerBanners } from '@/components/manager/inbox/composer-banners'
 import { useInbox } from '@/components/manager/inbox/use-inbox'
 import { useInboxShortcuts } from '@/components/manager/inbox/use-inbox-shortcuts'
 import { useThreadSearch } from '@/components/manager/inbox/thread-search'
-import { useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 /* -------------------------------------------------------------------------- */
 /*  Presentational shell. All state/effects/actions live in useInbox; this    */
@@ -184,6 +184,20 @@ export function InboxView({
 
   // Телеграм-стиль поиск по диалогу + навигация по кружкам/фото
   // с прикреплением к карточке лида.
+  // Открытая карточка лида (fixed-панель 28rem справа): тред получает правый
+  // отступ, чтобы карточка НЕ перекрывала контент диалога; при закрытии
+  // отступ снимается и раскладка возвращается в исходное состояние.
+  const [leadCardOpen, setLeadCardOpen] = useState(false)
+  useEffect(() => {
+    const onCardOpen = (e: Event) => {
+      const detail = (e as CustomEvent<{ open?: boolean }>).detail
+      setLeadCardOpen(Boolean(detail?.open))
+    }
+    window.addEventListener('omnidesk:lead-card-open', onCardOpen)
+    return () =>
+      window.removeEventListener('omnidesk:lead-card-open', onCardOpen)
+  }, [])
+
   const threadSearch = useThreadSearch({
     conversationId: activeId,
     loadOlder: handleLoadOlder,
@@ -263,10 +277,13 @@ export function InboxView({
         className={cn(
           'flex min-w-0 flex-1 flex-col',
           !active && 'hidden md:flex',
-          // Медиа-режим: карточка лида (fixed, 28rem справа) остаётся открытой,
-          // поэтому тред получает правый отступ — диалог и бар навигации
-          // видны целиком рядом с карточкой, ничего не перекрыто.
-          threadSearch.mediaActive && 'sm:pr-[min(28rem,45vw)]',
+          // Открытая карточка лида / медиа-режим: карточка (fixed, 28rem
+          // справа) не должна перекрывать контент — тред получает правый
+          // отступ, диалог и бар навигации видны целиком рядом с карточкой.
+          // Плавный переход синхронизирован со слайдом самой панели.
+          'transition-[padding] duration-300 ease-out',
+          (leadCardOpen || threadSearch.mediaActive) &&
+            'sm:pr-[min(28rem,45vw)]',
         )}
       >
         {active ? (

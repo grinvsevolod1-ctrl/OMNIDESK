@@ -1,6 +1,7 @@
 'use client'
 
-import { Landmark, Loader2, MapPin } from 'lucide-react'
+import { useState } from 'react'
+import { Landmark, Loader2, MapPin, Plus, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CityInput } from '@/components/shared/city-input'
@@ -19,6 +20,10 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
     autoPicked,
     cityRegion,
   } = state
+  // «+ добавить адрес»: клик раскрывает строку ввода; уже заполненный адрес
+  // (например, из сохранённой карточки) показывает поле автоматически.
+  const [addressAdded, setAddressAdded] = useState(false)
+  const showAddress = addressAdded || fields.address.trim() !== ''
   return (
     <>
       <Field label="ФИО" required>
@@ -82,13 +87,43 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
           </p>
         ) : null}
       </Field>
-      <Field label="Адрес">
-        <Input
-          value={fields.address}
-          onChange={(e) => fields.setAddress(e.target.value)}
-          placeholder="Улица, дом"
-        />
-      </Field>
+      {/* Адрес скрыт по умолчанию: в большинстве лидов он не нужен. Строка
+          ввода появляется по клику «+ добавить адрес»; если адрес уже
+          сохранён в карточке — поле показано сразу. */}
+      {showAddress ? (
+        <Field label="Адрес">
+          <div className="flex items-center gap-1.5">
+            <Input
+              value={fields.address}
+              onChange={(e) => fields.setAddress(e.target.value)}
+              placeholder="Улица, дом"
+              className="min-w-0 flex-1"
+              autoFocus={!fields.address}
+            />
+            <button
+              type="button"
+              className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Убрать адрес"
+              title="Убрать адрес"
+              onClick={() => {
+                fields.setAddress('')
+                setAddressAdded(false)
+              }}
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        </Field>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setAddressAdded(true)}
+          className="flex w-fit items-center gap-1 text-xs font-medium text-primary transition-colors hover:text-primary/80"
+        >
+          <Plus className="size-3.5" />
+          добавить адрес
+        </button>
+      )}
       <Field label="Вакансия / должность" required>
         <Input
           value={fields.vacancy}

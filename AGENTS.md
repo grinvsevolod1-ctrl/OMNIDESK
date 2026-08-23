@@ -40,13 +40,17 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `145`
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `146`
   (140 — статус «Не связался», 141 — роль head, 142 — правка комментариев:
   только автором в МСК-день создания, прошлый текст — в
   `lead_card_comment_revisions`, бейдж «изменён» виден всем; 143 —
   `head_managers`: руководитель может вести и менеджеров продаж, не только
   кураторов; 144 — статус лида «Новый»; 145 — роль buyer + `traffic_sources`,
-  `managers.traffic_source_id`, `lead_cards.traffic_source_id`).
+  `managers.traffic_source_id`, `lead_cards.traffic_source_id`; 146 —
+  `managers.telegram_contact`: «Telegram для кандидатов» куратора — куратор
+  сам ведёт его в `/curator/settings` (нормализация @username/t.me →
+  `lib/telegram-contact.ts`), менеджер после передачи лида получает в
+  композер готовый текст с этим контактом).
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: teleproto (Telegram

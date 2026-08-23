@@ -31,8 +31,8 @@ export function LeadCardPanel({
   const state = useLeadCard(conversationId, defaults)
   const {
     open,
-    setOpen,
     toggleOpen,
+    closeCard,
     pending,
     cardId,
     detail,
@@ -77,7 +77,7 @@ export function LeadCardPanel({
         aria-label="Закрыть карточку"
         aria-hidden={!open}
         tabIndex={open ? 0 : -1}
-        onClick={() => setOpen(false)}
+        onClick={closeCard}
       />
 
       {/* Always-mounted panel sliding in/out with the same smooth
@@ -111,7 +111,7 @@ export function LeadCardPanel({
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setOpen(false)}
+            onClick={closeCard}
             aria-label="Закрыть"
           >
             <X className="size-4" />
@@ -164,18 +164,11 @@ export function LeadCardPanel({
           )}
         </div>
 
-        <footer className="flex shrink-0 gap-2 border-t border-border bg-muted/30 p-3 sm:p-4">
+        {/* Кнопки «Сохранить» нет: карточка автоматически сохраняется при
+            закрытии (крестик, оверлей, Esc, повторный клик по «Карточка»). */}
+        <footer className="flex shrink-0 flex-col gap-1.5 border-t border-border bg-muted/30 p-3 sm:p-4">
           <Button
-            variant="outline"
-            className="flex-1"
-            disabled={pending}
-            onClick={() => save(false)}
-          >
-            {pending ? <Loader2 className="size-4 animate-spin" /> : null}
-            Сохранить
-          </Button>
-          <Button
-            className="flex-1 gap-1.5"
+            className="w-full gap-1.5"
             disabled={pending || !curatorId || missingForTransfer.length > 0}
             title={
               missingForTransfer.length > 0
@@ -191,6 +184,9 @@ export function LeadCardPanel({
             )}
             Передать
           </Button>
+          <p className="text-center text-[11px] text-muted-foreground">
+            Изменения сохраняются автоматически при закрытии карточки
+          </p>
         </footer>
       </aside>
     </>

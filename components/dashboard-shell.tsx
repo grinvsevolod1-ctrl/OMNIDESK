@@ -99,7 +99,22 @@ export function DashboardShell({
     return () => window.removeEventListener('omnidesk:focus-mode', onFocusMode)
   }, [])
 
-  const effectiveCollapsed = collapsed || focusMode
+  // Открытая карточка лида сворачивает сайдбар так же, как фокус-режим:
+  // временно (сохранённое предпочтение пользователя не трогаем) — чтобы
+  // правая панель карточки не перекрывала контент диалога. При закрытии
+  // карточки сайдбар возвращается в исходное состояние.
+  const [leadCardOpen, setLeadCardOpen] = useState(false)
+  useEffect(() => {
+    const onLeadCard = (e: Event) => {
+      const detail = (e as CustomEvent<{ open?: boolean }>).detail
+      setLeadCardOpen(Boolean(detail?.open))
+    }
+    window.addEventListener('omnidesk:lead-card-open', onLeadCard)
+    return () =>
+      window.removeEventListener('omnidesk:lead-card-open', onLeadCard)
+  }, [])
+
+  const effectiveCollapsed = collapsed || focusMode || leadCardOpen
 
   function toggleCollapsed() {
     setCollapsed((v) => {
