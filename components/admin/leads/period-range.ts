@@ -1,5 +1,12 @@
 import { mskDayKey } from '@/lib/time'
 
+/**
+ * Размер страницы списка лидов. Живёт в этом нейтральном модуле (без
+ * 'use client'), чтобы серверная страница /admin/leads могла импортировать
+ * константу напрямую — из клиентского use-leads-data.ts это невозможно.
+ */
+export const LEADS_PAGE_SIZE = 20
+
 /** Пресеты периода для статистики и фильтрации списка лидов. */
 export type PeriodPreset = 'all' | 'today' | '7d' | '30d' | 'day' | 'range'
 

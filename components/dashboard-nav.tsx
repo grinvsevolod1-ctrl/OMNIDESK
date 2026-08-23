@@ -24,6 +24,7 @@ import {
   Settings,
   BrainCircuit,
   Users,
+  ContactRound,
   Wallet,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
@@ -51,6 +52,7 @@ export type NavIcon =
   | 'max'
   | 'connections'
   | 'inbox'
+  | 'leads'
   | 'proxies'
   | 'servers'
   | 'livechat'
@@ -73,6 +75,7 @@ const ICONS: Record<NavIcon, ComponentType<{ className?: string }>> = {
   max: MaxIcon,
   connections: Plug,
   inbox: Inbox,
+  leads: ContactRound,
   proxies: Server,
   servers: ServerCog,
   livechat: MessageCircle,

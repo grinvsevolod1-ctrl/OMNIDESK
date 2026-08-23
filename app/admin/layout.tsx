@@ -30,6 +30,7 @@ const nav: NavItem[] = [
       { href: '/admin/sources', label: 'Источники', icon: 'channels' },
     ],
   },
+  { href: '/admin/leads', label: 'Лиды', icon: 'leads' },
   { href: '/admin/ai', label: 'ИИ-ассистент', icon: 'ai' },
   {
     href: '/admin/accounts',

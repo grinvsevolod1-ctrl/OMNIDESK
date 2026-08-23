@@ -83,7 +83,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    god-панели.** Никаких ссылок, упоминаний, намёков в обычном UI и в
    промптах co-pilot.
 2. **Admin AI (`lib/ai-console/*`) НЕ импортирует** `god-gate`, `secret-*`,
-   `god-messenger`, `god-sites` — ни прямо, ни транзитивно. Закреплено тестом
+   `god-messenger`, `god-sites` — ��и прямо, ни транзитивно. Закреплено тестом
    `lib/ai/isolation.test.ts` — не ломай его.
 3. **Диалоги, созданные из god-инструментов, — ОБЫЧНЫЕ реальные диалоги** для
    продавца, аналитики, уроков и дожима. НЕ фильтруй их по `is_simulated`.
@@ -91,7 +91,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    (Частая ошибка — не повторяй её.)
 4. **Гейт FAIL-CLOSED.** Без `SECRET_PANEL_PASSWORD` консоль отдаёт голый 404
    (страница и все god-API) и разлочить её нельзя вообще; ошибка «неверный
-   пароль» неотличима от «пароль не настроен». Recovery только через env:
+   пароль» неотличима от «пароль не настро��н». Recovery только через env:
    задать `SECRET_PANEL_PASSWORD` на VPS и перезапустить процесс — никакого
    in-band восстановления по дизайну.
 5. **Управляемые сайты** (вкладка «Сайты», `lib/god-sites.ts`, миграции
@@ -334,7 +334,19 @@ components/admin/        UI админки
   widget-editor-tabs.tsx + widget-editor/  редактор виджета (вкладка = файл)
   all-leads-section.tsx + leads/  «Все лиды»: контейнер + use-leads-data.ts
                          (фильтры/пагинация/поллинг/экспорт/передача),
-                         leads-filter-bar, leads-period-filter, xlsx-download
+                         leads-filter-bar, leads-period-filter, xlsx-download.
+                         Живёт на СВОЕЙ вкладке /admin/leads (пункт «Лиды» в
+                         навигации; раньше — секция внизу /admin/curators) +
+                         серверная hero-полоса leads/leads-hero.tsx.
+                         LEADS_PAGE_SIZE — в leads/period-range.ts (нейтральный
+                         модуль): его импортирует и серверная страница, и хук
+  create-account-dialog.tsx  ЕДИНЫЙ диалог «создать аккаунт с временным
+                         паролем» для всех ролей (менеджер / менеджер по
+                         кадрам / руководитель / медиабайер). Четыре прежних
+                         копии — теперь тонкие обёртки: роль-специфичные поля
+                         через слоты extraFieldsAfterEmail/AfterPassword,
+                         дозапись FormData — beforeSubmit, сброс — onReset.
+                         Новые «create-*-dialog» делай ТОЛЬКО через него
   finance/               финансы: expenses-panel + expenses/use-expenses.ts,
                          vault-panel + vault-card + vault-dialog (сейф паролей),
                          ads-panel.tsx + ads-panel/ — рекламные кабинеты:
@@ -717,7 +729,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 ## 10. Правила работы в этом репозитории
 
 - **Ветка:** пользователь просит пушить прямо в `main` и не плодить ветки —
-  следуй его явному указанию.
+  ��ледуй его явному указанию.
 - **Кириллица/UTF-8:** после правок промптов и текстов проверяй
   `grep -rlP '\xEF\xBF\xBD' lib components app worker/src scripts AGENTS.md`
   — должно быть пусто (битые символы уже случались).

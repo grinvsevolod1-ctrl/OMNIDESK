@@ -14,9 +14,14 @@ import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import type { LeadCard } from '@/lib/data/lead-cards'
 import type { LeadCardStats } from '@/lib/data/lead-stats'
 import { useXlsxExport } from '@/components/shared/use-xlsx-export'
-import { type PeriodPreset, presetRange, shiftDay } from './period-range'
+import {
+  LEADS_PAGE_SIZE,
+  type PeriodPreset,
+  presetRange,
+  shiftDay,
+} from './period-range'
 
-export const LEADS_PAGE_SIZE = 20
+export { LEADS_PAGE_SIZE }
 
 /** Единый набор фильтров выборки лидов (без пагинации). */
 export interface LeadsFilters {

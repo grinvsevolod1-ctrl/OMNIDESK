@@ -1,5 +1,5 @@
-import { MapPin } from 'lucide-react'
-import { AllLeadsSection } from '@/components/admin/all-leads-section'
+import { ArrowRight, MapPin } from 'lucide-react'
+import Link from 'next/link'
 import { CreateCuratorDialog } from '@/components/admin/create-curator-dialog'
 import { CuratorsTable } from '@/components/admin/curators-table'
 import { EmptyState, PageHeader } from '@/components/page-parts'
@@ -8,22 +8,18 @@ import {
   getCuratorDiscipline,
   getCuratorDisciplineHistory,
   listActiveCurators,
-  listAllTransferredLeads,
   type CuratorDisciplineHistory,
 } from '@/lib/data/lead-cards'
 
 export default async function CuratorsPage() {
-  const [curators, discipline, history, activeCurators, allLeads, orphaned] =
-    await Promise.all([
-      listCurators(),
-      getCuratorDiscipline(),
-      getCuratorDisciplineHistory(30).catch(
-        () => new Map<string, CuratorDisciplineHistory>(),
-      ),
-      listActiveCurators(),
-      listAllTransferredLeads({ limit: 50 }),
-      listAllTransferredLeads({ orphanedOnly: true, limit: 1 }),
-    ])
+  const [curators, discipline, history, activeCurators] = await Promise.all([
+    listCurators(),
+    getCuratorDiscipline(),
+    getCuratorDisciplineHistory(30).catch(
+      () => new Map<string, CuratorDisciplineHistory>(),
+    ),
+    listActiveCurators(),
+  ])
 
   const disciplineById = Object.fromEntries(
     discipline.map((d) => [d.curatorId, d]),
@@ -60,12 +56,17 @@ export default async function CuratorsPage() {
         )}
       </div>
 
-      <AllLeadsSection
-        initialLeads={allLeads.leads}
-        initialTotal={allLeads.total}
-        orphanedCount={orphaned.total}
-        curators={activeCurators}
-      />
+      {/* Все лиды переехали в отдельный раздел /admin/leads. */}
+      <Link
+        href="/admin/leads"
+        className="group inline-flex items-center gap-1.5 self-start text-sm font-medium text-primary hover:underline"
+      >
+        Все лиды по всем менеджерам по кадрам
+        <ArrowRight
+          className="size-4 transition-transform group-hover:translate-x-0.5"
+          aria-hidden
+        />
+      </Link>
     </div>
   )
 }
