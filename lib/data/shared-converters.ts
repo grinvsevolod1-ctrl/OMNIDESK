@@ -39,6 +39,7 @@ export function toManager(r: ManagerRow): Manager {
     role,
     city: role === 'curator' ? (r.city ?? null) : null,
     headCanEdit: role === 'head' ? Boolean(r.head_can_edit) : false,
+    telegramContact: role === 'curator' ? (r.telegram_contact ?? null) : null,
     createdAt: new Date(r.created_at).toISOString(),
   }
 }

@@ -30,6 +30,12 @@ export interface Manager {
    * true = «просмотр и редактирование». Always false for other roles.
    */
   headCanEdit: boolean
+  /**
+   * Telegram-контакт куратора для кандидатов (миграция 146). Куратор сам
+   * указывает и обновляет его в настройках; хранится канонично «@username».
+   * Менеджер передаёт этот контакт кандидату при передаче лида.
+   */
+  telegramContact: string | null
   createdAt: string
 }
 

@@ -15,6 +15,8 @@ import {
   updateManagerPassword,
   updateManagerStatus,
 } from '@/lib/data'
+import { setCuratorTelegramContact } from '@/lib/data/managers'
+import { normalizeTelegramContact } from '@/lib/telegram-contact'
 import {
   listCuratorCities,
   parseCityList,
@@ -408,6 +410,66 @@ export async function updateMyCitiesAction(
   revalidatePath('/curator/settings')
   revalidatePath('/admin/managers')
   return { ok: true, message: `Города обновлены: ${canonical.join(', ')}.` }
+}
+
+/**
+ * Мой Telegram для кандидатов: куратор читает свой сохранённый контакт
+ * (канонический «@username» или null, если не задан).
+ */
+export async function getMyTelegramContactAction(): Promise<string | null> {
+  const session = await getSession()
+  if (!session || session.role !== 'curator') return null
+  const me = await getManagerById(session.sub).catch(() => null)
+  return me?.telegramContact ?? null
+}
+
+/**
+ * Мой Telegram для кандидатов: куратор сам указывает и обновляет контакт
+ * (миграция 146). Принимаются «@username» и t.me-ссылки — нормализуются к
+ * «@username». Пустая строка очищает контакт. После сохранения контакт сразу
+ * используется при всех следующих передачах лидов.
+ */
+export async function updateMyTelegramContactAction(
+  raw: string,
+): Promise<ActionResult> {
+  const session = await getSession()
+  if (!session || session.role !== 'curator') {
+    return { ok: false, message: 'Нет доступа.' }
+  }
+  const trimmed = raw.trim()
+  const normalized = trimmed === '' ? null : normalizeTelegramContact(trimmed)
+  if (trimmed !== '' && !normalized) {
+    return {
+      ok: false,
+      message:
+        'Не удалось распознать контакт. Укажите @username или ссылку вида t.me/username.',
+    }
+  }
+  try {
+    await setCuratorTelegramContact(session.sub, normalized)
+  } catch (err) {
+    console.error('[v0] updateMyTelegramContactAction failed:', err)
+    return {
+      ok: false,
+      message: `Не удалось сохранить контакт: ${err instanceof Error ? err.message : 'ошибка базы данных'}`,
+    }
+  }
+  await writeAudit({
+    actorRole: 'curator',
+    actorId: session.sub,
+    actorLabel: session.name ?? 'Менеджер по кадрам',
+    action: 'curator.telegram_contact_update',
+    entityType: 'manager',
+    entityId: session.sub,
+    details: { telegramContact: normalized },
+  })
+  revalidatePath('/curator/settings')
+  return {
+    ok: true,
+    message: normalized
+      ? `Telegram-контакт сохранён: ${normalized}.`
+      : 'Telegram-контакт очищен.',
+  }
 }
 
 /** City name suggestions from the dictionary (for form autocompletes). */

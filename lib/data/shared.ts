@@ -38,6 +38,8 @@ export interface ManagerRow {
   city: string | null
   /** Edit permission for role = 'head' (migration 141). */
   head_can_edit: boolean | null
+  /** Telegram-контакт куратора для кандидатов (миграция 146). */
+  telegram_contact: string | null
   created_at: string | Date
 }
 
@@ -216,7 +218,8 @@ export const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_m
  */
 const MANAGER_COLUMN_NAMES = [
   'id', 'name', 'email', 'username', 'password_hash', 'status',
-  'session_version', 'on_lunch', 'role', 'city', 'head_can_edit', 'created_at',
+  'session_version', 'on_lunch', 'role', 'city', 'head_can_edit',
+  'telegram_contact', 'created_at',
 ] as const
 
 const CHANNEL_COLUMN_NAMES = [

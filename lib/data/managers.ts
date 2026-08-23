@@ -323,6 +323,24 @@ export async function updateManagerPassword(
 }
 
 /**
+ * Telegram-контакт куратора для кандидатов (миграция 146). Хранится в
+ * каноническом виде «@username» (нормализация — на слое server action).
+ * null — очистить контакт. После сохранения новый контакт сразу
+ * используется при всех следующих передачах лидов (findCuratorsByCity
+ * читает managers.* без кэша).
+ */
+export async function setCuratorTelegramContact(
+  id: string,
+  contact: string | null,
+): Promise<void> {
+  await query(
+    `UPDATE managers SET telegram_contact = $2
+      WHERE id = $1 AND role = 'curator'`,
+    [id, contact],
+  )
+}
+
+/**
  * «Разлогинить все устройства»: продвигает session_version, мгновенно
  * инвалидируя каждый выданный JWT этого сотрудника. Сессия, которая вызвала
  * действие, должна сразу перевыпустить свою cookie со свежей версией (тот же

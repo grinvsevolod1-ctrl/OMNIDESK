@@ -7,14 +7,17 @@
  * в админских диалогах; список скроллится внутри карточки.
  */
 import { useState, useTransition } from 'react'
-import { Loader2, Plus } from 'lucide-react'
+import { Loader2, Plus, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
 import {
+  getMyTelegramContactAction,
   listMyCitiesAction,
   updateMyCitiesAction,
+  updateMyTelegramContactAction,
 } from '@/app/actions/managers'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CityListInput } from '@/components/shared/city-list-input'
 
@@ -101,6 +104,77 @@ export function MyGeoSettings() {
           </Button>
         ) : null}
       </div>
+
+      <MyTelegramContact />
+    </div>
+  )
+}
+
+/**
+ * «Telegram для кандидатов» (миграция 146): куратор сам указывает и в любой
+ * момент обновляет свой актуальный Telegram — например, если аккаунт слетел
+ * или заменён. Принимаются «@username» и ссылки t.me/username; система
+ * приводит к единому виду «@username». Этот контакт менеджер видит при
+ * передаче лида и отправляет кандидату — кандидат пишет куратору сам.
+ */
+function MyTelegramContact() {
+  const [draft, setDraft] = useState<string | null>(null)
+  const [pending, startTransition] = useTransition()
+
+  const { data: saved, mutate } = useSWR(
+    'my-telegram-contact',
+    getMyTelegramContactAction,
+    { revalidateOnFocus: false },
+  )
+
+  const current = draft ?? saved ?? ''
+  const dirty = draft !== null && draft !== (saved ?? '')
+
+  function save() {
+    startTransition(async () => {
+      const res = await updateMyTelegramContactAction(current)
+      if (res.ok) {
+        toast.success(res.message)
+        await mutate()
+        setDraft(null)
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-border pt-4">
+      <Label htmlFor="my-telegram-contact" className="flex items-center gap-1.5">
+        <Send className="size-3.5" />
+        Telegram для кандидатов
+      </Label>
+      <div className="flex items-center gap-2">
+        <Input
+          id="my-telegram-contact"
+          value={current}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="@username или t.me/username"
+          className="max-w-xs"
+          autoComplete="off"
+        />
+        <Button onClick={save} disabled={pending || !dirty}>
+          {pending ? (
+            <>
+              <Loader2 className="size-4 animate-spin" />
+              Сохраняем…
+            </>
+          ) : (
+            'Сохранить'
+          )}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Этот контакт видит менеджер при передаче вам лида и отправляет его
+        кандидату — кандидат напишет вам сам. Если Telegram-аккаунт слетел или
+        заменён, просто укажите новый: он сразу будет использоваться при всех
+        следующих передачах.
+      </p>
     </div>
   )
 }

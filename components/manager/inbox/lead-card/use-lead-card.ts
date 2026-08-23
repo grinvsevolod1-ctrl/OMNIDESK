@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState, useTransition } from 'react'
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
@@ -19,6 +19,30 @@ export interface LeadCardDefaults {
   telegramUsername?: string
   telegramId?: string
   city?: string
+}
+
+/** Вакансия по умолчанию — «Курьер» должна стоять всегда. */
+const DEFAULT_VACANCY = 'Курьер'
+
+/** Сериализация полей формы для сравнения «есть ли несохранённые правки». */
+function makeSnapshot(f: {
+  fullName: string
+  phone: string
+  telegramUsername: string
+  telegramId: string
+  city: string
+  address: string
+  vacancy: string
+}): string {
+  return JSON.stringify([
+    f.fullName,
+    f.phone,
+    f.telegramUsername,
+    f.telegramId,
+    f.city,
+    f.address,
+    f.vacancy,
+  ])
 }
 
 /**
@@ -40,40 +64,64 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
   const [telegramId, setTelegramId] = useState(defaults?.telegramId ?? '')
   const [city, setCity] = useState(defaults?.city ?? '')
   const [address, setAddress] = useState('')
-  const [vacancy, setVacancy] = useState('')
+  // «Курьер» — вакансия по умолчанию: должна стоять всегда, менеджер меняет
+  // только в исключительных случаях.
+  const [vacancy, setVacancy] = useState(DEFAULT_VACANCY)
   const [curatorId, setCuratorId] = useState<string | null>(null)
   const [transferredAt, setTransferredAt] = useState<string | null>(null)
   // true — куратор подставлен автоматически по городу/области (не кликом).
   const [autoPicked, setAutoPicked] = useState(false)
+  // Снимок последнего сохранённого/загруженного состояния полей — по нему
+  // определяем «грязность» формы для автосохранения при закрытии карточки.
+  const savedSnapshotRef = useRef<string>('')
 
   const load = useCallback(async () => {
     const card = await getLeadCardAction(conversationId)
     if (card) {
+      const fields = {
+        fullName: card.fullName || defaults?.fullName || '',
+        phone: card.phone || defaults?.phone || '',
+        telegramUsername:
+          card.telegramUsername || defaults?.telegramUsername || '',
+        telegramId: card.telegramId || defaults?.telegramId || '',
+        city: card.city || defaults?.city || '',
+        address: card.address,
+        vacancy: card.vacancy || DEFAULT_VACANCY,
+      }
       setCardId(card.id)
-      setFullName(card.fullName || defaults?.fullName || '')
-      setPhone(card.phone || defaults?.phone || '')
-      setTelegramUsername(
-        card.telegramUsername || defaults?.telegramUsername || '',
-      )
-      setTelegramId(card.telegramId || defaults?.telegramId || '')
-      setCity(card.city || defaults?.city || '')
-      setAddress(card.address)
-      setVacancy(card.vacancy)
+      setFullName(fields.fullName)
+      setPhone(fields.phone)
+      setTelegramUsername(fields.telegramUsername)
+      setTelegramId(fields.telegramId)
+      setCity(fields.city)
+      setAddress(fields.address)
+      setVacancy(fields.vacancy)
       setCuratorId(card.curatorId)
       setTransferredAt(card.transferredAt)
+      savedSnapshotRef.current = makeSnapshot(fields)
     } else {
       // No card for this contact yet — make sure the form shows THIS
       // conversation's defaults, never leftovers from a previous thread.
+      const fields = {
+        fullName: defaults?.fullName ?? '',
+        phone: defaults?.phone ?? '',
+        telegramUsername: defaults?.telegramUsername ?? '',
+        telegramId: defaults?.telegramId ?? '',
+        city: defaults?.city ?? '',
+        address: '',
+        vacancy: DEFAULT_VACANCY,
+      }
       setCardId(null)
-      setFullName(defaults?.fullName ?? '')
-      setPhone(defaults?.phone ?? '')
-      setTelegramUsername(defaults?.telegramUsername ?? '')
-      setTelegramId(defaults?.telegramId ?? '')
-      setCity(defaults?.city ?? '')
-      setAddress('')
-      setVacancy('')
+      setFullName(fields.fullName)
+      setPhone(fields.phone)
+      setTelegramUsername(fields.telegramUsername)
+      setTelegramId(fields.telegramId)
+      setCity(fields.city)
+      setAddress(fields.address)
+      setVacancy(fields.vacancy)
       setCuratorId(null)
       setTransferredAt(null)
+      savedSnapshotRef.current = makeSnapshot(fields)
     }
   }, [conversationId, defaults])
 
@@ -93,18 +141,98 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     setTelegramId(defaults?.telegramId ?? '')
     setCity(defaults?.city ?? '')
     setAddress('')
-    setVacancy('')
+    setVacancy(DEFAULT_VACANCY)
     setCuratorId(null)
     setTransferredAt(null)
     setAutoPicked(false)
+    savedSnapshotRef.current = makeSnapshot({
+      fullName: defaults?.fullName ?? '',
+      phone: defaults?.phone ?? '',
+      telegramUsername: defaults?.telegramUsername ?? '',
+      telegramId: defaults?.telegramId ?? '',
+      city: defaults?.city ?? '',
+      address: '',
+      vacancy: DEFAULT_VACANCY,
+    })
   }
 
+  /**
+   * Закрытие карточки = автосохранение. Кнопки «Сохранить» в карточке нет:
+   * если менеджер что-то менял (форма «грязная» относительно последнего
+   * снимка) — молча сохраняем и показываем зелёное уведомление
+   * «Карточка сохранена». Пустую нетронутую форму не сохраняем.
+   */
+  const closeCard = useCallback(() => {
+    setOpen(false)
+    const snapshot = makeSnapshot({
+      fullName,
+      phone,
+      telegramUsername,
+      telegramId,
+      city,
+      address,
+      vacancy,
+    })
+    const dirty = snapshot !== savedSnapshotRef.current
+    // Ничего не менялось — просто закрываем.
+    if (!dirty) return
+    // Совсем пустая форма (все поля кроме дефолтной вакансии пусты) — не
+    // создаём карточку-призрак.
+    const hasContent =
+      fullName.trim() ||
+      phone.trim() ||
+      telegramUsername.trim() ||
+      telegramId.trim() ||
+      city.trim() ||
+      address.trim()
+    if (!cardId && !hasContent) return
+    void (async () => {
+      const res = await saveLeadCardAction({
+        conversationId,
+        fullName,
+        phone,
+        telegramUsername,
+        telegramId,
+        city,
+        address,
+        vacancy,
+        curatorId: null,
+      })
+      if (res.ok) {
+        savedSnapshotRef.current = snapshot
+        toast.success('Карточка сохранена', {
+          className:
+            'bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-300 backdrop-blur',
+        })
+        if (!cardId) {
+          const card = await getLeadCardAction(conversationId)
+          if (card) setCardId(card.id)
+        }
+      } else {
+        toast.error(res.message)
+      }
+    })()
+  }, [
+    cardId,
+    conversationId,
+    fullName,
+    phone,
+    telegramUsername,
+    telegramId,
+    city,
+    address,
+    vacancy,
+  ])
+
   function toggleOpen() {
-    const next = !open
-    setOpen(next)
+    if (open) {
+      closeCard()
+      return
+    }
+    setOpen(true)
     // Refetch on every open: the card may have been updated from another
     // dialog of the same contact or by the curator/admin meanwhile.
-    if (next) void load()
+    void load()
   }
 
   // Сообщаем инбоксу об открытии/закрытии карточки: медиа-режим (кружки/фото)
