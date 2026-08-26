@@ -279,11 +279,18 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
   }, [open])
 
   // Curator search by city (SWR keyed by the trimmed query).
+  //
+  // ВАЖНО: НЕ используем keepPreviousData. Раньше при смене города SWR отдавал
+  // кураторов ПРЕДЫДУЩЕГО города, пока грузился новый запрос, и автоподбор ниже
+  // подставлял стейл-куратора. В UI список успевал обновиться на новый город, а
+  // curatorId оставался от старого — лид передавался не тому, кого видит
+  // менеджер. Без keepPreviousData данные при смене города обнуляются, и
+  // автоподбор всегда работает по актуальному списку.
   const cityQuery = open ? city.trim() : ''
   const { data: curatorsData, isLoading: searching } = useSWR(
     cityQuery.length >= 2 ? ['curator-city-search', cityQuery] : null,
     () => findCuratorsByCityAction(cityQuery),
-    { revalidateOnFocus: false, keepPreviousData: true, dedupingInterval: 300 },
+    { revalidateOnFocus: false, dedupingInterval: 300 },
   )
   const curators: CuratorWithLoad[] =
     cityQuery.length >= 2 ? (curatorsData ?? []) : []
@@ -305,13 +312,33 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
   // куратору перекрывает автовыбор; смена города сбрасывает выбор и
   // автоподбор срабатывает заново. State adjustment during render — тот же
   // паттерн, что и сброс полей при смене диалога выше (без setState в эффекте).
+  //
+  // Выбор ВСЕГДА привязан к актуальному списку текущего города: если ранее
+  // выбранного/автоподобранного куратора нет в свежих результатах (город
+  // сменили) — сбрасываем и переподбираем по новому списку. Иначе можно было
+  // бы передать лид куратору, которого менеджер уже не видит в списке.
+  const dataReady = cityQuery.length >= 2 && !searching
+  const selectionValid =
+    curatorId !== null && curators.some((c) => c.id === curatorId)
   const autoCandidate =
-    open && !transferredAt && curatorId === null
-      ? (curatorsData?.[0] ?? null)
+    open && !transferredAt && dataReady && !selectionValid
+      ? (curators[0] ?? null)
       : null
-  if (autoCandidate) {
+  if (autoCandidate && autoCandidate.id !== curatorId) {
     setCuratorId(autoCandidate.id)
     setAutoPicked(true)
+  } else if (
+    open &&
+    !transferredAt &&
+    dataReady &&
+    curatorId !== null &&
+    !selectionValid &&
+    curators.length === 0
+  ) {
+    // Для нового города кураторов нет — снимаем стейл-выбор, чтобы кнопка
+    // «Передать» не отправила лид на куратора прошлого города.
+    setCuratorId(null)
+    setAutoPicked(false)
   }
 
   function pickCurator(id: string | null) {
@@ -389,7 +416,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
             )
           }
         }
-        // Подхватить id только что созданной карточки — открывает блок
+        // Подхватить id только чт�� созданной карточки — открывает блок
         // файлов/комментариев без повторного открытия панели.
         if (!cardId) await load()
       } else {
