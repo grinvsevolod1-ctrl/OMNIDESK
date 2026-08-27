@@ -270,6 +270,39 @@ interface ActiveThreadRow {
   persona: unknown
   turns: number
   max_turns: number
+  /** Когда менеджер написал последнее сообщение (ждём «человеческую» паузу). */
+  last_out_at: string
+}
+
+/**
+ * Детерминированный 32-битный хэш (FNV-1a). Нужен, чтобы пауза перед ответом
+ * была случайной, но СТАБИЛЬНОЙ между тиками крона: без него каждый тик
+ * перебрасывал бы кубик заново и паузы бы не работали.
+ */
+function fnv1a(str: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return h >>> 0
+}
+
+/**
+ * Сколько секунд «клиент» выжидает перед ответом на конкретную реплику
+ * менеджера. Похоже на живого человека: обычно 1–7 минут (прочитал, подумал,
+ * напечатал), но примерно каждый четвёртый ответ — «отвлёкся» на 10–35 минут.
+ * Детерминировано по (диалог, номер хода), поэтому не меняется между тиками.
+ */
+function replyDelaySec(conversationId: string, turns: number): number {
+  const h = fnv1a(`${conversationId}:${turns}`)
+  const roll = h % 100
+  if (roll < 25) {
+    // «Отвлёкся»: 10–35 минут.
+    return 600 + (h % 1500)
+  }
+  // Обычный темп: 60–420 секунд.
+  return 60 + (h % 360)
 }
 
 function toPersona(value: unknown): AutopilotPersona | null {
@@ -295,25 +328,33 @@ async function processActiveThreads(
   if (!cfg.replyEnabled) return 0
 
   // Активные автопилот-диалоги, где ПОСЛЕДНЕЕ сообщение исходящее (менеджер),
-  // то есть ждут ответа клиента.
+  // то есть ждут ответа клиента. Забираем и время этого сообщения — от него
+  // отсчитывается «человеческая» пауза перед ответом.
   const threads = await query<ActiveThreadRow>(
-    `SELECT t.conversation_id, t.persona, t.turns, t.max_turns
+    `SELECT t.conversation_id, t.persona, t.turns, t.max_turns,
+            lm.created_at AS last_out_at
        FROM god_ai_threads t
-      WHERE t.active
-        AND (
-          SELECT m.direction FROM messages m
+       JOIN LATERAL (
+          SELECT m.direction, m.created_at FROM messages m
            WHERE m.conversation_id = t.conversation_id AND m.deleted_at IS NULL
            ORDER BY m.created_at DESC LIMIT 1
-        ) = 'out'
+       ) lm ON true
+      WHERE t.active AND lm.direction = 'out'
       ORDER BY t.created_at ASC
       LIMIT $1`,
     [limit],
   )
 
+  const nowMs = Date.now()
   let replied = 0
   for (const t of threads) {
     const persona = toPersona(t.persona)
     if (!persona) continue
+
+    // Пауза ещё не выдержана — человек «думает/занят», ответит на следующих
+    // тиках. Пауза детерминирована, поэтому между тиками не перебрасывается.
+    const waitedSec = (nowMs - new Date(t.last_out_at).getTime()) / 1000
+    if (waitedSec < replyDelaySec(t.conversation_id, t.turns)) continue
     try {
       // Полная переписка для контекста модели.
       const msgs = await query<{ direction: 'in' | 'out'; body: string }>(
