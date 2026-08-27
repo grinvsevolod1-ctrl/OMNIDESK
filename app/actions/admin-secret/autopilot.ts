@@ -130,11 +130,26 @@ export async function secretToggleAutopilotAction(
 export async function secretRunAutopilotNowAction(): Promise<AutopilotRunResult> {
   await assertConsoleOrMessenger()
   try {
-    const res = await runAutopilotTick({ maxCreate: 3, maxReplies: 10 })
+    const res = await runAutopilotTick({ maxCreate: 3, maxReplies: 10, force: true })
     if (res.skipped === 'disabled')
       return { ok: false, message: 'ИИ выключен' }
     if (res.skipped === 'no_channels')
       return { ok: false, message: 'Не выбран ни один канал' }
+    if (res.skipped === 'no_gateway_key')
+      return {
+        ok: false,
+        message: 'Не настроен ключ AI Gateway (AI_GATEWAY_API_KEY) на сервере',
+      }
+    if (res.skipped === 'no_usable_channel')
+      return {
+        ok: false,
+        message: 'У выбранных каналов нет назначенного менеджера',
+      }
+    if (res.skipped === 'generation_failed')
+      return {
+        ok: false,
+        message: 'Модель не ответила: проверьте ключ AI Gateway и название модели',
+      }
     return {
       ok: true,
       message: `Готово: создано ${res.created}, ответов ${res.replied}`,

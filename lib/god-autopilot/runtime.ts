@@ -136,18 +136,24 @@ async function pickChannel(
   return usable[Math.floor(Math.random() * usable.length)]
 }
 
-/** Создать один входящий диалог по «доспевшему» слоту. */
-async function fireSlot(
-  slotId: string,
+/** Результат попытки создать один диалог. */
+type CreateOutcome = 'created' | 'no_channel' | 'no_message'
+
+/**
+ * Создать один входящий диалог (общая логика для слотов и форс-прогона).
+ * Возвращает причину неудачи, чтобы её можно было показать владельцу.
+ */
+async function createDialog(
   cfg: AutopilotConfig,
-): Promise<boolean> {
+  slotId: string | null,
+): Promise<CreateOutcome> {
   const channel = await pickChannel(cfg.channelIds)
-  if (!channel) return false
+  if (!channel) return 'no_channel'
 
   const persona = buildPersona()
   const opening =
     (await generateOpeningMessage(cfg.topic, persona, cfg.model)) ?? null
-  if (!opening) return false
+  if (!opening) return 'no_message'
 
   const convId = randomUUID()
   await withTransaction(async (db) => {
@@ -177,12 +183,14 @@ async function fireSlot(
        VALUES ($1, $2::jsonb, true, 1, $3)`,
       [convId, JSON.stringify(persona), cfg.maxTurns],
     )
-    await db.query(
-      `UPDATE god_ai_slots SET done = true, conversation_id = $2 WHERE id = $1`,
-      [slotId, convId],
-    )
+    if (slotId) {
+      await db.query(
+        `UPDATE god_ai_slots SET done = true, conversation_id = $2 WHERE id = $1`,
+        [slotId, convId],
+      )
+    }
   })
-  return true
+  return 'created'
 }
 
 /**
@@ -204,17 +212,57 @@ async function processDueSlots(
   let created = 0
   for (const slot of due) {
     try {
-      if (await fireSlot(slot.id, cfg)) created++
+      const outcome = await createDialog(cfg, slot.id)
+      if (outcome === 'created') created++
       else {
         // Нет пригодного канала или модель промолчала — не зацикливаемся,
         // помечаем слот отработанным, чтобы он не залипал.
         await query(`UPDATE god_ai_slots SET done = true WHERE id = $1`, [slot.id])
       }
     } catch (err) {
-      console.warn('[god-autopilot] fireSlot failed:', err)
+      console.warn('[god-autopilot] createDialog (slot) failed:', err)
     }
   }
   return created
+}
+
+/**
+ * Форс-создание диалогов для ручного «Прогнать сейчас»: не ждёт «доспевания»
+ * слотов и не смотрит на рабочее окно. Потребляет ближайшие невыполненные
+ * слоты (чтобы не раздувать дневную норму), а если их нет — создаёт диалог
+ * без слота. Возвращает число созданных и последнюю причину неудачи.
+ */
+async function forceCreateDialogs(
+  cfg: AutopilotConfig,
+  count: number,
+): Promise<{ created: number; failReason: CreateOutcome | null }> {
+  const slots = await query<{ id: string }>(
+    `SELECT id FROM god_ai_slots
+      WHERE NOT done
+      ORDER BY fire_at ASC
+      LIMIT $1`,
+    [count],
+  )
+  let created = 0
+  let failReason: CreateOutcome | null = null
+  for (let k = 0; k < count; k++) {
+    const slotId = slots[k]?.id ?? null
+    try {
+      const outcome = await createDialog(cfg, slotId)
+      if (outcome === 'created') created++
+      else {
+        failReason = outcome
+        // Канал так и не появится и модель не заговорит в этом же прогоне —
+        // дальше долбить бессмысленно.
+        break
+      }
+    } catch (err) {
+      console.warn('[god-autopilot] createDialog (force) failed:', err)
+      failReason = 'no_message'
+      break
+    }
+  }
+  return { created, failReason }
 }
 
 interface ActiveThreadRow {
@@ -326,21 +374,39 @@ async function processActiveThreads(
 export async function runAutopilotTick(opts?: {
   maxCreate?: number
   maxReplies?: number
+  /**
+   * Форс-режим для ручного «Прогнать сейчас»: создать диалоги НЕМЕДЛЕННО,
+   * не дожидаясь «доспевания» хаотичных слотов и игнорируя рабочее окно.
+   */
+  force?: boolean
 }): Promise<AutopilotTickResult> {
   const cfg = await getAutopilotConfig()
   if (!cfg.enabled)
     return { planned: 0, created: 0, replied: 0, skipped: 'disabled' }
   if (cfg.channelIds.length === 0)
     return { planned: 0, created: 0, replied: 0, skipped: 'no_channels' }
+  if (!process.env.AI_GATEWAY_API_KEY)
+    return { planned: 0, created: 0, replied: 0, skipped: 'no_gateway_key' }
 
   const now = new Date()
   const maxCreate = Math.max(1, Math.min(opts?.maxCreate ?? 5, 25))
   const maxReplies = Math.max(1, Math.min(opts?.maxReplies ?? 15, 50))
 
-  // Планируем и создаём новые диалоги только внутри рабочего окна МСК.
   let planned = 0
   let created = 0
-  if (insideWindow(now, cfg)) {
+  let skipped: string | null = null
+
+  if (opts?.force) {
+    // Ручной прогон: планируем день (если ещё не), затем создаём сразу.
+    if (insideWindow(now, cfg)) planned = await ensureTodaySlots(now, cfg)
+    const res = await forceCreateDialogs(cfg, maxCreate)
+    created = res.created
+    if (created === 0 && res.failReason) {
+      skipped =
+        res.failReason === 'no_channel' ? 'no_usable_channel' : 'generation_failed'
+    }
+  } else if (insideWindow(now, cfg)) {
+    // Крон: планируем и создаём новые диалоги только внутри окна МСК.
     planned = await ensureTodaySlots(now, cfg)
     created = await processDueSlots(now, cfg, maxCreate)
   }
@@ -348,5 +414,5 @@ export async function runAutopilotTick(opts?: {
   // Отвечать менеджеру можно всегда (менеджер мог написать и вне окна).
   const replied = await processActiveThreads(cfg, maxReplies)
 
-  return { planned, created, replied, skipped: null }
+  return { planned, created, replied, skipped }
 }
