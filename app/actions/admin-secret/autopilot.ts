@@ -40,7 +40,7 @@ export async function secretGetAutopilotConfigAction(): Promise<AutopilotConfigR
   await assertConsoleOrMessenger()
   try {
     const config = await getAutopilotConfig()
-    return { ok: true, config }
+    return { ok: true, message: '', config }
   } catch (err) {
     console.warn('[god-autopilot] get config failed:', err)
     return { ok: false, message: 'Не удалось загрузить настройки ИИ' }

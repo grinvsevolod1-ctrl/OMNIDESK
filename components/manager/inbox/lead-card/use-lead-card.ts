@@ -416,7 +416,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
             )
           }
         }
-        // Подхватить id только чт�� созданной карточки — открывает блок
+        // Подхватить id только что созданной карточки — открывает блок
         // файлов/комментариев без повторного открытия панели.
         if (!cardId) await load()
       } else {
