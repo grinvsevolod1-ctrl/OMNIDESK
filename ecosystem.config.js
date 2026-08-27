@@ -204,28 +204,6 @@ module.exports = {
       },
     },
     {
-      // God-messenger AI autopilot: plans chaotic dialog slots inside the MSK
-      // work window, creates new inbound "client" dialogs when a slot matures
-      // and keeps replying to the manager as a live client (see
-      // /api/cron/god-ai). 5-minute tick is safe — the daily-slot dedup, the
-      // work-window check and the master on/off switch all live in the config
-      // / data layer, so it is a no-op while the autopilot is disabled.
-      // Requires CRON_SECRET in the shared .env.
-      //
-      // NOTE: if you update an already-running deploy, remember to include this
-      // app in the `pm2 delete ...` line (see the header) before re-starting
-      // from this file, otherwise PM2 keeps the old process list.
-      name: 'omnidesk-cron-god-ai',
-      script: 'scripts/cron-god-ai.mjs',
-      cwd: __dirname,
-      autorestart: false,
-      cron_restart: '*/5 * * * *',
-      env: {
-        ...rootEnv,
-        NODE_ENV: 'production',
-      },
-    },
-    {
       // AI-manager health watchdog: alerts the owner when the brain's error
       // rate over the last hour crosses the threshold (see
       // /api/cron/ai-health). 10-minute tick is safe — alerts carry a

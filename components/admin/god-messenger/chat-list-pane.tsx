@@ -7,7 +7,6 @@ import {
   MessagesSquare,
   Plus,
   Search,
-  Sparkles,
 } from 'lucide-react'
 import type { ConversationWithManager } from '@/app/actions/admin-secret'
 import { ContactAvatar, Highlight } from '@/components/manager/inbox/atoms'
@@ -38,8 +37,6 @@ export function ChatListPane({
   selectedId,
   onSelect,
   onCreate,
-  onOpenAi,
-  aiActive,
   managerNameOf,
 }: {
   showThread: boolean
@@ -52,8 +49,6 @@ export function ChatListPane({
   selectedId: string | null
   onSelect: (id: string) => void
   onCreate: () => void
-  onOpenAi: () => void
-  aiActive: boolean
   managerNameOf: (id: string | null) => string
 }) {
   return (
@@ -109,32 +104,6 @@ export function ChatListPane({
           </div>
           <div className="flex items-center gap-1">
             <NotifyButton available={pushAvailable} />
-            {/* ИИ-автопилот: градиентная кнопка с «дыханием», когда активен. */}
-            <button
-              type="button"
-              onClick={onOpenAi}
-              aria-label="Искусственный интеллект в чатах"
-              title="Искусственный интеллект в чатах"
-              className={cn(
-                'relative inline-flex size-9 items-center justify-center rounded-lg text-white shadow-sm transition-transform active:scale-95',
-                'bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500',
-                'hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60',
-              )}
-            >
-              {aiActive && (
-                <span
-                  className="absolute inset-0 animate-ping rounded-lg bg-fuchsia-500/50"
-                  aria-hidden
-                />
-              )}
-              <Sparkles className="relative size-4" />
-              {aiActive && (
-                <span
-                  className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-background bg-emerald-400"
-                  aria-hidden
-                />
-              )}
-            </button>
             <Button
               size="icon"
               className="size-9 rounded-lg"
