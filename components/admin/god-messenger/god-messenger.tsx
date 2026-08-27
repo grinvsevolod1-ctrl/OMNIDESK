@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation'
 
 import type { Channel, Manager } from '@/lib/types'
 import { NewChatDialog } from './new-chat-dialog'
+import { AiAutopilotDialog } from './ai-autopilot-dialog'
+import { secretGetAutopilotConfigAction } from '@/app/actions/admin-secret'
 import { ChatListPane } from './chat-list-pane'
 import { ThreadPane, MESSAGES_WINDOW } from './thread-pane'
 import { MessageActionSheet } from './message-action-sheet'
@@ -41,6 +43,20 @@ export function GodMessenger({
 
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  // ИИ-автопилот: диалог настройки + активность (для «дыхания» кнопки).
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiActive, setAiActive] = useState(false)
+
+  // Однократно узнать, включён ли ИИ, чтобы кнопка в шапке светилась.
+  useEffect(() => {
+    let cancelled = false
+    void secretGetAutopilotConfigAction().then((res) => {
+      if (!cancelled && res.ok && res.config) setAiActive(res.config.enabled)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   // Render window: only the newest N messages hit the DOM. Long chats
   // (hundreds of messages) otherwise make opening a thread visibly slow on
   // mobile. "Показать ещё" expands the window; SSE appends work unchanged.
@@ -106,6 +122,8 @@ export function GodMessenger({
           selectedId={thread.selectedId}
           onSelect={(id) => thread.selectThread(id)}
           onCreate={() => setCreateOpen(true)}
+          onOpenAi={() => setAiOpen(true)}
+          aiActive={aiActive}
           managerNameOf={managerNameOf}
         />
 
@@ -167,6 +185,17 @@ export function GodMessenger({
           void thread.loadList({ silent: true })
           // Open the freshly created thread right away (as documented).
           if (id) thread.selectThread(id)
+        }}
+      />
+
+      <AiAutopilotDialog
+        open={aiOpen}
+        onOpenChange={setAiOpen}
+        channels={channels}
+        onConfigChange={(config) => {
+          setAiActive(config.enabled)
+          // Свежесозданные ИИ-диалоги подтянуть в список без перезагрузки.
+          void thread.loadList({ silent: true })
         }}
       />
     </div>
