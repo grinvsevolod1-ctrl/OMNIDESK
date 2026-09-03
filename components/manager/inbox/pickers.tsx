@@ -104,6 +104,15 @@ const EmojiGrid = memo(function EmojiGrid({
           key={e}
           type="button"
           onClick={() => onPick(e)}
+          // content-visibility: браузер пропускает растеризацию цветных emoji-
+          // глифов вне вьюпорта попапа (рисует ~видимые ряды, а не все 124–220
+          // сразу) — именно эта покраска раньше вешала кадр при открытии.
+          // contain-intrinsic-size = размер кнопки (size-9 = 2.25rem), чтобы
+          // скролл не прыгал.
+          style={{
+            contentVisibility: 'auto',
+            containIntrinsicSize: '2.25rem 2.25rem',
+          }}
           className="flex size-9 items-center justify-center rounded-md text-xl leading-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
           aria-label={`Вставить ${e}`}
         >
@@ -160,8 +169,14 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
           </Button>
         }
       />
-      <PopoverContent align="start" className="w-96 p-0">
-        <div className="flex h-72 flex-col">
+      <PopoverContent
+        align="start"
+        // Быстрый fade без зума: zoom-in-100 отменяет базовый zoom-in-95 (масштаб
+        // остаётся 100%), duration-75 ускоряет появление — попап «выскакивает»
+        // мгновенно, а не растягивается зумом на фоне тяжёлой покраски эмодзи.
+        className="w-96 p-0 duration-75 data-open:zoom-in-100 data-closed:zoom-out-100"
+      >
+        <div className="flex h-72 flex-col" style={{ contain: 'content' }}>
           {/* Вкладки категорий */}
           <div
             className="scrollbar-thin flex items-center gap-0.5 overflow-x-auto border-b border-border px-1.5 py-1"
