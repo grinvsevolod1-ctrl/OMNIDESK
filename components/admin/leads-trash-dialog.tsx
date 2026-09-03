@@ -4,7 +4,11 @@ import { useState, useTransition } from 'react'
 import { ArchiveRestore, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
-import { listTrashAction, restoreLeadAction } from '@/app/actions/lead-cards'
+import {
+  hardDeleteLeadAction,
+  listTrashAction,
+  restoreLeadAction,
+} from '@/app/actions/lead-cards'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -15,6 +19,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import type { DeletedLead } from '@/lib/data/lead-cards'
 import { APP_TIME_ZONE } from '@/lib/time'
 
 function fmt(iso: string): string {
@@ -33,25 +38,11 @@ function fmt(iso: string): string {
  */
 export function LeadsTrashDialog({ onChanged }: { onChanged: () => void }) {
   const [open, setOpen] = useState(false)
-  const [pending, startTransition] = useTransition()
   const { data, isLoading, mutate } = useSWR(
     open ? 'leads-trash' : null,
     () => listTrashAction(),
     { revalidateOnFocus: false },
   )
-
-  function restore(id: string) {
-    startTransition(async () => {
-      const res = await restoreLeadAction(id)
-      if (res.ok) {
-        toast.success(res.message)
-        await mutate()
-        onChanged()
-      } else {
-        toast.error(res.message)
-      }
-    })
-  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -86,46 +77,136 @@ export function LeadsTrashDialog({ onChanged }: { onChanged: () => void }) {
         ) : (
           <ul className="flex flex-col divide-y divide-border">
             {data.map((lead) => (
-              <li
+              <TrashItem
                 key={lead.id}
-                className="flex items-center gap-3 py-2.5"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {lead.fullName || 'Без имени'}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {[lead.city, lead.phone].filter(Boolean).join(' · ')}
-                  </p>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    Причина: {lead.deletedReason || '—'}
-                    {lead.deletedByName ? ` · ${lead.deletedByName}` : ''}
-                  </p>
-                </div>
-                <Badge
-                  variant="outline"
-                  className="shrink-0 border-transparent bg-muted text-muted-foreground"
-                >
-                  {fmt(lead.deletedAt)}
-                </Badge>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Восстановить лид"
-                  disabled={pending}
-                  onClick={() => restore(lead.id)}
-                >
-                  {pending ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <ArchiveRestore className="size-4" />
-                  )}
-                </Button>
-              </li>
+                lead={lead}
+                onChanged={() => {
+                  void mutate()
+                  onChanged()
+                }}
+              />
             ))}
           </ul>
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+function TrashItem({
+  lead,
+  onChanged,
+}: {
+  lead: DeletedLead
+  onChanged: () => void
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [pending, startTransition] = useTransition()
+
+  function restore() {
+    startTransition(async () => {
+      const res = await restoreLeadAction(lead.id)
+      if (res.ok) {
+        toast.success(res.message)
+        onChanged()
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }
+
+  function hardDelete() {
+    startTransition(async () => {
+      const res = await hardDeleteLeadAction({ leadCardId: lead.id })
+      if (res.ok) {
+        toast.success(res.message)
+        onChanged()
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }
+
+  return (
+    <li className="flex flex-col gap-2 py-2.5">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">
+            {lead.fullName || 'Без имени'}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">
+            {[lead.city, lead.phone].filter(Boolean).join(' · ')}
+          </p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            Причина: {lead.deletedReason || '—'}
+            {lead.deletedByName ? ` · ${lead.deletedByName}` : ''}
+          </p>
+        </div>
+        <Badge
+          variant="outline"
+          className="shrink-0 border-transparent bg-muted text-muted-foreground"
+        >
+          {fmt(lead.deletedAt)}
+        </Badge>
+        <div className="flex shrink-0 items-center">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Восстановить лид"
+            title="Восстановить"
+            disabled={pending}
+            onClick={restore}
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <ArchiveRestore className="size-4" />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Удалить навсегда"
+            title="Удалить навсегда"
+            className="text-muted-foreground hover:text-destructive"
+            disabled={pending}
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </div>
+      </div>
+
+      {confirmDelete ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-2.5">
+          <p className="text-xs text-destructive">
+            Удалить лид «{lead.fullName || 'без имени'}» навсегда? Действие
+            необратимо — вся история будет стёрта.
+          </p>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmDelete(false)}
+            >
+              Отмена
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={pending}
+              onClick={hardDelete}
+            >
+              {pending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5" />
+              )}
+              Удалить навсегда
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </li>
   )
 }

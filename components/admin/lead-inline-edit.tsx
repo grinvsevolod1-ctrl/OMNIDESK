@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { useInlineSave } from '@/components/admin/lead-inline-edit/use-inline-save'
 import {
   adminSetLeadStatusAction,
+  hardDeleteLeadAction,
   searchCityAction,
   softDeleteLeadAction,
   updateLeadFieldAction,
@@ -247,7 +248,7 @@ export function CityInlineEditor({
         render={
           <button
             type="button"
-            // max-w-full + overflow-hidden: длинный «Город (Регион)» обрезается
+            // max-w-full + overflow-hidden: длинный «Город (Регион)» обрез��ется
             // внутри своей grid-ячейки и не наезжает на соседние колонки.
             className="inline-flex min-w-0 max-w-full overflow-hidden"
             aria-label="Изменить город"
@@ -430,12 +431,26 @@ export function DeleteLeadButton({
 }) {
   const [open, setOpen] = useState(false)
   const [reason, setReason] = useState('')
+  // Второй режим — необратимое удаление: нужно на случай «глюченного» лида,
+  // который не удаляется штатным мягким удалением.
+  const [hardConfirm, setHardConfirm] = useState(false)
   const { pending, run } = useInlineSave()
 
   function remove() {
     run(() => softDeleteLeadAction({ leadCardId: lead.id, reason }), {
       onOk: () => {
         setOpen(false)
+        setReason('')
+        onDeleted()
+      },
+    })
+  }
+
+  function hardRemove() {
+    run(() => hardDeleteLeadAction({ leadCardId: lead.id }), {
+      onOk: () => {
+        setOpen(false)
+        setHardConfirm(false)
         setReason('')
         onDeleted()
       },
@@ -456,7 +471,13 @@ export function DeleteLeadButton({
       >
         <Trash2 className="size-4" />
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          setOpen(o)
+          if (!o) setHardConfirm(false)
+        }}
+      >
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Удалить лид?</DialogTitle>
@@ -490,6 +511,48 @@ export function DeleteLeadButton({
               В корзину
             </Button>
           </DialogFooter>
+
+          {/* Необратимое удаление — отдельным блоком, чтобы не нажать случайно */}
+          <div className="mt-1 border-t border-border pt-3">
+            {hardConfirm ? (
+              <div className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-2.5">
+                <p className="text-xs text-destructive">
+                  Удалить навсегда, минуя корзину? Действие необратимо — вся
+                  история лида будет стёрта без возможности восстановления.
+                </p>
+                <div className="flex items-center justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setHardConfirm(false)}
+                  >
+                    Отмена
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={pending}
+                    onClick={hardRemove}
+                  >
+                    {pending ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-3.5" />
+                    )}
+                    Удалить навсегда
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setHardConfirm(true)}
+                className="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-destructive hover:underline"
+              >
+                Удалить навсегда (необратимо)
+              </button>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </>

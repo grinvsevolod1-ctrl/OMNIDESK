@@ -8,19 +8,24 @@ import { getSession, requireAdmin } from '@/lib/auth'
 import {
   adminSetLeadStatus,
   getLeadCardById,
+  hardDeleteLeadCard,
   isInlineLeadField,
   listActiveCurators,
   listAllTransferredLeads,
+  listArchivedLeadsAdmin,
   listDeletedLeads,
   listLeadCardsForCurator,
   restoreLeadCard,
+  setLeadArchived,
   softDeleteLeadCard,
   transferLeadToCurator,
   updateLeadCardField,
   type AllLeadsFilter,
 } from '@/lib/data/lead-cards'
+import { createLeadNotification } from '@/lib/data/lead-notifications'
 import { safeDayKey } from '@/lib/data/lead-stats'
 import { isLeadStatus } from '@/lib/lead-status'
+import { sendPushToManager } from '@/lib/push'
 import {
   assertCuratorNotLocked,
   assertHeadCanEdit,
@@ -150,6 +155,99 @@ export async function restoreLeadAction(
 export async function listTrashAction() {
   await requireAdmin()
   return listDeletedLeads()
+}
+
+/* ------------------------------- Архив (админ) ------------------------------ */
+
+/** Admin: архив лидов (ушедшие из активного рабочего места), свежие сверху. */
+export async function listArchivedLeadsAdminAction() {
+  await requireAdmin()
+  return listArchivedLeadsAdmin()
+}
+
+/**
+ * Admin: вернуть лид из архива обратно его менеджеру по кадрам. Лид снова
+ * попадает в активное рабочее место куратора, а куратор получает модальное
+ * уведомление с обязательным пояснением, ПОЧЕМУ лид вернулся. Уведомление
+ * дублируется web-push'ем (best-effort).
+ */
+export async function returnArchivedLeadToCuratorAction(input: {
+  leadCardId: string
+  reason: string
+}): Promise<LeadCardActionResult> {
+  const session = await requireAdmin()
+  const reason = input.reason.replace(/\s+/g, ' ').trim()
+  if (reason.length < 3) {
+    return { ok: false, message: 'Укажите причину возврата (минимум 3 символа).' }
+  }
+
+  const card = await getLeadCardById(input.leadCardId)
+  if (!card) return { ok: false, message: 'Лид не найден.' }
+  if (!card.archivedAt) {
+    return { ok: false, message: 'Этот лид не в архиве.' }
+  }
+  if (!card.curatorId) {
+    return {
+      ok: false,
+      message:
+        'У лида нет менеджера по кадрам — сначала передайте его сотруднику, потом возвращайте.',
+    }
+  }
+
+  try {
+    // Возврат из архива: карточка снова в активном рабочем месте куратора.
+    await setLeadArchived({
+      leadCardId: card.id,
+      curatorId: null, // админ — без проверки владельца
+      archived: false,
+      actorId: session.sub === 'admin' ? null : session.sub,
+      actorName: session.name ?? 'Администратор',
+    })
+
+    const leadName = card.fullName || 'без имени'
+    // In-app модалка у куратора (главное требование) + web-push страховкой.
+    await createLeadNotification({
+      recipientId: card.curatorId,
+      leadCardId: card.id,
+      kind: 'lead_returned_from_archive',
+      title: 'Лид возвращён из архива',
+      body: reason,
+      leadName: card.fullName || null,
+    }).catch(() => null)
+    void sendPushToManager(card.curatorId, {
+      title: 'Omnidesk — лид возвращён из архива',
+      body: `${leadName}: ${reason}`,
+      url: '/curator',
+      tag: 'omnidesk-curator-return',
+    }).catch(() => null)
+
+    return {
+      ok: true,
+      message: `Лид «${leadName}» возвращён менеджеру по кадрам${card.curatorName ? ` ${card.curatorName}` : ''}.`,
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка возврата из архива'
+    return { ok: false, message: msg }
+  }
+}
+
+/**
+ * Admin: НЕОБРАТИМОЕ удаление лида. Физически стирает карточку и все связанные
+ * записи (комментарии, история, передачи, вложения — ON DELETE CASCADE)
+ * независимо от состояния лида. Нужно, чтобы можно было снести «глюченный»
+ * лид, который не удаляется обычным мягким удалением.
+ */
+export async function hardDeleteLeadAction(input: {
+  leadCardId: string
+}): Promise<LeadCardActionResult> {
+  await requireAdmin()
+  try {
+    const removed = await hardDeleteLeadCard(input.leadCardId)
+    if (!removed) return { ok: false, message: 'Лид не найден.' }
+    return { ok: true, message: 'Лид удалён навсегда.' }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Ошибка' }
+  }
 }
 
 /** Admin: смена статуса + комментарий из строки таблицы (любой лид). */

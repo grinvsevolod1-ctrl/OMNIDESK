@@ -29,6 +29,7 @@ import { exportMyLeadsExcelAction } from '@/app/actions/leads-export'
 import { useXlsxExport } from '@/components/shared/use-xlsx-export'
 import { ArchiveLeadDialog } from '@/components/curator/archive-lead-dialog'
 import { CuratorLeadRow } from '@/components/curator/curator-lead-row'
+import { CuratorReturnNotices } from '@/components/curator/curator-return-notices'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { StatusReminder } from '@/components/curator/status-reminder'
 import { EmptyState, PageHeader } from '@/components/page-parts'
@@ -224,6 +225,7 @@ export function CuratorLeadsView({
   return (
     <div className="relative flex w-full flex-col gap-5">
       <StatusReminder leads={leads} />
+      <CuratorReturnNotices />
 
       <PageHeader
         title="Обзор"
