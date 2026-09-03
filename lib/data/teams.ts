@@ -28,6 +28,20 @@ export interface Team {
   createdAt: string
 }
 
+/**
+ * Сводка по команде для аналитики (паритет админ = руководитель).
+ * `pool` — лиды, направленные в команду, но ещё не взятые кураторами
+ * (curator_id IS NULL); `claimed` — взятые в работу; `refused`/`left` —
+ * финальные исходы; `total` — все не-архивные лиды команды.
+ */
+export interface TeamStats {
+  pool: number
+  claimed: number
+  refused: number
+  left: number
+  total: number
+}
+
 interface TeamRow {
   id: string
   name: string
@@ -235,7 +249,7 @@ export async function setTeamMembers(input: {
                 WHERE id = ANY($1::uuid[]) AND role = 'curator'`,
               [curatorIds],
             )
-          ).rows.map((r) => r.id)
+          ).map((r) => r.id)
         : []
     const validManagers =
       managerIds.length > 0
@@ -245,7 +259,7 @@ export async function setTeamMembers(input: {
                 WHERE id = ANY($1::uuid[]) AND role = 'manager'`,
               [managerIds],
             )
-          ).rows.map((r) => r.id)
+          ).map((r) => r.id)
         : []
 
     const all = [...validCurators, ...validManagers]
@@ -257,6 +271,48 @@ export async function setTeamMembers(input: {
       ])
     }
   })
+}
+
+/**
+ * Сводка по каждой команде из переданного списка id (один запрос).
+ * Считаем не-архивные лиды команды: пул (не взят), взят, отказ, слив.
+ * Отсутствующие в результате команды получают нулевую сводку у вызывающего.
+ */
+export async function listTeamStats(
+  teamIds: string[],
+): Promise<Map<string, TeamStats>> {
+  const out = new Map<string, TeamStats>()
+  if (teamIds.length === 0) return out
+  const rows = await query<{
+    team_id: string
+    pool: number
+    claimed: number
+    refused: number
+    left: number
+    total: number
+  }>(
+    `SELECT lc.team_id,
+            count(*) FILTER (WHERE lc.curator_id IS NULL)::int AS pool,
+            count(*) FILTER (WHERE lc.curator_id IS NOT NULL)::int AS claimed,
+            count(*) FILTER (WHERE lc.status = 'refused')::int AS refused,
+            count(*) FILTER (WHERE lc.status = 'left')::int AS left,
+            count(*)::int AS total
+       FROM lead_cards lc
+      WHERE lc.team_id = ANY($1::uuid[])
+        AND lc.archived_at IS NULL
+      GROUP BY lc.team_id`,
+    [teamIds],
+  )
+  for (const r of rows) {
+    out.set(r.team_id, {
+      pool: r.pool,
+      claimed: r.claimed,
+      refused: r.refused,
+      left: r.left,
+      total: r.total,
+    })
+  }
+  return out
 }
 
 /** Активные кураторы и менеджеры без команды (для секции «Без команды»). */

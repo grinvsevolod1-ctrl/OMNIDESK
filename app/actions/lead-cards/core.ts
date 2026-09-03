@@ -274,62 +274,6 @@ export async function claimPoolLeadAction(input: {
     }
   }
 }
-  if (!input.fullName.trim()) {
-    return { ok: false, message: 'Укажите ФИО.' }
-  }
-  if (!input.city.trim()) {
-    return { ok: false, message: 'Укажите город.' }
-  }
-  if (input.curatorId && !input.curatorId.trim()) {
-    return { ok: false, message: 'Выберите менеджера по кадрам.' }
-  }
-  // Обязательные поля при ПЕРЕДАЧЕ лида менеджеру по кадрам. Обычное
-  // сохранение (в т.ч. тихий черновик для вложений через ensureCardId)
-  // остаётся мягким — иначе прикрепить файл к недозаполненной карточке
-  // стало бы невозможно.
-  if (input.curatorId) {
-    if (!input.telegramUsername.trim()) {
-      return { ok: false, message: 'Укажите Telegram (юзик) лида.' }
-    }
-    if (!input.vacancy.trim()) {
-      return { ok: false, message: 'Укажите вакансию / должность.' }
-    }
-  }
-
-  const resolved = await resolveCardManagerId(session, input.conversationId)
-  if (!resolved.ok) return resolved
-
-  try {
-    const { card, transferred, duplicateWarning } = await upsertLeadCard({
-      conversationId: input.conversationId,
-      managerId: resolved.managerId,
-      fullName: input.fullName,
-      phone: input.phone,
-      telegramUsername: input.telegramUsername,
-      telegramId: input.telegramId ?? '',
-      city: input.city,
-      address: input.address,
-      vacancy: input.vacancy,
-      curatorId: input.curatorId ?? null,
-      isAdmin: session.role === 'admin',
-    })
-    if (transferred && card.curatorId) {
-      void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
-    }
-
-    const warn = duplicateWarning ? ` ${duplicateWarning}` : ''
-    if (transferred) {
-      return {
-        ok: true,
-        message: `Лид передан менеджеру по кадрам${card.curatorName ? ` ${card.curatorName}` : ''}.${warn}`,
-      }
-    }
-    return { ok: true, message: `Карточка сохранена.${warn}` }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Ошибка сохранения'
-    return { ok: false, message: msg }
-  }
-}
 
 export async function listMyCuratorLeadsAction() {
   const session = await requireCurator()

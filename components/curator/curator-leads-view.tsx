@@ -400,7 +400,7 @@ export function CuratorLeadsView({
           {!searchExpanded ? (sort === 'newest' ? 'Новые' : 'Старые') : null}
         </Button>
 
-        {/* Выгрузка текущей вкладки в Excel ��� как у админа */}
+        {/* Выгрузка текущей вкладки в Excel — как у админа */}
         <Button
           variant="outline"
           size="sm"

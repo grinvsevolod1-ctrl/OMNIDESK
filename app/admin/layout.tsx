@@ -26,6 +26,7 @@ const nav: NavItem[] = [
         icon: 'managers',
       },
       { href: '/admin/heads', label: 'Руководители', icon: 'managers' },
+      { href: '/admin/teams', label: 'Команды', icon: 'managers' },
       { href: '/admin/buyers', label: 'Медиабайеры', icon: 'managers' },
       { href: '/admin/sources', label: 'Источники', icon: 'channels' },
     ],

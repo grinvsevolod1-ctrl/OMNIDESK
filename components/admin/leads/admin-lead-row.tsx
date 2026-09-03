@@ -191,7 +191,7 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         )}
       </span>
 
-      {/* Статус и «Нужно обновить» — одна я��ейка, левые края выровнены. */}
+      {/* Статус и «Нужно обновить» — одна ячейка, левые края выровнены. */}
       <span className="flex min-w-0 flex-wrap items-center gap-1.5">
         {needs ? (
           <Badge

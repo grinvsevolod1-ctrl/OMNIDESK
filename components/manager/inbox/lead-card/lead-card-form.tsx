@@ -66,10 +66,7 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
       <Field label="Город" required>
         <CityInput
           value={fields.city}
-          onValueChange={(v) => {
-            fields.setCity(v)
-            pickCurator(null)
-          }}
+          onValueChange={(v) => fields.setCity(v)}
           placeholder="Москва"
         />
         {cityRegion?.region ? (

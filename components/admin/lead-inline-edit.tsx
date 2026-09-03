@@ -248,7 +248,7 @@ export function CityInlineEditor({
         render={
           <button
             type="button"
-            // max-w-full + overflow-hidden: длинный «Город (Регион)» обрез��ется
+            // max-w-full + overflow-hidden: длинный «Город (Регион)» обрезается
             // внутри своей grid-ячейки и не наезжает на соседние колонки.
             className="inline-flex min-w-0 max-w-full overflow-hidden"
             aria-label="Изменить город"

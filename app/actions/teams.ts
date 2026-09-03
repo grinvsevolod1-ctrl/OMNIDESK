@@ -8,7 +8,7 @@
  * (/head) — гейт внутри каждого экшена.
  */
 import { revalidatePath } from 'next/cache'
-import { getSession, requireAdmin } from '@/lib/auth'
+import { getSession } from '@/lib/auth'
 import { query } from '@/lib/db'
 import { writeAudit } from '@/lib/data/audit'
 import { listHeads } from '@/lib/data/heads'
@@ -18,10 +18,12 @@ import {
   getTeamById,
   listTeams,
   listTeamsForHead,
+  listTeamStats,
   listUnassignedMembers,
   renameTeam,
   setTeamMembers,
 } from '@/lib/data/teams'
+import type { TeamStats } from '@/lib/data/teams'
 import type { ActionResult } from '@/lib/types'
 
 /** Сессия админа ИЛИ руководителя (обе роли управляют командами). */
@@ -59,10 +61,24 @@ export async function listTeamsAction() {
     listUnassignedMembers(),
   ])
   const heads = session.role === 'admin' ? await listHeads() : []
+  const statsMap = await listTeamStats(teams.map((t) => t.id))
+  // Плоский Record для сериализации в клиентский компонент (Map не проходит
+  // через границу RSC). Отсутствующие команды получают нулевую сводку.
+  const stats: Record<string, TeamStats> = {}
+  for (const t of teams) {
+    stats[t.id] = statsMap.get(t.id) ?? {
+      pool: 0,
+      claimed: 0,
+      refused: 0,
+      left: 0,
+      total: 0,
+    }
+  }
   return {
     teams,
     unassigned,
     heads,
+    stats,
     viewerRole: session.role,
     viewerId: session.sub,
   }
@@ -165,7 +181,7 @@ export async function setTeamMembersAction(input: {
                    OR team_id IN (SELECT id FROM teams WHERE head_id = $2))`,
           [requested, session.sub],
         )
-        const ok = new Set(allowed.rows.map((r) => r.id))
+        const ok = new Set(allowed.map((r) => r.id))
         curatorIds = curatorIds.filter((id) => ok.has(id))
         managerIds = managerIds.filter((id) => ok.has(id))
       }
