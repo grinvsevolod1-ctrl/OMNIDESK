@@ -1,12 +1,15 @@
 /**
- * Руководители (role = 'head', миграция 141): учётки в той же таблице
- * managers. Руководитель ведёт группу подчинённых двух видов:
- *   - кураторы (менеджеры по кадрам) — связь в head_curators (миграция 141);
- *   - менеджеры продаж — связь в head_managers (миграция 143).
- * Подчинённый принадлежит максимум одному руководителю. Руководитель видит
- * лидов СВОИХ кураторов (переданные, не в архиве) и СВОИХ менеджеров (не в
- * архиве); право на запись (поля/статусы/комментарии/передача) контролируется
- * флагом managers.head_can_edit.
+ * Руководители (role = 'head', миграция 141) поверх команд (миграция 150).
+ *
+ * Команда — единая орг-единица: руководитель владеет командой (teams.head_id),
+ * кураторы и менеджеры продаж входят в неё через managers.team_id. Прежние
+ * join-таблицы head_curators / head_managers удалены миграцией 150; этот модуль
+ * переписан поверх teams с СОХРАНЕНИЕМ сигнатур, поэтому вся ACL/аналитика
+ * руководителя (app/actions/heads.ts, shared.ts) работает без изменений.
+ *
+ * Руководитель видит лидов СВОИХ кураторов (переданные, не в архиве), СВОИХ
+ * менеджеров (не в архиве) и пул СВОИХ команд (ещё не разобранные лиды). Право
+ * на запись контролируется флагом managers.head_can_edit.
  */
 import { query, withTransaction } from '../db'
 import type { Manager } from '../types'
@@ -54,6 +57,34 @@ export async function setHeadCanEdit(
   )
 }
 
+/**
+ * Единственная команда руководителя (legacy-мостик): админский экран
+ * /admin/heads исторически назначает руководителю кураторов и менеджеров
+ * «одним списком». В модели команд это — состав его основной команды. Берём
+ * старейшую команду руководителя, а если её нет — создаём. Новый UB /admin/teams
+ * умеет несколько команд на руководителя; здесь работаем с основной.
+ */
+async function ensureHeadTeam(headId: string): Promise<string> {
+  const existing = await query<{ id: string }>(
+    `SELECT id FROM teams WHERE head_id = $1 ORDER BY created_at ASC LIMIT 1`,
+    [headId],
+  )
+  if (existing[0]) return existing[0].id
+  const name = await query<{ name: string }>(
+    `SELECT name FROM managers WHERE id = $1 LIMIT 1`,
+    [headId],
+  )
+  const label = `Команда ${name[0]?.name?.trim() || 'без имени'}`
+  const rows = await query<{ id: string }>(
+    `INSERT INTO teams (name, head_id) VALUES ($1, $2) RETURNING id`,
+    [label, headId],
+  )
+  return rows[0].id
+}
+
+/** SQL-подзапрос: id команд, которыми владеет руководитель. */
+const HEAD_TEAMS = `(SELECT id FROM teams WHERE head_id = $1)`
+
 /** Кураторы, закреплённые за руководителем (с числом активных лидов). */
 export interface HeadCurator extends Manager {
   activeLeads: number
@@ -68,9 +99,9 @@ export async function listCuratorsOfHead(
               WHERE lc.curator_id = m.id
                 AND lc.transferred_at IS NOT NULL
                 AND lc.archived_at IS NULL) AS active_leads
-       FROM head_curators hc
-       JOIN managers m ON m.id = hc.curator_id
-      WHERE hc.head_id = $1 AND m.role = 'curator'
+       FROM managers m
+      WHERE m.role = 'curator'
+        AND m.team_id IN ${HEAD_TEAMS}
       ORDER BY m.name`,
     [headId],
   )
@@ -79,22 +110,23 @@ export async function listCuratorsOfHead(
 
 /** Ids of the head's curators — the base of every head-scoped ACL check. */
 export async function listCuratorIdsOfHead(headId: string): Promise<string[]> {
-  const rows = await query<{ curator_id: string }>(
-    `SELECT curator_id FROM head_curators WHERE head_id = $1`,
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM managers
+      WHERE role = 'curator' AND team_id IN ${HEAD_TEAMS}`,
     [headId],
   )
-  return rows.map((r) => r.curator_id)
+  return rows.map((r) => r.id)
 }
 
-/** True when the curator belongs to this head's group. */
+/** True when the curator belongs to this head's team(s). */
 export async function isCuratorOfHead(
   headId: string,
   curatorId: string | null | undefined,
 ): Promise<boolean> {
   if (!curatorId) return false
   const rows = await query<{ ok: number }>(
-    `SELECT 1 AS ok FROM head_curators
-      WHERE head_id = $1 AND curator_id = $2 LIMIT 1`,
+    `SELECT 1 AS ok FROM managers
+      WHERE id = $2 AND role = 'curator' AND team_id IN ${HEAD_TEAMS} LIMIT 1`,
     [headId, curatorId],
   )
   return !!rows[0]
@@ -109,9 +141,11 @@ export async function mapCuratorHeads(): Promise<
     head_id: string
     head_name: string
   }>(
-    `SELECT hc.curator_id, hc.head_id, m.name AS head_name
-       FROM head_curators hc
-       JOIN managers m ON m.id = hc.head_id`,
+    `SELECT m.id AS curator_id, t.head_id, h.name AS head_name
+       FROM managers m
+       JOIN teams t ON t.id = m.team_id
+       JOIN managers h ON h.id = t.head_id
+      WHERE m.role = 'curator' AND t.head_id IS NOT NULL`,
   )
   const out = new Map<string, { headId: string; headName: string }>()
   for (const r of rows) {
@@ -121,16 +155,17 @@ export async function mapCuratorHeads(): Promise<
 }
 
 /**
- * Полная замена состава группы руководителя. Куратор может принадлежать
- * только одному руководителю: выбранные кураторы сначала выводятся из чужих
- * групп (UNIQUE(curator_id) иначе упадёт), затем закрепляются за этим.
+ * Полная замена КУРАТОРСКОГО состава основной команды руководителя.
+ * Legacy-мостик для /admin/heads: сохраняет менеджеров команды, заменяет
+ * только кураторов. Выбранные кураторы выводятся из чужих команд и
+ * закрепляются за этой (managers.team_id — одна команда на человека).
  */
 export async function setHeadCurators(
   headId: string,
   curatorIds: string[],
 ): Promise<void> {
   const unique = [...new Set(curatorIds)].filter(Boolean)
-  // Санитизация: только существующие кураторы (не менеджеры, не руководители).
+  const teamId = await ensureHeadTeam(headId)
   const valid =
     unique.length > 0
       ? await query<{ id: string }>(
@@ -141,18 +176,16 @@ export async function setHeadCurators(
   const ids = valid.map((r) => r.id)
 
   await withTransaction(async (db) => {
-    await db.query(`DELETE FROM head_curators WHERE head_id = $1`, [headId])
+    // Убрать из этой команды прежних кураторов (менеджеров не трогаем).
+    await db.query(
+      `UPDATE managers SET team_id = NULL
+        WHERE team_id = $1 AND role = 'curator'`,
+      [teamId],
+    )
     if (ids.length > 0) {
-      // Забрать кураторов из чужих групп (переезд между руководителями).
       await db.query(
-        `DELETE FROM head_curators WHERE curator_id = ANY($1::uuid[])`,
-        [ids],
-      )
-      await db.query(
-        `INSERT INTO head_curators (head_id, curator_id)
-         SELECT $1, unnest($2::uuid[])
-         ON CONFLICT DO NOTHING`,
-        [headId, ids],
+        `UPDATE managers SET team_id = $2 WHERE id = ANY($1::uuid[])`,
+        [ids, teamId],
       )
     }
   })
@@ -173,9 +206,9 @@ export async function listManagersOfHead(
             (SELECT COUNT(*)::int FROM lead_cards lc
               WHERE lc.manager_id = m.id
                 AND lc.archived_at IS NULL) AS active_leads
-       FROM head_managers hm
-       JOIN managers m ON m.id = hm.manager_id
-      WHERE hm.head_id = $1 AND m.role = 'manager'
+       FROM managers m
+      WHERE m.role = 'manager'
+        AND m.team_id IN ${HEAD_TEAMS}
       ORDER BY m.name`,
     [headId],
   )
@@ -184,22 +217,23 @@ export async function listManagersOfHead(
 
 /** Ids менеджеров руководителя. */
 export async function listManagerIdsOfHead(headId: string): Promise<string[]> {
-  const rows = await query<{ manager_id: string }>(
-    `SELECT manager_id FROM head_managers WHERE head_id = $1`,
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM managers
+      WHERE role = 'manager' AND team_id IN ${HEAD_TEAMS}`,
     [headId],
   )
-  return rows.map((r) => r.manager_id)
+  return rows.map((r) => r.id)
 }
 
-/** True, когда менеджер входит в группу этого руководителя. */
+/** True, когда менеджер входит в команду(ы) этого руководителя. */
 export async function isManagerOfHead(
   headId: string,
   managerId: string | null | undefined,
 ): Promise<boolean> {
   if (!managerId) return false
   const rows = await query<{ ok: number }>(
-    `SELECT 1 AS ok FROM head_managers
-      WHERE head_id = $1 AND manager_id = $2 LIMIT 1`,
+    `SELECT 1 AS ok FROM managers
+      WHERE id = $2 AND role = 'manager' AND team_id IN ${HEAD_TEAMS} LIMIT 1`,
     [headId, managerId],
   )
   return !!rows[0]
@@ -214,9 +248,11 @@ export async function mapManagerHeads(): Promise<
     head_id: string
     head_name: string
   }>(
-    `SELECT hm.manager_id, hm.head_id, m.name AS head_name
-       FROM head_managers hm
-       JOIN managers m ON m.id = hm.head_id`,
+    `SELECT m.id AS manager_id, t.head_id, h.name AS head_name
+       FROM managers m
+       JOIN teams t ON t.id = m.team_id
+       JOIN managers h ON h.id = t.head_id
+      WHERE m.role = 'manager' AND t.head_id IS NOT NULL`,
   )
   const out = new Map<string, { headId: string; headName: string }>()
   for (const r of rows) {
@@ -226,16 +262,15 @@ export async function mapManagerHeads(): Promise<
 }
 
 /**
- * Полная замена состава менеджеров группы. Менеджер принадлежит только одному
- * руководителю: выбранные сначала выводятся из чужих групп (UNIQUE(manager_id)
- * иначе упадёт), затем закрепляются за этим. Полный аналог setHeadCurators.
+ * Полная замена МЕНЕДЖЕРСКОГО состава основной команды руководителя.
+ * Legacy-мостик для /admin/heads: сохраняет кураторов, заменяет менеджеров.
  */
 export async function setHeadManagers(
   headId: string,
   managerIds: string[],
 ): Promise<void> {
   const unique = [...new Set(managerIds)].filter(Boolean)
-  // Санитизация: только существующие менеджеры продаж (не кураторы/руководители).
+  const teamId = await ensureHeadTeam(headId)
   const valid =
     unique.length > 0
       ? await query<{ id: string }>(
@@ -246,18 +281,15 @@ export async function setHeadManagers(
   const ids = valid.map((r) => r.id)
 
   await withTransaction(async (db) => {
-    await db.query(`DELETE FROM head_managers WHERE head_id = $1`, [headId])
+    await db.query(
+      `UPDATE managers SET team_id = NULL
+        WHERE team_id = $1 AND role = 'manager'`,
+      [teamId],
+    )
     if (ids.length > 0) {
-      // Забрать менеджеров из чужих групп (переезд между руководителями).
       await db.query(
-        `DELETE FROM head_managers WHERE manager_id = ANY($1::uuid[])`,
-        [ids],
-      )
-      await db.query(
-        `INSERT INTO head_managers (head_id, manager_id)
-         SELECT $1, unnest($2::uuid[])
-         ON CONFLICT DO NOTHING`,
-        [headId, ids],
+        `UPDATE managers SET team_id = $2 WHERE id = ANY($1::uuid[])`,
+        [ids, teamId],
       )
     }
   })
@@ -266,11 +298,12 @@ export async function setHeadManagers(
 /* ---------------------------- Лиды руководителя --------------------------- */
 
 /**
- * Лиды всей группы руководителя одним запросом без дублей:
+ * Лиды всех команд руководителя одним запросом без дублей:
  *   - карточки его КУРАТОРОВ — только переданные (transferred_at IS NOT NULL);
- *   - карточки его МЕНЕДЖЕРОВ — любые (лиды в воронке до передачи).
- * Обе ветки исключают архив. Сортировка — по времени передачи, а для
- * ещё не переданных менеджерских лидов по времени создания.
+ *   - карточки его МЕНЕДЖЕРОВ — любые (лиды в воронке до передачи);
+ *   - пул его КОМАНД — лиды, направленные в команду, но ещё не разобранные
+ *     (team_id команды руководителя, curator_id IS NULL).
+ * Все ветки исключают архив. Сортировка — по времени передачи/создания.
  */
 export async function listLeadCardsForHead(
   headId: string,
@@ -283,13 +316,15 @@ export async function listLeadCardsForHead(
       WHERE lc.archived_at IS NULL
         AND (
           (lc.curator_id IN (
-                SELECT curator_id FROM head_curators WHERE head_id = $1
-              )
+              SELECT id FROM managers
+               WHERE role = 'curator' AND team_id IN ${HEAD_TEAMS}
+             )
            AND lc.transferred_at IS NOT NULL)
-          OR
-          lc.manager_id IN (
-            SELECT manager_id FROM head_managers WHERE head_id = $1
-          )
+          OR lc.manager_id IN (
+              SELECT id FROM managers
+               WHERE role = 'manager' AND team_id IN ${HEAD_TEAMS}
+            )
+          OR (lc.team_id IN ${HEAD_TEAMS} AND lc.curator_id IS NULL)
         )
       ORDER BY COALESCE(lc.transferred_at, lc.created_at) DESC`,
     [headId],

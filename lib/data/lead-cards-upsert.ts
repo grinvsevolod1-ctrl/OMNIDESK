@@ -23,8 +23,14 @@ export interface UpsertLeadCardInput {
   city: string
   address: string
   vacancy: string
-  /** When set, the card is transferred to this curator. */
+  /** When set, the card is transferred to this curator (admin/legacy direct assign). */
   curatorId?: string | null
+  /**
+   * When set (and no curatorId), the card is routed to this TEAM'S POOL
+   * (миграция 150): team_id проставляется, curator_id остаётся NULL, лид
+   * разбирают кураторы вручную (claim). Основной путь передачи для менеджера.
+   */
+  teamId?: string | null
   /** True when the caller is an admin (may reassign an already-assigned lead). */
   isAdmin?: boolean
 }
@@ -33,6 +39,8 @@ export interface UpsertLeadCardResult {
   card: LeadCard
   /** True when the curator changed in this call (fresh transfer happened). */
   transferred: boolean
+  /** True when the lead was freshly routed to a team pool in this call. */
+  pooled: boolean
   /** Non-blocking duplicate warning, if any. */
   duplicateWarning: string | null
 }
@@ -86,6 +94,8 @@ export async function upsertLeadCard(
   const address = input.address.trim()
   const vacancy = input.vacancy.trim()
   const curatorId = input.curatorId?.trim() || null
+  // Пуловая маршрутизация в команду — только если явный куратор не задан.
+  const teamId = !curatorId ? input.teamId?.trim() || null : null
 
   if (curatorId) {
     const ok = await query<{ id: string }>(
@@ -96,12 +106,20 @@ export async function upsertLeadCard(
     )
     if (!ok[0]) throw new Error('Curator not found or inactive')
   }
+  if (teamId) {
+    const ok = await query<{ id: string }>(
+      `SELECT id FROM teams WHERE id = $1 LIMIT 1`,
+      [teamId],
+    )
+    if (!ok[0]) throw new Error('Команда не найдена')
+  }
 
   let existing = await query<{
     id: string
     curator_id: string | null
+    team_id: string | null
   }>(
-    `SELECT id, curator_id FROM lead_cards WHERE conversation_id = $1 LIMIT 1`,
+    `SELECT id, curator_id, team_id FROM lead_cards WHERE conversation_id = $1 LIMIT 1`,
     [input.conversationId],
   )
 
@@ -113,7 +131,13 @@ export async function upsertLeadCard(
       input.conversationId,
     ).catch(() => null)
     if (contactMatch) {
-      existing = [{ id: contactMatch.id, curator_id: contactMatch.curatorId }]
+      existing = [
+        {
+          id: contactMatch.id,
+          curator_id: contactMatch.curatorId,
+          team_id: contactMatch.teamId,
+        },
+      ]
     }
   }
 
@@ -125,6 +149,52 @@ export async function upsertLeadCard(
 
   if (existing[0]) {
     const prevCuratorId = existing[0].curator_id
+    const prevTeamId = existing[0].team_id
+
+    // Пуловая маршрутизация в команду: лид «только зашёл» и ещё не разобран.
+    // Свежая маршрутизация — только если лид не закреплён за куратором и ещё
+    // не в пуле (повторное сохранение менеджером не плодит передачи).
+    if (teamId) {
+      const isFreshPool = prevCuratorId === null && prevTeamId === null
+      await query(
+        `UPDATE lead_cards
+            SET full_name = $2, phone = $3, telegram_username = $4,
+                telegram_id = $5, city = $6, address = $7, vacancy = $8,
+                manager_id = $9,
+                team_id = CASE WHEN $11::boolean THEN $10 ELSE team_id END,
+                transferred_at = CASE WHEN $11::boolean THEN now() ELSE transferred_at END,
+                status = CASE WHEN $11::boolean THEN 'new' ELSE status END,
+                previous_status = CASE
+                  WHEN $11::boolean THEN COALESCE(status, previous_status)
+                  ELSE previous_status END,
+                status_confirmed_at = CASE WHEN $11::boolean THEN NULL ELSE status_confirmed_at END,
+                status_confirmed_date = CASE WHEN $11::boolean THEN NULL ELSE status_confirmed_date END,
+                updated_at = now()
+          WHERE id = $1`,
+        [
+          existing[0].id,
+          fullName,
+          phone,
+          telegramUsername,
+          telegramId,
+          city,
+          address,
+          vacancy,
+          input.managerId,
+          teamId,
+          isFreshPool,
+        ],
+      )
+      const card = await getLeadCardById(existing[0].id)
+      if (!card) throw new Error('Lead card update failed')
+      return {
+        card,
+        transferred: false,
+        pooled: isFreshPool,
+        duplicateWarning,
+      }
+    }
+
     const isReassign =
       curatorId !== null && prevCuratorId !== null && curatorId !== prevCuratorId
 
@@ -201,24 +271,29 @@ export async function upsertLeadCard(
 
     const card = await getLeadCardById(existing[0].id)
     if (!card) throw new Error('Lead card update failed')
-    return { card, transferred: isFreshTransfer, duplicateWarning }
+    return { card, transferred: isFreshTransfer, pooled: false, duplicateWarning }
   }
 
   const id = randomUUID()
+  // Свежесозданная карточка передаётся сразу, если задан куратор (legacy/admin)
+  // ЛИБО команда (пуловая маршрутизация): в обоих случаях transferred_at = now,
+  // статус NEW. team_id заполняется только для пуловой ветки.
+  const transferredNow = Boolean(curatorId) || Boolean(teamId)
   await query(
     `INSERT INTO lead_cards (
-       id, conversation_id, manager_id, curator_id,
+       id, conversation_id, manager_id, curator_id, team_id,
        full_name, phone, telegram_username, telegram_id, city, address, vacancy,
        transferred_at, status, traffic_source_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               CASE WHEN $4::uuid IS NOT NULL THEN now() ELSE NULL END,
-               CASE WHEN $4::uuid IS NOT NULL THEN 'new' ELSE NULL END,
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+               CASE WHEN $13::boolean THEN now() ELSE NULL END,
+               CASE WHEN $13::boolean THEN 'new' ELSE NULL END,
                (SELECT traffic_source_id FROM managers WHERE id = $3))`,
     [
       id,
       input.conversationId,
       input.managerId,
       curatorId,
+      teamId,
       fullName,
       phone,
       telegramUsername,
@@ -226,6 +301,7 @@ export async function upsertLeadCard(
       city,
       address,
       vacancy,
+      transferredNow,
     ],
   )
 
@@ -241,5 +317,10 @@ export async function upsertLeadCard(
 
   const card = await getLeadCardById(id)
   if (!card) throw new Error('Lead card create failed')
-  return { card, transferred: Boolean(curatorId), duplicateWarning }
+  return {
+    card,
+    transferred: Boolean(curatorId),
+    pooled: Boolean(teamId),
+    duplicateWarning,
+  }
 }

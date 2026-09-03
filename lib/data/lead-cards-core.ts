@@ -31,6 +31,10 @@ export interface LeadCard {
   transferredAt: string | null
   /** Set when the lead left the active workspace (final status, migration 117). */
   archivedAt: string | null
+  /** Команда-пул, в которую направлен лид (миграция 150); null — вне команд. */
+  teamId: string | null
+  /** true — лид в пуле команды (направлен, но ещё не взят): teamId есть, curatorId нет. */
+  isPool: boolean
   /** Источник трафика на момент обращения (миграция 145); null — не атрибутирован. */
   trafficSourceId: string | null
   trafficSourceName: string | null
@@ -91,6 +95,7 @@ export interface LeadCardRow {
   status_confirmed_date: string | Date | null
   transferred_at: string | Date | null
   archived_at: string | Date | null
+  team_id: string | null
   traffic_source_id: string | null
   traffic_source_name?: string | null
   created_at: string | Date
@@ -153,6 +158,9 @@ export function toLeadCard(r: LeadCardRow): LeadCard {
       ? new Date(r.transferred_at).toISOString()
       : null,
     archivedAt: r.archived_at ? new Date(r.archived_at).toISOString() : null,
+    teamId: r.team_id ?? null,
+    // Пул: направлен в команду, но ещё не взят куратором.
+    isPool: !!r.team_id && !r.curator_id,
     trafficSourceId: r.traffic_source_id ?? null,
     trafficSourceName: r.traffic_source_name ?? null,
     createdAt: new Date(r.created_at).toISOString(),
@@ -179,7 +187,7 @@ export const CARD_SELECT = `
   lc.id, lc.conversation_id, lc.manager_id, lc.curator_id,
   lc.full_name, lc.phone, lc.telegram_username, lc.telegram_id, lc.city, lc.address, lc.vacancy,
   lc.status, lc.previous_status, lc.status_confirmed_at, lc.status_confirmed_date,
-  lc.transferred_at, lc.archived_at, lc.traffic_source_id, lc.created_at, lc.updated_at,
+  lc.transferred_at, lc.archived_at, lc.team_id, lc.traffic_source_id, lc.created_at, lc.updated_at,
   (SELECT ts.name FROM traffic_sources ts WHERE ts.id = lc.traffic_source_id)
     AS traffic_source_name,
   m.name AS manager_name,

@@ -29,7 +29,7 @@ import { exportMyLeadsExcelAction } from '@/app/actions/leads-export'
 import { useXlsxExport } from '@/components/shared/use-xlsx-export'
 import { ArchiveLeadDialog } from '@/components/curator/archive-lead-dialog'
 import { CuratorLeadRow } from '@/components/curator/curator-lead-row'
-import { CuratorReturnNotices } from '@/components/curator/curator-return-notices'
+import { CuratorNotices } from '@/components/curator/curator-notices'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { StatusReminder } from '@/components/curator/status-reminder'
 import { EmptyState, PageHeader } from '@/components/page-parts'
@@ -96,8 +96,10 @@ export function CuratorLeadsView({
   const [tab, setTab] = useState<'active' | 'archive'>('active')
   const [visible, setVisible] = useState(PAGE)
 
+  // Пуловые лиды (ещё не взяты) НЕ считаются «требующими статуса» — они пока
+  // не закреплены за куратором и не блокируют рабочее место.
   const pendingLeads = useMemo(
-    () => leads.filter((l) => leadNeedsDailyStatus(l)),
+    () => leads.filter((l) => !l.isPool && leadNeedsDailyStatus(l)),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick re-evaluates the deadline
     [leads, tick],
   )
@@ -155,6 +157,27 @@ export function CuratorLeadsView({
       })
     },
     [refresh, leads, archived],
+  )
+
+  // «Взять в работу» пуловый лид: закрепляется за этим куратором (race-safe
+  // на сервере). После успеха — перечитываем список: лид уходит из пула в
+  // закреплённые, у остальных кураторов он пропадёт при их обновлении.
+  const claimLead = useCallback(
+    (id: string) => {
+      startTransition(async () => {
+        const { claimPoolLeadAction } = await import(
+          '@/app/actions/lead-cards'
+        )
+        const res = await claimPoolLeadAction({ leadCardId: id })
+        if (res.ok) {
+          toast.success(res.message)
+          await refresh()
+        } else {
+          toast.error(res.message)
+        }
+      })
+    },
+    [refresh],
   )
 
   // Выгрузка текущей вкладки (активные/архив) в Excel — общий флоу
@@ -224,8 +247,8 @@ export function CuratorLeadsView({
   // keep only the local column layout here to avoid double padding.
   return (
     <div className="relative flex w-full flex-col gap-5">
-      <StatusReminder leads={leads} />
-      <CuratorReturnNotices />
+      <StatusReminder leads={leads.filter((l) => !l.isPool)} />
+      <CuratorNotices onLeadsChanged={() => void refresh()} />
 
       <PageHeader
         title="Обзор"
@@ -377,7 +400,7 @@ export function CuratorLeadsView({
           {!searchExpanded ? (sort === 'newest' ? 'Новые' : 'Старые') : null}
         </Button>
 
-        {/* Выгрузка текущей вкладки в Excel — как у админа */}
+        {/* Выгрузка текущей вкладки в Excel ��� как у админа */}
         <Button
           variant="outline"
           size="sm"
@@ -460,6 +483,7 @@ export function CuratorLeadsView({
               pending={pending}
               onOpen={openLead}
               onToggleArchive={toggleArchive}
+              onClaim={claimLead}
               onRefresh={refreshRows}
             />
           ))}
@@ -476,6 +500,7 @@ export function CuratorLeadsView({
                 pending={pending}
                 onOpen={openLead}
                 onToggleArchive={toggleArchive}
+                onClaim={claimLead}
                 onRefresh={refreshRows}
               />
             ))}

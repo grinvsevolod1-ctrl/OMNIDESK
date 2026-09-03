@@ -5,13 +5,11 @@ import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
   addLeadCommentAction,
-  findCuratorsByCityAction,
   getCityRegionAction,
   getLeadCardAction,
   getLeadCardDetailAction,
   saveLeadCardAction,
 } from '@/app/actions/lead-cards'
-import type { CuratorWithLoad } from '@/lib/data/lead-cards'
 
 export interface LeadCardDefaults {
   fullName?: string
@@ -67,10 +65,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
   // «Курьер» — вакансия по умолчанию: должна стоять всегда, менеджер меняет
   // только в исключительных случаях.
   const [vacancy, setVacancy] = useState(DEFAULT_VACANCY)
-  const [curatorId, setCuratorId] = useState<string | null>(null)
   const [transferredAt, setTransferredAt] = useState<string | null>(null)
-  // true — куратор подставлен автоматически по городу/области (не кликом).
-  const [autoPicked, setAutoPicked] = useState(false)
   // Снимок последнего сохранённого/загруженного состояния полей — по нему
   // определяем «грязность» формы для автосохранения при закрытии карточки.
   const savedSnapshotRef = useRef<string>('')
@@ -96,7 +91,6 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
       setCity(fields.city)
       setAddress(fields.address)
       setVacancy(fields.vacancy)
-      setCuratorId(card.curatorId)
       setTransferredAt(card.transferredAt)
       savedSnapshotRef.current = makeSnapshot(fields)
     } else {
@@ -119,7 +113,6 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
       setCity(fields.city)
       setAddress(fields.address)
       setVacancy(fields.vacancy)
-      setCuratorId(null)
       setTransferredAt(null)
       savedSnapshotRef.current = makeSnapshot(fields)
     }
@@ -142,9 +135,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     setCity(defaults?.city ?? '')
     setAddress('')
     setVacancy(DEFAULT_VACANCY)
-    setCuratorId(null)
     setTransferredAt(null)
-    setAutoPicked(false)
   }
 
   // Снапшот дефолтов для нового диалога — в эффекте (не в render-сбросе выше:
@@ -204,7 +195,6 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
         city,
         address,
         vacancy,
-        curatorId: null,
       })
       if (res.ok) {
         savedSnapshotRef.current = snapshot
@@ -244,7 +234,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
   }
 
   // Сообщаем инбоксу об открытии/закрытии карточки: медиа-режим (кружки/фото)
-  // существует только рядом с открытой карточкой — при её закрытии бар
+  // существует только ря��ом с открытой карточкой — при её закрытии бар
   // навигации тоже закрывается и раскладка возвращается в исходное состояние
   // (иначе оставался правый отступ под карточку — «чёрный экран»).
   useEffect(() => {
@@ -278,22 +268,10 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     }
   }, [open])
 
-  // Curator search by city (SWR keyed by the trimmed query).
-  //
-  // ВАЖНО: НЕ используем keepPreviousData. Раньше при смене города SWR отдавал
-  // кураторов ПРЕДЫДУЩЕГО города, пока грузился новый запрос, и автоподбор ниже
-  // подставлял стейл-куратора. В UI список успевал обновиться на новый город, а
-  // curatorId оставался от старого — лид передавался не тому, кого видит
-  // менеджер. Без keepPreviousData данные при смене города обнуляются, и
-  // автоподбор всегда работает по актуальному списку.
+  // Город нужен для маршрутизации в пул команды по региону (миграция 150),
+  // но конкретного куратора менеджер больше НЕ выбирает — систему разбирают
+  // кураторы команды сами (claim). Здесь оставлена только подсказка области.
   const cityQuery = open ? city.trim() : ''
-  const { data: curatorsData, isLoading: searching } = useSWR(
-    cityQuery.length >= 2 ? ['curator-city-search', cityQuery] : null,
-    () => findCuratorsByCityAction(cityQuery),
-    { revalidateOnFocus: false, dedupingInterval: 300 },
-  )
-  const curators: CuratorWithLoad[] =
-    cityQuery.length >= 2 ? (curatorsData ?? []) : []
 
   // Область введённого города (миграция 124): подтягивается автоматически и
   // показывается менеджеру под полем «Город» — видно, по какой области
@@ -305,46 +283,6 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
   )
   const cityRegion =
     cityQuery.length >= 2 ? (cityRegionData ?? null) : null
-
-  // Автовыбор куратора: как только по городу/области нашлись кураторы и
-  // менеджер ещё никого не выбрал — подставляем первого (наименее
-  // загруженного; сортировка приходит с сервера). Ручной клик по другому
-  // куратору перекрывает автовыбор; смена города сбрасывает выбор и
-  // автоподбор срабатывает заново. State adjustment during render — тот же
-  // паттерн, что и сброс полей при смене диалога выше (без setState в эффекте).
-  //
-  // Выбор ВСЕГДА привязан к актуальному списку текущего города: если ранее
-  // выбранного/автоподобранного куратора нет в свежих результатах (город
-  // сменили) — сбрасываем и переподбираем по новому списку. Иначе можно было
-  // бы передать лид куратору, которого менеджер уже не видит в списке.
-  const dataReady = cityQuery.length >= 2 && !searching
-  const selectionValid =
-    curatorId !== null && curators.some((c) => c.id === curatorId)
-  const autoCandidate =
-    open && !transferredAt && dataReady && !selectionValid
-      ? (curators[0] ?? null)
-      : null
-  if (autoCandidate && autoCandidate.id !== curatorId) {
-    setCuratorId(autoCandidate.id)
-    setAutoPicked(true)
-  } else if (
-    open &&
-    !transferredAt &&
-    dataReady &&
-    curatorId !== null &&
-    !selectionValid &&
-    curators.length === 0
-  ) {
-    // Для нового города кураторов нет — снимаем стейл-выбор, чтобы кнопка
-    // «Передать» не отправила лид на куратора прошлого города.
-    setCuratorId(null)
-    setAutoPicked(false)
-  }
-
-  function pickCurator(id: string | null) {
-    setCuratorId(id)
-    setAutoPicked(false)
-  }
 
   // Детали карточки (статусы/комментарии менеджера по кадрам + вложения) — после сохранения.
   const { data: detail, mutate: mutateDetail } = useSWR(
@@ -370,6 +308,12 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     })
   }
 
+  /**
+   * Передача лида (миграция 150): уходит в ПУЛ команды менеджера, кураторы
+   * разбирают вручную (claim). Конкретный куратор здесь не выбирается, поэтому
+   * авто-вставка контакта куратора в композер убрана — куратор станет известен
+   * только после того, как возьмёт лид в работу.
+   */
   function save(transfer: boolean) {
     startTransition(async () => {
       const res = await saveLeadCardAction({
@@ -381,7 +325,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
         city,
         address,
         vacancy,
-        curatorId: transfer ? curatorId : null,
+        transferToTeam: transfer,
       })
       if (res.ok) {
         toast.success(res.message)
@@ -397,24 +341,6 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
         if (transfer) {
           setTransferredAt(new Date().toISOString())
           setOpen(false)
-          // После передачи менеджер отправляет кандидату контакт куратора:
-          // подставляем готовый текст в поле ввода этого диалога. Контакт —
-          // «Telegram для кандидатов» из настроек куратора (миграция 146),
-          // фолбэк — его логин в системе.
-          const curator = curators.find((c) => c.id === curatorId)
-          const handle =
-            curator?.telegramContact ??
-            (curator?.username ? `@${curator.username}` : null)
-          if (handle) {
-            window.dispatchEvent(
-              new CustomEvent('omnidesk:composer-insert', {
-                detail: {
-                  conversationId,
-                  text: `Напиши ему ( ${handle} ) мне нужна работа`,
-                },
-              }),
-            )
-          }
         }
         // Подхватить id только что созданной карточки — открывает блок
         // файлов/комментариев без повторного открытия панели.
@@ -440,7 +366,6 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
       city,
       address,
       vacancy,
-      curatorId: null,
     })
     if (!res.ok) {
       toast.error(res.message)
@@ -499,13 +424,7 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
       vacancy,
       setVacancy,
     },
-    // curators
-    curators,
-    searching,
-    curatorId,
-    setCuratorId,
-    pickCurator,
-    autoPicked,
+    // city region hint (для маршрутизации в пул по региону)
     cityRegion,
     // card / detail
     cardId,

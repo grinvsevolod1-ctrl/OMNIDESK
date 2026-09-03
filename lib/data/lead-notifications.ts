@@ -6,7 +6,9 @@
  */
 import { query } from '../db'
 
-export type LeadNotificationKind = 'lead_returned_from_archive'
+export type LeadNotificationKind =
+  | 'lead_returned_from_archive'
+  | 'lead_pool_available'
 
 export interface LeadNotification {
   id: string
@@ -62,6 +64,25 @@ export async function createLeadNotification(input: {
       input.leadName ?? null,
     ],
   )
+}
+
+/**
+ * Погасить все уведомления по лиду данного вида (например, когда пуловый лид
+ * взят в работу — остальным кураторам он больше не «светится» модалкой).
+ * Best-effort. Возврат: сколько погашено.
+ */
+export async function resolveNotificationsForLead(
+  leadCardId: string,
+  kind: LeadNotificationKind,
+): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `UPDATE lead_notifications
+        SET seen_at = now()
+      WHERE lead_card_id = $1 AND kind = $2 AND seen_at IS NULL
+      RETURNING id`,
+    [leadCardId, kind],
+  )
+  return rows.length
 }
 
 /** Unseen notices for a recipient, newest first (small cap — modal queue). */

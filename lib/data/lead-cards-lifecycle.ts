@@ -108,6 +108,64 @@ export async function transferLeadToCurator(
 }
 
 /**
+ * Куратор берёт пуловый лид в работу (миграция 150). Гонка исключена
+ * атомарным UPDATE: закрепляем лид ТОЛЬКО если он ещё не взят
+ * (curator_id IS NULL) и находится в команде куратора. Кто первый — за тем
+ * лид; остальные получают null (лид уже взят). На успехе — запись передачи
+ * (null → me) и возврат карточки; уведомления пула гасит вызывающий action.
+ *
+ * Возврат: карточка при успехе, либо null если лид уже взят / не в пуле /
+ * не в команде куратора.
+ */
+export async function claimPoolLead(input: {
+  leadCardId: string
+  curatorId: string
+}): Promise<LeadCard | null> {
+  const claimedId = await withTransaction(async (db) => {
+    // Куратор должен быть активным и состоять в команде.
+    const me = await db.query<{ team_id: string | null }>(
+      `SELECT team_id FROM managers
+        WHERE id = $1 AND role = 'curator' AND status = 'active' LIMIT 1`,
+      [input.curatorId],
+    )
+    const myTeam = me[0]?.team_id
+    if (!myTeam) return null
+
+    const upd = await db.query<{ id: string }>(
+      `UPDATE lead_cards
+          SET curator_id = $2,
+              status = 'new',
+              transferred_at = COALESCE(transferred_at, now()),
+              status_confirmed_at = NULL,
+              status_confirmed_date = NULL,
+              updated_at = now()
+        WHERE id = $1
+          AND curator_id IS NULL
+          AND team_id = $3
+          AND archived_at IS NULL
+        RETURNING id`,
+      [input.leadCardId, input.curatorId, myTeam],
+    )
+    if (!upd[0]) return null
+
+    await recordTransfer(
+      {
+        leadCardId: input.leadCardId,
+        fromCuratorId: null,
+        toCuratorId: input.curatorId,
+        initiatedById: input.curatorId,
+        initiatedByRole: 'curator',
+      },
+      db,
+    )
+    return upd[0].id
+  })
+
+  if (!claimedId) return null
+  return getLeadCardById(claimedId)
+}
+
+/**
  * Curator confirms today's status for a lead. Always requires a comment
  * (>= STATUS_COMMENT_MIN_LEN). Moves the previous confirmed status into
  * previous_status when the day changes.

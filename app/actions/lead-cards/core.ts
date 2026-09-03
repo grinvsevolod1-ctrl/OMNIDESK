@@ -11,6 +11,7 @@
 import { getSession, requireCurator } from '@/lib/auth'
 import {
   addLeadComment,
+  claimPoolLead,
   editLeadComment,
   findCuratorsByCity,
   findLeadCardForContact,
@@ -24,6 +25,14 @@ import {
   updateLeadStatus,
   upsertLeadCard,
 } from '@/lib/data/lead-cards'
+import {
+  createLeadNotification,
+  resolveNotificationsForLead,
+} from '@/lib/data/lead-notifications'
+import {
+  getManagerTeamId,
+  resolveTeamPoolTargets,
+} from '@/lib/data/teams'
 import { listLeadAttachments } from '@/lib/data/lead-attachments'
 import {
   isLeadStatus,
@@ -109,6 +118,13 @@ export async function saveLeadCardAction(input: {
   city: string
   address: string
   vacancy: string
+  /**
+   * Менеджерский путь передачи (миграция 150): лид уходит в ПУЛ команды
+   * менеджера и разбирается кураторами вручную (claim). Заменяет прежний
+   * выбор конкретного куратора.
+   */
+  transferToTeam?: boolean
+  /** Прямое закрепление за куратором — только для админа (legacy/реассайн). */
   curatorId?: string | null
 }): Promise<LeadCardActionResult> {
   const session = await requireManagerOrAdmin()
@@ -116,6 +132,148 @@ export async function saveLeadCardAction(input: {
   if (!input.conversationId) {
     return { ok: false, message: 'Диалог не указан.' }
   }
+  if (!input.fullName.trim()) {
+    return { ok: false, message: 'Укажите ФИО.' }
+  }
+  if (!input.city.trim()) {
+    return { ok: false, message: 'Укажите город.' }
+  }
+
+  const isTransfer = !!input.transferToTeam || !!input.curatorId?.trim()
+  // Обязательные поля при ПЕРЕДАЧЕ лида. Обычное сохранение (в т.ч. тихий
+  // черновик для вложений через ensureCardId) остаётся мягким — иначе
+  // прикрепить файл к недозаполненной карточке стало бы невозможно.
+  if (isTransfer) {
+    if (!input.telegramUsername.trim()) {
+      return { ok: false, message: 'Укажите Telegram (юзик) лида.' }
+    }
+    if (!input.vacancy.trim()) {
+      return { ok: false, message: 'Укажите вакансию / должность.' }
+    }
+  }
+
+  const resolved = await resolveCardManagerId(session, input.conversationId)
+  if (!resolved.ok) return resolved
+
+  // Команда-пул: менеджер передаёт в СВОЮ команду. Без команды передача
+  // заблокирована — так руководитель/админ обязаны сперва назначить менеджера
+  // в команду (данные не теряются, лид не уходит «в никуда»).
+  let teamId: string | null = null
+  if (input.transferToTeam && !input.curatorId) {
+    teamId = await getManagerTeamId(resolved.managerId)
+    if (!teamId) {
+      return {
+        ok: false,
+        message:
+          'Вы не состоите ни в одной команде — передача недоступна. Обратитесь к руководителю или администратору.',
+      }
+    }
+  }
+
+  try {
+    const { card, transferred, pooled, duplicateWarning } = await upsertLeadCard({
+      conversationId: input.conversationId,
+      managerId: resolved.managerId,
+      fullName: input.fullName,
+      phone: input.phone,
+      telegramUsername: input.telegramUsername,
+      telegramId: input.telegramId ?? '',
+      city: input.city,
+      address: input.address,
+      vacancy: input.vacancy,
+      curatorId: input.curatorId ?? null,
+      teamId,
+      isAdmin: session.role === 'admin',
+    })
+
+    // Прямое закрепление (админ) — пуш конкретному куратору, как раньше.
+    if (transferred && card.curatorId) {
+      void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
+    }
+
+    const warn = duplicateWarning ? ` ${duplicateWarning}` : ''
+
+    // Пуловая маршрутизация: разослать уведомления + пуш подходящим кураторам.
+    if (pooled && card.teamId) {
+      const { curatorIds } = await resolveTeamPoolTargets(
+        card.teamId,
+        card.city,
+      )
+      await Promise.all(
+        curatorIds.map((cid) =>
+          createLeadNotification({
+            recipientId: cid,
+            leadCardId: card.id,
+            kind: 'lead_pool_available',
+            title: 'Новый лид в пуле',
+            body: `Появился лид${card.city ? ` (${card.city})` : ''} — возьмите в работу, если он ваш.`,
+            leadName: card.fullName || null,
+          }).catch(() => null),
+        ),
+      )
+      for (const cid of curatorIds) {
+        void notifyCuratorOfTransfer(cid, card.fullName, card.city)
+      }
+      const n = curatorIds.length
+      return {
+        ok: true,
+        message:
+          n > 0
+            ? `Лид передан команде — виден ${n} ${pluralCurators(n)}.${warn}`
+            : `Лид передан команде.${warn}`,
+      }
+    }
+
+    if (transferred) {
+      return {
+        ok: true,
+        message: `Лид передан менеджеру по кадрам${card.curatorName ? ` ${card.curatorName}` : ''}.${warn}`,
+      }
+    }
+    return { ok: true, message: `Карточка сохранена.${warn}` }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Ошибка сохранения'
+    return { ok: false, message: msg }
+  }
+}
+
+function pluralCurators(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'куратору'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'кураторам'
+  return 'кураторам'
+}
+
+/**
+ * Куратор берёт пуловый лид в работу (миграция 150). Гонка исключена в
+ * claimPoolLead (атомарный UPDATE). На успехе гасим пуловые уведомления по
+ * этому лиду у всех — он больше никому не «светится».
+ */
+export async function claimPoolLeadAction(input: {
+  leadCardId: string
+}): Promise<LeadCardActionResult> {
+  const session = await requireCurator()
+  try {
+    // Дисциплина: после дедлайна с неподтверждёнными статусами — только
+    // подтверждение статусов, брать новые лиды нельзя.
+    await assertCuratorNotLocked(session.sub)
+    const card = await claimPoolLead({
+      leadCardId: input.leadCardId,
+      curatorId: session.sub,
+    })
+    if (!card) {
+      return { ok: false, message: 'Лид уже взят другим куратором или недоступен.' }
+    }
+    void resolveNotificationsForLead(input.leadCardId, 'lead_pool_available')
+    return { ok: true, message: `Лид «${card.fullName || 'без имени'}» закреплён за вами.` }
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'Ошибка',
+    }
+  }
+}
   if (!input.fullName.trim()) {
     return { ok: false, message: 'Укажите ФИО.' }
   }

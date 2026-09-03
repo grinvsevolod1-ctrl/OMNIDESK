@@ -1,25 +1,21 @@
 'use client'
 
 import { useState } from 'react'
-import { Landmark, Loader2, MapPin, Plus, X } from 'lucide-react'
+import { Landmark, Plus, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CityInput } from '@/components/shared/city-input'
-import { cn } from '@/lib/utils'
 import { TelegramOutreachButton } from './telegram-outreach-button'
 import type { LeadCardState } from './use-lead-card'
 
-/** Поля карточки лида + подбор менеджера по кадрам по городу. */
+/**
+ * Поля карточки лида. Конкретного менеджера по кадрам менеджер больше НЕ
+ * выбирает (миграция 150): при передаче лид уходит в пул команды и
+ * разбирается кураторами. Город остаётся — по нему идёт маршрутизация в пул
+ * по региону (подсказка области помогает менеджеру ввести корректный город).
+ */
 export function LeadCardForm({ state }: { state: LeadCardState }) {
-  const {
-    fields,
-    curators,
-    searching,
-    curatorId,
-    pickCurator,
-    autoPicked,
-    cityRegion,
-  } = state
+  const { fields, cityRegion } = state
   // «+ добавить адрес»: клик раскрывает строку ввода; уже заполненный адрес
   // (например, из сохранённой карточки) показывает поле автоматически.
   const [addressAdded, setAddressAdded] = useState(false)
@@ -132,68 +128,11 @@ export function LeadCardForm({ state }: { state: LeadCardState }) {
         />
       </Field>
 
-      {fields.city.trim().length >= 2 ? (
-        <div className="flex flex-col gap-2">
-          <span className="text-xs font-medium text-muted-foreground">
-            Менеджеры по кадрам по городу
-          </span>
-          {searching ? (
-            <p className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" />
-              Ищем…
-            </p>
-          ) : curators.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
-              Нет менеджеров по кадрам для «{fields.city.trim()}». Если это
-              небольшой населённый пункт, укажите его область или регион
-              (например, «Московская область») — подтянется менеджер по
-              кадрам, который её покрывает.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {curators.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => pickCurator(c.id)}
-                  className={cn(
-                    // min-w-0 по всей цепочке обязателен: без него длинный
-                    // список городов растягивал кнопку шире панели и появлялся
-                    // горизонтальный скролл всей карточки лида.
-                    'flex w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
-                    curatorId === c.id
-                      ? 'border-primary bg-primary/10 ring-1 ring-primary/30'
-                      : 'border-border hover:bg-muted',
-                  )}
-                >
-                  <span className="flex shrink-0 items-center gap-1.5 font-medium">
-                    {c.name}
-                    {autoPicked && curatorId === c.id ? (
-                      <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-normal text-primary">
-                        авто
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                    <span className="flex min-w-0 items-center gap-1">
-                      <MapPin className="size-3 shrink-0" />
-                      <span className="truncate">
-                        {c.cities?.length ? c.cities.join(', ') : c.city}
-                      </span>
-                    </span>
-                    <span
-                      className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px]"
-                      title="Активных лидов у менеджера по кадрам"
-                    >
-                      {c.activeLeads} лид.
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : null}
+      <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
+        При передаче лид уйдёт в вашу команду и появится у кураторов
+        по городу — кто&nbsp;первый возьмёт его в работу, за тем он и
+        закрепится.
+      </p>
     </>
   )
 }

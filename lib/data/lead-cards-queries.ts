@@ -102,6 +102,14 @@ export async function getLeadCardById(id: string): Promise<LeadCard | null> {
   return rows[0] ? toLeadCard(rows[0]) : null
 }
 
+/**
+ * Рабочее место куратора: ЗАКРЕПЛЁННЫЕ за ним лиды + ПУЛОВЫЕ лиды его команды,
+ * которые ему «светятся» (миграция 150). Пуловый лид виден, пока он не взят
+ * (curator_id IS NULL) и не в архиве, а куратору он адресован через
+ * уведомление lead_pool_available (город матчится по региону при передаче —
+ * единый источник правды сопоставления). Пуловые (isPool) идут первыми,
+ * затем закреплённые по времени передачи.
+ */
 export async function listLeadCardsForCurator(
   curatorId: string,
 ): Promise<LeadCard[]> {
@@ -110,10 +118,23 @@ export async function listLeadCardsForCurator(
        FROM lead_cards lc
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
-      WHERE lc.curator_id = $1
-        AND lc.transferred_at IS NOT NULL
-        AND lc.archived_at IS NULL
-      ORDER BY lc.transferred_at DESC`,
+      WHERE lc.archived_at IS NULL
+        AND (
+          (lc.curator_id = $1 AND lc.transferred_at IS NOT NULL)
+          OR (
+            lc.curator_id IS NULL
+            AND lc.team_id = (SELECT team_id FROM managers WHERE id = $1)
+            AND lc.team_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM lead_notifications ln
+               WHERE ln.lead_card_id = lc.id
+                 AND ln.recipient_id = $1
+                 AND ln.kind = 'lead_pool_available'
+            )
+          )
+        )
+      ORDER BY (lc.curator_id IS NULL) DESC,
+               COALESCE(lc.transferred_at, lc.created_at) DESC`,
     [curatorId],
   )
   return rows.map(toLeadCard)

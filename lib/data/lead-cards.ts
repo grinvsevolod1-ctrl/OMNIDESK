@@ -50,10 +50,11 @@ export {
   type UpsertLeadCardResult,
 } from './lead-cards-upsert'
 
-/* Post-transfer lifecycle: transfer, status confirmation, comments. */
+/* Post-transfer lifecycle: transfer, status confirmation, comments, claim. */
 export {
   addLeadComment,
   adminSetLeadStatus,
+  claimPoolLead,
   editLeadComment,
   listLeadComments,
   transferLeadToCurator,

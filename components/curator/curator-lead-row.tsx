@@ -6,10 +6,15 @@
  * «Удалить». Мемоизирована: перерисовка списка не трогает строки с
  * неизменившимися данными. Два варианта отображения: компактная строка
  * (list) и небольшая карточка (grid).
+ *
+ * ПУЛОВЫЙ лид (isPool, миграция 150) — ещё не взят: он не закреплён за
+ * куратором, поэтому редактировать/открывать его нельзя (нет доступа). Такая
+ * строка показывается read-only с бейджем «в пуле» и кнопкой «Взять в работу»
+ * (claim). После взятия строка становится обычной, редактируемой.
  */
 
 import { memo } from 'react'
-import { Archive, ArchiveRestore, AtSign } from 'lucide-react'
+import { Archive, ArchiveRestore, AtSign, MapPin, Sparkles } from 'lucide-react'
 import {
   CityInlineEditor,
   StatusInlineEditor,
@@ -34,6 +39,7 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
   pending,
   onOpen,
   onToggleArchive,
+  onClaim,
   onRefresh,
 }: {
   lead: LeadCard
@@ -43,10 +49,13 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
   pending: boolean
   onOpen: (id: string) => void
   onToggleArchive: (id: string, archived: boolean) => void
+  /** Взять пуловый лид в работу (claim). */
+  onClaim: (id: string) => void
   /** Перечитать список после inline-правки поля/статуса. */
   onRefresh: () => void
 }) {
-  const needs = !isArchived && leadNeedsDailyStatus(lead)
+  const isPool = lead.isPool && !isArchived
+  const needs = !isArchived && !isPool && leadNeedsDailyStatus(lead)
 
   /** Кликабельный бейдж статуса: сохраняет подсветку «нужно обновить». */
   const statusEditor = (
@@ -70,6 +79,53 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
         }
       />
     </span>
+  )
+
+  /** Бейдж «в пуле» — пуловый лид ещё не закреплён. */
+  const poolBadge = (
+    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+      <Sparkles className="size-3" />В пуле
+    </span>
+  )
+
+  /** Кнопка «Взять в работу» для пулового лида (полная — в карточках). */
+  const claimButton = (
+    <Button
+      size="sm"
+      className="h-7 shrink-0 gap-1 bg-emerald-600 px-2.5 text-white hover:bg-emerald-600/90"
+      disabled={pending}
+      aria-label="Взять в работу"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClaim(lead.id)
+      }}
+    >
+      <Sparkles className="size-3.5" />
+      Взять
+    </Button>
+  )
+
+  /** Иконка-кнопка «Взять» — в узкой колонке действий списка. */
+  const claimButtonIcon = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-sm"
+            className="bg-emerald-600 text-white hover:bg-emerald-600/90"
+            disabled={pending}
+            aria-label="Взять в работу"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClaim(lead.id)
+            }}
+          >
+            <Sparkles className="size-4" />
+          </Button>
+        }
+      />
+      <TooltipContent side="top">Взять в работу</TooltipContent>
+    </Tooltip>
   )
 
   const archiveButton = (
@@ -114,60 +170,82 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
     </a>
   ) : null
 
+  // Read-only отображение имени/должности/телефона для пула (без inline-правки).
+  const nameNode = isPool ? (
+    <p className="truncate text-sm font-medium">{lead.fullName || 'Без имени'}</p>
+  ) : (
+    <TextInlineEditor
+      lead={lead}
+      field="full_name"
+      label="ФИО"
+      display={lead.fullName || 'Без имени'}
+      className="text-sm font-medium"
+      onSaved={onRefresh}
+    />
+  )
+  const vacancyNode = isPool ? (
+    <span>{lead.vacancy || '—'}</span>
+  ) : (
+    <TextInlineEditor
+      lead={lead}
+      field="vacancy"
+      label="Должность"
+      display={lead.vacancy}
+      placeholder="Курьер, водитель…"
+      onSaved={onRefresh}
+    />
+  )
+  const phoneNode = isPool ? (
+    <span>{lead.phone || '—'}</span>
+  ) : (
+    <TextInlineEditor
+      lead={lead}
+      field="phone"
+      label="Телефон"
+      display={lead.phone}
+      placeholder="+7…"
+      onSaved={onRefresh}
+    />
+  )
+  const cityNode = isPool ? (
+    <span className="inline-flex items-center gap-1 text-muted-foreground">
+      <MapPin className="size-3 shrink-0" />
+      {lead.city || '—'}
+    </span>
+  ) : (
+    <CityInlineEditor lead={lead} onSaved={onRefresh} />
+  )
+
   if (view === 'grid') {
     return (
       <li
         className={cn(
-          'group flex cursor-pointer flex-col gap-2 rounded-xl border border-border bg-card p-3 transition-colors hover:bg-muted/30',
-          // Строки за экраном не рендерятся при скролле — списки из сотен
-          // лидов скроллятся без глюков (см. стандарт UI в AGENTS.md).
+          'group flex flex-col gap-2 rounded-xl border border-border bg-card p-3 transition-colors hover:bg-muted/30',
           '[content-visibility:auto] [contain-intrinsic-size:auto_9rem]',
           needs && 'ring-1 ring-amber-500/30',
+          isPool && 'cursor-default border-emerald-500/30 bg-emerald-500/[0.04]',
+          !isPool && 'cursor-pointer',
           isArchived && 'opacity-70 hover:opacity-100',
         )}
-        onClick={() => onOpen(lead.id)}
+        onClick={isPool ? undefined : () => onOpen(lead.id)}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            {/* ФИО, должность, телефон правятся кликом — как у админа.
-                stopPropagation живёт на самих контролах (см. lead-inline-edit),
-                поэтому клик по пустому месту карточки открывает полную карточку. */}
-            <TextInlineEditor
-              lead={lead}
-              field="full_name"
-              label="ФИО"
-              display={lead.fullName || 'Без имени'}
-              className="text-sm font-medium"
-              onSaved={onRefresh}
-            />
+            {nameNode}
             <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-              <TextInlineEditor
-                lead={lead}
-                field="vacancy"
-                label="Должность"
-                display={lead.vacancy}
-                placeholder="Курьер, водитель…"
-                onSaved={onRefresh}
-              />
+              {vacancyNode}
               <span aria-hidden>·</span>
-              <TextInlineEditor
-                lead={lead}
-                field="phone"
-                label="Телефон"
-                display={lead.phone}
-                placeholder="+7…"
-                onSaved={onRefresh}
-              />
+              {phoneNode}
             </div>
           </div>
-          {archiveButton}
+          {isPool ? claimButton : archiveButton}
         </div>
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          <CityInlineEditor lead={lead} onSaved={onRefresh} />
+          {cityNode}
           {telegramLink}
         </div>
         <div className="mt-auto flex flex-wrap items-center gap-1.5">
-          {statusEditor}
+          {isPool ? poolBadge : statusEditor}
           <span className="ml-auto text-xs text-muted-foreground">
             {isArchived && lead.archivedAt
               ? formatDateTime(lead.archivedAt)
@@ -184,48 +262,24 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
     <li
       className={cn(
         // CSS grid с фиксированными колонками (имя · город · статус · дата ·
-        // архив) — во всех строках колонки выровнены по одной сетке, ничего
-        // не «плавает». Ниже sm город и дата скрыты — сетка сжимается.
-        'grid cursor-pointer grid-cols-[minmax(0,1fr)_max-content_2.25rem] items-center gap-x-3 px-4 py-2.5 transition-colors hover:bg-muted/30 sm:px-5',
+        // действие) — во всех строках колонки выровнены по одной сетке.
+        'grid grid-cols-[minmax(0,1fr)_max-content_2.25rem] items-center gap-x-3 px-4 py-2.5 transition-colors hover:bg-muted/30 sm:px-5',
         'sm:grid-cols-[minmax(0,1fr)_7.5rem_max-content_2.25rem]',
         'lg:grid-cols-[minmax(0,1fr)_7.5rem_minmax(7rem,max-content)_8.5rem_2.25rem]',
-        // Строки за экраном не рендерятся при скролле (стандарт UI, AGENTS.md).
         '[content-visibility:auto] [contain-intrinsic-size:auto_3.5rem]',
         needs && 'bg-amber-500/[0.04]',
+        isPool && 'cursor-default bg-emerald-500/[0.04]',
+        !isPool && 'cursor-pointer',
         isArchived && 'opacity-70 hover:opacity-100',
       )}
-      onClick={() => onOpen(lead.id)}
+      onClick={isPool ? undefined : () => onOpen(lead.id)}
     >
       <div className="min-w-0">
-        {/* ФИО, должность, телефон правятся кликом — как у админа.
-            stopPropagation живёт на самих контролах (см. lead-inline-edit),
-            клик по пустому месту строки открывает полную карточку. */}
-        <TextInlineEditor
-          lead={lead}
-          field="full_name"
-          label="ФИО"
-          display={lead.fullName || 'Без имени'}
-          className="text-sm font-medium"
-          onSaved={onRefresh}
-        />
+        {nameNode}
         <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-          <TextInlineEditor
-            lead={lead}
-            field="vacancy"
-            label="Должность"
-            display={lead.vacancy}
-            placeholder="Курьер, водитель…"
-            onSaved={onRefresh}
-          />
+          {vacancyNode}
           <span aria-hidden>·</span>
-          <TextInlineEditor
-            lead={lead}
-            field="phone"
-            label="Телефон"
-            display={lead.phone}
-            placeholder="+7…"
-            onSaved={onRefresh}
-          />
+          {phoneNode}
           {telegramLink}
         </div>
       </div>
@@ -234,10 +288,14 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
         onClick={(e) => e.stopPropagation()}
         className="hidden min-w-0 overflow-hidden sm:inline-flex"
       >
-        <CityInlineEditor lead={lead} onSaved={onRefresh} />
+        {cityNode}
       </span>
 
-      {statusEditor}
+      {isPool ? (
+        <span className="inline-flex">{poolBadge}</span>
+      ) : (
+        statusEditor
+      )}
 
       {/* Ячейка даты рендерится всегда (lg+) — иначе сетка сломается. */}
       <span className="hidden min-w-0 lg:block">
@@ -261,14 +319,16 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
                 </span>
               }
             />
-            <TooltipContent side="top">Дата передачи</TooltipContent>
+            <TooltipContent side="top">
+              {isPool ? 'В пуле с' : 'Дата передачи'}
+            </TooltipContent>
           </Tooltip>
         ) : (
           <span className="text-xs text-muted-foreground">—</span>
         )}
       </span>
 
-      {archiveButton}
+      {isPool ? claimButtonIcon : archiveButton}
     </li>
   )
 })

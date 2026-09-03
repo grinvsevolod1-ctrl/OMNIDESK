@@ -1,8 +1,18 @@
 'use client'
 
-import { ClipboardList, Loader2, Send, X } from 'lucide-react'
+import { useState } from 'react'
+import { ClipboardList, Loader2, Send, Users, X } from 'lucide-react'
 import { LeadAttachments } from '@/components/shared/lead-attachments'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { LeadCardForm } from './lead-card/lead-card-form'
 import { LeadCardDetails } from './lead-card/lead-card-details'
@@ -38,10 +48,12 @@ export function LeadCardPanel({
     detail,
     mutateDetail,
     transferredAt,
-    curatorId,
     save,
     ensureCardId,
   } = state
+  // Подтверждение передачи: лид уходит в пул команды — действие заметное,
+  // поэтому спрашиваем «вы действительно хотите передать?».
+  const [confirmOpen, setConfirmOpen] = useState(false)
   // Обязательные поля для ПЕРЕДАЧИ: ФИО, город, Telegram (юзик), вакансия.
   // Обычное сохранение остаётся мягким (черновик для вложений).
   const missingForTransfer = [
@@ -169,26 +181,72 @@ export function LeadCardPanel({
         <footer className="flex shrink-0 flex-col gap-1.5 border-t border-border bg-muted/30 p-3 sm:p-4">
           <Button
             className="w-full gap-1.5"
-            disabled={pending || !curatorId || missingForTransfer.length > 0}
+            disabled={pending || missingForTransfer.length > 0}
             title={
               missingForTransfer.length > 0
                 ? `Для передачи заполните: ${missingForTransfer.join(', ')}`
                 : undefined
             }
-            onClick={() => save(true)}
+            onClick={() => setConfirmOpen(true)}
           >
             {pending ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
               <Send className="size-4" />
             )}
-            Передать
+            Передать команде
           </Button>
           <p className="text-center text-[11px] text-muted-foreground">
             Изменения сохраняются автоматически при закрытии карточки
           </p>
         </footer>
       </aside>
+
+      {/* Подтверждение передачи в пул команды. */}
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="size-4" />
+              Передать лид команде?
+            </DialogTitle>
+            <DialogDescription>
+              Лид{' '}
+              <span className="font-medium text-foreground">
+                {state.fields.fullName.trim() || 'без имени'}
+              </span>{' '}
+              уйдёт в вашу команду и появится у кураторов по городу
+              {state.fields.city.trim() ? ` «${state.fields.city.trim()}»` : ''}.
+              Кто первый возьмёт его в работу — за тем он и закрепится.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose
+              render={
+                <Button variant="outline" size="sm">
+                  Отмена
+                </Button>
+              }
+            />
+            <Button
+              size="sm"
+              className="gap-1.5"
+              disabled={pending}
+              onClick={() => {
+                setConfirmOpen(false)
+                save(true)
+              }}
+            >
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Send className="size-4" />
+              )}
+              Да, передать
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
