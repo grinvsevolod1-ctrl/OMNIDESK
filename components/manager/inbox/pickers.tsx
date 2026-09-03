@@ -9,7 +9,22 @@
 
 import { memo, useCallback, useState } from 'react'
 import useSWR from 'swr'
-import { Clock3, Loader2, Smile, Sticker } from 'lucide-react'
+import {
+  Car,
+  Clock3,
+  Dumbbell,
+  Heart,
+  Lightbulb,
+  Loader2,
+  PawPrint,
+  Pizza,
+  Shapes,
+  Smile,
+  Sticker,
+  ThumbsUp,
+  User,
+  type LucideIcon,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Popover,
@@ -24,6 +39,26 @@ import type { EmojiCategory } from './emoji-data'
 
 const RECENT_KEY = 'omnidesk-recent-emojis'
 const RECENT_MAX = 30
+
+/**
+ * Иконки вкладок категорий — lucide, а НЕ эмодзи-глифы. Раньше вкладки рисовали
+ * сам эмодзи (`c.icon`): на части ОС (Windows/Linux) без нужного варианта VS16
+ * они падали в монохромный текст-глиф и «ломались» вперемешку с цветными —
+ * отсюда «иконки ебутся». Векторные lucide рендерятся одинаково везде.
+ * Ключ — id категории из emoji-data; неизвестная категория падает на Smile.
+ */
+const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  smileys: Smile,
+  gestures: ThumbsUp,
+  people: User,
+  hearts: Heart,
+  animals: PawPrint,
+  food: Pizza,
+  activity: Dumbbell,
+  travel: Car,
+  objects: Lightbulb,
+  symbols: Shapes,
+}
 
 function readRecent(): string[] {
   try {
@@ -136,7 +171,7 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
           </Button>
         }
       />
-      <PopoverContent align="start" className="w-80 p-0">
+      <PopoverContent align="start" className="w-96 p-0">
         {!categories ? (
           <div className="flex h-72 items-center justify-center">
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -145,7 +180,7 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
           <div className="flex h-72 flex-col">
             {/* Вкладки категорий */}
             <div
-              className="flex items-center gap-0.5 border-b border-border px-1.5 py-1"
+              className="scrollbar-thin flex items-center gap-0.5 overflow-x-auto border-b border-border px-1.5 py-1"
               role="tablist"
               aria-label="Категории эмодзи"
             >
@@ -155,32 +190,38 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
                 aria-selected={tab === 'recent'}
                 onClick={() => setTab('recent')}
                 className={cn(
-                  'flex size-8 shrink-0 items-center justify-center rounded-md transition-colors',
+                  'flex size-7 shrink-0 items-center justify-center rounded-md transition-colors',
                   tab === 'recent'
                     ? 'bg-muted text-foreground'
                     : 'text-muted-foreground hover:bg-muted/60',
                 )}
                 aria-label="Недавние"
+                title="Недавние"
               >
                 <Clock3 className="size-4" />
               </button>
-              {categories.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === c.id}
-                  onClick={() => setTab(c.id)}
-                  className={cn(
-                    'flex size-8 shrink-0 items-center justify-center rounded-md text-base leading-none transition-colors',
-                    tab === c.id ? 'bg-muted' : 'hover:bg-muted/60',
-                  )}
-                  aria-label={c.label}
-                  title={c.label}
-                >
-                  {c.icon}
-                </button>
-              ))}
+              {categories.map((c) => {
+                const TabIcon = CATEGORY_ICONS[c.id] ?? Smile
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === c.id}
+                    onClick={() => setTab(c.id)}
+                    className={cn(
+                      'flex size-7 shrink-0 items-center justify-center rounded-md transition-colors',
+                      tab === c.id
+                        ? 'bg-muted text-foreground'
+                        : 'text-muted-foreground hover:bg-muted/60',
+                    )}
+                    aria-label={c.label}
+                    title={c.label}
+                  >
+                    <TabIcon className="size-4" />
+                  </button>
+                )
+              })}
             </div>
 
             {/* Сетка активной категории */}

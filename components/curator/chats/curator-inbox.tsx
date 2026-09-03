@@ -11,11 +11,13 @@
  * в use-curator-chats, здесь только вёрстка и локальный UI-стейт панелей.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft,
+  ArrowDownUp,
   CalendarClock,
+  Check,
   Info,
   MessageCircle,
   Paperclip,
@@ -26,6 +28,12 @@ import {
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { Conversation, Message } from '@/lib/types'
@@ -40,6 +48,91 @@ import type { PanelChannelType } from '@/lib/types'
 import type { CuratorConversationStatus } from '@/lib/data/curator-conversations'
 
 type ListFilter = 'all' | 'unread'
+type SortMode = 'recent' | 'unread' | 'name'
+
+const SORT_LABELS: Record<SortMode, string> = {
+  recent: 'Сначала новые',
+  unread: 'Непрочитанные',
+  name: 'По имени',
+}
+
+/**
+ * Строка списка диалогов. Мемоизирована: раньше все строки перерисовывались на
+ * каждый рендер родителя (ввод в поиск, realtime-события, router.refresh) —
+ * при сотнях диалогов это и давало «лаги». Теперь строка ре-рендерится только
+ * при смене своих пропсов, а onSelect — стабильная ссылка из родителя.
+ */
+const ConversationRow = memo(function ConversationRow({
+  conversation: c,
+  isActive,
+  leadStatus,
+  onSelect,
+}: {
+  conversation: Conversation
+  isActive: boolean
+  leadStatus?: CuratorConversationStatus
+  onSelect: (id: string) => void
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onSelect(c.id)}
+        className={cn(
+          'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors',
+          isActive
+            ? 'bg-primary/10 ring-1 ring-primary/30'
+            : 'hover:bg-muted/60',
+        )}
+      >
+        <ContactAvatar
+          name={c.contactName}
+          channel={c.channelType}
+          channelId={c.channelId}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span
+              className={cn(
+                'truncate text-sm',
+                c.unread > 0 ? 'font-semibold text-foreground' : 'font-medium',
+              )}
+            >
+              {c.contactName}
+            </span>
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              {listStamp(c.lastMessageAt)}
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-center gap-1.5">
+            <SourceChip conversation={c} size="xs" />
+            <span
+              className={cn(
+                'truncate text-xs',
+                c.unread > 0 ? 'text-foreground/80' : 'text-muted-foreground',
+              )}
+            >
+              {c.lastMessage || '—'}
+            </span>
+          </div>
+          {leadStatus ? (
+            <div className="mt-1">
+              <LeadStatusBadge
+                status={leadStatus.status}
+                className="px-1.5 py-0 text-[10px]"
+              />
+            </div>
+          ) : null}
+        </div>
+        {c.unread > 0 ? (
+          <span className="ml-1 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground tabular-nums">
+            {c.unread > 99 ? '99+' : c.unread}
+          </span>
+        ) : null}
+      </button>
+    </li>
+  )
+})
 
 export function CuratorInbox({
   conversations,
@@ -56,8 +149,9 @@ export function CuratorInbox({
   const router = useRouter()
   // Форма статуса и бейджи используют кураторский статус лида этого диалога.
   // После подтверждения статуса перезапрашиваем серверную страницу — свежий
-  // статус приезжает в leadStatusByConversation.
-  const onStatusSaved = () => router.refresh()
+  // статус приезжает в leadStatusByConversation. useCallback — чтобы не ломать
+  // мемоизацию потомков лишней новой ссылкой на каждый рендер.
+  const onStatusSaved = useCallback(() => router.refresh(), [router])
   const {
     activeId,
     setActiveId,
@@ -78,6 +172,7 @@ export function CuratorInbox({
 
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<ListFilter>('all')
+  const [sort, setSort] = useState<SortMode>('recent')
   const [infoOpen, setInfoOpen] = useState(false)
 
   const totalUnread = useMemo(
@@ -85,9 +180,13 @@ export function CuratorInbox({
     [conversations],
   )
 
-  const filtered = useMemo(() => {
+  // Фильтр (поиск + «непрочитанные») и сортировка. Держим в одном useMemo,
+  // чтобы список пересобирался только при изменении входов, а не на каждый
+  // рендер (частые из-за realtime/router.refresh). Сортировка не мутирует
+  // conversations — работаем по копии.
+  const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return conversations.filter((c) => {
+    const list = conversations.filter((c) => {
       if (filter === 'unread' && !(c.unread > 0)) return false
       if (!q) return true
       return (
@@ -96,7 +195,33 @@ export function CuratorInbox({
         (c.lastMessage ?? '').toLowerCase().includes(q)
       )
     })
-  }, [conversations, search, filter])
+    const byRecent = (a: Conversation, b: Conversation) =>
+      new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()
+    const sorted = [...list]
+    if (sort === 'recent') {
+      sorted.sort(byRecent)
+    } else if (sort === 'unread') {
+      // Непрочитанные сверху (по числу непрочитанных), внутри — свежие первыми.
+      sorted.sort(
+        (a, b) => (b.unread || 0) - (a.unread || 0) || byRecent(a, b),
+      )
+    } else {
+      sorted.sort((a, b) =>
+        a.contactName.localeCompare(b.contactName, 'ru'),
+      )
+    }
+    return sorted
+  }, [conversations, search, filter, sort])
+
+  // Выбор диалога — стабильная ссылка, чтобы мемоизированные строки списка не
+  // перерисовывались все разом на каждый рендер родителя.
+  const handleSelectConversation = useCallback(
+    (id: string) => {
+      setActiveId(id)
+      setInfoOpen(false)
+    },
+    [setActiveId],
+  )
 
   return (
     <div className="relative flex h-full overflow-hidden bg-background">
@@ -127,36 +252,65 @@ export function CuratorInbox({
               aria-label="Поиск по диалогам"
             />
           </div>
-          {/* Сегмент-фильтр: все / только непрочитанные */}
-          <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5">
-            {(
-              [
-                ['all', 'Все'],
-                ['unread', 'Непрочитанные'],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setFilter(value)}
-                className={cn(
-                  'flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors',
-                  filter === value
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {label}
-                {value === 'unread' && totalUnread > 0 ? (
-                  <span className="ml-1 tabular-nums">({totalUnread})</span>
-                ) : null}
-              </button>
-            ))}
+          {/* Сегмент-фильтр (все / непрочитанные) + сортировка */}
+          <div className="flex items-center gap-2">
+            <div className="flex flex-1 items-center gap-1 rounded-lg bg-muted p-0.5">
+              {(
+                [
+                  ['all', 'Все'],
+                  ['unread', 'Непрочитанные'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setFilter(value)}
+                  className={cn(
+                    'flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                    filter === value
+                      ? 'bg-card text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {label}
+                  {value === 'unread' && totalUnread > 0 ? (
+                    <span className="ml-1 tabular-nums">({totalUnread})</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
+                  >
+                    <ArrowDownUp className="size-3.5" />
+                    <span className="hidden lg:inline">{SORT_LABELS[sort]}</span>
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="min-w-44">
+                {(Object.keys(SORT_LABELS) as SortMode[]).map((mode) => (
+                  <DropdownMenuItem key={mode} onClick={() => setSort(mode)}>
+                    <Check
+                      className={cn(
+                        'size-4',
+                        sort === mode ? 'opacity-100' : 'opacity-0',
+                      )}
+                    />
+                    {SORT_LABELS[mode]}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
         <div className="scrollbar-thin flex-1 overflow-y-auto">
-          {filtered.length === 0 ? (
+          {visible.length === 0 ? (
             <div className="p-6 text-center text-sm text-muted-foreground">
               {conversations.length === 0
                 ? 'Переданных диалогов пока нет. Когда вам передадут лид с перепиской, он появится здесь.'
@@ -166,75 +320,15 @@ export function CuratorInbox({
             </div>
           ) : (
             <ul className="p-1.5">
-              {filtered.map((c) => {
-                const isActive = activeId === c.id
-                return (
-                  <li key={c.id}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveId(c.id)
-                        setInfoOpen(false)
-                      }}
-                      className={cn(
-                        'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors',
-                        isActive
-                          ? 'bg-primary/10 ring-1 ring-primary/30'
-                          : 'hover:bg-muted/60',
-                      )}
-                    >
-                      <ContactAvatar
-                        name={c.contactName}
-                        channel={c.channelType}
-                        channelId={c.channelId}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span
-                            className={cn(
-                              'truncate text-sm',
-                              c.unread > 0
-                                ? 'font-semibold text-foreground'
-                                : 'font-medium',
-                            )}
-                          >
-                            {c.contactName}
-                          </span>
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
-                            {listStamp(c.lastMessageAt)}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1.5">
-                          <SourceChip conversation={c} size="xs" />
-                          <span
-                            className={cn(
-                              'truncate text-xs',
-                              c.unread > 0
-                                ? 'text-foreground/80'
-                                : 'text-muted-foreground',
-                            )}
-                          >
-                            {c.lastMessage || '—'}
-                          </span>
-                        </div>
-                        {leadStatusByConversation[c.id] ? (
-                          <div className="mt-1">
-                            <LeadStatusBadge
-                              status={leadStatusByConversation[c.id].status}
-                              className="px-1.5 py-0 text-[10px]"
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-                      {c.unread > 0 ? (
-                        <span className="ml-1 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground tabular-nums">
-                          {c.unread > 99 ? '99+' : c.unread}
-                        </span>
-                      ) : null}
-                    </button>
-                  </li>
-                )
-              })}
+              {visible.map((c) => (
+                <ConversationRow
+                  key={c.id}
+                  conversation={c}
+                  isActive={activeId === c.id}
+                  leadStatus={leadStatusByConversation[c.id]}
+                  onSelect={handleSelectConversation}
+                />
+              ))}
             </ul>
           )}
         </div>
