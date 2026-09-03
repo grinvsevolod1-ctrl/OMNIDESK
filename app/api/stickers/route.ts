@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/auth'
-import { getChannelOwner } from '@/lib/data'
+import { getChannelOwner, getChannelOwnerForCurator } from '@/lib/data'
 import { fetchStickers, isWorkerConfigured } from '@/lib/worker-client'
 
 export const runtime = 'nodejs'
@@ -17,7 +17,13 @@ export async function GET(request: Request): Promise<Response> {
   const channelId = new URL(request.url).searchParams.get('channelId') ?? ''
   if (!channelId) return new Response('Bad request', { status: 400 })
 
-  const owner = await getChannelOwner(channelId, session.sub)
+  // Кураторы авторизуются через переданный им диалог на канале, а не по
+  // владению каналом (канал принадлежит owner-менеджеру). См.
+  // getChannelOwnerForCurator — тот же fail-closed 404 при отсутствии доступа.
+  const owner =
+    session.role === 'curator'
+      ? await getChannelOwnerForCurator(channelId, session.sub)
+      : await getChannelOwner(channelId, session.sub)
   if (!owner) return new Response('Not found', { status: 404 })
   if (owner.channelType !== 'telegram') {
     return Response.json({ stickers: [] })

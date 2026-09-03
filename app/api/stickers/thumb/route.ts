@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/auth'
-import { getChannelOwner } from '@/lib/data'
+import { getChannelOwner, getChannelOwnerForCurator } from '@/lib/data'
 import { isWorkerConfigured, streamFromWorker } from '@/lib/worker-client'
 
 export const runtime = 'nodejs'
@@ -20,7 +20,10 @@ export async function GET(request: Request): Promise<Response> {
   const fileReference = sp.get('fileReference') ?? ''
   if (!channelId || !id) return new Response('Bad request', { status: 400 })
 
-  const owner = await getChannelOwner(channelId, session.sub)
+  const owner =
+    session.role === 'curator'
+      ? await getChannelOwnerForCurator(channelId, session.sub)
+      : await getChannelOwner(channelId, session.sub)
   if (!owner || owner.channelType !== 'telegram') {
     return new Response('Not found', { status: 404 })
   }

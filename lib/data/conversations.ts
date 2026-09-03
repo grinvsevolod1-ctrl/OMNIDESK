@@ -276,12 +276,17 @@ export {
  */
 export {
   editMessageBody,
+  editMessageBodyForCurator,
   getChannelOwner,
+  getChannelOwnerForCurator,
   getMessageDispatch,
+  getMessageDispatchForCurator,
   getMessageOwner,
   getMessageOwnerAdmin,
   markMessageDeleted,
+  markMessageDeletedForCurator,
   setMessageReaction,
+  setMessageReactionForCurator,
 } from './message-admin'
 
 /**

@@ -3,10 +3,12 @@
 /**
  * Состояние раздела «Чаты» куратора: выбор активного диалога, локальный кэш
  * сообщений с оптимистичными апдейтами, реалтайм через общий /api/stream
- * (события уже приходят скоупленные по curator_id — см. app/api/stream),
- * и обработчики отправки (текст + фото/файл). Намеренно проще менеджерского
- * useInbox: у куратора нет реакций/пересылки/стикеров/голосовых/расписания —
- * только чтение истории и ответ текстом или вложением.
+ * (события уже приходят скоупленные по curator_id — см. app/api/stream), и
+ * ПОЛНЫЙ набор действий менеджера: отправка/ответ/редактирование/удаление/
+ * реакции/пересылка/стикеры/голосовые/отложенная отправка + фото/файлы. Все
+ * серверные экшены скоуплены по curator_id (см. app/actions/curator-messages),
+ * поэтому куратор действует только в ПЕРЕДАННЫХ ему диалогах; доставка идёт
+ * через воркер под owner-менеджером канала.
  */
 
 import {
@@ -19,13 +21,21 @@ import {
 } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import type { Conversation, Message } from '@/lib/types'
+import type { Conversation, Message, StickerItem } from '@/lib/types'
+import type { ForwardTarget } from '@/components/manager/message-context-menu'
 import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
 import {
+  deleteCuratorMessageAction,
+  editCuratorMessageAction,
+  forwardCuratorMessageAction,
   loadCuratorThreadMessagesAction,
   loadOlderCuratorMessagesAction,
   markCuratorConversationReadAction,
+  reactCuratorMessageAction,
   sendCuratorMessageAction,
+  sendCuratorScheduledMessageAction,
+  sendCuratorStickerAction,
+  sendCuratorVoiceAction,
 } from '@/app/actions/curator-messages'
 
 export function useCuratorChats({
@@ -53,6 +63,9 @@ export function useCuratorChats({
   // композером и уходит в send как replyToMessageId. Сбрасывается при смене
   // диалога и после отправки.
   const [replyTarget, setReplyTarget] = useState<Message | null>(null)
+  // Редактируемое сообщение (только своё исходящее, Telegram). Взаимоисключимо
+  // с replyTarget — как у менеджера.
+  const [editTarget, setEditTarget] = useState<Message | null>(null)
 
   // Держим локальный кэш в синхроне с новыми SSR-данными (router.refresh).
   // Тот же паттерн «производное от пропсов», что и в useInbox менеджера —
@@ -106,6 +119,7 @@ export function useCuratorChats({
     const id = activeId
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setReplyTarget(null)
+    setEditTarget(null)
     void markCuratorConversationReadAction(id).catch(() => {})
   }, [activeId])
 
@@ -134,6 +148,45 @@ export function useCuratorChats({
       const body = text.trim()
       if (!body) return
       const id = activeId
+
+      // Режим редактирования: перезаписываем баббл оптимистично, шлём правку,
+      // откатываем при ошибке. Полное зеркало менеджерского useMessageActions.
+      if (editTarget) {
+        const target = editTarget
+        const prevBody = target.body ?? ''
+        if (body === prevBody.trim()) {
+          setEditTarget(null)
+          return
+        }
+        setLocalMessages((prev) => ({
+          ...prev,
+          [id]: (prev[id] ?? []).map((m) =>
+            m.id === target.id
+              ? {
+                  ...m,
+                  body,
+                  editedAt: new Date().toISOString(),
+                  editCount: (m.editCount ?? 0) + 1,
+                }
+              : m,
+          ),
+        }))
+        setEditTarget(null)
+        startTransition(async () => {
+          const res = await editCuratorMessageAction(target.id, body)
+          if (!res.ok) {
+            toast.error(res.message)
+            setLocalMessages((prev) => ({
+              ...prev,
+              [id]: (prev[id] ?? []).map((m) =>
+                m.id === target.id ? { ...m, body: prevBody } : m,
+              ),
+            }))
+          }
+        })
+        return
+      }
+
       const reply = replyTarget
       const optimistic: Message = {
         id: `tmp_${Date.now()}`,
@@ -163,13 +216,170 @@ export function useCuratorChats({
         if (!res.ok) toast.error(res.message)
       })
     },
-    [activeId, currentUser, replyTarget],
+    [activeId, currentUser, replyTarget, editTarget],
   )
 
   // Выбрать сообщение для ответа-цитаты (из контекстного меню бабла).
   const handleReply = useCallback((message: Message) => {
+    setEditTarget(null)
     setReplyTarget(message)
   }, [])
+
+  // Начать редактирование своего исходящего сообщения (Telegram).
+  const handleEdit = useCallback((message: Message) => {
+    setReplyTarget(null)
+    setEditTarget(message)
+  }, [])
+
+  // Реакция-эмодзи на сообщение (Telegram), оптимистично.
+  const reactTo = useCallback(
+    (message: Message, emoji: string) => {
+      if (!activeId) return
+      const id = activeId
+      setLocalMessages((prev) => ({
+        ...prev,
+        [id]: (prev[id] ?? []).map((m) => {
+          if (m.id !== message.id) return m
+          const others = (m.reactions ?? []).filter((r) => !r.fromMe)
+          const reactions = emoji
+            ? [...others, { emoji, fromMe: true }]
+            : others
+          return { ...m, reactions: reactions.length ? reactions : undefined }
+        }),
+      }))
+      startTransition(async () => {
+        const res = await reactCuratorMessageAction(message.id, emoji)
+        if (!res.ok) toast.error(res.message)
+      })
+    },
+    [activeId],
+  )
+
+  // Удалить сообщение у всех (Telegram), оптимистично.
+  const deleteMessage = useCallback(
+    (message: Message) => {
+      if (!activeId) return
+      const id = activeId
+      setLocalMessages((prev) => ({
+        ...prev,
+        [id]: (prev[id] ?? []).map((m) =>
+          m.id === message.id
+            ? {
+                ...m,
+                body: '',
+                deletedAt: new Date().toISOString(),
+                reactions: undefined,
+              }
+            : m,
+        ),
+      }))
+      startTransition(async () => {
+        const res = await deleteCuratorMessageAction(message.id)
+        if (res.ok) toast.success(res.message)
+        else toast.error(res.message)
+      })
+    },
+    [activeId],
+  )
+
+  // Переслать сообщение в другой переданный куратору Telegram-диалог.
+  const forwardMessage = useCallback(
+    (message: Message, toConversationId: string) => {
+      startTransition(async () => {
+        const res = await forwardCuratorMessageAction(
+          message.id,
+          toConversationId,
+        )
+        if (res.ok) toast.success(res.message)
+        else toast.error(res.message)
+      })
+    },
+    [],
+  )
+
+  // Отправить стикер (Telegram), оптимистично.
+  const sendSticker = useCallback(
+    (sticker: StickerItem) => {
+      if (!activeId) return
+      const id = activeId
+      const optimistic: Message = {
+        id: `tmp_${Date.now()}`,
+        conversationId: id,
+        direction: 'out',
+        body: sticker.emoji || '[Стикер]',
+        author: currentUser,
+        createdAt: new Date().toISOString(),
+        status: 'sent',
+        mediaType: 'sticker',
+        mediaMime: sticker.mime,
+      }
+      setLocalMessages((prev) => ({
+        ...prev,
+        [id]: [...(prev[id] ?? []), optimistic],
+      }))
+      startTransition(async () => {
+        const res = await sendCuratorStickerAction(id, sticker)
+        if (!res.ok) toast.error(res.message)
+      })
+    },
+    [activeId, currentUser],
+  )
+
+  // Отправить голосовое (Telegram), оптимистично.
+  const sendVoice = useCallback(
+    (audio: { base64: string; mime: string; durationSec: number }) => {
+      if (!activeId) return
+      const id = activeId
+      const optimistic: Message = {
+        id: `tmp_${Date.now()}`,
+        conversationId: id,
+        direction: 'out',
+        body: '[Голосовое сообщение]',
+        author: currentUser,
+        createdAt: new Date().toISOString(),
+        status: 'sent',
+        mediaType: 'voice',
+        mediaMime: audio.mime,
+      }
+      setLocalMessages((prev) => ({
+        ...prev,
+        [id]: [...(prev[id] ?? []), optimistic],
+      }))
+      startTransition(async () => {
+        const res = await sendCuratorVoiceAction(id, audio)
+        if (!res.ok) toast.error(res.message)
+      })
+    },
+    [activeId, currentUser],
+  )
+
+  // Отложенная отправка (Telegram). Без оптимистичного баббла — строка
+  // приедет обычным revalidate с превью «[Запланировано на …]».
+  const scheduleSend = useCallback(
+    (body: string, scheduleAtIso: string) => {
+      if (!activeId) return
+      const id = activeId
+      startTransition(async () => {
+        const res = await sendCuratorScheduledMessageAction(
+          id,
+          body,
+          scheduleAtIso,
+        )
+        if (res.ok) toast.success(res.message)
+        else toast.error(res.message)
+      })
+    },
+    [activeId],
+  )
+
+  // Цели пересылки: остальные переданные куратору Telegram-диалоги.
+  const forwardTargets: ForwardTarget[] = useMemo(
+    () =>
+      conversations
+        .filter((c) => c.channelType === 'telegram' && c.id !== activeId)
+        .map((c) => ({ id: c.id, name: c.contactName })),
+    [conversations, activeId],
+  )
 
   // Копировать текст сообщения в буфер обмена.
   const handleCopy = useCallback((message: Message) => {
@@ -244,8 +454,18 @@ export function useCuratorChats({
     handleSendMediaFile,
     replyTarget,
     setReplyTarget,
+    editTarget,
+    setEditTarget,
     handleReply,
+    handleEdit,
     handleCopy,
+    reactTo,
+    deleteMessage,
+    forwardMessage,
+    forwardTargets,
+    sendSticker,
+    sendVoice,
+    scheduleSend,
     pending,
     syncState,
   }

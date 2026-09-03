@@ -3,16 +3,18 @@
 /**
  * Раздел «Чаты» куратора: список переданных диалогов + тред + композер.
  * Полноэкранная раскладка (dashboard-shell отдаёт /curator/chats как fullBleed,
- * без полей и внешнего скролла — как менеджерский инбокс). Тред переиспользует
- * богатый презентационный MessageList менеджера (баблы, цитаты, реакции-дисплей,
- * медиа, тики, разделители дней, бесконечная подгрузка вверх) в режиме
- * readOnlyActions: куратору доступны только «Ответить» и «Копировать», без
- * провайдер-действий (реакции/пересылка/редактирование/удаление). Состояние —
- * в use-curator-chats, здесь только вёрстка и локальный UI-стейт панелей.
+ * без полей и внешнего скролла — как менеджерский инбокс). Тред и композер
+ * переиспуют РОВНО те же компоненты, что и у менеджера (MessageList +
+ * MessageComposer): куратору доступен полный набор действий — ответ, копия,
+ * реакции, редактирование своих, удаление, пересылка, стикеры, голосовые и
+ * отложенная отправка. Все серверные экшены скоуплены по curator_id (см.
+ * app/actions/curator-messages). Состояние — в use-curator-chats, здесь только
+ * вёрстка и локальный UI-стейт панелей.
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import {
   ArrowLeft,
   ArrowDownUp,
@@ -20,11 +22,10 @@ import {
   Check,
   Info,
   MessageCircle,
-  Paperclip,
+  Pencil,
   Radio,
   Reply,
   Search,
-  SendHorizonal,
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -36,11 +37,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import type { Conversation, Message } from '@/lib/types'
+import type { Conversation, Message, StickerItem } from '@/lib/types'
 import { ContactAvatar, MetaRows, SourceChip } from '@/components/manager/inbox/atoms'
 import { MessageList } from '@/components/manager/inbox/message-list'
-import { EmojiPicker } from '@/components/manager/inbox/pickers'
+import { MessageComposer } from '@/components/manager/inbox/message-composer'
 import { CHANNEL_VISUAL, listStamp } from '@/components/manager/inbox/visual'
+import type { ForwardTarget } from '@/components/manager/message-context-menu'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { LeadStatusForm } from '@/components/curator/lead-panel-forms'
 import { useCuratorChats } from '@/components/curator/chats/use-curator-chats'
@@ -165,8 +167,18 @@ export function CuratorInbox({
     handleSendMediaFile,
     replyTarget,
     setReplyTarget,
+    editTarget,
+    setEditTarget,
     handleReply,
+    handleEdit,
     handleCopy,
+    reactTo,
+    deleteMessage,
+    forwardMessage,
+    forwardTargets,
+    sendSticker,
+    sendVoice,
+    scheduleSend,
     pending,
   } = useCuratorChats({ conversations, messagesByConversation, currentUser })
 
@@ -355,10 +367,20 @@ export function CuratorInbox({
             onBack={() => setActiveId(null)}
             onSend={handleSend}
             onSendMediaFile={handleSendMediaFile}
+            onSendSticker={sendSticker}
+            onSendVoice={sendVoice}
+            onScheduleSend={scheduleSend}
             onReply={handleReply}
+            onEdit={handleEdit}
+            onReact={reactTo}
+            onDelete={deleteMessage}
+            onForward={forwardMessage}
+            forwardTargets={forwardTargets}
             onCopy={handleCopy}
             replyTarget={replyTarget}
             onCancelReply={() => setReplyTarget(null)}
+            editTarget={editTarget}
+            onCancelEdit={() => setEditTarget(null)}
             infoOpen={infoOpen}
             onToggleInfo={() => setInfoOpen((v) => !v)}
             pending={pending}
