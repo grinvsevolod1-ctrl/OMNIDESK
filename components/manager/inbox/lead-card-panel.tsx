@@ -75,7 +75,7 @@ export function LeadCardPanel({
         onClick={toggleOpen}
       >
         <ClipboardList className="size-4" />
-        <span className="hidden sm:inline">Карточка</span>
+        <span className="hidden sm:inline">Передать</span>
       </Button>
 
       {/* Mobile-only dim backdrop with a smooth fade (desktop keeps the
