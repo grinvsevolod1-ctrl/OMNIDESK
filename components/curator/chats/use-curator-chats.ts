@@ -1,0 +1,211 @@
+'use client'
+
+/**
+ * Состояние раздела «Чаты» куратора: выбор активного диалога, локальный кэш
+ * сообщений с оптимистичными апдейтами, реалтайм через общий /api/stream
+ * (события уже приходят скоупленные по curator_id — см. app/api/stream),
+ * и обработчики отправки (текст + фото/файл). Намеренно проще менеджерского
+ * useInbox: у куратора нет реакций/пересылки/стикеров/голосовых/расписания —
+ * только чтение истории и ответ текстом или вложением.
+ */
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
+import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
+import type { Conversation, Message } from '@/lib/types'
+import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
+import {
+  loadCuratorThreadMessagesAction,
+  loadOlderCuratorMessagesAction,
+  markCuratorConversationReadAction,
+  sendCuratorMessageAction,
+} from '@/app/actions/curator-messages'
+
+export function useCuratorChats({
+  conversations,
+  messagesByConversation,
+  currentUser,
+}: {
+  conversations: Conversation[]
+  messagesByConversation: Record<string, Message[]>
+  currentUser: string
+}) {
+  const router = useRouter()
+  const [pending, startTransition] = useTransition()
+
+  const [activeId, setActiveId] = useState<string | null>(
+    conversations[0]?.id ?? null,
+  )
+  const [localMessages, setLocalMessages] = useState<
+    Record<string, Message[]>
+  >(messagesByConversation)
+  const [threadLoading, setThreadLoading] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [noOlder, setNoOlder] = useState<Record<string, boolean>>({})
+
+  // Держим локальный кэш в синхроне с новыми SSR-данными (router.refresh).
+  useEffect(() => {
+    setLocalMessages((prev) => {
+      const next = { ...prev }
+      for (const [id, msgs] of Object.entries(messagesByConversation)) {
+        // Свежие серверные данные заменяют локальные, кроме tmp-оптимистичных.
+        next[id] = msgs
+      }
+      return next
+    })
+  }, [messagesByConversation])
+
+  const { syncState } = useInboxRealtime({ router, setLocalMessages })
+
+  const active = useMemo(
+    () => conversations.find((c) => c.id === activeId) ?? null,
+    [conversations, activeId],
+  )
+  const thread = activeId ? (localMessages[activeId] ?? []) : []
+
+  // Холодный диалог (вне SSR-слайса): догружаем историю при первом открытии.
+  const hydratedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!activeId) return
+    if (hydratedRef.current.has(activeId)) return
+    if ((localMessages[activeId]?.length ?? 0) > 0) {
+      hydratedRef.current.add(activeId)
+      return
+    }
+    hydratedRef.current.add(activeId)
+    setThreadLoading(true)
+    const id = activeId
+    startTransition(async () => {
+      const res = await loadCuratorThreadMessagesAction(id)
+      if (res.ok) {
+        setLocalMessages((prev) => ({ ...prev, [id]: res.messages }))
+      }
+      setThreadLoading(false)
+    })
+  }, [activeId, localMessages])
+
+  // Отметить прочитанным при открытии (best-effort).
+  useEffect(() => {
+    if (!activeId) return
+    const id = activeId
+    void markCuratorConversationReadAction(id).catch(() => {})
+  }, [activeId])
+
+  const loadOlder = useCallback(() => {
+    if (!activeId || loadingOlder) return
+    const id = activeId
+    const oldest = (localMessages[id] ?? [])[0]
+    if (!oldest) return
+    setLoadingOlder(true)
+    startTransition(async () => {
+      const res = await loadOlderCuratorMessagesAction(id, oldest.createdAt)
+      if (res.ok) {
+        setLocalMessages((prev) => ({
+          ...prev,
+          [id]: [...res.messages, ...(prev[id] ?? [])],
+        }))
+        if (!res.hasMore) setNoOlder((p) => ({ ...p, [id]: true }))
+      }
+      setLoadingOlder(false)
+    })
+  }, [activeId, loadingOlder, localMessages])
+
+  const handleSend = useCallback(
+    (text: string) => {
+      if (!activeId) return
+      const body = text.trim()
+      if (!body) return
+      const id = activeId
+      const optimistic: Message = {
+        id: `tmp_${Date.now()}`,
+        conversationId: id,
+        direction: 'out',
+        body,
+        author: currentUser,
+        createdAt: new Date().toISOString(),
+        status: 'sent',
+      }
+      setLocalMessages((prev) => ({
+        ...prev,
+        [id]: [...(prev[id] ?? []), optimistic],
+      }))
+      startTransition(async () => {
+        const res = await sendCuratorMessageAction(id, body)
+        if (!res.ok) toast.error(res.message)
+      })
+    },
+    [activeId, currentUser],
+  )
+
+  // Прикрепить и отправить файл (WhatsApp/VK) через curator-media API-роут.
+  // Telegram-медиа в объём куратора не входит — кнопка появляется только для
+  // whatsapp/vk (см. композер). Ответ прилетит обратно по SSE.
+  const handleSendMediaFile = useCallback(
+    (file: File, caption: string) => {
+      if (!activeId || !active) return
+      const channelType = active.channelType
+      if (channelType !== 'whatsapp' && channelType !== 'vk') return
+      const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+      if (file.size > MAX_UPLOAD_BYTES) {
+        toast.error('Файл слишком большой (максимум 200 МБ).')
+        return
+      }
+      const fd = new FormData()
+      fd.append('conversationId', activeId)
+      fd.append('channel', channelType)
+      fd.append('file', file)
+      const trimmed = caption.trim()
+      if (trimmed) fd.append('caption', trimmed)
+      startTransition(async () => {
+        try {
+          const resp = await fetch('/api/curator-media/upload', {
+            method: 'POST',
+            body: fd,
+          })
+          let res: { ok?: boolean; message?: string } = {}
+          try {
+            res = (await resp.json()) as typeof res
+          } catch {
+            /* не-JSON (обрезано прокси) — по статусу ниже */
+          }
+          if (resp.ok && res.ok) {
+            toast.success(res.message ?? 'Файл отправлен.')
+          } else {
+            toast.error(
+              res.message ??
+                (resp.status === 413
+                  ? 'Файл слишком большой для сервера.'
+                  : 'Не удалось отправить файл. Попробуйте ещё раз.'),
+            )
+          }
+        } catch (err) {
+          console.error('[v0] curator media upload failed:', err)
+          toast.error('Сеть прервала загрузку. Попробуйте снова.')
+        }
+      })
+    },
+    [activeId, active],
+  )
+
+  return {
+    activeId,
+    setActiveId,
+    active,
+    thread,
+    threadLoading,
+    loadingOlder,
+    noOlder,
+    loadOlder,
+    handleSend,
+    handleSendMediaFile,
+    pending,
+    syncState,
+  }
+}

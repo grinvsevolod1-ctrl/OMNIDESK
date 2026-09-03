@@ -123,6 +123,10 @@ export function toConversation(r: ConversationRow): Conversation {
     aiHandoffAt: r.ai_handoff_at
       ? new Date(r.ai_handoff_at).toISOString()
       : undefined,
+    transferred: Boolean(r.curator_id),
+    transferredToCuratorAt: r.transferred_to_curator_at
+      ? new Date(r.transferred_to_curator_at).toISOString()
+      : undefined,
   }
 }
 

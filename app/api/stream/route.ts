@@ -27,6 +27,12 @@ export async function GET(request: Request): Promise<Response> {
   }
   const managerId = session.sub
   const isAdmin = session.role === 'admin'
+  // Куратор подключается к тому же SSE для раздела «Чаты» (миграция 151):
+  // его события скоупятся по curator_id, а не manager_id. viewerId — id
+  // текущего зрителя в любой роли; isCurator меняет и фильтрацию, и
+  // gap-recovery (у куратора нет менеджерского бэкфилла — шлём resync).
+  const viewerId = session.sub
+  const isCurator = session.role === 'curator'
   const lastEventId = request.headers.get('last-event-id')
 
   const encoder = new TextEncoder()
@@ -62,7 +68,11 @@ export async function GET(request: Request): Promise<Response> {
       send('ready', { ok: true, at: new Date().toISOString() })
 
       // Gap recovery: replay messages missed while the client was disconnected.
-      if (lastEventId) {
+      // Куратор: менеджерского бэкфилла нет — при реконнекте с Last-Event-ID
+      // просто просим клиента перезапросить данные (resync), без id.
+      if (lastEventId && isCurator) {
+        send('update', { type: 'conversation', managerId: viewerId, event: 'resync' })
+      } else if (lastEventId) {
         const since = new Date(lastEventId)
         if (!Number.isNaN(since.getTime())) {
           try {
@@ -133,6 +143,15 @@ export async function GET(request: Request): Promise<Response> {
           ) {
             send('lead', { type: 'lead' })
           }
+          return
+        }
+        // Куратор: доставляем ТОЛЬКО message/conversation-события его
+        // переданных диалогов (по curator_id). Эфемерные typing/presence и
+        // channel-события — менеджерские, куратору не нужны.
+        if (isCurator) {
+          if (event.type !== 'message' && event.type !== 'conversation') return
+          if (event.curatorId !== viewerId) return
+          send('update', event, event.createdAt)
           return
         }
         // Only deliver events scoped to this manager.

@@ -123,8 +123,9 @@ export async function recordTransfer(
   },
   db?: DbExecutor,
 ): Promise<void> {
-  const run = () =>
-    (db ?? { query }).query(
+  const exec = db ?? { query }
+  const run = async () => {
+    await exec.query(
       `INSERT INTO lead_transfers
          (id, lead_card_id, from_curator_id, to_curator_id,
           from_curator_name, to_curator_name, initiated_by, initiated_by_role)
@@ -141,6 +142,23 @@ export async function recordTransfer(
         input.initiatedByRole,
       ],
     )
+    // Раздел «Чаты» куратора (миграция 151): вслед за передачей ЛИДА привязываем
+    // его ДИАЛОГ к тому же куратору — единый chokepoint для всех путей передачи
+    // (прямая передача менеджером, захват из пула, передача между кураторами,
+    // переназначение админом). Диалог остаётся во владении менеджера; у куратора
+    // появляется параллельная ссылка curator_id, ИИ менеджера ставится на паузу.
+    // Лиды без диалога (conversation_id IS NULL) просто не затрагиваются.
+    await exec.query(
+      `UPDATE conversations c
+          SET curator_id = $2,
+              transferred_to_curator_at = now(),
+              ai_paused = true
+         FROM lead_cards lc
+        WHERE lc.id = $1
+          AND lc.conversation_id = c.id`,
+      [input.leadCardId, input.toCuratorId],
+    )
+  }
   if (db) {
     // See recordStatusHistory: inside a transaction errors must propagate.
     await run()

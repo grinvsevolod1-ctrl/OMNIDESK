@@ -7,6 +7,7 @@ import { requireCurator } from '@/lib/auth'
 
 const nav: NavItem[] = [
   { href: '/curator', label: 'Обзор', icon: 'overview' },
+  { href: '/curator/chats', label: 'Чаты', icon: 'inbox' },
   { href: '/curator/settings', label: 'Настройки', icon: 'settings' },
 ]
 

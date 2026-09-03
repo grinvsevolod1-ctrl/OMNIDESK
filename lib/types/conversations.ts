@@ -101,6 +101,16 @@ export interface Conversation {
   aiHandoffPending?: boolean
   /** When the AI handed this lead off (ISO), for ordering notifications. */
   aiHandoffAt?: string
+  /**
+   * True when the lead was передан куратору (миграция 151): диалог виден
+   * менеджеру только для чтения, а активно ведёт его куратор. ИИ менеджера при
+   * этом молчит (гейт curator_id IS NULL).
+   */
+  transferred?: boolean
+  /** Имя куратора, которому передан диалог (для бейджа у менеджера). */
+  curatorName?: string
+  /** ISO-время передачи диалога куратору. */
+  transferredToCuratorAt?: string
 }
 
 /**

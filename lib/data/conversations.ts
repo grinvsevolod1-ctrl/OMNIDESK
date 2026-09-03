@@ -31,10 +31,14 @@ const CONVERSATION_LIST_LIMIT = 500
 export async function listConversations(
   managerId: string,
 ): Promise<Conversation[]> {
-  const rows = await query<ConversationRow & { channel_name: string | null }>(
-    `SELECT ${conversationColumns('c')}, ch.name AS channel_name
+  const rows = await query<
+    ConversationRow & { channel_name: string | null; curator_name: string | null }
+  >(
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name,
+            cur.name AS curator_name
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
+       LEFT JOIN managers cur ON cur.id = c.curator_id
       WHERE c.manager_id = $1
       ORDER BY c.last_message_at DESC
       LIMIT $2`,
@@ -43,6 +47,7 @@ export async function listConversations(
   return rows.map((r) => ({
     ...toConversation(r),
     channelName: r.channel_name ?? undefined,
+    curatorName: r.curator_name ?? undefined,
   }))
 }
 

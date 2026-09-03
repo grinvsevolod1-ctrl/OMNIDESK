@@ -216,6 +216,15 @@ export async function getMessagesSince(
 export async function addMessage(input: {
   conversationId: string
   managerId: string
+  /**
+   * When set, the outbound message is sent by a CURATOR: ownership is checked
+   * against conversations.curator_id (not manager_id), and the human-takeover
+   * side-effects (ai_paused/status→handoff) are skipped — a curator-led dialog
+   * is already ai_paused and its status is managed via the lead card, not here.
+   * The row is still inserted under the conversation's manager_id owner so all
+   * existing manager-scoped reads keep working.
+   */
+  curatorId?: string
   body: string
   author: string
   /** Optional media descriptor, e.g. an outgoing sticker or WhatsApp file. */
@@ -244,13 +253,20 @@ export async function addMessage(input: {
   // Ownership is folded into the INSERT (INSERT ... SELECT ... WHERE manager_id)
   // so we neither insert into someone else's conversation nor pay an extra
   // round-trip for the check.
+  // Владение диалогом: обычно по manager_id, но для куратора — по curator_id.
+  // Курьерский INSERT ... SELECT встраивает проверку прямо в запрос, поэтому
+  // чужой диалог просто не вставит строку (0 rows → null, как и у менеджера).
+  const ownerScope = input.curatorId
+    ? { col: 'curator_id', id: input.curatorId }
+    : { col: 'manager_id', id: input.managerId }
+
   return withTransaction(async (db) => {
     const rows = await db.query<{ id: string }>(
       `INSERT INTO messages
          (conversation_id, direction, body, author, media_type, media_mime, media_name, media_ref, reply_to_message_id, status)
        SELECT c.id, 'out', $2, $3, $4, $5, $6, $7, $8, 'sent'
          FROM conversations c
-        WHERE c.id = $1 AND c.manager_id = $9
+        WHERE c.id = $1 AND c.${ownerScope.col} = $9
        RETURNING id`,
       [
         input.conversationId,
@@ -261,10 +277,10 @@ export async function addMessage(input: {
         input.mediaName ?? null,
         input.mediaRef ? JSON.stringify(input.mediaRef) : null,
         input.replyToMessageId ?? null,
-        input.managerId,
+        ownerScope.id,
       ],
     )
-    // No row inserted => the conversation doesn't belong to this manager.
+    // No row inserted => the conversation doesn't belong to this owner.
     if (rows.length === 0) return null
 
     // A human outbound message hands the thread back from the AI: pause AI-lead
@@ -277,7 +293,10 @@ export async function addMessage(input: {
     // «Не ликвид» / «Передан» classification is never clobbered. AI-authored rows
     // never touch the status. This mirrors the AI's own handoff and keeps the
     // «Ликвид» decision manager-only.
-    const humanTakeover = !input.byAi
+    //
+    // Куратор: пропускаем takeover-побочки — диалог уже ai_paused при линковке,
+    // а статус лида ведётся через карточку, не через сообщение.
+    const humanTakeover = !input.byAi && !input.curatorId
       ? `, ai_paused = true, ai_autopilot_enabled = false,
          status = CASE WHEN COALESCE(status, 'unsubscribed') = 'unsubscribed'
                        THEN 'handoff' ELSE status END,

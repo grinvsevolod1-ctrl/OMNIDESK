@@ -85,12 +85,16 @@ export async function listManualCorrectionRules(
  * exactly:
  *
  *   led = ai_assist_settings.enabled AND c.ai_enrolled AND NOT c.ai_paused
+ *         AND c.curator_id IS NULL
+ *
+ * curator_id gate (миграция 151): переданный куратору диалог ИИ не ведёт.
  */
 export async function isConversationAiLed(
   conversationId: string,
 ): Promise<boolean> {
   const row = await one<{ led: boolean }>(
-    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused) AS led
+    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused
+             AND c.curator_id IS NULL) AS led
        FROM conversations c
        CROSS JOIN ai_assist_settings s
       WHERE c.id = $1 AND s.id = true`,

@@ -284,6 +284,11 @@ export function useInbox({
     return aiMasterEnabled && !active.aiPaused
   }, [active, aiOverrides, aiMasterEnabled])
 
+  // Лид передан куратору (миграция 151): менеджер видит переписку только для
+  // чтения — композер блокируется, передача/AI-переключатель скрываются, из
+  // напоминаний диалог исключается. Ответственность за общение у куратора.
+  const activeTransferred = Boolean(active?.transferred)
+
   // NOTE: The outbound "agent is typing" indicator (a server action fired on
   // every keystroke) was removed for performance - a network round-trip per
   // character made the composer feel laggy. Typing is now purely local.
@@ -462,6 +467,7 @@ export function useInbox({
     pending,
     // active thread derived
     activeAiLed,
+    activeTransferred,
     activeTyping,
     activePresence,
     availableTypes,

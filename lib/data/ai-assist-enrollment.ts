@@ -12,16 +12,22 @@ import { query } from '../db'
  *   led = ai_assist_settings.enabled      -- master switch ON
  *         AND conversations.ai_enrolled    -- this dialog is AI-led
  *         AND NOT conversations.ai_paused   -- not temporarily paused
+ *         AND conversations.curator_id IS NULL  -- not handed to a curator
  *
  * New dialogs are auto-enrolled at creation, so the AI leads them out of the
  * box; pre-existing dialogs stay manual until an admin enrolls them. A single
  * CROSS JOIN keeps this cheap.
+ *
+ * curator_id gate (миграция 151): как только лид передан куратору, диалог ведёт
+ * куратор вручную — ИИ менеджера замолкает независимо от enrollment. Формула
+ * ДОЛЖНА совпадать с worker/src/repo-ai-context.ts#isConversationAiLed.
  */
 export async function isConversationAiLed(
   conversationId: string,
 ): Promise<boolean> {
   const rows = await query<{ led: boolean }>(
-    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused) AS led
+    `SELECT (s.enabled AND c.ai_enrolled AND NOT c.ai_paused
+             AND c.curator_id IS NULL) AS led
        FROM conversations c
        CROSS JOIN ai_assist_settings s
       WHERE c.id = $1 AND s.id = true`,

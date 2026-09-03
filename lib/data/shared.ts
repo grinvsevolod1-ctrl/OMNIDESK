@@ -86,6 +86,9 @@ export interface ConversationRow {
   ai_paused?: boolean | null
   ai_handoff_pending?: boolean | null
   ai_handoff_at?: string | Date | null
+  /** Куратор, которому передан диалог (миграция 151); null = не передан. */
+  curator_id?: string | null
+  transferred_to_curator_at?: string | Date | null
   created_at?: string | Date | null
 }
 
@@ -234,6 +237,7 @@ const CONVERSATION_COLUMN_NAMES = [
   'unread', 'status', 'status_detail', 'status_updated_at', 'reply_dismissed_at',
   'muted', 'meta', 'visitor_no', 'contact_blocked', 'contact_name_hidden',
   'ai_autopilot_enabled', 'ai_paused', 'ai_handoff_pending', 'ai_handoff_at',
+  'curator_id', 'transferred_to_curator_at',
   'created_at',
 ] as const
 
