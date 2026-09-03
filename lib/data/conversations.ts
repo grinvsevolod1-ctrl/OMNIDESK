@@ -132,6 +132,63 @@ export async function findOrCreateOutreachConversation(input: {
 }
 
 /**
+ * Curator variant of `findOrCreateOutreachConversation` (migration 151). Same
+ * shape, but the created/reused conversation is ALSO stamped with `curator_id`
+ * so it appears in the curator's «Чаты» (and the AI-manager stays silent — see
+ * isConversationAiLed). `manager_id` remains the outreach channel's owner: the
+ * curator has no Telegram account of their own; delivery runs under the owner.
+ * "Foreign" here means the thread already belongs to a DIFFERENT curator — we
+ * never hand a colleague's outreach thread over. A thread owned by the channel
+ * manager but not yet transferred to any curator is claimed by this curator.
+ */
+export async function findOrCreateCuratorOutreachConversation(input: {
+  channelId: string
+  managerId: string
+  curatorId: string
+  contactName: string
+  handle: string
+}): Promise<{ id: string; foreign: boolean } | null> {
+  const existing = await query<{ id: string; curator_id: string | null }>(
+    `SELECT id, curator_id FROM conversations
+      WHERE channel_id = $1 AND contact_handle = $2
+      ORDER BY last_message_at DESC
+      LIMIT 1`,
+    [input.channelId, input.handle],
+  )
+  if (existing[0]) {
+    if (existing[0].curator_id && existing[0].curator_id !== input.curatorId) {
+      return { id: existing[0].id, foreign: true }
+    }
+    // Claim an as-yet-unassigned thread for this curator (idempotent).
+    if (!existing[0].curator_id) {
+      await query(
+        `UPDATE conversations
+            SET curator_id = $2, transferred_to_curator_at = now()
+          WHERE id = $1 AND curator_id IS NULL`,
+        [existing[0].id, input.curatorId],
+      )
+    }
+    return { id: existing[0].id, foreign: false }
+  }
+  const created = await query<{ id: string }>(
+    `INSERT INTO conversations
+       (channel_id, manager_id, curator_id, transferred_to_curator_at,
+        channel_type, contact_name, contact_handle,
+        last_message, last_message_at, unread)
+     VALUES ($1, $2, $3, now(), 'telegram', $4, $5, '', now(), 0)
+     RETURNING id`,
+    [
+      input.channelId,
+      input.managerId,
+      input.curatorId,
+      input.contactName,
+      input.handle,
+    ],
+  )
+  return created[0] ? { id: created[0].id, foreign: false } : null
+}
+
+/**
  * List a manager's conversations filtered by EFFECTIVE lead status (and, for
  * «Не ликвид», optionally a reason sub-status). Powers the dashboard status
  * board's drill-down modal. Manager-scoped — never leaks other managers' leads.

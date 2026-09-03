@@ -45,6 +45,7 @@ import { CHANNEL_VISUAL, listStamp } from '@/components/manager/inbox/visual'
 import type { ForwardTarget } from '@/components/manager/message-context-menu'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { LeadStatusForm } from '@/components/curator/lead-panel-forms'
+import { CuratorOutreachButton } from '@/components/curator/chats/curator-outreach'
 import { useCuratorChats } from '@/components/curator/chats/use-curator-chats'
 import type { PanelChannelType } from '@/lib/types'
 import type { CuratorConversationStatus } from '@/lib/data/curator-conversations'
@@ -141,12 +142,15 @@ export function CuratorInbox({
   messagesByConversation,
   leadStatusByConversation,
   currentUser,
+  outreachAvailable = false,
 }: {
   conversations: Conversation[]
   messagesByConversation: Record<string, Message[]>
   /** Кураторский статус лида на диалог (свой набор статусов, миграция 151). */
   leadStatusByConversation: Record<string, CuratorConversationStatus>
   currentUser: string
+  /** Доступен ли аккаунт для исходящих (кнопка «Написать в ТГ» в шапке). */
+  outreachAvailable?: boolean
 }) {
   const router = useRouter()
   // Форма статуса и бейджи используют кураторский статус лида этого диалога.
@@ -247,12 +251,20 @@ export function CuratorInbox({
         <div className="flex flex-col gap-3 border-b border-border p-3">
           <div className="flex items-center justify-between px-1">
             <h1 className="text-base font-semibold">Чаты</h1>
-            <span className="text-xs text-muted-foreground">
-              {conversations.length}
-              {totalUnread > 0 ? (
-                <span className="ml-1 text-primary">· {totalUnread} новых</span>
-              ) : null}
-            </span>
+            <div className="flex items-center gap-2">
+              <CuratorOutreachButton
+                available={outreachAvailable}
+                onOpenConversation={setActiveId}
+              />
+              <span className="text-xs text-muted-foreground">
+                {conversations.length}
+                {totalUnread > 0 ? (
+                  <span className="ml-1 text-primary">
+                    · {totalUnread} новых
+                  </span>
+                ) : null}
+              </span>
+            </div>
           </div>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -418,10 +430,20 @@ function CuratorThread({
   onBack,
   onSend,
   onSendMediaFile,
+  onSendSticker,
+  onSendVoice,
+  onScheduleSend,
   onReply,
+  onEdit,
+  onReact,
+  onDelete,
+  onForward,
+  forwardTargets,
   onCopy,
   replyTarget,
   onCancelReply,
+  editTarget,
+  onCancelEdit,
   infoOpen,
   onToggleInfo,
   pending,
@@ -437,17 +459,33 @@ function CuratorThread({
   onBack: () => void
   onSend: (text: string) => void
   onSendMediaFile: (file: File, caption: string) => void
+  onSendSticker: (sticker: StickerItem) => void
+  onSendVoice: (audio: {
+    base64: string
+    mime: string
+    durationSec: number
+  }) => void
+  onScheduleSend: (text: string, scheduleAtIso: string) => void
   onReply: (m: Message) => void
+  onEdit: (m: Message) => void
+  onReact: (m: Message, emoji: string) => void
+  onDelete: (m: Message) => void
+  onForward: (m: Message, toConversationId: string) => void
+  forwardTargets: ForwardTarget[]
   onCopy: (m: Message) => void
   replyTarget: Message | null
   onCancelReply: () => void
+  editTarget: Message | null
+  onCancelEdit: () => void
   infoOpen: boolean
   onToggleInfo: () => void
   pending: boolean
 }) {
-  const canAttach =
-    active.channelType === 'whatsapp' || active.channelType === 'vk'
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
+  // Черновики в памяти на время жизни треда (MessageComposer ремоунтится на
+  // смену диалога через key, поэтому этого достаточно — как у менеджера, но без
+  // персистентного стора). Ключ — id диалога.
+  const draftsRef = useRef<Record<string, string>>({})
   const channelShort =
     CHANNEL_VISUAL[active.channelType as PanelChannelType]?.short ??
     active.channelType
@@ -535,23 +573,44 @@ function CuratorThread({
           noOlder={noOlder}
           loadingOlder={loadingOlder}
           onLoadOlder={onLoadOlder}
-          forwardTargets={[]}
+          forwardTargets={forwardTargets}
           activeTyping={null}
           messagesScrollRef={messagesScrollRef}
           onThreadScroll={() => {}}
           onReply={onReply}
-          onEdit={() => {}}
-          onReact={() => {}}
+          onEdit={onEdit}
+          onReact={onReact}
           onCopy={onCopy}
-          onForward={() => {}}
-          onDelete={() => {}}
+          onForward={onForward}
+          onDelete={onDelete}
           onShowHistory={() => {}}
-          readOnlyActions
         />
       )}
 
-      {/* Черновик ответа-цитаты */}
-      {replyTarget ? (
+      {/* Баннер редактирования — взаимоисключим с цитатой (как у менеджера) */}
+      {editTarget ? (
+        <div className="flex items-center gap-2 border-t border-border bg-muted/40 px-3 py-2 sm:px-4">
+          <Pencil className="size-4 shrink-0 text-primary" />
+          <div className="min-w-0 flex-1 border-l-2 border-primary/60 pl-2">
+            <p className="truncate text-xs font-semibold text-foreground">
+              Редактирование
+            </p>
+            <p className="truncate text-xs text-muted-foreground">
+              {editTarget.body || '[сообщение]'}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 shrink-0"
+            onClick={onCancelEdit}
+            aria-label="Отменить редактирование"
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+      ) : replyTarget ? (
         <div className="flex items-center gap-2 border-t border-border bg-muted/40 px-3 py-2 sm:px-4">
           <Reply className="size-4 shrink-0 text-primary" />
           <div className="min-w-0 flex-1 border-l-2 border-primary/60 pl-2">
@@ -576,12 +635,37 @@ function CuratorThread({
         </div>
       ) : null}
 
-      {/* Композер */}
-      <CuratorComposer
-        canAttach={canAttach}
-        pending={pending}
+      {/* Композер — ровно тот же, что у менеджера. Менеджерские фичи, которых
+          у куратора нет, нейтрализованы: ИИ всегда выключен (диалог уже передан
+          человеку), быстрых ответов и Telemost нет. Стикеры/голос/отложка/эмодзи
+          работают через кураторские экшены. */}
+      <MessageComposer
+        conversationId={active.id}
+        channelType={active.channelType}
+        channelId={active.channelId}
+        getInitialDraft={(id) => draftsRef.current[id] ?? ''}
+        onPersistDraft={(t) => {
+          draftsRef.current[active.id] = t
+        }}
         onSend={onSend}
+        onSendSticker={onSendSticker}
         onSendMediaFile={onSendMediaFile}
+        onSendVoice={onSendVoice}
+        onVoiceError={(m) => toast.error(m)}
+        onScheduleSend={onScheduleSend}
+        aiLed={false}
+        onBlockedInteract={() => {}}
+        onToggleAi={() => {}}
+        statusPending={false}
+        pending={pending}
+        quickReplies={[]}
+        telemostEnabled={false}
+        onStartMeeting={() => {}}
+        meetingPending={false}
+        replyActive={Boolean(replyTarget)}
+        editing={
+          editTarget ? { id: editTarget.id, body: editTarget.body ?? '' } : null
+        }
       />
     </>
   )
@@ -684,113 +768,5 @@ function CuratorInfoPanel({
         ) : null}
       </div>
     </aside>
-  )
-}
-
-function CuratorComposer({
-  canAttach,
-  pending,
-  onSend,
-  onSendMediaFile,
-}: {
-  canAttach: boolean
-  pending: boolean
-  onSend: (text: string) => void
-  onSendMediaFile: (file: File, caption: string) => void
-}) {
-  const [text, setText] = useState('')
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-
-  function submit() {
-    const body = text.trim()
-    if (!body) return
-    onSend(body)
-    setText('')
-  }
-
-  function insertEmoji(emoji: string) {
-    const el = textareaRef.current
-    if (!el) {
-      setText((t) => t + emoji)
-      return
-    }
-    const start = el.selectionStart ?? text.length
-    const end = el.selectionEnd ?? text.length
-    const next = text.slice(0, start) + emoji + text.slice(end)
-    setText(next)
-    // Вернуть каретку после вставленного эмодзи на следующем кадре.
-    requestAnimationFrame(() => {
-      el.focus()
-      const pos = start + emoji.length
-      el.setSelectionRange(pos, pos)
-    })
-  }
-
-  return (
-    <form
-      className="flex items-end gap-1.5 border-t border-border bg-card p-3"
-      onSubmit={(e) => {
-        e.preventDefault()
-        submit()
-      }}
-    >
-      {canAttach ? (
-        <>
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) {
-                onSendMediaFile(f, text.trim())
-                setText('')
-              }
-              e.target.value = ''
-            }}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-            disabled={pending}
-            onClick={() => fileInputRef.current?.click()}
-            aria-label="Прикрепить файл"
-            title="Прикрепить файл (фото, документ)"
-          >
-            <Paperclip className="size-4" />
-          </Button>
-        </>
-      ) : null}
-      <EmojiPicker onPick={insertEmoji} />
-      <textarea
-        ref={textareaRef}
-        value={text}
-        rows={1}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            submit()
-          }
-        }}
-        placeholder="Написать сообщение…"
-        aria-label="Текст ответа"
-        className="scrollbar-thin max-h-40 min-h-[40px] flex-1 resize-none rounded-2xl bg-muted px-4 py-2.5 text-sm leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/30"
-      />
-      <Button
-        type="submit"
-        size="icon"
-        className="size-10 shrink-0 rounded-full"
-        disabled={pending || !text.trim()}
-        aria-label="Отправить"
-      >
-        <SendHorizonal className="size-4" />
-      </Button>
-    </form>
   )
 }

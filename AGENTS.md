@@ -56,9 +56,22 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   `transferred_to_curator_at` + гейт `curator_id IS NULL` в `isConversationAiLed`
   (ИИ менеджера молчит после передачи), единый chokepoint линковки диалога —
   `recordTransfer`; куратор ведёт переданные диалоги на `/curator/chats`
-  (полноэкранный инбокс с инфо-панелью, поиском, фильтром «непрочитанные»,
-  ответом-цитатой и emoji; переиспользует богатый `MessageList` менеджера в
-  режиме `readOnlyActions`), менеджер видит их только для чтения; 152 —
+  (полноэкранный инбокс с инфо-панелью, поиском, фильтром «непрочитанные»).
+  **Инбокс куратора = ПОЛНЫЙ паритет с менеджером** (не read-only): тот же
+  богатый `MessageList` со всеми действиями (ответ-цитата, редактирование,
+  реакции, удаление, пересылка, копирование) и тот же `MessageComposer`
+  менеджера (стикеры/голос/отложка/эмодзи/вложения) — но менеджерские фичи,
+  которых у куратора нет, нейтрализованы: `aiLed=false` (диалог уже у человека),
+  без быстрых ответов и Telemost, черновики — в памяти на время жизни треда.
+  Действия проходят через curator-scoped экшены `app/actions/curator-messages.ts`
+  (скоуп по `curator_id`). Плюс аутрич: кнопка «Написать в ТГ» в шапке списка
+  (`components/curator/chats/curator-outreach.tsx` → `startCuratorTelegramOutreachAction`
+  в `app/actions/curator-outreach.ts`) шлёт первым с общего аккаунта для
+  исходящих (`getOutreachChannel`), создавая диалог сразу с `curator_id`
+  (`findOrCreateCuratorOutreachConversation`) — он появляется в «Чатах»
+  куратора, ИИ по нему молчит (гейт `curator_id IS NULL`), доставка идёт под
+  владельцем канала (`manager_id`); у куратора своего Telegram-аккаунта нет.
+  Менеджер по-прежнему видит переданные диалоги только для чтения; 152 —
   `managers.avatar_url`: локальная аватарка сотрудника (менеджер/куратор/
   руководитель) — сжатый на клиенте квадрат 256×256 в data:-URL, БЕЗ сторонних
   хранилищ, грузится в `/{app,curator,head}/settings` (`AvatarUploader` +
@@ -67,7 +80,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: teleproto (Telegram
-  MTProto; поддерживаемый форк GramJS, сам GramJS deprecated — мигрировали
+  MTProto; поддерживаемый форк GramJS, сам GramJS deprecated — мигр��ровали
   drop-in, импорты `teleproto`/`teleproto/*`), боты VK/MAX, обработка
   джобов. Запускается через PM2.
 - **PM2** (`ecosystem.config.js`) — 12 процессов: panel, worker, крон-джобы
@@ -78,7 +91,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   `tests/integration/*.test.ts` (`pnpm test:integration`): требуют
   `DATABASE_URL` (без него скипаются), проверяют гонку livechat-диалогов
   (миграция 128), IDOR-скоупинг сообщений/медиа, revocation сессий,
-  передачу диалогов (включая гонку двух одновременных передач) и
+  передачу диалогов (включая гонку двух одновре��енных передач) и
   журнал аудита (миграция 129).
 - **Виджет лайв-чата** — `widget-src/livechat.js`, собирается esbuild'ом
   (`scripts/build-widget.mjs`, minify) в `public/livechat.js`. НЕ редактируй
@@ -230,7 +243,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    (autoSpend, профили, кривые, слово «скрутка», сырой JSON state): контекст
    собирается как Direct-выгрузка — движение средств с датами (зачисление/
    израсходовано/остаток), расход по дням за 14 дней (та же per-day
-   математика, что у баланса: dailyBudget × weekdayFactor × jitter), кампании
+   матем��тика, что у баланса: dailyBudget × weekdayFactor × jitter), кампании
    по периодам с CTR/CPC/CPA и датами размещения. Вызов — общий AI Gateway
    (`lib/ai/brain/core`: GATEWAY_URL/resolveModel — разрешённое направление
    импорта; lib/ai-console НЕ должен импортировать god-report). Результат НЕ
@@ -492,7 +505,7 @@ lib/
                          с кириллицей — только lookaround `(?<![а-яё])`) →
                          уровень 2 (дешёвый LLM-роутер, generateObject, nano) →
                          уровень 3 (агент с инструментами; мутации ТОЛЬКО через
-                         propose_* + подтверждение кнопкой, исполняет отдельный
+                         propose_* + подтверждение кн��пкой, исполняет отдельный
                          action confirmOverviewActionAction). Admin-видимая
                          поверхность — в списке isolation.test.ts
   admin-console/         ОС-шелл-копилот всей админки (кроме god-панели)
@@ -540,7 +553,7 @@ lib/
                            dead letters, свежесть кронов)
                          прочее: ai-directives, ai-followup, ai-analytics,
                          ai-log (ai_logs), console-shell, jobs
-                         (enqueueJob — идемпотентность отправки, миграция 126)
+                         (enqueueJob — идемпотентнос��ь отправки, миграция 126)
   http/                  request.ts — zod-валидация входящих JSON
   hooks/                 клиентские хуки: use-shared-poll (ОБЩИЙ поллер — один
                          interval на канал, скрытые вкладки молчат; используй
@@ -576,7 +589,7 @@ lib/
                          (повторное включение = новый старт, spentToDate=0);
                          autoSpend.spentToDate — кумулятивно списанное с
                          баланса (ведёт commitAutoSpend посуточной симуляцией,
-                         не плоским days × budget) — капит историю завершённых
+                         не плоским days × budget) — капит историю завершённ��х
                          дней деньгами, которые реально были. Ручные
                          periodOverrides накладываются поверх и побеждают;
                          periodOverrides.today отбрасывается санитизацией
@@ -772,7 +785,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
   явно не влезет в ~300 строк одного файла — НЕ пиши один большой файл,
   сразу раскладывай по принятым паттернам проекта:
   - **Клиентский компонент с логикой** → тонкий контейнер `foo.tsx`
-    (состояние + вызовы server actions) + подпапка `foo/` с презентационными
+    (состояние + вызовы server actions) + подпапка `foo/` с презента��ионными
     подкомпонентами; переиспользуемая клиентская логика — в хук `use-*.ts`
     рядом. Эталоны: `components/shared/twofa-settings.tsx` + `twofa-settings/`,
     `components/manager/inbox-view.tsx` + `inbox/`.
@@ -843,7 +856,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 |---|---|
 | Новая возможность Admin AI | `lib/ai-console/run-assistant.ts` (+ `assistant.ts`, иконка в `ai-console.tsx`) |
 | Изменить поведение продавца | директивы `lib/data/ai-directives.ts` или промпт `lib/ai/manager-brain.ts` |
-| Изменить вход мозга (лимиты, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
+| Изменить вход мозга (лими��ы, RAG) | ТОЛЬКО `lib/ai/assemble-brain-input.ts` (раздел 7) |
 | Новая настройка ИИ | колонка в `ai_assist_settings` (миграция) → `lib/data/ai-assist-settings.ts` → инструмент co-pilot |
 | Новый канал / воркер | `worker/src/*`, `lib/autopilot/*`, доставка — `lib/outbound-dispatch.ts` |
 | БД-слой воркера | барели `worker/src/repo.ts` и `repo-ai.ts` |
@@ -852,7 +865,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
 | «Все лиды» (админ) | `all-leads-section.tsx` + `components/admin/leads/use-leads-data.ts` |
 | «Мои лиды» (менеджер по кадрам) | `components/curator/curator-leads-view.tsx` |
 | «Мои лиды» (менеджер) | `components/manager/manager-leads-view.tsx` |
-| Excel-выгрузки лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), клиент — `components/admin/leads/xlsx-download.ts` |
+| Excel-выгруз��и лидов | `app/actions/leads-export.ts` (три роли: админ / менеджер / менеджер по кадрам), клиент — `components/admin/leads/xlsx-download.ts` |
 | Realtime лидов (push) | миграция 127 + `app/api/stream/route.ts` + `lib/hooks/use-lead-events.ts` |
 | Карточка лида (куратор) | `lead-detail-panel.tsx` + `components/curator/lead-detail/*` |
 | Инбокс менеджера | `inbox-view.tsx` + `components/manager/inbox/use-inbox.ts` (+ шорткаты `use-inbox-shortcuts.ts`) |

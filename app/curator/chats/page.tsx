@@ -1,4 +1,5 @@
 import { requireCurator } from '@/lib/auth'
+import { getOutreachChannel } from '@/lib/data'
 import {
   listConversationsForCurator,
   listCuratorLeadStatuses,
@@ -15,10 +16,15 @@ export default async function CuratorChatsPage() {
   const user = await requireCurator()
   const conversations = await listConversationsForCurator(user.sub)
   const conversationIds = conversations.map((c) => c.id)
-  const [messagesByConversation, leadStatusByConversation] = await Promise.all([
-    listMessagesForConversationsCurator(conversationIds, user.sub),
-    listCuratorLeadStatuses(conversationIds, user.sub),
-  ])
+  const [messagesByConversation, leadStatusByConversation, outreachChannel] =
+    await Promise.all([
+      listMessagesForConversationsCurator(conversationIds, user.sub),
+      listCuratorLeadStatuses(conversationIds, user.sub),
+      getOutreachChannel(),
+    ])
+  const outreachAvailable = Boolean(
+    outreachChannel && outreachChannel.status === 'connected',
+  )
 
   return (
     // Полноэкранная страница (dashboard-shell отдаёт /curator/chats как
@@ -29,6 +35,7 @@ export default async function CuratorChatsPage() {
         messagesByConversation={messagesByConversation}
         leadStatusByConversation={leadStatusByConversation}
         currentUser={user.name}
+        outreachAvailable={outreachAvailable}
       />
     </div>
   )
