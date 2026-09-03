@@ -33,7 +33,7 @@ import {
 } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import type { StickerItem } from '@/lib/types'
-import type { EmojiCategory } from './emoji-data'
+import { EMOJI_CATEGORIES } from './emoji-data'
 
 /* ------------------------------ Emoji picker ------------------------------ */
 
@@ -115,33 +115,22 @@ const EmojiGrid = memo(function EmojiGrid({
 })
 
 /**
- * Эмодзи-пикер композера: ленивые данные (динамический import при первом
- * открытии), вкладки категорий, «Недавние» в localStorage. Контент попапа
- * монтируется только когда он открыт.
+ * Эмодзи-пикер композера: данные импортируются СТАТИЧЕСКИ (палитра — всего
+ * пара КБ строк-констант), поэтому попап открывается МГНОВЕННО — без
+ * динамического import, без спиннера и без сброса при ремоунте композера
+ * (раньше `key`-ремоунт на смену диалога обнулял categories и заставлял модуль
+ * «грузиться» заново со спиннером на каждом открытии). «Недавние» читаются в
+ * обработчике открытия, а не в эффекте, чтобы не плодить каскадные рендеры.
  */
 export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
   const [open, setOpen] = useState(false)
-  const [categories, setCategories] = useState<EmojiCategory[] | null>(null)
   const [tab, setTab] = useState('smileys')
   const [recent, setRecent] = useState<string[]>([])
 
-  // Палитра (~1200 эмодзи) не входит в бандл композера — подгружаем модуль
-  // при первом открытии и держим в состоянии навсегда. «Недавние» читаются
-  // в обработчике открытия (не в эффекте), чтобы не плодить каскадные рендеры.
-  const handleOpenChange = useCallback(
-    (next: boolean) => {
-      setOpen(next)
-      if (next) {
-        setRecent(readRecent())
-        if (!categories) {
-          void import('./emoji-data').then((m) =>
-            setCategories(m.EMOJI_CATEGORIES),
-          )
-        }
-      }
-    },
-    [categories],
-  )
+  const handleOpenChange = useCallback((next: boolean) => {
+    setOpen(next)
+    if (next) setRecent(readRecent())
+  }, [])
 
   const handlePick = useCallback(
     (emoji: string) => {
@@ -154,7 +143,7 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
   const activeEmojis =
     tab === 'recent'
       ? recent
-      : (categories?.find((c) => c.id === tab)?.emojis ?? [])
+      : (EMOJI_CATEGORIES.find((c) => c.id === tab)?.emojis ?? [])
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -172,70 +161,64 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
         }
       />
       <PopoverContent align="start" className="w-96 p-0">
-        {!categories ? (
-          <div className="flex h-72 items-center justify-center">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : (
-          <div className="flex h-72 flex-col">
-            {/* Вкладки категорий */}
-            <div
-              className="scrollbar-thin flex items-center gap-0.5 overflow-x-auto border-b border-border px-1.5 py-1"
-              role="tablist"
-              aria-label="Категории эмодзи"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === 'recent'}
-                onClick={() => setTab('recent')}
-                className={cn(
-                  'flex size-7 shrink-0 items-center justify-center rounded-md transition-colors',
-                  tab === 'recent'
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground hover:bg-muted/60',
-                )}
-                aria-label="Недавние"
-                title="Недавние"
-              >
-                <Clock3 className="size-4" />
-              </button>
-              {categories.map((c) => {
-                const TabIcon = CATEGORY_ICONS[c.id] ?? Smile
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={tab === c.id}
-                    onClick={() => setTab(c.id)}
-                    className={cn(
-                      'flex size-7 shrink-0 items-center justify-center rounded-md transition-colors',
-                      tab === c.id
-                        ? 'bg-muted text-foreground'
-                        : 'text-muted-foreground hover:bg-muted/60',
-                    )}
-                    aria-label={c.label}
-                    title={c.label}
-                  >
-                    <TabIcon className="size-4" />
-                  </button>
-                )
-              })}
-            </div>
-
-            {/* Сетка активной категории */}
-            <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
-              {tab === 'recent' && recent.length === 0 ? (
-                <p className="px-2 py-10 text-center text-xs text-muted-foreground">
-                  Здесь появятся эмодзи, которые вы используете чаще всего
-                </p>
-              ) : (
-                <EmojiGrid emojis={activeEmojis} onPick={handlePick} />
+        <div className="flex h-72 flex-col">
+          {/* Вкладки категорий */}
+          <div
+            className="scrollbar-thin flex items-center gap-0.5 overflow-x-auto border-b border-border px-1.5 py-1"
+            role="tablist"
+            aria-label="Категории эмодзи"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'recent'}
+              onClick={() => setTab('recent')}
+              className={cn(
+                'flex size-7 shrink-0 items-center justify-center rounded-md transition-colors',
+                tab === 'recent'
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:bg-muted/60',
               )}
-            </div>
+              aria-label="Недавние"
+              title="Недавние"
+            >
+              <Clock3 className="size-4" />
+            </button>
+            {EMOJI_CATEGORIES.map((c) => {
+              const TabIcon = CATEGORY_ICONS[c.id] ?? Smile
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === c.id}
+                  onClick={() => setTab(c.id)}
+                  className={cn(
+                    'flex size-7 shrink-0 items-center justify-center rounded-md transition-colors',
+                    tab === c.id
+                      ? 'bg-muted text-foreground'
+                      : 'text-muted-foreground hover:bg-muted/60',
+                  )}
+                  aria-label={c.label}
+                  title={c.label}
+                >
+                  <TabIcon className="size-4" />
+                </button>
+              )
+            })}
           </div>
-        )}
+
+          {/* Сетка активной категории */}
+          <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
+            {tab === 'recent' && recent.length === 0 ? (
+              <p className="px-2 py-10 text-center text-xs text-muted-foreground">
+                Здесь появятся эмодзи, которые вы используете чаще всего
+              </p>
+            ) : (
+              <EmojiGrid emojis={activeEmojis} onPick={handlePick} />
+            )}
+          </div>
+        </div>
       </PopoverContent>
     </Popover>
   )
@@ -301,7 +284,7 @@ export function StickerPicker({
         ) : !stickers || stickers.length === 0 ? (
           <p className="px-2 py-8 text-center text-xs text-muted-foreground">
             Нет доступных стикеров. Добавьте стикеры в избранное в Telegram, и
-            они появятся здесь.
+            они п��явятся здесь.
           </p>
         ) : (
           <div className="scrollbar-thin grid max-h-64 grid-cols-4 gap-1 overflow-y-auto">
