@@ -5,6 +5,7 @@ import { ChevronUp, History, Loader2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
+  BasicMessageMenu,
   MessageContextMenu,
   type ForwardTarget,
 } from '@/components/manager/message-context-menu'
@@ -44,6 +45,7 @@ export function MessageList({
   onShowHistory,
   highlightedId,
   onBubbleClick,
+  readOnlyActions = false,
 }: {
   active: Conversation
   activeId: string | null
@@ -68,6 +70,12 @@ export function MessageList({
   highlightedId?: string | null
   /** Клик по бабблу — выбор медиа в режиме «прикрепить к карточке». */
   onBubbleClick?: (message: Message) => void
+  /**
+   * Роль без провайдер-действий (куратор): полное контекстное меню и toggle
+   * реакций отключаются, вместо них — базовое меню «Ответить/Копировать».
+   * Реакции при этом всё равно ОТОБРАЖАЮТСЯ (они пришли от собеседника).
+   */
+  readOnlyActions?: boolean
 }) {
   // Infinite scroll up: when the top sentinel becomes visible near the top of
   // the feed, older messages load automatically — no button press needed.
@@ -204,7 +212,10 @@ export function MessageList({
                     m.body &&
                     m.mediaType !== 'sticker' &&
                     !(hasMedia && isMediaPlaceholder(m.body))
-                  const canAct = active.channelType === 'telegram'
+                  const isTelegram = active.channelType === 'telegram'
+                  // Полные провайдер-действия только у менеджера на Telegram;
+                  // у куратора (readOnlyActions) — базовое меню ниже.
+                  const canAct = isTelegram && !readOnlyActions
                   const reactions = m.reactions ?? []
 
                   const bubble = (
@@ -348,6 +359,16 @@ export function MessageList({
                         >
                           {bubble}
                         </MessageContextMenu>
+                      ) : readOnlyActions ? (
+                        <BasicMessageMenu
+                          message={m}
+                          // Ответ-цитата пробрасывается только на Telegram,
+                          // где воркер её поддерживает; копирование — везде.
+                          onReply={isTelegram ? onReply : undefined}
+                          onCopy={onCopy}
+                        >
+                          {bubble}
+                        </BasicMessageMenu>
                       ) : (
                         bubble
                       )}

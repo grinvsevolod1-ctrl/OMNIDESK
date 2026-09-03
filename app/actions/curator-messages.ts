@@ -35,6 +35,7 @@ const CURATOR_CHATS_PATH = '/curator/chats'
 export async function sendCuratorMessageAction(
   conversationId: string,
   body: string,
+  replyToMessageId?: string,
 ): Promise<SimpleResult> {
   const session = await requireCurator()
   const text = body.trim()
@@ -51,6 +52,8 @@ export async function sendCuratorMessageAction(
     curatorId: session.sub,
     body: text,
     author: session.name,
+    // Ответ-цитата: воркер Telegram проставит reply_to при доставке.
+    replyToMessageId: replyToMessageId || undefined,
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
 

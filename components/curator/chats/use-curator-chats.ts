@@ -49,6 +49,10 @@ export function useCuratorChats({
   const [threadLoading, setThreadLoading] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [noOlder, setNoOlder] = useState<Record<string, boolean>>({})
+  // Цель ответа-цитаты (как в Telegram): выбранное сообщение показывается над
+  // композером и уходит в send как replyToMessageId. Сбрасывается при смене
+  // диалога и после отправки.
+  const [replyTarget, setReplyTarget] = useState<Message | null>(null)
 
   // Держим локальный кэш в синхроне с новыми SSR-данными (router.refresh).
   // Тот же паттерн «производное от пропсов», что и в useInbox менеджера —
@@ -96,10 +100,12 @@ export function useCuratorChats({
     })
   }, [activeId, localMessages])
 
-  // Отметить прочитанным при открытии (best-effort).
+  // Отметить прочитанным при открытии (best-effort) + сбросить черновик ответа.
   useEffect(() => {
     if (!activeId) return
     const id = activeId
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setReplyTarget(null)
     void markCuratorConversationReadAction(id).catch(() => {})
   }, [activeId])
 
@@ -128,6 +134,7 @@ export function useCuratorChats({
       const body = text.trim()
       if (!body) return
       const id = activeId
+      const reply = replyTarget
       const optimistic: Message = {
         id: `tmp_${Date.now()}`,
         conversationId: id,
@@ -136,18 +143,43 @@ export function useCuratorChats({
         author: currentUser,
         createdAt: new Date().toISOString(),
         status: 'sent',
+        // Оптимистичная цитата — сразу показываем в баббле до ответа сервера.
+        replyTo: reply
+          ? {
+              id: reply.id,
+              author: reply.author ?? '',
+              body: reply.body ?? '',
+              mediaType: reply.mediaType,
+            }
+          : undefined,
       }
       setLocalMessages((prev) => ({
         ...prev,
         [id]: [...(prev[id] ?? []), optimistic],
       }))
+      setReplyTarget(null)
       startTransition(async () => {
-        const res = await sendCuratorMessageAction(id, body)
+        const res = await sendCuratorMessageAction(id, body, reply?.id)
         if (!res.ok) toast.error(res.message)
       })
     },
-    [activeId, currentUser],
+    [activeId, currentUser, replyTarget],
   )
+
+  // Выбрать сообщение для ответа-цитаты (из контекстного меню бабла).
+  const handleReply = useCallback((message: Message) => {
+    setReplyTarget(message)
+  }, [])
+
+  // Копировать текст сообщения в буфер обмена.
+  const handleCopy = useCallback((message: Message) => {
+    const text = message.body ?? ''
+    if (!text) return
+    void navigator.clipboard
+      ?.writeText(text)
+      .then(() => toast.success('Скопировано'))
+      .catch(() => toast.error('Не удалось скопировать'))
+  }, [])
 
   // Прикрепить и отправить файл (WhatsApp/VK) через curator-media API-роут.
   // Telegram-медиа в объём куратора не входит — кнопка появляется только для
@@ -210,6 +242,10 @@ export function useCuratorChats({
     loadOlder,
     handleSend,
     handleSendMediaFile,
+    replyTarget,
+    setReplyTarget,
+    handleReply,
+    handleCopy,
     pending,
     syncState,
   }

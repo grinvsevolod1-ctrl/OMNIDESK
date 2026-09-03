@@ -4,6 +4,7 @@ import { MyGeoSettings } from '@/components/curator/my-geo-settings'
 import { ChangePasswordForm } from '@/components/manager/change-password-form'
 import { NotificationSettings } from '@/components/manager/notification-settings'
 import { PageHeader } from '@/components/page-parts'
+import { AvatarUploader } from '@/components/shared/avatar-uploader'
 import { LoginHistory } from '@/components/shared/login-history'
 import { ProfileForm } from '@/components/shared/profile-form'
 import {
@@ -69,6 +70,12 @@ export default async function CuratorSettingsPage() {
         Ваше имя, логин и email для входа. Изменения применяются сразу; логин
         и email должны быть уникальны.
       </p>
+      <div className="mt-5 border-b border-border pb-5">
+        <AvatarUploader
+          name={session.name}
+          initialAvatarUrl={account?.avatarUrl ?? null}
+        />
+      </div>
       <div className="mt-5">
         <ProfileForm
           initialName={session.name}

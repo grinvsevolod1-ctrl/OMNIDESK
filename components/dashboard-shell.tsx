@@ -13,7 +13,7 @@ import { logoutAction } from '@/app/actions/auth'
 import { BrandMark } from '@/components/brand'
 import { NavLinks } from '@/components/dashboard-nav'
 import { Button } from '@/components/ui/button'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
   Tooltip,
   TooltipContent,
@@ -28,7 +28,7 @@ import type { NavItem } from '@/components/dashboard-nav'
 interface DashboardShellProps {
   nav: NavItem[]
   roleLabel: string
-  user: { name: string; email: string }
+  user: { name: string; email: string; avatarUrl?: string | null }
   /** Optional control rendered in the header, before the user identity. */
   headerSlot?: ReactNode
   children: ReactNode
@@ -63,7 +63,7 @@ export function DashboardShell({
 
   // Полноэкранные страницы (инбокс) занимают всю доступную высоту без полей и
   // прокрутки страницы — скроллится только их внутреннее содержимое.
-  const fullBleed = pathname.endsWith('/inbox')
+  const fullBleed = pathname.endsWith('/inbox') || pathname.endsWith('/curator/chats')
 
   // Restore the collapsed preference on mount (client-only) to avoid a
   // hydration mismatch, then persist any change the user makes.
@@ -262,6 +262,9 @@ export function DashboardShell({
               {headerSlot}
               <div className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm">
                 <Avatar className="size-7">
+                  {user.avatarUrl ? (
+                    <AvatarImage src={user.avatarUrl} alt={user.name} />
+                  ) : null}
                   <AvatarFallback className="bg-secondary text-xs font-medium text-secondary-foreground">
                     {initials(user.name)}
                   </AvatarFallback>

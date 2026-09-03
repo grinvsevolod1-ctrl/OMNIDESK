@@ -4,6 +4,7 @@ import { SWRProvider } from '@/components/swr-provider'
 import { NotificationGate } from '@/components/manager/notification-gate'
 import { NotificationProvider } from '@/components/manager/notification-provider'
 import { requireCurator } from '@/lib/auth'
+import { getManagerById } from '@/lib/data'
 
 const nav: NavItem[] = [
   { href: '/curator', label: 'Обзор', icon: 'overview' },
@@ -17,6 +18,9 @@ export default async function CuratorLayout({
   children: ReactNode
 }) {
   const user = await requireCurator()
+  // Аватарка не живёт в JWT (это был бы жирный data:-URL в cookie) — читаем
+  // строку сотрудника из БД для шапки. Best-effort: без неё покажем инициалы.
+  const account = await getManagerById(user.sub).catch(() => null)
 
   return (
     <SWRProvider>
@@ -24,7 +28,11 @@ export default async function CuratorLayout({
         <DashboardShell
           nav={nav}
           roleLabel="Менеджер по кадрам"
-          user={{ name: user.name, email: user.email }}
+          user={{
+            name: user.name,
+            email: user.email,
+            avatarUrl: account?.avatarUrl ?? null,
+          }}
         >
           <NotificationGate>{children}</NotificationGate>
         </DashboardShell>

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
 import { SWRProvider } from '@/components/swr-provider'
 import { requireBuyer } from '@/lib/auth'
+import { getManagerById } from '@/lib/data'
 
 const nav: NavItem[] = [{ href: '/buyer', label: 'Обзор', icon: 'overview' }]
 

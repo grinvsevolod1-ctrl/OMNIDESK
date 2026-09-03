@@ -40,6 +40,8 @@ export interface ManagerRow {
   head_can_edit: boolean | null
   /** Telegram-контакт куратора для кандидатов (миграция 146). */
   telegram_contact: string | null
+  /** Локальная аватарка сотрудника — data:-URL в TEXT (миграция 152). */
+  avatar_url: string | null
   created_at: string | Date
 }
 
@@ -220,10 +222,10 @@ export const MESSAGE_REPLY_JOIN = `LEFT JOIN messages rt ON rt.id = m.reply_to_m
  * `SELECT m... FROM ... m` shapes.
  */
 const MANAGER_COLUMN_NAMES = [
-  'id', 'name', 'email', 'username', 'password_hash', 'status',
-  'session_version', 'on_lunch', 'role', 'city', 'head_can_edit',
-  'telegram_contact', 'created_at',
-] as const
+    'id', 'name', 'email', 'username', 'password_hash', 'status',
+    'session_version', 'on_lunch', 'role', 'city', 'head_can_edit',
+    'telegram_contact', 'avatar_url', 'created_at',
+  ] as const
 
 const CHANNEL_COLUMN_NAMES = [
   'id', 'manager_id', 'type', 'name', 'detail', 'status', 'session_status',

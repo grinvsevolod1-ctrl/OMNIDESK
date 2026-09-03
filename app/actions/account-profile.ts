@@ -18,6 +18,7 @@ import {
   sanitizeUsername,
   setManagerOnLunch,
   tryGoOnLunch,
+  updateManagerAvatar,
   updateManagerPassword,
   updateManagerProfile,
 } from '@/lib/data'
@@ -238,4 +239,77 @@ export async function updateMyProfileAction(
   revalidatePath('/curator/settings')
   revalidatePath('/head/settings')
   return { ok: true, message: 'Профиль обновлён.' }
+}
+
+/**
+ * Максимальный размер сохранённой аватарки (data:-URL). Картинка сжимается на
+ * клиенте до квадрата 256×256, так что реальные значения — десятки КБ; лимит
+ * с большим запасом отсекает попытки записать в БД гигантскую строку. base64
+ * раздувает бинарь примерно в 4/3, поэтому 512 КБ строки ≈ ~380 КБ картинки.
+ */
+const MAX_AVATAR_DATAURL_LEN = 512 * 1024
+
+/** Разрешённые форматы локальной аватарки (сжатие на клиенте — JPEG/WebP/PNG). */
+const AVATAR_DATAURL_RE = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/
+
+/**
+ * Загрузка / сброс собственной аватарки для ролей из таблицы managers
+ * (менеджер, куратор, руководитель). ПОЛНОСТЬЮ локально: принимаем сжатый
+ * на клиенте data:-URL, валидируем формат и размер и кладём в БД. Пустая
+ * строка / null — сброс к инициалам. Никаких сторонних хранилищ.
+ */
+export async function updateMyAvatarAction(
+  dataUrl: string | null,
+): Promise<SimpleResult> {
+  const session = await getSession()
+  if (!session || !isSelfManagedRole(session.role)) {
+    return { ok: false, message: 'Нет доступа.' }
+  }
+
+  const value = (dataUrl ?? '').trim()
+
+  // Сброс аватарки.
+  if (!value) {
+    await updateManagerAvatar(session.sub, null)
+    await writeAudit({
+      actorRole: session.role,
+      actorId: session.sub,
+      actorLabel: session.name,
+      action: 'account.avatar_update',
+      entityType: 'manager',
+      entityId: session.sub,
+      details: { cleared: true },
+    })
+    revalidatePath('/app/settings')
+    revalidatePath('/curator/settings')
+    revalidatePath('/head/settings')
+    return { ok: true, message: 'Аватар удалён.' }
+  }
+
+  if (value.length > MAX_AVATAR_DATAURL_LEN) {
+    return {
+      ok: false,
+      message: 'Изображение слишком большое. Выберите файл поменьше.',
+    }
+  }
+  if (!AVATAR_DATAURL_RE.test(value)) {
+    return {
+      ok: false,
+      message: 'Неподдерживаемый формат. Загрузите PNG, JPEG или WebP.',
+    }
+  }
+
+  await updateManagerAvatar(session.sub, value)
+  await writeAudit({
+    actorRole: session.role,
+    actorId: session.sub,
+    actorLabel: session.name,
+    action: 'account.avatar_update',
+    entityType: 'manager',
+    entityId: session.sub,
+  })
+  revalidatePath('/app/settings')
+  revalidatePath('/curator/settings')
+  revalidatePath('/head/settings')
+  return { ok: true, message: 'Аватар обновлён.' }
 }

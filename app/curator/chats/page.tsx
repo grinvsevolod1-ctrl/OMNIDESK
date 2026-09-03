@@ -3,7 +3,6 @@ import {
   listConversationsForCurator,
   listMessagesForConversationsCurator,
 } from '@/lib/data/curator-conversations'
-import { PageHeader } from '@/components/page-parts'
 import { CuratorInbox } from '@/components/curator/chats/curator-inbox'
 
 /**
@@ -20,11 +19,9 @@ export default async function CuratorChatsPage() {
   )
 
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader
-        title="Чаты"
-        description="Переписка по переданным вам лидам. Отвечайте клиентам прямо здесь — текстом или вложением."
-      />
+    // Полноэкранная страница (dashboard-shell отдаёт /curator/chats как
+    // fullBleed): занимает всю высоту main без внешних полей и скролла.
+    <div className="h-full">
       <CuratorInbox
         conversations={conversations}
         messagesByConversation={messagesByConversation}

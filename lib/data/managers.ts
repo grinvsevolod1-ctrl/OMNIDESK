@@ -307,6 +307,19 @@ export async function updateManagerProfile(
   invalidateManagerAuthState(id)
 }
 
+/**
+ * Локальная аватарка сотрудника (миграция 152). `dataUrl` — уже сжатый на
+ * клиенте data:-URL (валидация формата/размера — на слое server action),
+ * null — сбросить к инициалам. Auth-state кэш не трогаем: аватарка в JWT не
+ * хранится (страницы читают её из БД), сессия остаётся валидной.
+ */
+export async function updateManagerAvatar(
+  id: string,
+  dataUrl: string | null,
+): Promise<void> {
+  await query('UPDATE managers SET avatar_url = $2 WHERE id = $1', [id, dataUrl])
+}
+
 export async function updateManagerPassword(
   id: string,
   passwordHash: string,

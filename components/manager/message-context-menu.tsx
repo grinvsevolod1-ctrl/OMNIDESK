@@ -171,3 +171,48 @@ export function MessageContextMenu({
 }
 
 export { QUICK_REACTIONS }
+
+/**
+ * Урезанное контекстное меню для ролей без провайдер-действий (куратор):
+ * только «Ответить» (цитата — provider-agnostic) и «Копировать текст».
+ * Нет реакций/редактирования/пересылки/удаления — их worker-плейбек в объём
+ * куратора не входит. Если ни одно действие недоступно, рендерит сам bubble.
+ */
+export function BasicMessageMenu({
+  message,
+  onReply,
+  onCopy,
+  children,
+}: {
+  message: Message
+  /** Undefined → пункт «Ответить» скрыт (напр. не-Telegram канал). */
+  onReply?: (m: Message) => void
+  onCopy: (m: Message) => void
+  children: ReactNode
+}) {
+  const hasText = Boolean(message.body && message.body.trim())
+  // Нечего показать — не оборачиваем в меню вообще.
+  if (!onReply && !hasText) return <>{children}</>
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={<div className="w-fit max-w-full" />}>
+        {children}
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-44">
+        {onReply ? (
+          <ContextMenuItem onClick={() => onReply(message)}>
+            <Reply />
+            Ответить
+          </ContextMenuItem>
+        ) : null}
+        {hasText ? (
+          <ContextMenuItem onClick={() => onCopy(message)}>
+            <Copy />
+            Копировать текст
+          </ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
