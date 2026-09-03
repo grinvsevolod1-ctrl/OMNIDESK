@@ -10,6 +10,7 @@ import {
   Users,
   X,
 } from 'lucide-react'
+import { LeadsArchiveDialog } from '@/components/admin/leads-archive-dialog'
 import { LeadsTrashDialog } from '@/components/admin/leads-trash-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -202,6 +203,7 @@ export function LeadsFilterBar({
         {!searchExpanded ? 'Excel' : null}
       </Button>
 
+      <LeadsArchiveDialog onChanged={onTrashChanged} />
       <LeadsTrashDialog onChanged={onTrashChanged} />
     </div>
   )

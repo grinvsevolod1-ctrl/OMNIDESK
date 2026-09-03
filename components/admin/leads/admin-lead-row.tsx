@@ -162,15 +162,21 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         )}
       </span>
 
-      {/* Ячейка сотрудника рендерится всегда (md+) — иначе сетка сломается. */}
-      <span className="hidden min-w-0 md:block">
+      {/* Ячейка сотрудника рендерится всегда (md+) — иначе сетка сломается.
+          Стиль как у менеджера: переданный лид — единый emerald-бейдж
+          «Передан: …», без сотрудника — destructive-бейдж; текст обрезается
+          внутри ячейки (overflow-hidden + truncate), не наезжая на соседей. */}
+      <span className="hidden min-w-0 overflow-hidden md:inline-flex">
         {lead.curatorName ? (
           <Tooltip>
             <TooltipTrigger
               render={
-                <span className="block cursor-default truncate text-xs text-muted-foreground">
-                  {lead.curatorName}
-                </span>
+                <Badge
+                  variant="outline"
+                  className="max-w-full cursor-default border-transparent bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                >
+                  <span className="truncate">Передан: {lead.curatorName}</span>
+                </Badge>
               }
             />
             <TooltipContent side="top">Менеджер по кадрам</TooltipContent>
@@ -185,7 +191,7 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         )}
       </span>
 
-      {/* Статус и «Нужно обновить» — одна ячейка, левые края выровнены. */}
+      {/* Статус и «Нужно обновить» — одна я��ейка, левые края выровнены. */}
       <span className="flex min-w-0 flex-wrap items-center gap-1.5">
         {needs ? (
           <Badge

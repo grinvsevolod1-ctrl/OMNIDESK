@@ -83,8 +83,10 @@ export {
 
 /* Admin overview, trash (soft delete) and inline editing. */
 export {
+  hardDeleteLeadCard,
   isInlineLeadField,
   listAllTransferredLeads,
+  listArchivedLeadsAdmin,
   listDeletedLeads,
   parseLeadSearch,
   purgeDeletedLeads,

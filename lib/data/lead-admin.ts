@@ -139,6 +139,10 @@ export async function listAllTransferredLeads(
   params.push(limit, offset)
 
   const order = filter.sort === 'oldest' ? 'ASC' : 'DESC'
+  // Tie-breaker by id: transferred_at is only second-precision, so bulk
+  // transfers share a timestamp. Without a stable secondary key ORDER BY is
+  // non-deterministic — the same lead could appear on two pages or vanish
+  // between them (the "glitchy" pagination). id makes every page stable.
   const rows = await query<LeadCardRow & { region_name: string | null }>(
     `SELECT ${CARD_SELECT},
             (SELECT rg.name FROM cities ci
@@ -148,7 +152,7 @@ export async function listAllTransferredLeads(
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
       WHERE ${where}
-      ORDER BY lc.transferred_at ${order}
+      ORDER BY lc.transferred_at ${order}, lc.id ${order}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params,
   )
@@ -257,6 +261,46 @@ export async function listDeletedLeads(
     deletedReason: r.deleted_reason ?? '',
     deletedByName: r.deleted_by_name,
   }))
+}
+
+/**
+ * Админский архив: лиды с нерабочим статусом, ушедшие из активного рабочего
+ * места (archived_at IS NOT NULL, ещё не удалённые). Сортировка по дате
+ * архивации — свежие сверху, чтобы было видно «когда их туда добавили».
+ * Регион подставляется для отображения, как в общей выборке.
+ */
+export async function listArchivedLeadsAdmin(
+  limit = 200,
+): Promise<LeadCard[]> {
+  const rows = await query<LeadCardRow & { region_name: string | null }>(
+    `SELECT ${CARD_SELECT},
+            (SELECT rg.name FROM cities ci
+              JOIN regions rg ON rg.id = ci.region_id
+             WHERE ci.name_norm = lower(lc.city) LIMIT 1) AS region_name
+       FROM lead_cards lc
+       LEFT JOIN managers m ON m.id = lc.manager_id
+       LEFT JOIN managers c ON c.id = lc.curator_id
+      WHERE lc.archived_at IS NOT NULL
+        AND lc.deleted_at IS NULL
+      ORDER BY lc.archived_at DESC, lc.id DESC
+      LIMIT ${Math.min(Math.max(limit, 1), 500)}`,
+  )
+  return rows.map((r) => ({ ...toLeadCard(r), region: r.region_name }))
+}
+
+/**
+ * НЕОБРАТИМОЕ удаление лида: физически стирает карточку и все связанные
+ * записи (комментарии, история, передачи, вложения — через ON DELETE CASCADE).
+ * Работает НЕЗАВИСИМО от состояния (активный / в корзине / архив / «глюченный»
+ * лид со сломанными полями) — по id, без guard'ов, поэтому им можно снести
+ * то, что не удаляется обычным мягким удалением. Возврат: был ли удалён.
+ */
+export async function hardDeleteLeadCard(leadCardId: string): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `DELETE FROM lead_cards WHERE id = $1 RETURNING id`,
+    [leadCardId],
+  )
+  return rows.length > 0
 }
 
 /** Автоочистка корзины: физически удаляет лиды старше N дней. Возврат: сколько удалено. */
