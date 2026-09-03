@@ -12,13 +12,18 @@ export default async function BuyerLayout({
   children: ReactNode
 }) {
   const user = await requireBuyer()
+  const account = await getManagerById(user.sub).catch(() => null)
 
   return (
     <SWRProvider>
       <DashboardShell
         nav={nav}
         roleLabel="Медиабайер"
-        user={{ name: user.name, email: user.email }}
+        user={{
+          name: user.name,
+          email: user.email,
+          avatarUrl: account?.avatarUrl ?? null,
+        }}
       >
         {children}
       </DashboardShell>

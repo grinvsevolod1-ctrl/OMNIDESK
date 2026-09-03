@@ -24,14 +24,15 @@ import {
   SendHorizonal,
   X,
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { Conversation, Message } from '@/lib/types'
+import { LEAD_STATUS_META } from '@/lib/types'
 import { ContactAvatar, MetaRows, SourceChip } from '@/components/manager/inbox/atoms'
 import { MessageList } from '@/components/manager/inbox/message-list'
 import { EmojiPicker } from '@/components/manager/inbox/pickers'
-import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { CHANNEL_VISUAL, listStamp } from '@/components/manager/inbox/visual'
 import { useCuratorChats } from '@/components/curator/chats/use-curator-chats'
 import type { PanelChannelType } from '@/lib/types'
@@ -488,7 +489,9 @@ function CuratorInfoPanel({
               </p>
             ) : null}
           </div>
-          <LeadStatusBadge status={active.status} />
+          <Badge variant="secondary" className="shrink-0">
+            {LEAD_STATUS_META[active.status].label}
+          </Badge>
         </div>
 
         <dl className="flex flex-col gap-3 border-t border-border pt-4">

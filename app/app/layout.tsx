@@ -8,7 +8,7 @@ import { LunchToggle } from '@/components/manager/lunch-toggle'
 import { Fake502 } from '@/components/fake-502'
 import { DictionariesProvider } from '@/components/dictionaries-provider'
 import { requireManager } from '@/lib/auth'
-import { getFake502, getManagerOnLunch } from '@/lib/data'
+import { getFake502, getManagerById, getManagerOnLunch } from '@/lib/data'
 import { getDictionaries } from '@/lib/data/dictionaries'
 
 const nav: NavItem[] = [
@@ -38,6 +38,8 @@ export default async function ManagerLayout({
   // Managed dictionaries (lead-status labels etc.) are resolved server-side
   // once per request so client components never flash default captions.
   const dictionaries = await getDictionaries()
+  // Аватарка для шапки (в JWT её нет — читаем строку сотрудника из БД).
+  const account = await getManagerById(user.sub).catch(() => null)
   return (
     <SWRProvider>
     <DictionariesProvider value={dictionaries}>
@@ -45,7 +47,11 @@ export default async function ManagerLayout({
       <DashboardShell
         nav={nav}
         roleLabel="Менеджер"
-        user={{ name: user.name, email: user.email }}
+        user={{
+          name: user.name,
+          email: user.email,
+          avatarUrl: account?.avatarUrl ?? null,
+        }}
         headerSlot={
           <>
             <LunchToggle initialOnLunch={onLunch} />

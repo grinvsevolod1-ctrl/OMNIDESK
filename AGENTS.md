@@ -40,7 +40,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `151`
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `152`
   (140 — статус «Не связался», 141 — роль head, 142 — правка комментариев:
   только автором в МСК-день создания, прошлый текст — в
   `lead_card_comment_revisions`, бейдж «изменён» виден всем; 143 —
@@ -56,7 +56,14 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   `transferred_to_curator_at` + гейт `curator_id IS NULL` в `isConversationAiLed`
   (ИИ менеджера молчит после передачи), единый chokepoint линковки диалога —
   `recordTransfer`; куратор ведёт переданные диалоги на `/curator/chats`
-  (текст + фото/файлы), менеджер видит их только для чтения).
+  (полноэкранный инбокс с инфо-панелью, поиском, фильтром «непрочитанные»,
+  ответом-цитатой и emoji; переиспользует богатый `MessageList` менеджера в
+  режиме `readOnlyActions`), менеджер видит их только для чтения; 152 —
+  `managers.avatar_url`: локальная аватарка сотрудника (менеджер/куратор/
+  руководитель) — сжатый на клиенте квадрат 256×256 в data:-URL, БЕЗ сторонних
+  хранилищ, грузится в `/{app,curator,head}/settings` (`AvatarUploader` +
+  `updateMyAvatarAction`), показывается в шапке dashboard-shell; у админа
+  строки в БД нет — только инициалы).
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: teleproto (Telegram
@@ -151,7 +158,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    В редакторе — постоянный красный баннер, в списке — бейдж «Заблокирован».
    **Генератор расширений (миграция 136; бывшая «Сайты бета» — теперь это
    ЕДИНСТВЕННАЯ вкладка «Сайты», отдельной классической вкладки больше нет):**
-   в редакторе сайта есть кнопка «Скачать расширение»
+   в редакторе сайта есть кнопка «Скачать расшир��ние»
    (`secretDownloadExtensionAction`). Она собирает готовый `.zip` браузерного
    расширения под конкретный сайт: статические шаблоны из
    `lib/god-ext/templates/` (page3.html/app.js/content.js/rules.json/
@@ -159,7 +166,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    `config.js` (api-origin из запроса, slug, токен) и `manifest.json`.
    Сборка — `lib/god-ext/build.ts`, ZIP без зависимостей —
    `lib/god-ext/zip.ts` (zlib deflate + CRC32, ручной local/central-dir).
-   Скачивание ��Е ротирует ключ (миграция 137) — в архив вшивается постоянный
+   Скачивание НЕ ротирует ключ (миграция 137) — в архив вшивается постоянный
    токен, все архивы работают одновременно. Каждое скачивание бампит
    `ext_version` → `manifest.version = 1.0.K` (Chrome требует новую версию)
    и присваивает постоянный `ext_label_seq` → `name = «яндекс N»` (сквозная
@@ -230,7 +237,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    сохраняется — чат-диалог с markdown-рендером (заголовки/таблицы/списки,
    свой мини-рендерер без зависимостей и без innerHTML) + копирование
    (`components/admin/secret-sites/report-dialog.tsx`).
-6. **Личные Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
+6. **Личные Telegram-аккаунты ��ладельца** (вкладка «Telegram» god-панели,
    миграция 135) — каналы `type='telegram_personal'` в `channels`, живут
    на воркере (`worker/src/personal.ts`, teleproto). Все admin-видимые выборки
    каналов ОБЯЗАНЫ исключать их фильтром `type <> 'telegram_personal'`
@@ -253,13 +260,13 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    `app/actions/admin-secret/gmt.ts` (гейт requireGod, без audit()); UI —
    `components/admin/secret-gmt-tab.tsx` (SWR по actions, автоопрос 15с пока
    есть PENDING-покупки). **Ключ назначается ИЗ ПАНЕЛИ (миграция 139):**
-   хранится в godовой таблице `god_settings` (key `gmt_api_key`, плейнтекст —
+   хранится в godовой таблице `god_settings` (key `gmt_api_key`, пле��нтекст —
    осознанное решение владельца, прецедент — api_key_plain сайтов из 137);
    env `GMT_API_KEY` остаётся fallback'ом, БД имеет приоритет. Кнопка «Ключ»
    в шапке вкладки — смена/удаление; перед сохранением ключ проверяется
    живым запросом к /v1/profile/ (secretGmtSetKeyAction), опечатка не
    затирает рабочий ключ. Наружу ключ не отдаётся — только маска (последние
-   4 символа). Без ключа вкладка ��оказывает форму ввода, actions отвечают
+   4 символа). Без ключа вкладка показывает форму ввода, actions отвечают
    ошибкой. Жизненный цикл покупки (из доков): PENDING
    (деньги списаны) → request-code → SUCCESS (креды: код+пароль, повторный
    request-code даёт conflict — креды читать из GET /purchases/:id) или
@@ -314,7 +321,7 @@ app/                     Next.js App Router
                            (админ, все лиды), exportMyLeadsExcelAction
                            (менеджер по кадрам, свои),
                            exportManagerLeadsExcelAction (менеджер, свои
-                           с фильтрами периода/статуса) и
+                           с фильтрами пе��иода/статуса) и
                            exportBuyerLeadsExcelAction (байер, лиды его
                            источников с колонкой «Источник»)
                          lead-cards/ — actions лид-карточек (core и др.)
@@ -408,7 +415,7 @@ components/manager/      UI менеджера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
                          use-inbox-shortcuts.ts (j/k, Alt+стрелки),
                          use-thread-scroll.ts — автоскролл треда по НАМЕРЕНИЮ
-                         пользователя: жест вверх (wheel/touch) мгновенно
+                         пользоват��ля: жест вверх (wheel/touch) мгновенно
                          снимает прилипание, программные скроллы флагуются и
                          не меняют intent, re-stick только у самого низа
                          (<40px) с мёртвой зоной 40–120px. НЕ возвращай
@@ -685,7 +692,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   данные — ТОЛЬКО через `lib/data/*` (не пиши SQL в инструменте), запись в
   `actions`, при необходимости — в `SYSTEM_INSTRUCTIONS`.
 
-## 7. ИИ-менеджер (прод��вец) — как устроен
+## 7. ИИ-менеджер (продавец) — как устроен
 
 - **Мозг:** `lib/ai/manager-brain.ts` — `generateManagerReply(input, log,
   config)`. Модель/temperature/maxTokens из `BrainConfig` (настройка админки
@@ -773,7 +780,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
     реэкспортирует из `foo-<домен>.ts`, общие хелперы — в `foo-shared.ts`
     (НЕ `'use server'`). Эталоны: `app/actions/auth.ts` (login/twofa/shared),
     `app/actions/admin-accounts.ts`, `app/actions/finance.ts`.
-  - **Данные/типы** → по домена�� в `lib/data/*`, `lib/types/*` с барелем.
+  - **Данные/типы** → по доменам в `lib/data/*`, `lib/types/*` с барелем.
     Общие конверты (`ActionResult`) — из `lib/types`, не локальные копии.
   - **Повторяющийся блок** (гейт, кэш, валидация), который понадобится
     больше чем в одном месте, — сразу в `lib/` (эталоны: `lib/cron-auth.ts`,
