@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   ArrowLeft,
   CalendarClock,
@@ -24,30 +25,39 @@ import {
   SendHorizonal,
   X,
 } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { Conversation, Message } from '@/lib/types'
-import { LEAD_STATUS_META } from '@/lib/types'
 import { ContactAvatar, MetaRows, SourceChip } from '@/components/manager/inbox/atoms'
 import { MessageList } from '@/components/manager/inbox/message-list'
 import { EmojiPicker } from '@/components/manager/inbox/pickers'
 import { CHANNEL_VISUAL, listStamp } from '@/components/manager/inbox/visual'
+import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
+import { LeadStatusForm } from '@/components/curator/lead-panel-forms'
 import { useCuratorChats } from '@/components/curator/chats/use-curator-chats'
 import type { PanelChannelType } from '@/lib/types'
+import type { CuratorConversationStatus } from '@/lib/data/curator-conversations'
 
 type ListFilter = 'all' | 'unread'
 
 export function CuratorInbox({
   conversations,
   messagesByConversation,
+  leadStatusByConversation,
   currentUser,
 }: {
   conversations: Conversation[]
   messagesByConversation: Record<string, Message[]>
+  /** Кураторский статус лида на диалог (свой набор статусов, миграция 151). */
+  leadStatusByConversation: Record<string, CuratorConversationStatus>
   currentUser: string
 }) {
+  const router = useRouter()
+  // Форма статуса и бейджи используют кураторский статус лида этого диалога.
+  // После подтверждения статуса перезапрашиваем серверную страницу — свежий
+  // статус приезжает в leadStatusByConversation.
+  const onStatusSaved = () => router.refresh()
   const {
     activeId,
     setActiveId,
@@ -207,6 +217,14 @@ export function CuratorInbox({
                             {c.lastMessage || '—'}
                           </span>
                         </div>
+                        {leadStatusByConversation[c.id] ? (
+                          <div className="mt-1">
+                            <LeadStatusBadge
+                              status={leadStatusByConversation[c.id].status}
+                              className="px-1.5 py-0 text-[10px]"
+                            />
+                          </div>
+                        ) : null}
                       </div>
                       {c.unread > 0 ? (
                         <span className="ml-1 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground tabular-nums">
@@ -234,6 +252,7 @@ export function CuratorInbox({
             key={active.id}
             active={active}
             activeId={activeId}
+            leadStatus={leadStatusByConversation[active.id]}
             thread={thread}
             threadLoading={threadLoading}
             loadingOlder={loadingOlder}
@@ -260,7 +279,12 @@ export function CuratorInbox({
 
       {/* --------------------------- Инфо-панель ----------------------------- */}
       {active && infoOpen ? (
-        <CuratorInfoPanel active={active} onClose={() => setInfoOpen(false)} />
+        <CuratorInfoPanel
+          active={active}
+          leadStatus={leadStatusByConversation[active.id]}
+          onStatusSaved={onStatusSaved}
+          onClose={() => setInfoOpen(false)}
+        />
       ) : null}
     </div>
   )
@@ -269,6 +293,7 @@ export function CuratorInbox({
 function CuratorThread({
   active,
   activeId,
+  leadStatus,
   thread,
   threadLoading,
   loadingOlder,
@@ -287,6 +312,7 @@ function CuratorThread({
 }: {
   active: Conversation
   activeId: string | null
+  leadStatus?: CuratorConversationStatus
   thread: Message[]
   threadLoading: boolean
   loadingOlder: boolean
@@ -358,6 +384,12 @@ function CuratorThread({
             ) : null}
           </div>
         </div>
+        {leadStatus ? (
+          <LeadStatusBadge
+            status={leadStatus.status}
+            className="hidden shrink-0 sm:inline-flex"
+          />
+        ) : null}
         <Button
           variant={infoOpen ? 'secondary' : 'ghost'}
           size="icon"
@@ -441,9 +473,13 @@ function CuratorThread({
 
 function CuratorInfoPanel({
   active,
+  leadStatus,
+  onStatusSaved,
   onClose,
 }: {
   active: Conversation
+  leadStatus?: CuratorConversationStatus
+  onStatusSaved: () => void
   onClose: () => void
 }) {
   const channelShort =
@@ -489,9 +525,9 @@ function CuratorInfoPanel({
               </p>
             ) : null}
           </div>
-          <Badge variant="secondary" className="shrink-0">
-            {LEAD_STATUS_META[active.status].label}
-          </Badge>
+          {leadStatus ? (
+            <LeadStatusBadge status={leadStatus.status} />
+          ) : null}
         </div>
 
         <dl className="flex flex-col gap-3 border-t border-border pt-4">
@@ -505,6 +541,21 @@ function CuratorInfoPanel({
             </div>
           ))}
         </dl>
+
+        {/* Кураторский статус лида: свой набор статусов + обязательный
+            комментарий. Тот же action и форма, что и в «Мои лиды» — куратор
+            подтверждает статус, не выходя из переписки. -mx-4 распахивает
+            секцию на всю ширину панели (форма имеет собственные поля px-4). */}
+        {leadStatus ? (
+          <div className="-mx-4 mt-4 border-t border-border">
+            <LeadStatusForm
+              leadCardId={leadStatus.leadCardId}
+              currentStatus={leadStatus.status}
+              onSaved={onStatusSaved}
+              variant="curator"
+            />
+          </div>
+        ) : null}
 
         {/* Контекст посетителя (лайв-чат сайта) */}
         {active.meta ? (

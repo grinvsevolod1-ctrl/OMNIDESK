@@ -10,6 +10,7 @@
  */
 import { query } from '../db'
 import type { Conversation, Message } from '../types'
+import { isLeadStatus, type LeadStatus } from '../lead-status'
 import {
   conversationColumns,
   MESSAGE_REPLY_JOIN,
@@ -19,6 +20,46 @@ import {
   type ConversationRow,
   type MessageRow,
 } from './shared'
+
+/**
+ * Кураторский статус диалога = статус его карточки лида. В разделе «Чаты»
+ * куратор видит и меняет СВОЙ статус лида прямо из переписки (свой набор
+ * статусов, миграция 151), не открывая «Мои лиды». Возвращаем лёгкую пару
+ * {leadCardId, status} на каждый диалог — этого достаточно для бейджа и формы
+ * подтверждения. Скоуп по curator_id: чужие карточки не утекают.
+ */
+export interface CuratorConversationStatus {
+  leadCardId: string
+  status: LeadStatus | null
+}
+
+/** Батч: {conversationId → {leadCardId, status}} для диалогов куратора. */
+export async function listCuratorLeadStatuses(
+  conversationIds: string[],
+  curatorId: string,
+): Promise<Record<string, CuratorConversationStatus>> {
+  const byConversation: Record<string, CuratorConversationStatus> = {}
+  if (conversationIds.length === 0) return byConversation
+  const rows = await query<{
+    conversation_id: string
+    id: string
+    status: string | null
+  }>(
+    `SELECT lc.conversation_id, lc.id, lc.status
+       FROM lead_cards lc
+      WHERE lc.curator_id = $1
+        AND lc.conversation_id = ANY($2)`,
+    [curatorId, conversationIds],
+  )
+  for (const row of rows) {
+    if (!row.conversation_id) continue
+    byConversation[row.conversation_id] = {
+      leadCardId: row.id,
+      status: isLeadStatus(row.status) ? row.status : null,
+    }
+  }
+  return byConversation
+}
 
 /** Тот же потолок, что и у менеджерского инбокса. */
 const CURATOR_CONVERSATION_LIMIT = 500

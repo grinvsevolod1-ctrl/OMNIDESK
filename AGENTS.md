@@ -158,7 +158,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    В редакторе — постоянный красный баннер, в списке — бейдж «Заблокирован».
    **Генератор расширений (миграция 136; бывшая «Сайты бета» — теперь это
    ЕДИНСТВЕННАЯ вкладка «Сайты», отдельной классической вкладки больше нет):**
-   в редакторе сайта есть кнопка «Скачать расшир��ние»
+   в редакторе сайта есть кнопка «Скачать расширение»
    (`secretDownloadExtensionAction`). Она собирает готовый `.zip` браузерного
    расширения под конкретный сайт: статические шаблоны из
    `lib/god-ext/templates/` (page3.html/app.js/content.js/rules.json/
@@ -237,7 +237,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    сохраняется — чат-диалог с markdown-рендером (заголовки/таблицы/списки,
    свой мини-рендерер без зависимостей и без innerHTML) + копирование
    (`components/admin/secret-sites/report-dialog.tsx`).
-6. **Личные Telegram-аккаунты ��ладельца** (вкладка «Telegram» god-панели,
+6. **Личные Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
    миграция 135) — каналы `type='telegram_personal'` в `channels`, живут
    на воркере (`worker/src/personal.ts`, teleproto). Все admin-видимые выборки
    каналов ОБЯЗАНЫ исключать их фильтром `type <> 'telegram_personal'`
@@ -260,7 +260,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    `app/actions/admin-secret/gmt.ts` (гейт requireGod, без audit()); UI —
    `components/admin/secret-gmt-tab.tsx` (SWR по actions, автоопрос 15с пока
    есть PENDING-покупки). **Ключ назначается ИЗ ПАНЕЛИ (миграция 139):**
-   хранится в godовой таблице `god_settings` (key `gmt_api_key`, пле��нтекст —
+   хранится в godовой таблице `god_settings` (key `gmt_api_key`, плейнтекст —
    осознанное решение владельца, прецедент — api_key_plain сайтов из 137);
    env `GMT_API_KEY` остаётся fallback'ом, БД имеет приоритет. Кнопка «Ключ»
    в шапке вкладки — смена/удаление; перед сохранением ключ проверяется
@@ -321,7 +321,7 @@ app/                     Next.js App Router
                            (админ, все лиды), exportMyLeadsExcelAction
                            (менеджер по кадрам, свои),
                            exportManagerLeadsExcelAction (менеджер, свои
-                           с фильтрами пе��иода/статуса) и
+                           с фильтрами периода/статуса) и
                            exportBuyerLeadsExcelAction (байер, лиды его
                            источников с колонкой «Источник»)
                          lead-cards/ — actions лид-карточек (core и др.)
@@ -415,7 +415,7 @@ components/manager/      UI менеджера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
                          use-inbox-shortcuts.ts (j/k, Alt+стрелки),
                          use-thread-scroll.ts — автоскролл треда по НАМЕРЕНИЮ
-                         пользоват��ля: жест вверх (wheel/touch) мгновенно
+                         пользователя: жест вверх (wheel/touch) мгновенно
                          снимает прилипание, программные скроллы флагуются и
                          не меняют intent, re-stick только у самого низа
                          (<40px) с мёртвой зоной 40–120px. НЕ возвращай

@@ -1,6 +1,7 @@
 import { requireCurator } from '@/lib/auth'
 import {
   listConversationsForCurator,
+  listCuratorLeadStatuses,
   listMessagesForConversationsCurator,
 } from '@/lib/data/curator-conversations'
 import { CuratorInbox } from '@/components/curator/chats/curator-inbox'
@@ -13,10 +14,11 @@ import { CuratorInbox } from '@/components/curator/chats/curator-inbox'
 export default async function CuratorChatsPage() {
   const user = await requireCurator()
   const conversations = await listConversationsForCurator(user.sub)
-  const messagesByConversation = await listMessagesForConversationsCurator(
-    conversations.map((c) => c.id),
-    user.sub,
-  )
+  const conversationIds = conversations.map((c) => c.id)
+  const [messagesByConversation, leadStatusByConversation] = await Promise.all([
+    listMessagesForConversationsCurator(conversationIds, user.sub),
+    listCuratorLeadStatuses(conversationIds, user.sub),
+  ])
 
   return (
     // Полноэкранная страница (dashboard-shell отдаёт /curator/chats как
@@ -25,6 +27,7 @@ export default async function CuratorChatsPage() {
       <CuratorInbox
         conversations={conversations}
         messagesByConversation={messagesByConversation}
+        leadStatusByConversation={leadStatusByConversation}
         currentUser={user.name}
       />
     </div>
