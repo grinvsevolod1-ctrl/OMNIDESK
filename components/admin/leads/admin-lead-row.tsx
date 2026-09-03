@@ -58,13 +58,19 @@ export const AdminLeadRow = memo(function AdminLeadRow({
   return (
     <li
       className={cn(
-        // CSS grid с фиксированными колонками (имя · город · источник ·
-        // сотрудник · статус · дата · действия) — колонки выровнены по одной
-        // сетке во всех строках. Ниже брейкпоинтов лишние колонки скрыты.
-        'grid grid-cols-[minmax(0,1fr)_max-content_auto] items-center gap-x-3 px-4 py-3 transition-colors duration-1000 sm:px-5',
-        'sm:grid-cols-[minmax(0,1fr)_8.5rem_max-content_auto]',
-        'md:grid-cols-[minmax(0,1fr)_8.5rem_minmax(0,9.5rem)_max-content_auto]',
-        'lg:grid-cols-[minmax(0,1fr)_8.5rem_minmax(0,7rem)_minmax(0,9.5rem)_minmax(7rem,max-content)_max-content_auto]',
+        // CSS grid с ФИКСИРОВАННЫМИ колонками (имя · город · источник ·
+        // сотрудник · статус · дата · действия). Каждая строка — отдельная
+        // grid-раскладка (grid висит на <li>), поэтому content-based треки
+        // (max-content / minmax) резолвились БЫ по контенту КАЖДОЙ строки и
+        // колонки «скакали». Все треки, кроме гибкого имени (1fr), заданы в rem:
+        // сумма фиксированных треков одинакова во всех строках → 1fr одинаков →
+        // колонки идеально выровнены по вертикали. Ниже брейкпоинтов лишние
+        // колонки скрыты (у детей hidden … {bp}:…), число видимых детей строго
+        // совпадает с числом треков на каждом брейкпоинте.
+        'grid grid-cols-[minmax(0,1fr)_9.5rem_4.5rem] items-center gap-x-3 px-4 py-3 transition-colors duration-1000 sm:px-5',
+        'sm:grid-cols-[minmax(0,1fr)_8.5rem_9.5rem_4.5rem]',
+        'md:grid-cols-[minmax(0,1fr)_8.5rem_9.5rem_9.5rem_4.5rem]',
+        'lg:grid-cols-[minmax(0,1fr)_8.5rem_7rem_9.5rem_9.5rem_7rem_4.5rem]',
         // Строки за экраном не рендерятся при скролле (стандарт UI, AGENTS.md).
         '[content-visibility:auto] [contain-intrinsic-size:auto_3.75rem]',
         // Новый лид, появившийся при фоновом обновлении, —
