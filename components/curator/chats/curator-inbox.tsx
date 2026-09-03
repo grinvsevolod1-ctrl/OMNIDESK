@@ -258,14 +258,14 @@ function CuratorThread({
 }
 
 function CuratorMessages({ thread }: { thread: Message[] }) {
-  // Разделители по дням + баблы. Группировку по дню считаем на лету.
-  let lastDay = ''
+  // Разделители по дням + баблы. showDay считаем сравнением с ПРЕДЫДУЩИМ
+  // сообщением (без мутации во время рендера — как в MessageList менеджера).
   return (
     <div className="flex flex-col gap-1.5">
-      {thread.map((m) => {
+      {thread.map((m, i) => {
         const day = dayLabel(m.createdAt)
-        const showDay = day !== lastDay
-        lastDay = day
+        const prev = i > 0 ? thread[i - 1] : null
+        const showDay = !prev || dayLabel(prev.createdAt) !== day
         const out = m.direction === 'out'
         const deleted = Boolean(m.deletedAt)
         const hasMedia = Boolean(m.mediaType)

@@ -138,6 +138,7 @@ export function InboxView({
     filtered,
     pending,
     activeAiLed,
+    activeTransferred,
     activeTyping,
     activePresence,
     availableTypes,
@@ -292,6 +293,8 @@ export function InboxView({
               active={active}
               activePresence={activePresence}
               activeAiLed={activeAiLed}
+              transferred={activeTransferred}
+              curatorName={active.curatorName}
               aiButtonPulse={aiButtonPulse}
               statusPending={statusPending}
               activeStatusValue={activeStatusValue}
@@ -349,9 +352,18 @@ export function InboxView({
               onCancelReply={() => setReplyTarget(null)}
             />
 
-            {/* Composer — isolated component so typing never re-renders the
+            {/* Лид передан куратору (миграция 151): менеджер только читает —
+                композер заменяется баннером, чтобы не было двух отвечающих. */}
+            {activeTransferred ? (
+              <div className="border-t border-border bg-muted/40 px-4 py-3 text-center text-sm text-muted-foreground">
+                Лид передан куратору
+                {active.curatorName ? ` ${active.curatorName}` : ''}. Переписку
+                ведёт куратор — вам доступно только чтение.
+              </div>
+            ) : (
+            /* Composer — isolated component so typing never re-renders the
                 whole inbox. Keyed by conversation id so each thread gets its own
-                local draft (persisted across switches via draftsRef). */}
+                local draft (persisted across switches via draftsRef). */
             <MessageComposer
               key={active.id}
               conversationId={active.id}
@@ -384,6 +396,7 @@ export function InboxView({
                 editTarget ? { id: editTarget.id, body: editTarget.body } : null
               }
             />
+            )}
           </>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">

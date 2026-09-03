@@ -51,7 +51,10 @@ export function useCuratorChats({
   const [noOlder, setNoOlder] = useState<Record<string, boolean>>({})
 
   // Держим локальный кэш в синхроне с новыми SSR-данными (router.refresh).
+  // Тот же паттерн «производное от пропсов», что и в useInbox менеджера —
+  // синхронный setState здесь осознан (см. use-inbox.ts).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLocalMessages((prev) => {
       const next = { ...prev }
       for (const [id, msgs] of Object.entries(messagesByConversation)) {
@@ -80,9 +83,11 @@ export function useCuratorChats({
       return
     }
     hydratedRef.current.add(activeId)
-    setThreadLoading(true)
     const id = activeId
+    // setState держим внутри транзишена (не напрямую в теле эффекта), чтобы не
+    // нарушать react-hooks/set-state-in-effect и не гонять лишний ре-рендер.
     startTransition(async () => {
+      setThreadLoading(true)
       const res = await loadCuratorThreadMessagesAction(id)
       if (res.ok) {
         setLocalMessages((prev) => ({ ...prev, [id]: res.messages }))

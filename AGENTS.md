@@ -40,7 +40,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `146`
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `151`
   (140 — статус «Не связался», 141 — роль head, 142 — правка комментариев:
   только автором в МСК-день создания, прошлый текст — в
   `lead_card_comment_revisions`, бейдж «изменён» виден всем; 143 —
@@ -50,7 +50,13 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   `managers.telegram_contact`: «Telegram для кандидатов» куратора — куратор
   сам ведёт его в `/curator/settings` (нормализация @username/t.me →
   `lib/telegram-contact.ts`), менеджер после передачи лида получает в
-  композер готовый текст с этим контактом).
+  композер готовый текст с этим контактом; 147–150 — команды (`teams`,
+  `team_members`), раздел `/admin/teams` и `/head/team`, маршрутизация пула по
+  командам; 151 — раздел «Чаты» куратора: `conversations.curator_id` +
+  `transferred_to_curator_at` + гейт `curator_id IS NULL` в `isConversationAiLed`
+  (ИИ менеджера молчит после передачи), единый chokepoint линковки диалога —
+  `recordTransfer`; куратор ведёт переданные диалоги на `/curator/chats`
+  (текст + фото/файлы), менеджер видит их только для чтения).
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: teleproto (Telegram
@@ -153,7 +159,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    `config.js` (api-origin из запроса, slug, токен) и `manifest.json`.
    Сборка — `lib/god-ext/build.ts`, ZIP без зависимостей —
    `lib/god-ext/zip.ts` (zlib deflate + CRC32, ручной local/central-dir).
-   Скачивание НЕ ротирует ключ (миграция 137) — в архив вшивается постоянный
+   Скачивание ��Е ротирует ключ (миграция 137) — в архив вшивается постоянный
    токен, все архивы работают одновременно. Каждое скачивание бампит
    `ext_version` → `manifest.version = 1.0.K` (Chrome требует новую версию)
    и присваивает постоянный `ext_label_seq` → `name = «яндекс N»` (сквозная
@@ -253,7 +259,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    в шапке вкладки — смена/удаление; перед сохранением ключ проверяется
    живым запросом к /v1/profile/ (secretGmtSetKeyAction), опечатка не
    затирает рабочий ключ. Наружу ключ не отдаётся — только маска (последние
-   4 символа). Без ключа вкладка показывает форму ввода, actions отвечают
+   4 символа). Без ключа вкладка ��оказывает форму ввода, actions отвечают
    ошибкой. Жизненный цикл покупки (из доков): PENDING
    (деньги списаны) → request-code → SUCCESS (креды: код+пароль, повторный
    request-code даёт conflict — креды читать из GET /purchases/:id) или
@@ -679,7 +685,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   данные — ТОЛЬКО через `lib/data/*` (не пиши SQL в инструменте), запись в
   `actions`, при необходимости — в `SYSTEM_INSTRUCTIONS`.
 
-## 7. ИИ-менеджер (продавец) — как устроен
+## 7. ИИ-менеджер (прод��вец) — как устроен
 
 - **Мозг:** `lib/ai/manager-brain.ts` — `generateManagerReply(input, log,
   config)`. Модель/temperature/maxTokens из `BrainConfig` (настройка админки
@@ -767,7 +773,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
     реэкспортирует из `foo-<домен>.ts`, общие хелперы — в `foo-shared.ts`
     (НЕ `'use server'`). Эталоны: `app/actions/auth.ts` (login/twofa/shared),
     `app/actions/admin-accounts.ts`, `app/actions/finance.ts`.
-  - **Данные/типы** → по доменам в `lib/data/*`, `lib/types/*` с барелем.
+  - **Данные/типы** → по домена�� в `lib/data/*`, `lib/types/*` с барелем.
     Общие конверты (`ActionResult`) — из `lib/types`, не локальные копии.
   - **Повторяющийся блок** (гейт, кэш, валидация), который понадобится
     больше чем в одном месте, — сразу в `lib/` (эталоны: `lib/cron-auth.ts`,

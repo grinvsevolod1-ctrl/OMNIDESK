@@ -42,6 +42,8 @@ export function ThreadHeader({
   active,
   activePresence,
   activeAiLed,
+  transferred = false,
+  curatorName,
   aiButtonPulse,
   statusPending,
   activeStatusValue,
@@ -58,6 +60,10 @@ export function ThreadHeader({
   active: Conversation
   activePresence: PresenceState | null
   activeAiLed: boolean
+  /** Лид передан куратору (миграция 151): у менеджера — только чтение. */
+  transferred?: boolean
+  /** Имя куратора для бейджа, когда transferred. */
+  curatorName?: string
   aiButtonPulse: boolean
   statusPending: boolean
   activeStatusValue: string
@@ -118,6 +124,11 @@ export function ThreadHeader({
               </span>
             ) : null}
             {activePresence ? <PresenceBadge state={activePresence} /> : null}
+            {transferred ? (
+              <span className="shrink-0 rounded bg-primary/15 px-1.5 text-[11px] font-medium text-primary">
+                {curatorName ? `Передан ${curatorName}` : 'Передан куратору'}
+              </span>
+            ) : null}
           </p>
           <div className="flex min-w-0 items-center gap-1.5">
             <SourceChip conversation={active} size="xs" />
@@ -126,27 +137,31 @@ export function ThreadHeader({
       </button>
 
       <div className="flex items-center gap-1.5">
-        <Button
-          variant={activeAiLed ? 'default' : 'ghost'}
-          size="sm"
-          onClick={onToggleAi}
-          disabled={statusPending}
-          aria-pressed={activeAiLed}
-          title={
-            activeAiLed
-              ? 'ИИ ведёт этот диалог. Нажмите, чтобы отключить и ответить самому.'
-              : 'Включить ИИ: он проанализирует переписку и продолжит общение.'
-          }
-          className={cn(
-            'gap-1.5',
-            aiButtonPulse && 'animate-shake ring-2 ring-primary',
-          )}
-        >
-          <BrainCircuit className="size-4" />
-          <span className="hidden sm:inline">
-            {activeAiLed ? 'ИИ ведёт' : 'ИИ'}
-          </span>
-        </Button>
+        {/* Диалог передан куратору — ИИ менеджера отключён и переключать его
+            нельзя (curator_id гейт), поэтому кнопку скрываем. */}
+        {transferred ? null : (
+          <Button
+            variant={activeAiLed ? 'default' : 'ghost'}
+            size="sm"
+            onClick={onToggleAi}
+            disabled={statusPending}
+            aria-pressed={activeAiLed}
+            title={
+              activeAiLed
+                ? 'ИИ ведёт этот диалог. Нажмите, чтобы отключить и ответить самому.'
+                : 'Включить ИИ: он проанализирует переписку и продолжит общение.'
+            }
+            className={cn(
+              'gap-1.5',
+              aiButtonPulse && 'animate-shake ring-2 ring-primary',
+            )}
+          >
+            <BrainCircuit className="size-4" />
+            <span className="hidden sm:inline">
+              {activeAiLed ? 'ИИ ведёт' : 'ИИ'}
+            </span>
+          </Button>
+        )}
 
         <LeadCardPanel
           conversationId={active.id}
@@ -212,7 +227,7 @@ export function ThreadHeader({
               <Info className="size-4" />
               Данные и источник
             </DropdownMenuItem>
-            {hasTransferTargets ? (
+            {hasTransferTargets && !transferred ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onOpenTransfer}>
