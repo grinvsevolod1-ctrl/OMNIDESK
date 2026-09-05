@@ -67,7 +67,13 @@ self.addEventListener('push', (event) => {
     tag: data.tag || undefined,
     // Replace an existing bubble with the same tag instead of stacking.
     renotify: Boolean(data.tag),
-    data: { url: data.url || '/app/inbox', kind: data.kind, kickToken: data.kickToken },
+    data: {
+      url: data.url || '/app/inbox',
+      kind: data.kind,
+      kickToken: data.kickToken,
+      conversationId: data.conversationId,
+      replyRole: data.replyRole,
+    },
   }
 
   // Security alert («вход с нового устройства»): action buttons + sticky, so
@@ -77,6 +83,18 @@ self.addEventListener('push', (event) => {
     options.actions = [
       { action: 'confirm', title: 'Да, это я' },
       { action: 'kick', title: 'Разлогинить все' },
+    ]
+  } else if (data.conversationId) {
+    // Inbound message: let the operator reply straight from the notification.
+    // Android/Chrome renders a text input; platforms without inline-reply
+    // support fall back to a plain button that just opens the chat.
+    options.actions = [
+      {
+        action: 'reply',
+        title: 'Ответить',
+        type: 'text',
+        placeholder: 'Сообщение…',
+      },
     ]
   }
 
@@ -110,6 +128,46 @@ self.addEventListener('notificationclick', (event) => {
       )
     }
     // 'confirm' or a plain click: nothing else to do.
+    return
+  }
+
+  // Inline reply from the notification (Android/Chrome text action). Post the
+  // typed text to the panel with the session cookie so it's sent under the
+  // operator's identity, then confirm with a lightweight bubble.
+  if (event.action === 'reply' && nData.conversationId) {
+    const text = (event.reply || '').trim()
+    if (!text) return
+    event.waitUntil(
+      fetch('/api/push/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          conversationId: nData.conversationId,
+          role: nData.replyRole || 'manager',
+          text,
+        }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error('reply failed')
+          return self.registration.showNotification('Omnidesk', {
+            body: 'Ответ отправлен',
+            icon: '/app-icon-192.png',
+            badge: '/icon-light-32x32.png',
+            tag: nData.conversationId
+              ? 'conv:' + nData.conversationId
+              : undefined,
+            renotify: false,
+          })
+        })
+        .catch(() =>
+          self.registration.showNotification('Omnidesk', {
+            body: 'Не удалось отправить ответ. Откройте чат.',
+            icon: '/app-icon-192.png',
+            badge: '/icon-light-32x32.png',
+          }),
+        ),
+    )
     return
   }
 

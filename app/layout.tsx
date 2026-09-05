@@ -39,6 +39,14 @@ export const viewport: Viewport = {
   themeColor: '#0a0a0a',
   width: 'device-width',
   initialScale: 1,
+  // Fill the whole iPhone screen edge-to-edge (behind the notch / Dynamic
+  // Island / home indicator) and expose the safe-area env() insets that the
+  // chat shell and composer pad against. Without this iOS letterboxes the PWA.
+  viewportFit: 'cover',
+  // Keep the iOS keyboard from zooming/shoving the layout: lock scale so a tap
+  // on the composer input never triggers Safari's auto-zoom (inputs are ≥16px).
+  maximumScale: 1,
+  userScalable: false,
 }
 
 export default function RootLayout({

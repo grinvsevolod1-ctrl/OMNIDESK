@@ -139,11 +139,13 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
   // by sendPushToManager(curatorId) exactly like a manager's.
   let targetId = event.managerId
   let targetUrl = '/app/inbox'
+  let replyRole: 'manager' | 'curator' = 'manager'
   if (event.conversationId) {
     const curatorId = await getConversationCuratorId(event.conversationId)
     if (curatorId) {
       targetId = curatorId
       targetUrl = '/curator/chats'
+      replyRole = 'curator'
     }
   }
 
@@ -163,6 +165,10 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
     tag: event.conversationId
       ? `conv:${event.conversationId}`
       : `mgr:${targetId}`,
+    // Enable the inline reply action in the service worker (reply straight from
+    // the notification). Only when we know the conversation to reply into.
+    conversationId: event.conversationId,
+    replyRole,
   }).catch(() => {
     /* delivery failures are handled/logged inside sendPushToManager */
   })

@@ -324,6 +324,20 @@ export interface PushPayload {
   kind?: 'security'
   /** Signed token the kick button POSTs to /api/security/kick. */
   kickToken?: string
+  /**
+   * Inbound-message pushes set this so the service worker can offer an inline
+   * "reply" action (type:'text'): the worker POSTs the typed text to
+   * /api/push/reply with the session cookie. Undefined = no reply affordance
+   * (security alerts, visitor/god pushes).
+   */
+  conversationId?: string
+  /**
+   * Which authenticated surface should send the reply — 'manager' routes to the
+   * manager send action, 'curator' to the curator-scoped one. Mirrors the
+   * dispatcher's targetUrl decision so the reply is sent by the same identity
+   * that received the push.
+   */
+  replyRole?: 'manager' | 'curator'
 }
 
 export type EndpointPushResult =

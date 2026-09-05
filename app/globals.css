@@ -250,6 +250,65 @@
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
+
+  /* -------------------------------------------------------------------------
+     iOS PWA safe-area helpers (env(safe-area-inset-*)).
+     С viewportFit:cover приложение рисуется под чёлкой / Dynamic Island и
+     нижним индикатором «домой» на iPhone. Эти утилиты добавляют РОВНО столько
+     отступа, сколько занимает вырез, и деградируют в 0 на устройствах без
+     выреза (env() там = 0). max() гарантирует, что уже заданный дизайном
+     отступ не схлопнется на «плоских» экранах.
+  ------------------------------------------------------------------------- */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
+  /* Комбинированные: базовый отступ + вырез, чтобы контент не прилипал к краю. */
+  .pt-safe-3 {
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+  }
+  .pb-safe-2 {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+  .pb-safe-3 {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  .px-safe {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+  }
+  /* Высота вьюпорта, устойчивая к появлению/скрытию адресной строки Safari:
+     dvh = «динамическая» высота, корректно учитывает клавиатуру и панели iOS. */
+  .h-dvh-safe {
+    height: 100vh; /* фолбэк для старых движков */
+    height: 100dvh;
+  }
+  .min-h-dvh-safe {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  .max-h-dvh-safe {
+    max-height: 100vh;
+    max-height: 100dvh;
+  }
+}
+
+/* На iOS запрещаем «резиновый» overscroll всего документа и подтягивание-к-
+   обновлению внутри standalone-PWA, иначе тянется вся страница, а не список
+   сообщений. Списки чатов сами включают overscroll-contain по месту. */
+@media (display-mode: standalone) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
 }
 
 /* ---------------------------------------------------------------------------

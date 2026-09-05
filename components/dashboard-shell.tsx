@@ -274,7 +274,7 @@ export function DashboardShell({
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Без backdrop-blur: пере-блюр контента под sticky-шапкой на каждом
               кадре скролла — источник глюков (см. стандарт UI в AGENTS.md). */}
-          <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background px-4 md:px-6">
+          <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background px-4 pt-safe md:px-6" style={{ height: 'calc(3.5rem + env(safe-area-inset-top))' }}>
             <Button
               variant="ghost"
               size="icon-sm"

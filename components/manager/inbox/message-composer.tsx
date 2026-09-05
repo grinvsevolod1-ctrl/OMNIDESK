@@ -389,7 +389,7 @@ export const MessageComposer = memo(function MessageComposer({
   return (
     <div
       className={cn(
-        'relative bg-card',
+        'relative bg-card pb-safe',
         replyActive ? '' : 'border-t border-border',
       )}
       {...(canAttach ? media.dragHandlers : {})}
