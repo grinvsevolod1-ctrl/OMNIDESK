@@ -77,6 +77,13 @@ export async function setLeadArchivedAction(input: {
  * нерабочей причины («Игнор» / «Отказался» / «Кинул») + обязательный
  * комментарий. Одной транзакцией: смена статуса, комментарий, журнал,
  * архив. Доступно менеджеру по кадрам (свои лиды) и админу (любой лид).
+ *
+ * Дневной дисциплинарный гейт здесь НЕ применяется намеренно: архивация с
+ * обязательной нерабочей причиной и комментарием — это уже полноценное
+ * решение по лиду (сильнее ежедневного подтверждения), и она убирает лид из
+ * счётчика «ждут статуса». Требовать сперва подтвердить ВСЕ остальные лиды,
+ * чтобы отправить один в архив, — замкнутый круг, поэтому «В архив» доступна
+ * вне зависимости от того, обновлены ли статусы остальных лидов.
  */
 export async function archiveLeadWithReasonAction(input: {
   leadCardId: string
@@ -102,10 +109,6 @@ export async function archiveLeadWithReasonAction(input: {
     }
   }
   try {
-    if (session.role === 'curator') {
-      // Архивация — обслуживание рабочего места: дневной гейт действует.
-      await assertCuratorNotLocked(session.sub)
-    }
     const card = await archiveLeadWithStatus({
       leadCardId: input.leadCardId,
       curatorId: session.role === 'curator' ? session.sub : null,
