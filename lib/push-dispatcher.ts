@@ -1,5 +1,5 @@
 import 'server-only'
-import { isConversationMuted } from './data'
+import { getConversationCuratorId, isConversationMuted } from './data'
 import {
   isPushConfigured,
   sendPushToGod,
@@ -131,6 +131,22 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
     }
   }
 
+  // Route to whoever actually owns the thread. Once a conversation is handed
+  // off to a curator (миграция 151) the manager's AI is silent and the curator
+  // works it, so the push must reach the curator — not the channel owner.
+  // Falls back to the manager when there is no curator. push_subscriptions is
+  // keyed by the signed-in user's id, so a curator's own devices are addressed
+  // by sendPushToManager(curatorId) exactly like a manager's.
+  let targetId = event.managerId
+  let targetUrl = '/app/inbox'
+  if (event.conversationId) {
+    const curatorId = await getConversationCuratorId(event.conversationId)
+    if (curatorId) {
+      targetId = curatorId
+      targetUrl = '/curator/chats'
+    }
+  }
+
   const sender =
     event.contactName?.trim() ||
     event.contactHandle?.trim() ||
@@ -139,14 +155,14 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
   const title = `${sender} · ${channel}`
   const body = event.body ? truncate(event.body) : 'Новое сообщение'
 
-  void sendPushToManager(event.managerId, {
+  void sendPushToManager(targetId, {
     title,
     body,
-    url: '/app/inbox',
+    url: targetUrl,
     // Collapse repeated messages from the same conversation into one bubble.
     tag: event.conversationId
       ? `conv:${event.conversationId}`
-      : `mgr:${event.managerId}`,
+      : `mgr:${targetId}`,
   }).catch(() => {
     /* delivery failures are handled/logged inside sendPushToManager */
   })

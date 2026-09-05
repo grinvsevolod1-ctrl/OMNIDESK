@@ -427,6 +427,28 @@ export async function isConversationMuted(
   return rows.length > 0 ? Boolean(rows[0].muted) : false
 }
 
+/**
+ * The curator a conversation was handed off to (миграция 151), or null when it
+ * is still AI/manager-led. Used by the push dispatcher to route an inbound
+ * message to the person actually responsible: once a thread is transferred the
+ * manager's AI goes silent and the curator owns it, so the push must reach the
+ * curator, not the channel owner. Never throws — on any failure the dispatcher
+ * falls back to the manager.
+ */
+export async function getConversationCuratorId(
+  conversationId: string,
+): Promise<string | null> {
+  try {
+    const rows = await query<{ curator_id: string | null }>(
+      `SELECT curator_id FROM conversations WHERE id = $1`,
+      [conversationId],
+    )
+    return rows.length > 0 ? rows[0].curator_id : null
+  } catch {
+    return null
+  }
+}
+
 /*
  * Conversation transfer (manager hand-off, admin bulk reassignment, transfer
  * targets) moved to conversation-transfer.ts; re-exported for compatibility.

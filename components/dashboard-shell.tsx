@@ -7,9 +7,10 @@
  * in dashboard-nav.tsx; NavIcon/NavItem are re-exported for compatibility.
  */
 import { usePathname } from 'next/navigation'
-import { useEffect, useState, type ReactNode } from 'react'
-import { ChevronLeft, LogOut, Menu, PanelLeft, X } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { ChevronLeft, Loader2, LogOut, Menu, PanelLeft, X } from 'lucide-react'
 import { logoutAction } from '@/app/actions/auth'
+import { unsubscribePushThisDevice } from '@/lib/push-client'
 import { BrandMark } from '@/components/brand'
 import { NavLinks } from '@/components/dashboard-nav'
 import { Button } from '@/components/ui/button'
@@ -56,6 +57,19 @@ export function DashboardShell({
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
+
+  // Sign out cleanly: drop THIS device's push subscription BEFORE ending the
+  // session, otherwise the server row survives and the dispatcher keeps pushing
+  // to a logged-out device. Cleanup is best-effort and never blocks logout.
+  const handleLogout = useCallback(async () => {
+    setLoggingOut(true)
+    try {
+      await unsubscribePushThisDevice()
+    } finally {
+      await logoutAction()
+    }
+  }, [])
   // Временный фокус-режим (навигация по кружкам/фото в инбоксе): сайдбар
   // сворачивается на время, НЕ трогая сохранённое предпочтение пользователя,
   // и разворачивается обратно, когда режим выключается.
@@ -276,17 +290,21 @@ export function DashboardShell({
                   </span>
                 </span>
               </div>
-              <form action={logoutAction}>
-                <Button
-                  type="submit"
-                  variant="outline"
-                  size="sm"
-                  aria-label="Выйти"
-                >
-                  <LogOut className="size-4" />
-                  <span className="hidden sm:inline">Выйти</span>
-                </Button>
-              </form>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Выйти"
+            disabled={loggingOut}
+            onClick={() => void handleLogout()}
+          >
+            {loggingOut ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <LogOut className="size-4" />
+            )}
+            <span className="hidden sm:inline">Выйти</span>
+          </Button>
             </div>
           </header>
 

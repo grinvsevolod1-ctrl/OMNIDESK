@@ -1,4 +1,4 @@
-import { subscribePushAction } from '@/app/actions/push'
+import { subscribePushAction, unsubscribePushAction } from '@/app/actions/push'
 
 /**
  * Browser-side Web Push helpers shared by the manager notification UI
@@ -78,4 +78,31 @@ export async function ensurePushSubscription(
     p256dh: json.keys.p256dh,
     auth: json.keys.auth,
   })
+}
+
+/**
+ * Tear down THIS device's push subscription on logout. Without this the server
+ * row survives sign-out and the dispatcher keeps pushing to a logged-out
+ * device — the "logged out but still getting notifications" bug. The server
+ * row is dropped FIRST (so delivery stops even if the browser unsubscribe
+ * fails), then the browser subscription is removed so the next user on this
+ * browser starts clean. Scoped to the current device only: signing out on the
+ * desktop never kills the phone's subscription. Best-effort and never throws —
+ * logout must never be blocked by push cleanup, and the server action is
+ * role-gated (manager/curator), so for other roles the row removal simply
+ * no-ops while the browser still unsubscribes.
+ */
+export async function unsubscribePushThisDevice(): Promise<void> {
+  try {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+      return
+    }
+    const reg = await navigator.serviceWorker.getRegistration()
+    const sub = reg ? await reg.pushManager.getSubscription() : null
+    if (!sub) return
+    await unsubscribePushAction(sub.endpoint).catch(() => {})
+    await sub.unsubscribe().catch(() => {})
+  } catch {
+    /* logout must never be blocked by push cleanup */
+  }
 }
