@@ -32,13 +32,25 @@ export async function listConversations(
   managerId: string,
 ): Promise<Conversation[]> {
   const rows = await query<
-    ConversationRow & { channel_name: string | null; curator_name: string | null }
+    ConversationRow & {
+      channel_name: string | null
+      curator_name: string | null
+      lead_status: string | null
+      lead_archived: boolean | null
+    }
   >(
+    // lead_cards has a UNIQUE partial index on conversation_id (migration 112),
+    // so the join yields at most one card. lead_status/lead_archived let the
+    // manager inbox split transferred threads into «у куратора в работе»
+    // (hidden) vs «Доработки» (returned for follow-up). See managerBucket().
     `SELECT ${conversationColumns('c')}, ch.name AS channel_name,
-            cur.name AS curator_name
+            cur.name AS curator_name,
+            lc.status AS lead_status,
+            (lc.archived_at IS NOT NULL) AS lead_archived
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers cur ON cur.id = c.curator_id
+       LEFT JOIN lead_cards lc ON lc.conversation_id = c.id
       WHERE c.manager_id = $1
       ORDER BY c.last_message_at DESC
       LIMIT $2`,
@@ -48,6 +60,8 @@ export async function listConversations(
     ...toConversation(r),
     channelName: r.channel_name ?? undefined,
     curatorName: r.curator_name ?? undefined,
+    curatorLeadStatus: r.lead_status ?? null,
+    curatorArchived: Boolean(r.lead_archived),
   }))
 }
 

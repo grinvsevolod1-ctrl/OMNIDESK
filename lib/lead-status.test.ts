@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   FINAL_LEAD_STATUSES,
   isFinalLeadStatus,
+  isReworkStatus,
   leadNeedsDailyStatus,
   needsDailyStatusUpdate,
+  REWORK_LEAD_STATUSES,
 } from './lead-status'
 import { mskDayKey } from './time'
 
@@ -21,6 +23,26 @@ describe('isFinalLeadStatus', () => {
     expect(isFinalLeadStatus('awaiting_exit')).toBe(false)
     expect(isFinalLeadStatus(null)).toBe(false)
     expect(isFinalLeadStatus(undefined)).toBe(false)
+  })
+})
+
+describe('isReworkStatus (возврат лида менеджеру в «Доработки»)', () => {
+  it('только Игнор / Отказался / Не связался попадают в набор', () => {
+    expect(REWORK_LEAD_STATUSES).toEqual(['no_contact', 'refused', 'ignore'])
+    expect(isReworkStatus('no_contact')).toBe(true)
+    expect(isReworkStatus('refused')).toBe(true)
+    expect(isReworkStatus('ignore')).toBe(true)
+  })
+
+  it('рабочие и прочие статусы в «Доработки» не возвращаются', () => {
+    // «Кинул» сознательно НЕ в наборе (владелец не отметил его в чекбоксах).
+    expect(isReworkStatus('left')).toBe(false)
+    expect(isReworkStatus('working')).toBe(false)
+    expect(isReworkStatus('new')).toBe(false)
+    expect(isReworkStatus('training')).toBe(false)
+    expect(isReworkStatus(null)).toBe(false)
+    expect(isReworkStatus(undefined)).toBe(false)
+    expect(isReworkStatus('')).toBe(false)
   })
 })
 

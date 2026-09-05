@@ -1,7 +1,13 @@
 'use client'
 
 import { Fragment } from 'react'
-import { BellOff, Search, SlidersHorizontal, X } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  BellOff,
+  Search,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -63,6 +69,9 @@ export function ConversationListHeader({
   mutedCount,
   showMuted,
   setShowMuted,
+  transferredCount,
+  viewBucket,
+  setViewBucket,
   hasActiveFilters,
   clearFilters,
   onOpenConversation,
@@ -90,6 +99,11 @@ export function ConversationListHeader({
   mutedCount: number
   showMuted: boolean
   setShowMuted: (updater: (v: boolean) => boolean) => void
+  /** Кол-во диалогов, которые куратор ведёт прямо сейчас (для чипа «Переданные»). */
+  transferredCount: number
+  /** Текущий сегмент инбокса. */
+  viewBucket: 'active' | 'transferred' | 'rework'
+  setViewBucket: (b: 'active' | 'transferred' | 'rework') => void
   hasActiveFilters: boolean
   clearFilters: () => void
   /** Открыть диалог по id — для кнопки «Написать в ТГ» после отправки. */
@@ -320,6 +334,37 @@ export function ConversationListHeader({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* «Переданные»: диалоги, которые куратор ведёт прямо сейчас. По
+            умолчанию они скрыты из активного списка — этот чип открывает их
+            отдельным сегментом. Показываем, пока есть такие диалоги или пока
+            сегмент открыт (чтобы был путь обратно). */}
+        {transferredCount > 0 || viewBucket === 'transferred' ? (
+          <button
+            type="button"
+            aria-pressed={viewBucket === 'transferred'}
+            onClick={() =>
+              setViewBucket(
+                viewBucket === 'transferred' ? 'active' : 'transferred',
+              )
+            }
+            className={cn(
+              'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
+              viewBucket === 'transferred'
+                ? 'bg-primary/15 text-primary'
+                : 'text-muted-foreground hover:bg-muted',
+            )}
+            title={
+              viewBucket === 'transferred'
+                ? 'Вернуться к активным диалогам'
+                : 'Показать диалоги, которые ведёт куратор'
+            }
+          >
+            <ArrowLeftRight className="size-3" />
+            Переданные
+            <span className="text-[10px] opacity-60">{transferredCount}</span>
+          </button>
+        ) : null}
 
         {mutedCount > 0 ? (
           <button

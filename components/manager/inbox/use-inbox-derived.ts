@@ -3,6 +3,7 @@
 import { useMemo } from 'react'
 import type { ForwardTarget } from '@/components/manager/message-context-menu'
 import { sourceLabel } from '@/components/manager/inbox/visual'
+import { managerBucket } from '@/components/manager/inbox/filtering'
 import type {
   ChannelType,
   Conversation,
@@ -146,6 +147,14 @@ export function useInboxDerived({
     [conversations, isMuted],
   )
 
+  // Threads a curator is actively working (hidden from the default list) —
+  // drives the «Переданные» segment chip.
+  const transferredCount = useMemo(
+    () =>
+      conversations.filter((c) => managerBucket(c) === 'transferred').length,
+    [conversations],
+  )
+
   const unreadTotal = useMemo(
     () => conversations.reduce((n, c) => n + (c.unread > 0 ? 1 : 0), 0),
     [conversations],
@@ -174,6 +183,7 @@ export function useInboxDerived({
     sources,
     awaitingReply,
     mutedCount,
+    transferredCount,
     unreadTotal,
     forwardTargets,
     pendingHandoffs,

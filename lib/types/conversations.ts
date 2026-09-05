@@ -111,6 +111,16 @@ export interface Conversation {
   curatorName?: string
   /** ISO-время передачи диалога куратору. */
   transferredToCuratorAt?: string
+  /**
+   * Текущий статус лид-карточки у куратора (enum из lib/lead-status.ts, НЕ из
+   * conversation-статусов). Заполняется только в списках менеджера, где нужно
+   * разделить переданные диалоги на «у куратора в работе» и «Доработки»
+   * (куратор поставил Игнор/Отказался/Не связался). undefined — карточки нет
+   * или диалог не передан.
+   */
+  curatorLeadStatus?: string | null
+  /** Лид-карточка ушла в архив у куратора (lead_cards.archived_at). */
+  curatorArchived?: boolean
 }
 
 /**

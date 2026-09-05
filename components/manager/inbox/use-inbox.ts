@@ -16,7 +16,10 @@ import type { ChannelType, Conversation, Message } from '@/lib/types'
 import { useInboxFilters } from '@/components/manager/inbox/use-inbox-filters'
 import { useDrafts } from '@/components/manager/inbox/use-drafts'
 import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
-import { filterAndSortConversations } from '@/components/manager/inbox/filtering'
+import {
+  filterAndSortConversations,
+  type ManagerBucket,
+} from '@/components/manager/inbox/filtering'
 import { useReplyReminder } from '@/components/manager/inbox/use-reply-reminder'
 import { useThreadHistory } from '@/components/manager/inbox/use-thread-history'
 import { useThreadScroll } from '@/components/manager/inbox/use-thread-scroll'
@@ -117,6 +120,11 @@ export function useInbox({
   // Whether to reveal muted/silenced threads in the list (hidden by default).
   const [showMuted, setShowMuted] = useState(false)
 
+  // Which inbox segment is shown. 'active' (default) hides threads a curator is
+  // actively working; 'transferred' shows only those («Переданные»). 'rework'
+  // («Доработки») is wired in Этап 4.
+  const [viewBucket, setViewBucket] = useState<ManagerBucket>('active')
+
   // List filtering + sorting state (search, Set filters, sort mode).
   const {
     search,
@@ -159,6 +167,7 @@ export function useInbox({
     sources,
     awaitingReply,
     mutedCount,
+    transferredCount,
     unreadTotal,
     forwardTargets,
     pendingHandoffs,
@@ -197,6 +206,7 @@ export function useInbox({
         awaitingReply,
         isMuted,
         showMuted,
+        viewBucket,
         activeId,
         localMessages,
       }),
@@ -211,10 +221,21 @@ export function useInbox({
       awaitingReply,
       isMuted,
       showMuted,
+      viewBucket,
       activeId,
       localMessages,
     ],
   )
+
+  // If the «Переданные» segment empties out (curator finished every thread),
+  // fall back to the active view so the manager isn't left staring at an empty
+  // list with no visible way back.
+  useEffect(() => {
+    if (viewBucket === 'transferred' && transferredCount === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setViewBucket('active')
+    }
+  }, [viewBucket, transferredCount])
 
   // When the channel-type filter changes, drop any selected sources that no
   // longer belong to a visible type, so stale selections can't hide everything.
@@ -433,6 +454,10 @@ export function useInbox({
     // muted toggle
     showMuted,
     setShowMuted,
+    // segment view (Активные / Переданные / Доработки)
+    viewBucket,
+    setViewBucket,
+    transferredCount,
     // filters
     search,
     setSearch,

@@ -109,6 +109,9 @@ export function InboxView({
     pulseAiButton,
     showMuted,
     setShowMuted,
+    viewBucket,
+    setViewBucket,
+    transferredCount,
     search,
     setSearch,
     typeFilter,
@@ -257,6 +260,9 @@ export function InboxView({
         mutedCount={mutedCount}
         showMuted={showMuted}
         setShowMuted={setShowMuted}
+        transferredCount={transferredCount}
+        viewBucket={viewBucket}
+        setViewBucket={setViewBucket}
         hasActiveFilters={hasActiveFilters}
         clearFilters={clearFilters}
         isMuted={isMuted}

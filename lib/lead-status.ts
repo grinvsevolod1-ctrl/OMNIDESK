@@ -152,6 +152,28 @@ export function isArchiveLeadStatus(
   )
 }
 
+/**
+ * «Доработки»: статусы куратора, при которых лид возвращается менеджеру на
+ * дожим. Куратор потерял/не дожал контакт — менеджер пробует ещё раз (при
+ * необходимости с запасного аккаунта для исходящих, см. Этап 4). Набор выбран
+ * владельцем: Игнор, Отказался, Не связался. «Кинул» (`left`) сюда СОЗНАТЕЛЬНО
+ * не входит (в чекбоксах не отмечен) — чтобы вернуть его в дожим, достаточно
+ * добавить одну строку. Признак «архива» лида (`lead_cards.archived_at`)
+ * учитывается отдельно (см. isReworkStatus использование в UI): архивный лид
+ * тоже возвращается в «Доработки».
+ */
+export const REWORK_LEAD_STATUSES = [
+  'no_contact',
+  'refused',
+  'ignore',
+] as const satisfies readonly LeadStatus[]
+
+export function isReworkStatus(
+  value: string | null | undefined,
+): value is (typeof REWORK_LEAD_STATUSES)[number] {
+  return !!value && (REWORK_LEAD_STATUSES as readonly string[]).includes(value)
+}
+
 export function leadStatusLabel(value: string | null | undefined): string {
   if (isLeadStatus(value)) return LEAD_STATUS_LABELS[value]
   return 'Не указан'

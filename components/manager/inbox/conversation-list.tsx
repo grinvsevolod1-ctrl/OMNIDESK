@@ -79,6 +79,9 @@ export function ConversationList({
   mutedCount,
   showMuted,
   setShowMuted,
+  transferredCount,
+  viewBucket,
+  setViewBucket,
   hasActiveFilters,
   clearFilters,
   isMuted,
@@ -129,6 +132,9 @@ export function ConversationList({
   mutedCount: number
   showMuted: boolean
   setShowMuted: (updater: (v: boolean) => boolean) => void
+  transferredCount: number
+  viewBucket: 'active' | 'transferred' | 'rework'
+  setViewBucket: (b: 'active' | 'transferred' | 'rework') => void
   hasActiveFilters: boolean
   clearFilters: () => void
   isMuted: (c: Conversation) => boolean
@@ -175,6 +181,9 @@ export function ConversationList({
         mutedCount={mutedCount}
         showMuted={showMuted}
         setShowMuted={setShowMuted}
+        transferredCount={transferredCount}
+        viewBucket={viewBucket}
+        setViewBucket={setViewBucket}
         hasActiveFilters={hasActiveFilters}
         clearFilters={clearFilters}
         onOpenConversation={setActiveId}

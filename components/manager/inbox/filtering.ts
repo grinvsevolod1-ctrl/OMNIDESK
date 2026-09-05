@@ -16,7 +16,31 @@ import type {
   Message,
   NotLiquidReason,
 } from '@/lib/types'
+import { isReworkStatus } from '@/lib/lead-status'
 import { sourceLabel, type SortMode } from '@/components/manager/inbox/visual'
+
+/**
+ * Which manager "bucket" a conversation belongs to, derived purely from
+ * whether it's been handed to a curator and that curator's lead-card status:
+ *
+ *   'active'      — not transferred (curator_id NULL). Normal thread the
+ *                   manager (or AI) leads.
+ *   'transferred' — handed to a curator who is actively working it. Hidden from
+ *                   the manager's default list; visible under «Переданные».
+ *   'rework'      — the curator gave up on it (Игнор/Отказался/Не связался) or
+ *                   archived it, so it returns to the manager for a follow-up
+ *                   push. Surfaced under «Доработки» (Этап 4).
+ *
+ * Single source of truth shared by the list filter, the counters and the open
+ * thread, so all three always agree.
+ */
+export type ManagerBucket = 'active' | 'transferred' | 'rework'
+
+export function managerBucket(c: Conversation): ManagerBucket {
+  if (!c.transferred) return 'active'
+  if (c.curatorArchived || isReworkStatus(c.curatorLeadStatus)) return 'rework'
+  return 'transferred'
+}
 
 export interface FilterSortParams {
   conversations: Conversation[]
@@ -29,6 +53,12 @@ export interface FilterSortParams {
   awaitingReply: Map<string, { waiting: boolean; since: number }>
   isMuted: (c: Conversation) => boolean
   showMuted: boolean
+  /**
+   * Which segment the manager is viewing. 'active' is the default inbox and
+   * hides threads a curator is actively working ('transferred'); 'transferred'
+   * shows only those. 'rework' («Доработки») is wired in Этап 4.
+   */
+  viewBucket: ManagerBucket
   activeId: string | null
   localMessages: Record<string, Message[]>
 }
@@ -44,11 +74,25 @@ export function filterAndSortConversations({
   awaitingReply,
   isMuted,
   showMuted,
+  viewBucket,
   activeId,
   localMessages,
 }: FilterSortParams): Conversation[] {
   const q = search.trim().toLowerCase()
   const list = conversations.filter((c) => {
+    // Segment gate. The open thread is exempt so it never vanishes mid-read
+    // (e.g. the curator picks it up while the manager has it open).
+    if (c.id !== activeId) {
+      const bucket = managerBucket(c)
+      if (viewBucket === 'transferred') {
+        if (bucket !== 'transferred') return false
+      } else if (bucket === 'transferred') {
+        // Default 'active' view hides threads the curator is actively working.
+        // 'rework' threads stay here (read-only) until Этап 4 gives them their
+        // own «Доработки» segment.
+        return false
+      }
+    }
     // Muted contacts are hidden by default; reveal them via the toggle. The
     // currently-open thread always stays visible so it never vanishes mid-chat.
     if (isMuted(c) && !showMuted && c.id !== activeId) return false
