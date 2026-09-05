@@ -80,13 +80,18 @@ function computeAlbums(thread: Message[]): {
 const SWIPE_REPLY_THRESHOLD = 56
 
 /**
- * Свайп-влево по сообщению → быстрый ответ (как в Telegram/WhatsApp) — чтобы не
- * приходилось долго жать на сообщение и лезть в меню. Только touch и только по
- * горизонтали: пока жест вертикальный, лента скроллится как обычно
- * (touch-action: pan-y). За порогом баббл слегка уезжает влево и открывается
- * иконка ответа; при отпускании — плавно возвращается и вызывает onReply. Где
- * ответ недоступен (не-Telegram, удалённое сообщение, десктоп) обёртка
- * прозрачна и ничего не перехватывает.
+ * Свайп-влево по сообщению → быстрый ответ (как в Telegram/WhatsApp).
+ *
+ * ОДИН слой: обёртка сама `w-full flex justify-*` (чтобы `max-w-[80%]` бабла
+ * считался именно от неё — от полной ширины ряда, а не от промежуточного бокса;
+ * это и был баг со съехавшими бабблами и полосой у края) И одновременно несёт
+ * саму трансформацию сдвига и touch-обработчики. Отдельного вложенного
+ * translateX-слоя больше нет.
+ *
+ * Только touch и только по горизонтали: пока жест вертикальный, лента
+ * скроллится обычным образом (touch-action: pan-y). Величину сдвига дублируем в
+ * ref, чтобы onTouchEnd видел актуальное значение без устаревшего замыкания —
+ * поэтому свайп срабатывает КАЖДЫЙ раз, а не «один раз и всё».
  */
 function SwipeToReply({
   enabled,
@@ -101,18 +106,31 @@ function SwipeToReply({
   children: ReactNode
 }) {
   const [dx, setDx] = useState(0)
+  const dxRef = useRef(0)
   const start = useRef<{ x: number; y: number; active: boolean } | null>(null)
-  // Обёртка сама несёт выравнивание (w-full flex + justify), чтобы вставка
-  // свайп-слоя не ломала позицию баббла и max-width: иначе исходящие уезжают
-  // от правого края.
+
+  const set = (v: number) => {
+    dxRef.current = v
+    setDx(v)
+  }
+  const reset = () => {
+    start.current = null
+    set(0)
+  }
+
   if (!enabled) return <>{children}</>
+
   return (
     <div
       className={cn(
         'relative flex w-full',
         align === 'end' ? 'justify-end' : 'justify-start',
       )}
-      style={{ touchAction: 'pan-y' }}
+      style={{
+        transform: dx ? `translateX(${dx}px)` : undefined,
+        transition: dx === 0 ? 'transform 0.18s ease-out' : 'none',
+        touchAction: 'pan-y',
+      }}
       onTouchStart={(e) => {
         const t = e.touches[0]
         start.current = { x: t.clientX, y: t.clientY, active: false }
@@ -123,8 +141,6 @@ function SwipeToReply({
         const t = e.touches[0]
         const dX = t.clientX - s.x
         const dY = t.clientY - s.y
-        // Решаем направление жеста один раз: горизонталь — наш свайп,
-        // вертикаль — отдаём скроллу и больше не вмешиваемся.
         if (!s.active) {
           if (Math.abs(dX) > 10 && Math.abs(dX) > Math.abs(dY) * 1.3) {
             s.active = true
@@ -135,20 +151,20 @@ function SwipeToReply({
             return
           }
         }
-        setDx(Math.max(Math.min(dX, 0), -96))
+        set(Math.max(Math.min(dX, 0), -88))
       }}
       onTouchEnd={() => {
-        if (start.current?.active && dx <= -SWIPE_REPLY_THRESHOLD) onReply()
-        start.current = null
-        setDx(0)
+        if (start.current?.active && dxRef.current <= -SWIPE_REPLY_THRESHOLD) {
+          onReply()
+        }
+        reset()
       }}
-      onTouchCancel={() => {
-        start.current = null
-        setDx(0)
-      }}
+      onTouchCancel={reset}
     >
+      {/* Иконка ответа проявляется по мере сдвига; строго в пределах обёртки,
+          pointer-events-none — за край не вылезает, полосу не создаёт. */}
       <div
-        className="pointer-events-none absolute inset-y-0 right-2 flex items-center"
+        className="pointer-events-none absolute inset-y-0 right-1 flex items-center"
         style={{ opacity: Math.min(1, Math.abs(dx) / SWIPE_REPLY_THRESHOLD) }}
         aria-hidden
       >
@@ -156,14 +172,7 @@ function SwipeToReply({
           <Reply className="size-4" />
         </span>
       </div>
-      <div
-        style={{
-          transform: `translateX(${dx}px)`,
-          transition: dx === 0 ? 'transform 0.18s ease-out' : 'none',
-        }}
-      >
-        {children}
-      </div>
+      {children}
     </div>
   )
 }
@@ -298,7 +307,7 @@ export function MessageList({
     <div
       ref={messagesScrollRef}
       onScroll={onThreadScroll}
-      className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-muted/20 px-3 py-4 sm:px-6"
+      className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-muted/20 px-3 py-4 sm:px-6"
       style={{
         backgroundImage:
           'radial-gradient(color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 1px)',
