@@ -21,6 +21,7 @@ import type { Dictionaries } from '@/lib/dictionaries'
 import type { ShellInsight } from '@/lib/admin-console/insights'
 import type { AssistantTurn } from '@/lib/admin-console/assistant'
 import { setShellModeAction } from '@/app/actions/admin-console'
+import { updateAdminAvatarAction } from '@/app/actions/account'
 import { OsShell } from './os-shell'
 
 export function AdminChrome({
@@ -34,7 +35,7 @@ export function AdminChrome({
 }: {
   shellEnabled: boolean
   nav: NavItem[]
-  user: { name: string; email: string }
+  user: { name: string; email: string; avatarUrl?: string | null }
   dictionaries: Dictionaries
   insights?: ShellInsight[]
   savedSession?: AssistantTurn[] | null
@@ -71,6 +72,7 @@ export function AdminChrome({
       nav={nav}
       roleLabel="Администратор"
       user={user}
+      avatarAction={updateAdminAvatarAction}
       headerSlot={
         <Button
           variant="outline"

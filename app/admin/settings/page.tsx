@@ -10,8 +10,13 @@ import {
 } from '@/components/shared/settings-shell'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { AvatarUploader } from '@/components/shared/avatar-uploader'
 import { requireAdmin } from '@/lib/auth'
 import { logoutAction } from '@/app/actions/auth'
+import {
+  getAdminAvatarAction,
+  updateAdminAvatarAction,
+} from '@/app/actions/account'
 import pkg from '@/package.json'
 
 // Single source of truth: package.json version, so this card can never drift
@@ -38,6 +43,7 @@ const TABS: SettingsTab[] = [
 export default async function AdminSettingsPage() {
   const user = await requireAdmin()
   const login = user.email.split('@')[0] || user.email
+  const adminAvatar = await getAdminAvatarAction()
 
   const details = [
     { icon: User, label: 'Имя', value: user.name, mono: false },
@@ -47,6 +53,14 @@ export default async function AdminSettingsPage() {
 
   const accountPanel = (
     <div className="flex flex-col gap-4">
+      <Card className="p-5">
+        <AvatarUploader
+          name={user.name}
+          initialAvatarUrl={adminAvatar}
+          action={updateAdminAvatarAction}
+        />
+      </Card>
+
       <Card className="overflow-hidden">
         <div className="divide-y divide-border">
           {details.map((d) => {

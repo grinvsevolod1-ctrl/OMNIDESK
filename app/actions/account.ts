@@ -10,8 +10,10 @@
 
 export {
   changeOwnPasswordAction,
+  getAdminAvatarAction,
   getLunchStateAction,
   setLunchAction,
+  updateAdminAvatarAction,
   updateMyAvatarAction,
   updateMyProfileAction,
 } from './account-profile'

@@ -11,6 +11,7 @@ import { getDictionaries } from '@/lib/data/dictionaries'
 import { SHELL_MODE_COOKIE } from '@/lib/admin-console/assistant'
 import { detectShellInsights } from '@/lib/admin-console/insights'
 import { loadConsoleSession } from '@/lib/data/console-shell'
+import { getAdminAvatar } from '@/lib/data/admin-avatar'
 
 const nav: NavItem[] = [
   { href: '/admin', label: 'Обзор', icon: 'overview' },
@@ -72,13 +73,15 @@ export default async function AdminLayout({
     ? await Promise.all([detectShellInsights(), loadConsoleSession(user.sub)])
     : [[], null]
 
+  const avatarUrl = await getAdminAvatar(user.sub)
+
   return (
     <SWRProvider>
       <DictionariesProvider value={dictionaries}>
         <AdminChrome
           shellEnabled={shellEnabled}
           nav={nav}
-          user={{ name: user.name, email: user.email }}
+          user={{ name: user.name, email: user.email, avatarUrl }}
           dictionaries={dictionaries}
           insights={insights}
           savedSession={savedSession}

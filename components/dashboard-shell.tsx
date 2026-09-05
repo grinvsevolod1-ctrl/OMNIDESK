@@ -10,7 +10,10 @@ import { usePathname } from 'next/navigation'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { ChevronLeft, Loader2, LogOut, Menu, PanelLeft, X } from 'lucide-react'
 import { logoutAction } from '@/app/actions/auth'
+import { updateMyAvatarAction } from '@/app/actions/account'
+import type { SimpleResult } from '@/app/actions/account-shared'
 import { unsubscribePushThisDevice } from '@/lib/push-client'
+import { AvatarPickerDialog } from '@/components/shared/avatar-picker'
 import { BrandMark } from '@/components/brand'
 import { NavLinks } from '@/components/dashboard-nav'
 import { Button } from '@/components/ui/button'
@@ -32,6 +35,11 @@ interface DashboardShellProps {
   user: { name: string; email: string; avatarUrl?: string | null }
   /** Optional control rendered in the header, before the user identity. */
   headerSlot?: ReactNode
+  /**
+   * Serverное сохранение аватарки из шапки. По умолчанию — для ролей из
+   * managers; админ передаёт updateAdminAvatarAction (у него нет строки в БД).
+   */
+  avatarAction?: (value: string | null) => Promise<SimpleResult>
   children: ReactNode
 }
 
@@ -52,12 +60,17 @@ export function DashboardShell({
   roleLabel,
   user,
   headerSlot,
+  avatarAction = updateMyAvatarAction,
   children,
 }: DashboardShellProps) {
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(
+    user.avatarUrl ?? null,
+  )
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false)
 
   // Sign out cleanly: drop THIS device's push subscription BEFORE ending the
   // session, otherwise the server row survives and the dispatcher keeps pushing
@@ -275,14 +288,22 @@ export function DashboardShell({
             <div className="ml-auto flex items-center gap-2">
               {headerSlot}
               <div className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm">
-                <Avatar className="size-7">
-                  {user.avatarUrl ? (
-                    <AvatarImage src={user.avatarUrl} alt={user.name} />
-                  ) : null}
-                  <AvatarFallback className="bg-secondary text-xs font-medium text-secondary-foreground">
-                    {initials(user.name)}
-                  </AvatarFallback>
-                </Avatar>
+                <button
+                  type="button"
+                  onClick={() => setAvatarPickerOpen(true)}
+                  aria-label="Изменить аватар"
+                  className="group relative rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Avatar className="size-7">
+                    {avatarUrl ? (
+                      <AvatarImage src={avatarUrl} alt={user.name} />
+                    ) : null}
+                    <AvatarFallback className="bg-secondary text-xs font-medium text-secondary-foreground">
+                      {initials(user.name)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="absolute inset-0 rounded-full ring-1 ring-inset ring-transparent transition group-hover:ring-primary" />
+                </button>
                 <span className="hidden max-w-[160px] flex-col leading-tight sm:flex">
                   <span className="truncate font-medium">{user.name}</span>
                   <span className="truncate text-xs text-muted-foreground">
@@ -333,6 +354,14 @@ export function DashboardShell({
           )}
         </div>
       </div>
+
+      <AvatarPickerDialog
+        open={avatarPickerOpen}
+        onOpenChange={setAvatarPickerOpen}
+        currentAvatar={avatarUrl}
+        action={avatarAction}
+        onSaved={setAvatarUrl}
+      />
     </TooltipProvider>
   )
 }

@@ -5,6 +5,7 @@ import {
   comparePassword,
   getSession,
   hashPassword,
+  requireAdmin,
   requireManager,
   startSession,
 } from '@/lib/auth'
@@ -23,6 +24,8 @@ import {
   updateManagerProfile,
 } from '@/lib/data'
 import { writeAudit } from '@/lib/data/audit'
+import { getAdminAvatar, setAdminAvatar } from '@/lib/data/admin-avatar'
+import { isDemonAvatarPreset } from '@/lib/avatar-presets'
 import type { SimpleResult } from './account-shared'
 
 /**
@@ -93,8 +96,15 @@ export async function getLunchStateAction(): Promise<boolean> {
 }
 
 /** Роли, чьи учётки живут в таблице managers и правят свой профиль сами. */
-function isSelfManagedRole(role: string): role is 'manager' | 'curator' | 'head' {
-  return role === 'manager' || role === 'curator' || role === 'head'
+function isSelfManagedRole(
+  role: string,
+): role is 'manager' | 'curator' | 'head' | 'buyer' {
+  return (
+    role === 'manager' ||
+    role === 'curator' ||
+    role === 'head' ||
+    role === 'buyer'
+  )
 }
 
 export async function changeOwnPasswordAction(
@@ -286,16 +296,20 @@ export async function updateMyAvatarAction(
     return { ok: true, message: 'Аватар удалён.' }
   }
 
-  if (value.length > MAX_AVATAR_DATAURL_LEN) {
-    return {
-      ok: false,
-      message: 'Изображение слишком большое. Выберите файл поменьше.',
+  // Готовый демонический образ — короткий путь /avatars/demon-XX.png.
+  const isPreset = isDemonAvatarPreset(value)
+  if (!isPreset) {
+    if (value.length > MAX_AVATAR_DATAURL_LEN) {
+      return {
+        ok: false,
+        message: 'Изображение слишком большое. Выберите файл поменьше.',
+      }
     }
-  }
-  if (!AVATAR_DATAURL_RE.test(value)) {
-    return {
-      ok: false,
-      message: 'Неподдерживаемый формат. Загрузите PNG, JPEG или WebP.',
+    if (!AVATAR_DATAURL_RE.test(value)) {
+      return {
+        ok: false,
+        message: 'Неподдерживаемый формат. Загрузите PNG, JPEG или WebP.',
+      }
     }
   }
 
@@ -307,9 +321,57 @@ export async function updateMyAvatarAction(
     action: 'account.avatar_update',
     entityType: 'manager',
     entityId: session.sub,
+    details: { preset: isPreset ? value : undefined },
   })
   revalidatePath('/app/settings')
   revalidatePath('/curator/settings')
   revalidatePath('/head/settings')
+  revalidatePath('/buyer/settings')
   return { ok: true, message: 'Аватар обновлён.' }
+}
+
+/**
+ * Аватарка администратора. У админа нет строки в `managers`, поэтому его аватар
+ * хранится в kv-таблице `app_settings` (ключ на каждого админа). Принимает либо
+ * готовый образ (/avatars/demon-XX.png), либо сжатый на клиенте data:-URL;
+ * пустая строка / null — сброс к инициалам. Никаких сторонних хранилищ.
+ */
+export async function updateAdminAvatarAction(
+  dataUrl: string | null,
+): Promise<SimpleResult> {
+  const session = await requireAdmin()
+
+  const value = (dataUrl ?? '').trim()
+
+  if (!value) {
+    await setAdminAvatar(session.sub, null)
+    revalidatePath('/admin')
+    return { ok: true, message: 'Аватар удалён.' }
+  }
+
+  const isPreset = isDemonAvatarPreset(value)
+  if (!isPreset) {
+    if (value.length > MAX_AVATAR_DATAURL_LEN) {
+      return {
+        ok: false,
+        message: 'Изображение слишком большое. Выберите файл поменьше.',
+      }
+    }
+    if (!AVATAR_DATAURL_RE.test(value)) {
+      return {
+        ok: false,
+        message: 'Неподдерживаемый формат. Загрузите PNG, JPEG или WebP.',
+      }
+    }
+  }
+
+  await setAdminAvatar(session.sub, value)
+  revalidatePath('/admin')
+  return { ok: true, message: 'Аватар обновлён.' }
+}
+
+/** Прочитать текущую аватарку администратора (для шапки/настроек). */
+export async function getAdminAvatarAction(): Promise<string | null> {
+  const session = await requireAdmin()
+  return getAdminAvatar(session.sub)
 }
