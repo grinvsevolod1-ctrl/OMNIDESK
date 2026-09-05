@@ -1,7 +1,7 @@
 'use client'
 
 import { memo } from 'react'
-import { ArrowRightLeft, AtSign } from 'lucide-react'
+import { ArrowRightLeft, AtSign, UserRound } from 'lucide-react'
 import {
   CityInlineEditor,
   DeleteLeadButton,
@@ -134,10 +134,22 @@ export const AdminLeadRow = memo(function AdminLeadRow({
               {lead.telegramUsername}
             </a>
           ) : null}
-          {/* Ниже lg источник живёт в подстроке; на lg+ — своя колонка. */}
+          {/* Источник трафика — в подстроке на всех ширинах. */}
           {lead.trafficSourceName ? (
-            <span className="inline-flex max-w-32 items-center rounded-md bg-muted px-1.5 py-0.5 text-[11px] lg:hidden">
+            <span className="inline-flex max-w-32 items-center rounded-md bg-muted px-1.5 py-0.5 text-[11px]">
               <span className="truncate">{lead.trafficSourceName}</span>
+            </span>
+          ) : null}
+          {/* Менеджер продаж, передавший лид: ниже lg — в подстроке, на lg+ —
+              в своей колонке. Явно подписан «Передал: …», чтобы не путать с
+              менеджером по кадрам («Передан: …»). */}
+          {lead.managerName ? (
+            <span
+              className="inline-flex max-w-40 items-center gap-0.5 text-primary lg:hidden"
+              title="Менеджер продаж — передал лид"
+            >
+              <UserRound className="size-3 shrink-0" />
+              <span className="truncate">Передал: {lead.managerName}</span>
             </span>
           ) : null}
         </div>
@@ -150,18 +162,23 @@ export const AdminLeadRow = memo(function AdminLeadRow({
         <CityInlineEditor lead={lead} onSaved={onRefresh} />
       </span>
 
-      {/* Источник трафика — своя колонка на lg+: чипы выровнены по сетке. */}
+      {/* Менеджер продаж, передавший лид — своя колонка на lg+. Раньше здесь
+          был источник трафика (переехал в подстроку): теперь вместо безликого
+          «—» явно видно, кто передал лид. */}
       <span className="hidden min-w-0 lg:block">
-        {lead.trafficSourceName ? (
+        {lead.managerName ? (
           <Tooltip>
             <TooltipTrigger
               render={
-                <span className="inline-flex max-w-full cursor-default items-center rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                  <span className="truncate">{lead.trafficSourceName}</span>
+                <span className="inline-flex max-w-full cursor-default items-center gap-1 text-xs text-muted-foreground">
+                  <UserRound className="size-3 shrink-0" />
+                  <span className="truncate">{lead.managerName}</span>
                 </span>
               }
             />
-            <TooltipContent side="top">Источник трафика</TooltipContent>
+            <TooltipContent side="top">
+              Менеджер продаж — передал лид
+            </TooltipContent>
           </Tooltip>
         ) : (
           <span className="text-xs text-muted-foreground">—</span>
