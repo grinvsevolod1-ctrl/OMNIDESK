@@ -90,19 +90,28 @@ const SWIPE_REPLY_THRESHOLD = 56
  */
 function SwipeToReply({
   enabled,
+  align,
   onReply,
   children,
 }: {
   enabled: boolean
+  /** Сторона выравнивания баббла в ряду (out → вправо, in → влево). */
+  align: 'start' | 'end'
   onReply: () => void
   children: ReactNode
 }) {
   const [dx, setDx] = useState(0)
   const start = useRef<{ x: number; y: number; active: boolean } | null>(null)
+  // Обёртка сама несёт выравнивание (w-full flex + justify), чтобы вставка
+  // свайп-слоя не ломала позицию баббла и max-width: иначе исходящие уезжают
+  // от правого края.
   if (!enabled) return <>{children}</>
   return (
     <div
-      className="relative"
+      className={cn(
+        'relative flex w-full',
+        align === 'end' ? 'justify-end' : 'justify-start',
+      )}
       style={{ touchAction: 'pan-y' }}
       onTouchStart={(e) => {
         const t = e.touches[0]
@@ -219,7 +228,7 @@ export function MessageList({
    */
   readOnlyActions?: boolean
   /**
-   * Скрыть тики доставки/ошибки отправки у исходящих (роль без владения
+   * Скрыть тики доставки/ошибки отправки у и��ходящих (роль без владения
    * отправкой — куратор по кадрам). Диалоги передаются человеку/ведутся из
    * другого места, поэтому статус «Не отправлено» вводил бы куратора в
    * заблуждение — будто его сообщение не ушло. Время при этом остаётся.
@@ -552,6 +561,7 @@ export function MessageList({
                   return (
                     <SwipeToReply
                       enabled={isTelegram && !isDeleted}
+                      align={isOut ? 'end' : 'start'}
                       onReply={() => onReply(m)}
                     >
                     <div
