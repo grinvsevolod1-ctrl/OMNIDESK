@@ -111,32 +111,7 @@ export function DashboardShell({
     [slotEl],
   )
 
-  // iOS standalone PWA: видимая область меняется, когда всплывает экранная
-  // клавиатура, а `fixed inset-0` / `100dvh` под неё не подстраиваются — снизу
-  // под композером оставалась чёрная полоса body (bg-background), а сам композер
-  // мог уезжать под клавиатуру. Привязываем высоту оболочки к
-  // visualViewport.height, чтобы её низ ВСЕГДА совпадал с реально видимым краем
-  // экрана (и с закрытой, и с открытой клавиатурой). На десктопе это просто
-  // высота окна.
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const vv = window.visualViewport
-    const apply = () => {
-      const h = vv?.height ?? window.innerHeight
-      document.documentElement.style.setProperty('--app-vh', `${h}px`)
-    }
-    apply()
-    vv?.addEventListener('resize', apply)
-    vv?.addEventListener('scroll', apply)
-    window.addEventListener('resize', apply)
-    window.addEventListener('orientationchange', apply)
-    return () => {
-      vv?.removeEventListener('resize', apply)
-      vv?.removeEventListener('scroll', apply)
-      window.removeEventListener('resize', apply)
-      window.removeEventListener('orientationchange', apply)
-    }
-  }, [])
+
 
   // Sign out cleanly: drop THIS device's push subscription BEFORE ending the
   // session, otherwise the server row survives and the dispatcher keeps pushing
@@ -224,14 +199,12 @@ export function DashboardShell({
   return (
     <ShellHeaderContext.Provider value={headerCtx}>
     <TooltipProvider>
-      {/* Высота = var(--app-vh) (реальная visualViewport.height, см. эффект
-          выше) с фолбэком 100dvh до гидрации. Фиксированный слой сверху вниз по
-          видимой области: композер всегда прижат к реально видимому низу — без
-          чёрной полосы body под ним и без ухода под клавиатуру в iOS-PWA. */}
-      <div
-        className="fixed inset-x-0 top-0 flex overflow-hidden bg-background"
-        style={{ height: 'var(--app-vh, 100dvh)' }}
-      >
+      {/* fixed inset-0: слой прибит ко ВСЕМ четырём краям экрана (top/right/
+          bottom/left = 0), поэтому в standalone-PWA на iOS занимает ровно весь
+          вьюпорт — без чёрных полос body справа и снизу. overflow-hidden
+          отрезает любое внутреннее переполнение, а pb-safe композера кроет
+          home-indicator. */}
+      <div className="fixed inset-0 flex overflow-hidden bg-background">
         {/* Desktop sidebar */}
         <aside
           className={cn(
