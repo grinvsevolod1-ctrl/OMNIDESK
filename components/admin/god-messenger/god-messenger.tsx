@@ -1,8 +1,17 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
 import { useSearchParams } from 'next/navigation'
 
+import { toast } from 'sonner'
+import { secretSetContactBlockedAction } from '@/app/actions/admin-secret/conversation-edits'
 import type { Channel, Manager } from '@/lib/types'
 import { NewChatDialog } from './new-chat-dialog'
 import { ChatListPane } from './chat-list-pane'
@@ -88,6 +97,26 @@ export function GodMessenger({
     return (id: string | null) => (id ? map.get(id) ?? '—' : '—')
   }, [managers])
 
+  const [blockPending, startBlock] = useTransition()
+  const blocked = Boolean(thread.conversation?.contactBlocked)
+  const toggleBlock = useCallback(() => {
+    const id = thread.selectedId
+    if (!id) return
+    const next = !blocked
+    startBlock(async () => {
+      const res = await secretSetContactBlockedAction(id, next)
+      if (res.ok) {
+        toast.success(res.message)
+        // Refresh the open thread + list so the badge and any settled sends
+        // reflect the new block state immediately.
+        thread.loadThreadRef.current(id)
+        thread.loadList({ silent: true })
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }, [blocked, thread])
+
   const showThread = thread.selectedId !== null
 
   const replyLabel = composer.replyTo
@@ -125,6 +154,9 @@ export function GodMessenger({
           retryLoad={() => {
             if (thread.selectedId) thread.loadThreadRef.current(thread.selectedId)
           }}
+          blocked={blocked}
+          blockPending={blockPending}
+          onToggleBlock={toggleBlock}
           scrollBoxRef={scroll.scrollBoxRef}
           endRef={scroll.endRef}
           onScrollBox={scroll.onScrollBox}

@@ -13,6 +13,7 @@
 import type React from 'react'
 import { useEffect, useRef } from 'react'
 import {
+  Ban,
   Check,
   ChevronLeft,
   CornerUpLeft,
@@ -59,6 +60,11 @@ interface ThreadPaneProps {
   managerNameOf: (id: string | null) => string
   selectThread: (id: string | null) => void
   retryLoad: () => void
+  /* Block toggle: simulates the contact blocking our manager. When blocked,
+   * outbound sends to a god-created dialog surface as "не доставлено". */
+  blocked: boolean
+  blockPending: boolean
+  onToggleBlock: () => void
   /* Scroll plumbing (use-god-scroll) */
   scrollBoxRef: React.RefObject<HTMLDivElement | null>
   endRef: React.RefObject<HTMLDivElement | null>
@@ -102,6 +108,9 @@ export function ThreadPane({
   managerNameOf,
   selectThread,
   retryLoad,
+  blocked,
+  blockPending,
+  onToggleBlock,
   scrollBoxRef,
   endRef,
   onScrollBox,
@@ -244,7 +253,34 @@ export function ThreadPane({
                 </span>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={onToggleBlock}
+              disabled={blockPending}
+              aria-pressed={blocked}
+              title={
+                blocked
+                  ? 'Клиент заблокировал менеджера — нажмите, чтобы разблокировать'
+                  : 'Заблокировать: сообщения будут «не доставлены»'
+              }
+              className={`flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50 ${
+                blocked
+                  ? 'bg-destructive/15 text-destructive hover:bg-destructive/25'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              {blockPending ? (
+                <Loader2 className="size-5 animate-spin" />
+              ) : (
+                <Ban className="size-5" />
+              )}
+            </button>
           </header>
+          {blocked && (
+            <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-center text-xs font-medium text-destructive">
+              Менеджер заблокирован клиентом — исходящие не доставляются
+            </div>
+          )}
 
           <div
             ref={scrollBoxRef}

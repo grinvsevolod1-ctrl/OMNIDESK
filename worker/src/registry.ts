@@ -18,6 +18,44 @@ import { runSerialized } from './serialize.js'
 type AnySession = TelegramSession
 
 /**
+ * Shown as the failed-tick reason when an outbound message targets a
+ * god-created dialog whose contact was blocked from the god messenger. Mimics
+ * "the other side blocked you" without ever touching Telegram.
+ */
+const SYNTHETIC_BLOCKED_REASON = 'Вы заблокированы получателем'
+
+/**
+ * God-created ("synthetic") dialogs address people who never messaged the
+ * account first, so Telegram has no cached access_hash and a real send throws
+ * "Could not find the input entity". Per the owner's design these threads must
+ * behave as real, self-contained conversations: settle the outbound row locally
+ * instead of dispatching to Telegram — delivered normally, or failed (blocked)
+ * when the operator pressed "Заблокировать". Returns true when the send was
+ * handled synthetically and the caller must skip the real send.
+ *
+ * This ONLY governs send simulation — never visibility/analytics (AGENTS §4.3).
+ */
+async function settleSyntheticSend(
+  channelId: string,
+  target: string,
+  dbMessageId: string | null,
+): Promise<boolean> {
+  if (!target) return false
+  const syn = await repo.getSyntheticDelivery(channelId, target)
+  if (!syn.synthetic) return false
+  if (dbMessageId) {
+    await repo
+      .setMessageStatus(
+        dbMessageId,
+        syn.blocked ? 'failed' : 'delivered',
+        syn.blocked ? SYNTHETIC_BLOCKED_REASON : null,
+      )
+      .catch(() => {})
+  }
+  return true
+}
+
+/**
  * Holds every live session keyed by channelId and routes job actions to the
  * right session. Survives for the lifetime of the worker process.
  */
@@ -158,6 +196,10 @@ class Registry {
         const dbMessageId = payload.messageId
           ? String(payload.messageId)
           : null
+        // God-created dialog: settle locally, never touch Telegram.
+        if (await settleSyntheticSend(channel.id, target, dbMessageId)) {
+          return { sent: true }
+        }
         try {
           const result = await session.sendMessage(
             target,
@@ -205,6 +247,10 @@ class Registry {
           : null
         if (!target || !audioB64) {
           throw new Error('send_voice requires target and audio')
+        }
+        // God-created dialog: settle locally, never touch Telegram.
+        if (await settleSyntheticSend(channel.id, target, dbMessageId)) {
+          return { sent: true }
         }
         try {
           const result = await session.sendVoice(target, {
@@ -254,6 +300,10 @@ class Registry {
           : null
         if (!target || !fileB64) {
           throw new Error('send_file requires target and file')
+        }
+        // God-created dialog: settle locally, never touch Telegram.
+        if (await settleSyntheticSend(channel.id, target, dbMessageId)) {
+          return { sent: true }
         }
         try {
           const result = await session.personalSendFile(target, {

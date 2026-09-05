@@ -140,6 +140,39 @@ export async function setMessageStatus(
   )
 }
 
+/** Send-simulation state for a god-created ("synthetic") conversation. */
+export interface SyntheticDelivery {
+  /** True when the thread was authored in the god messenger (migration 153). */
+  synthetic: boolean
+  /** True when the operator pressed "block" in the god messenger (mig. 046). */
+  blocked: boolean
+}
+
+/**
+ * Resolve whether a conversation is a god-created synthetic thread and whether
+ * its contact is marked blocked. Used by the send path to settle outbound
+ * messages locally instead of hitting Telegram (whose peer has no cached
+ * access_hash for a person who never messaged us first). This ONLY drives send
+ * simulation — never visibility/analytics (AGENTS §4.3). Matched by the same
+ * (channel_id, contact_handle) key the send job carries as `target`.
+ */
+export async function getSyntheticDelivery(
+  channelId: string,
+  contactHandle: string,
+): Promise<SyntheticDelivery> {
+  const row = await one<{ god_synthetic: boolean; contact_blocked: boolean }>(
+    `SELECT god_synthetic, contact_blocked
+       FROM conversations
+      WHERE channel_id = $1 AND contact_handle = $2
+      LIMIT 1`,
+    [channelId, contactHandle],
+  )
+  return {
+    synthetic: Boolean(row?.god_synthetic),
+    blocked: Boolean(row?.contact_blocked),
+  }
+}
+
 /**
  * Mark every outbound message in a conversation as 'read' up to (and including)
  * a provider message id. Used for Telegram's "read up to max_id" outbox

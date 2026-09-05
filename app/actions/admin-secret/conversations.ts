@@ -84,9 +84,14 @@ export async function secretCreateConversationAction(input: {
   // inserts must never leave a thread whose preview references a lost message.
   await withTransaction(async (db) => {
     await db.query(
+      // god_synthetic = true: this thread was authored in the god messenger and
+      // addresses someone who never wrote to the account first. Outbound sends
+      // are settled locally (delivered, or "blocked" when contact_blocked) so a
+      // missing Telegram access_hash can never surface a send error. This flag
+      // ONLY affects send simulation — never visibility/analytics (AGENTS §4.3).
       `INSERT INTO conversations
-         (id, channel_id, channel_type, manager_id, contact_name, contact_handle, last_message, last_message_at, status, unread)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($9::timestamptz, now()), 'liquid', $8)`,
+         (id, channel_id, channel_type, manager_id, contact_name, contact_handle, last_message, last_message_at, status, unread, god_synthetic)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($9::timestamptz, now()), 'liquid', $8, true)`,
       [
         id,
         channel[0].id,
