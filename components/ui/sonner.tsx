@@ -13,6 +13,22 @@ const Toaster = ({ ...props }: ToasterProps) => {
       className="toaster group"
       position="top-right"
       closeButton
+      // В standalone-PWA (viewport-fit=cover) верх экрана занят Dynamic Island /
+      // статус-баром: без отступа тосты появляются ПОД ним и по ним нельзя
+      // кликнуть. Смещаем на величину выреза (min — базовый отступ на «плоских»
+      // экранах), чтобы уведомления всегда были видимы и кликабельны.
+      offset={{
+        top: "max(1rem, env(safe-area-inset-top))",
+        right: "max(1rem, env(safe-area-inset-right))",
+        bottom: "max(1rem, env(safe-area-inset-bottom))",
+        left: "max(1rem, env(safe-area-inset-left))",
+      }}
+      mobileOffset={{
+        top: "max(0.75rem, env(safe-area-inset-top))",
+        right: "max(0.75rem, env(safe-area-inset-right))",
+        bottom: "max(0.75rem, env(safe-area-inset-bottom))",
+        left: "max(0.75rem, env(safe-area-inset-left))",
+      }}
       icons={{
         success: (
           <CircleCheckIcon className="size-4" />

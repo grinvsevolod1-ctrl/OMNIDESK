@@ -169,10 +169,13 @@ export function DashboardShell({
               логотип не заезжает под системную строку. */}
           <div
             className={cn(
-              'flex h-14 items-center border-b border-sidebar-border pt-safe',
+              'flex h-14 items-center border-b border-sidebar-border',
               effectiveCollapsed ? 'justify-center px-0' : 'gap-2 px-5',
             )}
-            style={{ height: 'calc(3.5rem + env(safe-area-inset-top))' }}
+            style={{
+              paddingTop: 'env(safe-area-inset-top)',
+              height: 'calc(3.5rem + env(safe-area-inset-top))',
+            }}
           >
             <BrandMark className="size-5 shrink-0 text-foreground" />
             {!effectiveCollapsed ? (
@@ -249,21 +252,30 @@ export function DashboardShell({
             />
             {/* pl-safe: в ландшафте не заезжаем под вырез/островок слева. */}
             <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[80%] flex-col border-r border-sidebar-border bg-sidebar pl-safe">
-              {/* Шапка дрокера повторяет safe-area шапки основной колонки
-                  (pt-safe + та же высота), иначе в standalone-PWA логотип
-                  «Omnidesk» заезжает под системную строку с часами. */}
+              {/* Шапка дрокера повторяет safe-area шапки основной колонки:
+                  paddingTop задаём ИНЛАЙНОМ (гарантированно, без зависимости
+                  от utility-класса), плюс та же высота — иначе в standalone-PWA
+                  логотип «Omnidesk» заезжает под системную строку с часами. */}
               <div
-                className="flex h-14 items-center gap-2 border-b border-sidebar-border px-5 pt-safe"
-                style={{ height: 'calc(3.5rem + env(safe-area-inset-top))' }}
+                className="flex items-center gap-2 border-b border-sidebar-border px-5"
+                style={{
+                  paddingTop: 'env(safe-area-inset-top)',
+                  height: 'calc(3.5rem + env(safe-area-inset-top))',
+                }}
               >
-                <BrandMark className="size-5 text-foreground" />
-                <span className="text-sm font-semibold tracking-tight">
-                  Omnidesk
+                <BrandMark className="size-5 shrink-0 text-foreground" />
+                <span className="flex min-w-0 flex-col leading-tight">
+                  <span className="truncate text-sm font-semibold tracking-tight">
+                    Omnidesk
+                  </span>
+                  <span className="truncate text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+                    {roleLabel}
+                  </span>
                 </span>
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  className="ml-auto"
+                  className="ml-auto shrink-0"
                   onClick={() => setMobileOpen(false)}
                   aria-label="Закрыть меню"
                 >
@@ -286,7 +298,13 @@ export function DashboardShell({
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Без backdrop-blur: пере-блюр контента под sticky-шапкой на каждом
               кадре скролла — источник глюков (см. стандарт UI в AGENTS.md). */}
-          <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background px-4 pt-safe md:px-6" style={{ height: 'calc(3.5rem + env(safe-area-inset-top))' }}>
+          <header
+            className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background px-4 md:px-6"
+            style={{
+              paddingTop: 'env(safe-area-inset-top)',
+              height: 'calc(3.5rem + env(safe-area-inset-top))',
+            }}
+          >
             <Button
               variant="ghost"
               size="icon-sm"
