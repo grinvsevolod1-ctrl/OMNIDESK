@@ -38,11 +38,16 @@ export type BubbleAction = 'menu'
 export const MessageBubble = memo(function MessageBubble({
   message,
   prev,
+  next,
+  isLast,
   onReply,
   onMenu,
 }: {
   message: Message
   prev?: Message
+  next?: Message
+  /** Последнее сообщение треда — только оно анимирует свой вход. */
+  isLast?: boolean
   onReply: (message: Message) => void
   onMenu: (message: Message) => void
 }) {
@@ -124,6 +129,14 @@ export const MessageBubble = memo(function MessageBubble({
     new Date(prev.createdAt).toDateString() !==
       new Date(message.createdAt).toDateString()
 
+  // Последний в «пачке» одного отправителя за один день — только у него
+  // острый уголок-хвост (Telegram-стиль); внутри группы углы скруглены.
+  const nextSameSide =
+    next &&
+    next.direction === message.direction &&
+    new Date(next.createdAt).toDateString() ===
+      new Date(message.createdAt).toDateString()
+
   const revealProgress = Math.min(1, -dragX / DRAG_TRIGGER)
 
   return (
@@ -136,7 +149,12 @@ export const MessageBubble = memo(function MessageBubble({
         </div>
       )}
       <div
-        className="relative select-none"
+        className={cn(
+          'relative select-none',
+          // Анимируем вход только у последнего пузыря — новое сообщение
+          // мягко появляется, история при прокрутке не дёргается.
+          isLast && 'motion-safe:animate-message-in',
+        )}
         // content-visibility: browser skips layout/paint of off-screen bubbles.
         style={{
           touchAction: 'pan-y',
@@ -182,8 +200,14 @@ export const MessageBubble = memo(function MessageBubble({
             className={cn(
               'max-w-[82%] rounded-2xl px-3.5 py-2 text-sm sm:max-w-[75%]',
               mine
-                ? 'rounded-br-sm bg-primary text-primary-foreground'
-                : 'rounded-bl-sm border border-border bg-card text-foreground',
+                ? cn(
+                    'bg-primary text-primary-foreground',
+                    !nextSameSide && 'rounded-br-sm',
+                  )
+                : cn(
+                    'border border-border bg-card text-foreground',
+                    !nextSameSide && 'rounded-bl-sm',
+                  ),
             )}
           >
             {deleted ? (
@@ -263,6 +287,32 @@ export const MessageBubble = memo(function MessageBubble({
   )
 })
 
+/** Фото с приглушённой заглушкой-«шиммером» на время загрузки — картинка
+ *  плавно проявляется, без пустого прыжка (Telegram-стиль). */
+function ImageWithSkeleton({ url, alt }: { url: string; alt: string }) {
+  const [loaded, setLoaded] = useState(false)
+  return (
+    <span
+      className={cn(
+        'relative block overflow-hidden rounded-lg',
+        !loaded && 'min-h-40 min-w-40 skeleton-shimmer bg-muted/60',
+      )}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url || '/placeholder.svg'}
+        alt={alt}
+        loading="lazy"
+        onLoad={() => setLoaded(true)}
+        className={cn(
+          'mb-1 max-h-72 w-auto max-w-full rounded-lg object-contain transition-opacity duration-300',
+          loaded ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+    </span>
+  )
+}
+
 /** Inline media renderer: photos, video, voice/audio players, file cards. */
 function MediaContent({ message, mine }: { message: Message; mine: boolean }) {
   const url = message.mediaUrl as string
@@ -270,15 +320,9 @@ function MediaContent({ message, mine }: { message: Message; mine: boolean }) {
     case 'image':
     case 'sticker':
       return (
-        <a href={url} target="_blank" rel="noreferrer" className="block">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={url || '/placeholder.svg'}
-            alt={message.mediaName || 'Изображение'}
-            loading="lazy"
-            className="mb-1 max-h-72 w-auto max-w-full rounded-lg object-contain"
-          />
-        </a>
+      <a href={url} target="_blank" rel="noreferrer" className="block">
+        <ImageWithSkeleton url={url} alt={message.mediaName || 'Изображение'} />
+      </a>
       )
     case 'video_note':
       // Телеграм-стиль кружок: круглый, клик = play/pause, прогресс-обод.

@@ -255,6 +255,8 @@ export function ThreadPane({
                       key={m.id}
                       message={m}
                       prev={visible[i - 1]}
+                      next={visible[i + 1]}
+                      isLast={i === visible.length - 1}
                       onReply={startReply}
                       onMenu={onMenu}
                     />

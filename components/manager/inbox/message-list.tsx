@@ -161,12 +161,24 @@ export function MessageList({
           const isOut = m.direction === 'out'
           const prevSameSide =
             prev && prev.direction === m.direction && !showDay
+          const next = thread[i + 1]
+          // Последний в «пачке» одного отправителя — только у него рисуем
+          // острый уголок-хвост (как в Telegram); внутри группы углы скруглены.
+          const nextSameSide =
+            next &&
+            next.direction === m.direction &&
+            dayLabel(next.createdAt) === dayLabel(m.createdAt)
+          const isLast = i === thread.length - 1
           return (
             // content-visibility lets the browser skip layout/paint of
             // off-screen bubbles — a large win on 300-message threads.
             <div
               key={m.id}
               data-message-id={m.id}
+              // Анимируем вход ТОЛЬКО у последнего сообщения — новые
+              // приходящие/отправленные плавно появляются, а прокрутка
+              // истории не дёргается.
+              className={isLast ? 'motion-safe:animate-message-in' : undefined}
               style={{
                 contentVisibility: 'auto',
                 containIntrinsicSize: 'auto 56px',
@@ -227,8 +239,14 @@ export function MessageList({
                           : cn(
                               'px-3 py-2 shadow-sm',
                               isOut
-                                ? 'rounded-2xl rounded-br-sm bg-primary text-primary-foreground'
-                                : 'rounded-2xl rounded-bl-sm border border-border bg-card text-foreground',
+                                ? cn(
+                                    'rounded-2xl bg-primary text-primary-foreground',
+                                    !nextSameSide && 'rounded-br-sm',
+                                  )
+                                : cn(
+                                    'rounded-2xl border border-border bg-card text-foreground',
+                                    !nextSameSide && 'rounded-bl-sm',
+                                  ),
                             ),
                       )}
                     >

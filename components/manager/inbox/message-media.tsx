@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { TgsSticker } from '@/components/manager/inbox/tgs-sticker'
 import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import type { Message } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 /** Placeholder labels we synthesise at ingest for media without a caption. */
 const MEDIA_PLACEHOLDERS = new Set([
@@ -196,6 +197,7 @@ function MediaLightbox({
 export function MessageMedia({ message }: { message: Message }) {
   const [failed, setFailed] = useState(false)
   const [lightbox, setLightbox] = useState(false)
+  const [imgLoaded, setImgLoaded] = useState(false)
   const url = message.mediaUrl
   const type = effectiveMediaType(message)
 
@@ -268,7 +270,12 @@ export function MessageMedia({ message }: { message: Message }) {
         <button
           type="button"
           onClick={() => setLightbox(true)}
-          className="group relative block cursor-zoom-in overflow-hidden rounded-lg"
+          className={cn(
+            'group relative block cursor-zoom-in overflow-hidden rounded-lg',
+            // Пока картинка грузится — приглушённый фон с «шиммером», чтобы не
+            // было пустого прыжка (как превью-заглушка в Telegram).
+            !imgLoaded && 'min-h-40 min-w-40 skeleton-shimmer bg-muted/60',
+          )}
           aria-label="Открыть изображение"
         >
           {/* External chat media of unknown size — see note above; plain img. */}
@@ -276,8 +283,12 @@ export function MessageMedia({ message }: { message: Message }) {
           <img
             src={url || '/placeholder.svg'}
             alt={message.body || 'Изображение'}
-            className="max-h-80 max-w-full rounded-lg object-contain"
+            className={cn(
+              'max-h-80 max-w-full rounded-lg object-contain transition-opacity duration-300',
+              imgLoaded ? 'opacity-100' : 'opacity-0',
+            )}
             loading="lazy"
+            onLoad={() => setImgLoaded(true)}
             onError={() => setFailed(true)}
           />
         </button>
@@ -289,7 +300,7 @@ export function MessageMedia({ message }: { message: Message }) {
   }
 
   if (type === 'video_note') {
-    // Телеграм-стиль кружок: play/pause по клику, круговой прогресс-обод,
+    // Телеграм-стиль кружок: play/pause по клик��, круговой прогресс-обод,
     // оставшееся время внутри. Скачивание — маленькой кнопкой под кружком.
     return (
       <div className="flex flex-col gap-1">
