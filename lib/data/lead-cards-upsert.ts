@@ -80,6 +80,28 @@ export async function findDuplicateLeadWarning(input: {
     : `Возможный дубль: карточка «${who}» с теми же контактами уже существует.`
 }
 
+/**
+ * ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ для статуса «Передан».
+ *
+ * В момент реальной передачи лида (в пул команды ИЛИ прямо куратору) статус
+ * диалога в инбоксе менеджера становится «Передан» (conversations.status =
+ * 'transferred'). Раньше «Передан» проставлялся вручную и жил ОТДЕЛЬНО от факта
+ * передачи — получалось два несвязанных «Передан». Теперь статус инбокса всегда
+ * выводится из факта передачи: одна операция передачи → один статус.
+ */
+async function markConversationTransferred(
+  conversationId: string,
+): Promise<void> {
+  await query(
+    `UPDATE conversations
+        SET status = 'transferred',
+            status_detail = NULL,
+            status_updated_at = now()
+      WHERE id = $1`,
+    [conversationId],
+  )
+}
+
 export async function upsertLeadCard(
   input: UpsertLeadCardInput,
 ): Promise<UpsertLeadCardResult> {
@@ -185,6 +207,8 @@ export async function upsertLeadCard(
           isFreshPool,
         ],
       )
+      // Свежая пуловая передача — диалог помечается «Передан» в инбоксе.
+      if (isFreshPool) await markConversationTransferred(input.conversationId)
       const card = await getLeadCardById(existing[0].id)
       if (!card) throw new Error('Lead card update failed')
       return {
@@ -267,6 +291,8 @@ export async function upsertLeadCard(
         status: null,
         reason: 'transfer_reset',
       })
+      // Прямая передача куратору — «Передан» в инбоксе менеджера.
+      await markConversationTransferred(input.conversationId)
     }
 
     const card = await getLeadCardById(existing[0].id)
@@ -314,6 +340,8 @@ export async function upsertLeadCard(
       initiatedByRole: input.isAdmin ? 'admin' : 'manager',
     })
   }
+  // Новая карточка, созданная сразу с передачей (куратор или пул) — «Передан».
+  if (transferredNow) await markConversationTransferred(input.conversationId)
 
   const card = await getLeadCardById(id)
   if (!card) throw new Error('Lead card create failed')

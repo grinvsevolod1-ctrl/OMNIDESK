@@ -7,10 +7,14 @@
  *     here a manager manually classifies the lead.
  *   - 'liquid' (Ликвид): on-target audience matching our parameters.
  *   - 'not_liquid' (Не ликвид): off-target; a reason is stored in statusDetail.
- *   - 'transferred' (Передан): qualified and passed further down the process.
+ *   - 'transferred' (Передан): СИСТЕМНЫЙ статус — единый источник правды о
+ *     передаче. Проставляется АВТОМАТИЧЕСКИ в момент реальной передачи лида
+ *     (в пул команды или прямо куратору), см. lib/data/lead-cards-upsert.ts.
+ *     Вручную не выбирается (серверный guard в setLeadStatusAction).
  * When no status is pinned the lead defaults to 'unsubscribed'. The «Ликвид» /
- * «Не ликвид» / «Передан» classifications are set by a manager by hand — the AI
- * never auto-assigns them; the most it does is move a lead to «Передан человеку».
+ * «Не ликвид» classifications are set by a manager by hand — the AI never
+ * auto-assigns them; the most it does is move a lead to «Передан человеку».
+ * «Передан» же следует за фактом передачи и вручную не ставится.
  */
 export type LeadStatus =
   | 'unsubscribed'
@@ -26,6 +30,17 @@ export const LEAD_STATUS_ORDER: LeadStatus[] = [
   'not_liquid',
   'transferred',
 ]
+
+/**
+ * Статусы, которые менеджер выставляет ВРУЧНУЮ (пикеры / радио). «Передан»
+ * (transferred) сюда НЕ входит: это системный статус — он проставляется
+ * автоматически в момент передачи лида (в пул или куратору) и является единым
+ * источником правды. Для фильтров и счётчиков используйте LEAD_STATUS_ORDER,
+ * где «Передан» присутствует.
+ */
+export const MANUAL_LEAD_STATUS_ORDER: LeadStatus[] = LEAD_STATUS_ORDER.filter(
+  (s) => s !== 'transferred',
+)
 
 export const LEAD_STATUS_META: Record<
   LeadStatus,
@@ -90,7 +105,7 @@ export interface LeadStatusOption {
 }
 
 export const LEAD_STATUS_OPTIONS: LeadStatusOption[] =
-  LEAD_STATUS_ORDER.flatMap<LeadStatusOption>((s) =>
+  MANUAL_LEAD_STATUS_ORDER.flatMap<LeadStatusOption>((s) =>
     s === 'not_liquid'
       ? NOT_LIQUID_REASON_ORDER.map((r) => ({
           value: `not_liquid:${r}`,

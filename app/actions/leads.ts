@@ -75,6 +75,15 @@ export async function setLeadStatusAction(
   if (next !== null && !(next in LEAD_STATUS_META)) {
     return { ok: false, message: 'Неизвестный статус.' }
   }
+  // «Передан» — системный статус: он проставляется автоматически в момент
+  // передачи лида (в пул или куратору) и служит единым источником правды.
+  // Вручную его выставлять нельзя, иначе появится «передан» без факта передачи.
+  if (next === 'transferred') {
+    return {
+      ok: false,
+      message: '«Передан» проставляется автоматически при передаче лида.',
+    }
+  }
   const detail =
     next === 'not_liquid' && reason && reason in NOT_LIQUID_REASON_META
       ? reason

@@ -16,7 +16,7 @@
  */
 import {
   LEAD_STATUS_META,
-  LEAD_STATUS_ORDER,
+  MANUAL_LEAD_STATUS_ORDER,
   NOT_LIQUID_REASON_META,
   NOT_LIQUID_REASON_ORDER,
   type LeadStatus,
@@ -198,7 +198,9 @@ export function resolveDictionaries(raw: unknown): Dictionaries {
  * LEAD_STATUS_OPTIONS constant but with editable labels.
  */
 export function buildLeadStatusOptions(dict: Dictionaries): LeadStatusOption[] {
-  return LEAD_STATUS_ORDER.flatMap<LeadStatusOption>((s) =>
+  // MANUAL_LEAD_STATUS_ORDER, не LEAD_STATUS_ORDER: «Передан» — системный статус,
+  // выставляется автоматически при передаче лида, вручную не выбирается.
+  return MANUAL_LEAD_STATUS_ORDER.flatMap<LeadStatusOption>((s) =>
     s === 'not_liquid'
       ? NOT_LIQUID_REASON_ORDER.map((r) => ({
           value: `not_liquid:${r}`,
