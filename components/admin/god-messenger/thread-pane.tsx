@@ -39,7 +39,7 @@ import {
   MEDIA_ACCEPT,
   type MediaStaging,
 } from '@/components/manager/inbox/media-staging'
-import { MessageBubble } from './message-bubble'
+import { MediaAlbumBubble, MessageBubble } from './message-bubble'
 import { snippetOf } from './reply'
 import { EmojiPicker } from './emoji-picker'
 
@@ -49,6 +49,58 @@ export type GodConversation = ConversationWithManager
 
 /* How many newest messages are rendered initially / added per "show more". */
 export const MESSAGES_WINDOW = 50
+
+/* Media sent together (Telegram albums) arrives as separate rows; we regroup
+ * consecutive same-direction photos/videos created within this window into one
+ * grid bubble. Kept short so a later unrelated photo never merges in. */
+const ALBUM_WINDOW_MS = 60_000
+const ALBUM_KINDS = new Set(['image', 'video', 'sticker'])
+
+type RenderItem =
+  | { kind: 'single'; message: Message; index: number }
+  | { kind: 'album'; messages: Message[] }
+
+/** Collapse runs (≥2) of grouped media into album items; everything else stays single. */
+function groupAlbums(visible: Message[]): RenderItem[] {
+  const items: RenderItem[] = []
+  let i = 0
+  while (i < visible.length) {
+    const m = visible[i]
+    const groupable =
+      !m.deletedAt && !!m.mediaType && ALBUM_KINDS.has(m.mediaType) && !m.replyTo
+    if (groupable) {
+      const run: Message[] = [m]
+      let j = i + 1
+      while (j < visible.length) {
+        const n = visible[j]
+        const prev = run[run.length - 1]
+        const close =
+          Math.abs(
+            new Date(n.createdAt).getTime() - new Date(prev.createdAt).getTime(),
+          ) <= ALBUM_WINDOW_MS
+        if (
+          !n.deletedAt &&
+          !!n.mediaType &&
+          ALBUM_KINDS.has(n.mediaType) &&
+          !n.replyTo &&
+          n.direction === m.direction &&
+          close
+        ) {
+          run.push(n)
+          j++
+        } else break
+      }
+      if (run.length >= 2) {
+        items.push({ kind: 'album', messages: run })
+        i = j
+        continue
+      }
+    }
+    items.push({ kind: 'single', message: m, index: i })
+    i++
+  }
+  return items
+}
 
 interface ThreadPaneProps {
   conversation: GodConversation | null
@@ -307,17 +359,29 @@ export function ThreadPane({
                       Показать ещё ({messages.length - visibleCount} скрыто)
                     </button>
                   )}
-                  {messages.slice(-visibleCount).map((m, i, visible) => (
-                    <MessageBubble
-                      key={m.id}
-                      message={m}
-                      prev={visible[i - 1]}
-                      next={visible[i + 1]}
-                      isLast={i === visible.length - 1}
-                      onReply={startReply}
-                      onMenu={onMenu}
-                    />
-                  ))}
+                  {(() => {
+                    const visible = messages.slice(-visibleCount)
+                    return groupAlbums(visible).map((item, gi, groups) =>
+                      item.kind === 'album' ? (
+                        <MediaAlbumBubble
+                          key={item.messages[0].id}
+                          messages={item.messages}
+                          onReply={startReply}
+                          onMenu={onMenu}
+                        />
+                      ) : (
+                        <MessageBubble
+                          key={item.message.id}
+                          message={item.message}
+                          prev={visible[item.index - 1]}
+                          next={visible[item.index + 1]}
+                          isLast={gi === groups.length - 1}
+                          onReply={startReply}
+                          onMenu={onMenu}
+                        />
+                      ),
+                    )
+                  })()}
                 </>
               )}
               <div ref={endRef} />
@@ -395,7 +459,7 @@ export function ThreadPane({
               <div className="flex items-end gap-1.5">
                 {/* Единая «пилюля» (Telegram-style): эмодзи, расширяющееся поле
                     и скрепка внутри одного скруглённого контейнера, который
-                    подсвечивается при фокусе и растёт вместе с текстом. */}
+                    подсвечивается п��и фокусе и растёт вместе с текстом. */}
                 <div className="flex flex-1 items-end gap-0.5 rounded-3xl bg-muted px-1.5 py-1 transition-all focus-within:bg-card focus-within:ring-[3px] focus-within:ring-ring/30">
                   <EmojiPicker
                     onPick={(emoji) => applyValue(valueRef.current + emoji, true)}

@@ -12,6 +12,7 @@ import {
   CheckCheck,
   CornerUpLeft,
   FileText,
+  Loader2,
   Pencil,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -289,7 +290,15 @@ export const MessageBubble = memo(function MessageBubble({
 
 /** Фото с приглушённой заглушкой-«шиммером» на время загрузки — картинка
  *  плавно проявляется, без пустого прыжка (Telegram-стиль). */
-function ImageWithSkeleton({ url, alt }: { url: string; alt: string }) {
+function ImageWithSkeleton({
+  url,
+  alt,
+  uploading,
+}: {
+  url: string
+  alt: string
+  uploading?: boolean
+}) {
   const [loaded, setLoaded] = useState(false)
   return (
     <span
@@ -309,6 +318,16 @@ function ImageWithSkeleton({ url, alt }: { url: string; alt: string }) {
           loaded ? 'opacity-100' : 'opacity-0',
         )}
       />
+      {uploading && <UploadingOverlay />}
+    </span>
+  )
+}
+
+/** Telegram-style "still uploading" veil with a spinning ring over media. */
+function UploadingOverlay() {
+  return (
+    <span className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-black/35">
+      <Loader2 className="size-7 animate-spin text-white/90" />
     </span>
   )
 }
@@ -316,12 +335,17 @@ function ImageWithSkeleton({ url, alt }: { url: string; alt: string }) {
 /** Inline media renderer: photos, video, voice/audio players, file cards. */
 function MediaContent({ message, mine }: { message: Message; mine: boolean }) {
   const url = message.mediaUrl as string
+  const uploading = message.status === 'pending'
   switch (message.mediaType) {
     case 'image':
     case 'sticker':
       return (
       <a href={url} target="_blank" rel="noreferrer" className="block">
-        <ImageWithSkeleton url={url} alt={message.mediaName || 'Изображение'} />
+        <ImageWithSkeleton
+          url={url}
+          alt={message.mediaName || 'Изображение'}
+          uploading={uploading}
+        />
       </a>
       )
     case 'video_note':
@@ -380,3 +404,134 @@ function mediaLabel(t?: string): string {
       return 'Сообщение'
   }
 }
+
+/** Column count for a Telegram-style media album grid. */
+function albumCols(n: number): string {
+  if (n === 2) return 'grid-cols-2'
+  if (n === 4) return 'grid-cols-2'
+  return 'grid-cols-3'
+}
+
+/**
+ * A run of photos/videos sent together, rendered as ONE Telegram-style album:
+ * a tight square grid with a single caption + timestamp footer. Tap a cell to
+ * open it; long-press (touch) or right-click (desktop) opens the action sheet
+ * for that specific item, so per-photo reply/delete still works.
+ */
+export const MediaAlbumBubble = memo(function MediaAlbumBubble({
+  messages,
+  onReply,
+  onMenu,
+}: {
+  messages: Message[]
+  onReply: (message: Message) => void
+  onMenu: (message: Message) => void
+}) {
+  const mine = messages[0].direction === 'in'
+  const caption = messages.map((m) => parseReply(m.body).text).find(Boolean) || ''
+  const last = messages[messages.length - 1]
+  const cols = albumCols(messages.length)
+
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pressFired = useRef(false)
+  const startCellPress = (m: Message) => {
+    pressFired.current = false
+    pressTimer.current = setTimeout(() => {
+      pressFired.current = true
+      onMenu(m)
+    }, LONG_PRESS_MS)
+  }
+  const clearCellPress = () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current)
+    pressTimer.current = null
+  }
+
+  return (
+    <div className={cn('flex px-1', mine ? 'justify-end' : 'justify-start')}>
+      <div
+        className={cn(
+          'max-w-[16rem] overflow-hidden rounded-2xl p-1',
+          mine ? 'bg-primary' : 'bg-card border border-border',
+        )}
+      >
+        <div className={cn('grid gap-[3px]', cols)}>
+          {messages.map((m) => {
+            const url = (m.mediaUrl as string) || '/placeholder.svg'
+            const uploading = m.status === 'pending'
+            const failed = m.status === 'failed'
+            return (
+              <a
+                key={m.id}
+                href={uploading ? undefined : url}
+                target="_blank"
+                rel="noreferrer"
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  onMenu(m)
+                }}
+                onPointerDown={(e) => {
+                  if (e.pointerType === 'touch') startCellPress(m)
+                }}
+                onPointerUp={clearCellPress}
+                onPointerLeave={clearCellPress}
+                onClick={(e) => {
+                  if (pressFired.current) e.preventDefault()
+                }}
+                className="relative block aspect-square overflow-hidden rounded-md bg-muted/40"
+              >
+                {m.mediaType === 'video' ? (
+                  // eslint-disable-next-line jsx-a11y/media-has-caption
+                  <video
+                    src={url}
+                    muted
+                    playsInline
+                    preload="metadata"
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={url}
+                    alt={m.mediaName || 'Изображение'}
+                    loading="lazy"
+                    className="size-full object-cover"
+                  />
+                )}
+                {uploading && <UploadingOverlay />}
+                {failed && (
+                  <span className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-destructive/50 text-[10px] font-medium text-white">
+                    Ошибка
+                  </span>
+                )}
+              </a>
+            )
+          })}
+        </div>
+        {caption && (
+          <p
+            className={cn(
+              'whitespace-pre-wrap break-words px-1.5 pt-1 text-sm leading-relaxed',
+              mine ? 'text-primary-foreground' : 'text-foreground',
+            )}
+          >
+            {caption}
+          </p>
+        )}
+        <span
+          className={cn(
+            'flex items-center justify-end gap-1 px-1.5 pb-0.5 pt-0.5 text-[10px]',
+            mine ? 'text-primary-foreground/70' : 'text-muted-foreground',
+          )}
+        >
+          {fmtTime(last.createdAt)}
+          {mine &&
+            (last.status === 'read' ? (
+              <CheckCheck className="size-3" />
+            ) : (
+              <Check className="size-3" />
+            ))}
+        </span>
+      </div>
+    </div>
+  )
+})

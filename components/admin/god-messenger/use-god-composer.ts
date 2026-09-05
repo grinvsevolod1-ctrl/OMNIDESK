@@ -304,6 +304,41 @@ export function useGodComposer({
         fd.set('caption', caption)
         if (captionOverride === undefined) applyValue('')
       }
+
+      const mediaType: MediaType =
+        kind === 'voice'
+          ? 'voice'
+          : file.type.startsWith('image/')
+            ? 'image'
+            : file.type.startsWith('video/')
+              ? 'video'
+              : file.type.startsWith('audio/')
+                ? 'audio'
+                : 'document'
+      // Optimistic bubble: show the file in the thread IMMEDIATELY from a local
+      // object URL with an "uploading" overlay (Telegram-style), then reconcile
+      // with the server row on success. The local URL keeps the preview instant
+      // for this session; a reload fetches the durable copy from /api/media.
+      const tempId = `tmp-${crypto.randomUUID()}`
+      const localUrl =
+        mediaType === 'image' || mediaType === 'video'
+          ? URL.createObjectURL(file)
+          : undefined
+      const optimistic: Message = {
+        id: tempId,
+        conversationId: convId,
+        direction: 'in',
+        body: caption,
+        author: conversation?.contactName || 'Клиент',
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        mediaType,
+        mediaMime: file.type || undefined,
+        mediaName: file.name || undefined,
+        mediaUrl: localUrl,
+      }
+      setMessages((prev) => [...prev, optimistic])
+
       setUploading(true)
       pinOnNextGrowth()
       // Fetch-роут вместо server action: POST экшена с крупным файлом режется
@@ -326,37 +361,38 @@ export function useGodComposer({
         })
         .then((res) => {
           if (res.ok && res.id) {
-            const mediaType: MediaType =
-              kind === 'voice'
-                ? 'voice'
-                : file.type.startsWith('image/')
-                  ? 'image'
-                  : file.type.startsWith('video/')
-                    ? 'video'
-                    : file.type.startsWith('audio/')
-                      ? 'audio'
-                      : 'document'
-            const newMsg: Message = {
-              id: res.id,
-              conversationId: convId,
-              direction: 'in',
-              body: caption,
-              author: conversation?.contactName || 'Клиент',
-              createdAt: res.createdAt ?? new Date().toISOString(),
-              mediaType,
-              mediaMime: file.type || undefined,
-              mediaName: file.name || undefined,
-              mediaUrl: `/api/media/${res.id}`,
-            }
+            const realId = res.id
             setMessages((prev) =>
-              prev.some((m) => m.id === newMsg.id) ? prev : [...prev, newMsg],
+              prev.map((m) =>
+                m.id === tempId
+                  ? {
+                      ...optimistic,
+                      id: realId,
+                      createdAt: res.createdAt ?? optimistic.createdAt,
+                      status: undefined,
+                      mediaUrl: localUrl ?? `/api/media/${realId}`,
+                    }
+                  : m,
+              ),
             )
             void loadList({ silent: true })
           } else if (!res.ok) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === tempId
+                  ? { ...m, status: 'failed', errorReason: res.message }
+                  : m,
+              ),
+            )
             toast.error(res.message)
           }
         })
-        .catch(() => toast.error('Не удалось отправить файл'))
+        .catch(() => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === tempId ? { ...m, status: 'failed' } : m)),
+          )
+          toast.error('Не удалось отправить файл')
+        })
         .finally(() => setUploading(false))
     },
     [applyValue, conversation, loadList, pinOnNextGrowth, selectedIdRef, setMessages],

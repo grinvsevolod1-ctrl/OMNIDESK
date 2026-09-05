@@ -380,13 +380,20 @@ export async function secretSendMediaMessageAction(
   const messageId = randomUUID()
   const body = caption || mediaBodyLabel(mediaType, file.name)
 
-  // Bytes go to S3 / the local VPS filesystem (see lib/media-store.ts); bytea
-  // only as a fallback when every tier fails, so uploads keep working either way.
+  // God dialogs are the owner's private scenario tool with NO provider to
+  // re-download from, so their media must survive a deploy (deploy.sh atomically
+  // swaps the app dir, orphaning the default media-store dir) and an object-store
+  // outage. We therefore persist the bytes straight into Postgres (bytea)
+  // whenever they fit the archive cap — the /api/media durable fast path serves
+  // them from the DB forever, never falling through to the worker. Only oversized
+  // files use the tiered disk/S3 store.
   let uploadFilePath: string | null = null
-  try {
-    uploadFilePath = await saveMediaFile(bytes, mime)
-  } catch {
-    uploadFilePath = null
+  if (bytes.byteLength > MEDIA_MAX_STORE_BYTES) {
+    try {
+      uploadFilePath = await saveMediaFile(bytes, mime)
+    } catch {
+      uploadFilePath = null
+    }
   }
 
   const created = await withTransaction(async (db) => {

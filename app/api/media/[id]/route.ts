@@ -147,7 +147,13 @@ export async function GET(
     return new Response('Media unavailable', { status: 502 })
   }
   if (!upstream.ok || !upstream.body) {
-    return new Response('Media unavailable', { status: upstream.status || 502 })
+    // Never surface the worker's own 5xx to the browser as a 500: a failed
+    // re-download (e.g. a synthetic/god message with no provider media, or a
+    // remotely-deleted file) is "media unavailable", not a panel server error.
+    // Client 4xx from the worker is passed through; anything else becomes 502.
+    const status =
+      upstream.status >= 400 && upstream.status < 500 ? upstream.status : 502
+    return new Response('Media unavailable', { status })
   }
 
   const headers = new Headers()
