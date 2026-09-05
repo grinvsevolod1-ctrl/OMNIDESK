@@ -63,6 +63,21 @@ export interface Message {
   /** Delivery/read status for outbound messages (undefined for inbound). */
   status?: MessageStatus
   /**
+   * Client-only (god messenger). Groups several media messages that were sent
+   * together into one Telegram-style album grid. Never persisted server-side.
+   */
+  albumId?: string
+  /**
+   * Client-only. Local object URL shown INSTANTLY while the file uploads, so a
+   * photo appears in the thread before the server round-trip finishes and never
+   * triggers an `/api/media` fetch during the session.
+   */
+  localPreviewUrl?: string
+  /** Client-only. Media is still uploading (progress ring, no lightbox link). */
+  uploading?: boolean
+  /** Client-only. Upload progress in [0,1] when the transport reports it. */
+  uploadProgress?: number
+  /**
    * Human-readable reason a send failed (only set when status === 'failed'),
    * e.g. "Пользователь запретил сообщения от сообщества" (VK) or "Окно 24 часов
    * закрыто" (WhatsApp). Shown in the inbox next to the failed marker.

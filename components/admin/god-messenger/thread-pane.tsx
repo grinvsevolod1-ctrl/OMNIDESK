@@ -50,6 +50,48 @@ export type GodConversation = ConversationWithManager
 /* How many newest messages are rendered initially / added per "show more". */
 export const MESSAGES_WINDOW = 50
 
+/* Max time gap (ms) for the reload heuristic below. */
+const ALBUM_TIME_WINDOW_MS = 5000
+
+/** Do two consecutive messages belong to the same Telegram-style album? A live
+ *  batch carries an explicit `albumId`; after a reload (client-only field is
+ *  gone) we fall back to grouping adjacent visual media of the same direction
+ *  sent within a few seconds of each other — how albums actually arrive. */
+function sameAlbum(a: Message, b: Message): boolean {
+  if (a.deletedAt || b.deletedAt) return false
+  if (a.direction !== b.direction) return false
+  const visual = (m: Message) =>
+    m.mediaType === 'image' ||
+    m.mediaType === 'video' ||
+    m.mediaType === 'sticker'
+  if (!visual(a) || !visual(b)) return false
+  if (a.albumId || b.albumId) return a.albumId === b.albumId
+  const gap = Math.abs(
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  )
+  return gap <= ALBUM_TIME_WINDOW_MS
+}
+
+/** Collapse runs of album members into groups; everything else stays a group
+ *  of one. Each group keeps its start index so the caller can find prev/next. */
+function buildAlbumGroups(
+  visible: Message[],
+): { items: Message[]; startIndex: number }[] {
+  const groups: { items: Message[]; startIndex: number }[] = []
+  let i = 0
+  while (i < visible.length) {
+    const items = [visible[i]]
+    let j = i + 1
+    while (j < visible.length && sameAlbum(items[items.length - 1], visible[j])) {
+      items.push(visible[j])
+      j++
+    }
+    groups.push({ items, startIndex: i })
+    i = j
+  }
+  return groups
+}
+
 interface ThreadPaneProps {
   conversation: GodConversation | null
   selectedId: string | null
@@ -307,17 +349,24 @@ export function ThreadPane({
                       Показать ещё ({messages.length - visibleCount} скрыто)
                     </button>
                   )}
-                  {messages.slice(-visibleCount).map((m, i, visible) => (
-                    <MessageBubble
-                      key={m.id}
-                      message={m}
-                      prev={visible[i - 1]}
-                      next={visible[i + 1]}
-                      isLast={i === visible.length - 1}
-                      onReply={startReply}
-                      onMenu={onMenu}
-                    />
-                  ))}
+                  {(() => {
+                    const visible = messages.slice(-visibleCount)
+                    return buildAlbumGroups(visible).map((g) => {
+                      const end = g.startIndex + g.items.length
+                      return (
+                        <MessageBubble
+                          key={g.items[0].id}
+                          message={g.items[0]}
+                          group={g.items.length > 1 ? g.items : undefined}
+                          prev={visible[g.startIndex - 1]}
+                          next={visible[end]}
+                          isLast={end === visible.length}
+                          onReply={startReply}
+                          onMenu={onMenu}
+                        />
+                      )
+                    })
+                  })()}
                 </>
               )}
               <div ref={endRef} />
@@ -395,7 +444,7 @@ export function ThreadPane({
               <div className="flex items-end gap-1.5">
                 {/* Единая «пилюля» (Telegram-style): эмодзи, расширяющееся поле
                     и скрепка внутри одного скруглённого контейнера, который
-                    подсвечивается при фокусе и растёт вместе с текстом. */}
+                    подсвечивается п��и фокусе и растёт вместе с текстом. */}
                 <div className="flex flex-1 items-end gap-0.5 rounded-3xl bg-muted px-1.5 py-1 transition-all focus-within:bg-card focus-within:ring-[3px] focus-within:ring-ring/30">
                   <EmojiPicker
                     onPick={(emoji) => applyValue(valueRef.current + emoji, true)}

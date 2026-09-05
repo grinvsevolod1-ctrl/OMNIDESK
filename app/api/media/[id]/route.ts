@@ -30,6 +30,21 @@ export const dynamic = 'force-dynamic'
  */
 export async function GET(
   request: Request,
+  ctx: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  // Any thrown error here (DB hiccup, provider fetch reject, disk read) used to
+  // surface as a raw framework 500 in the browser console. Convert it into a
+  // handled 502 and log the real cause so a broken image never spams 500s.
+  try {
+    return await handleMediaGet(request, ctx)
+  } catch (err) {
+    console.error('[v0][media] stream failed:', err)
+    return new Response('Media unavailable', { status: 502 })
+  }
+}
+
+async function handleMediaGet(
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   const session = await getSession()

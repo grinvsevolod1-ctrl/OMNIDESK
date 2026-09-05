@@ -12,6 +12,7 @@ import {
   CheckCheck,
   CornerUpLeft,
   FileText,
+  Loader2,
   Pencil,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -37,6 +38,7 @@ export type BubbleAction = 'menu'
  */
 export const MessageBubble = memo(function MessageBubble({
   message,
+  group,
   prev,
   next,
   isLast,
@@ -44,6 +46,9 @@ export const MessageBubble = memo(function MessageBubble({
   onMenu,
 }: {
   message: Message
+  /** Telegram album: 2+ media messages sent together, rendered as one grid.
+   *  `message` is the first member (carries caption / reply / timestamp). */
+  group?: Message[]
   prev?: Message
   next?: Message
   /** Последнее сообщение треда — только оно анимирует свой вход. */
@@ -51,6 +56,7 @@ export const MessageBubble = memo(function MessageBubble({
   onReply: (message: Message) => void
   onMenu: (message: Message) => void
 }) {
+  const isAlbum = Boolean(group && group.length > 1)
   const mine = message.direction === 'in'
   const deleted = Boolean(message.deletedAt)
   const { quote: legacyQuote, text } = parseReply(message.body)
@@ -247,8 +253,13 @@ export const MessageBubble = memo(function MessageBubble({
                   </div>
                 )}
 
-                {message.mediaType && message.mediaUrl && (
-                  <MediaContent message={message} mine={mine} />
+                {isAlbum ? (
+                  <MediaAlbum items={group as Message[]} />
+                ) : (
+                  message.mediaType &&
+                  (message.mediaUrl || message.localPreviewUrl) && (
+                    <MediaContent message={message} mine={mine} />
+                  )
                 )}
 
                 {/* Hide auto-generated "[Фото]"-style bodies under real media. */}
@@ -287,9 +298,34 @@ export const MessageBubble = memo(function MessageBubble({
   )
 })
 
+/** Полупрозрачный слой «загрузка…» поверх превью, пока файл заливается —
+ *  Telegram-стиль: фото уже в чате, но с процессом отправки. */
+function UploadOverlay({ progress }: { progress?: number }) {
+  const pct = Math.round((progress ?? 0) * 100)
+  return (
+    <span className="absolute inset-0 flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+      <span className="flex flex-col items-center gap-1 text-white">
+        <Loader2 className="size-6 animate-spin" />
+        <span className="text-[11px] font-medium tabular-nums">{pct}%</span>
+      </span>
+    </span>
+  )
+}
+
 /** Фото с приглушённой заглушкой-«шиммером» на время загрузки — картинка
- *  плавно проявляется, без пустого прыжка (Telegram-стиль). */
-function ImageWithSkeleton({ url, alt }: { url: string; alt: string }) {
+ *  плавно проявляется, без пустого прыжка (Telegram-стиль). Во время отправки
+ *  поверх ложится слой прогресса. */
+function ImageWithSkeleton({
+  url,
+  alt,
+  uploading,
+  progress,
+}: {
+  url: string
+  alt: string
+  uploading?: boolean
+  progress?: number
+}) {
   const [loaded, setLoaded] = useState(false)
   return (
     <span
@@ -309,33 +345,106 @@ function ImageWithSkeleton({ url, alt }: { url: string; alt: string }) {
           loaded ? 'opacity-100' : 'opacity-0',
         )}
       />
+      {uploading && <UploadOverlay progress={progress} />}
     </span>
+  )
+}
+
+/** Grid of an image/video album (Telegram-style): 2→two-up, 3→one wide + two,
+ *  4→2×2, 5+→3 columns. Every cell is a square crop with its own upload state. */
+function MediaAlbum({ items }: { items: Message[] }) {
+  const n = items.length
+  const cols = n <= 4 ? 2 : 3
+  return (
+    <div
+      className={cn(
+        'mb-1 grid w-64 max-w-full gap-0.5 sm:w-72',
+        cols === 2 ? 'grid-cols-2' : 'grid-cols-3',
+      )}
+    >
+      {items.map((m, idx) => (
+        <AlbumCell
+          key={m.id}
+          message={m}
+          // 3-photo album: first spans the full width above the pair.
+          className={n === 3 && idx === 0 ? 'col-span-2' : undefined}
+        />
+      ))}
+    </div>
+  )
+}
+
+function AlbumCell({
+  message,
+  className,
+}: {
+  message: Message
+  className?: string
+}) {
+  const url = message.localPreviewUrl || message.mediaUrl || ''
+  const inner = (
+    <span className="relative block aspect-square overflow-hidden rounded-md bg-muted">
+      {message.mediaType === 'video' && !message.localPreviewUrl ? (
+        <video src={url} preload="metadata" className="size-full object-cover" />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={url || '/placeholder.svg'}
+          alt={message.mediaName || 'Вложение'}
+          loading="lazy"
+          className="size-full object-cover"
+        />
+      )}
+      {message.uploading && <UploadOverlay progress={message.uploadProgress} />}
+    </span>
+  )
+  if (message.uploading) return <div className={className}>{inner}</div>
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className={cn('block', className)}>
+      {inner}
+    </a>
   )
 }
 
 /** Inline media renderer: photos, video, voice/audio players, file cards. */
 function MediaContent({ message, mine }: { message: Message; mine: boolean }) {
-  const url = message.mediaUrl as string
+  // Prefer the local optimistic preview so a just-sent file shows instantly and
+  // never fires an /api/media request until it's actually persisted.
+  const url = (message.localPreviewUrl || message.mediaUrl) as string
   switch (message.mediaType) {
     case 'image':
-    case 'sticker':
-      return (
-      <a href={url} target="_blank" rel="noreferrer" className="block">
-        <ImageWithSkeleton url={url} alt={message.mediaName || 'Изображение'} />
-      </a>
+    case 'sticker': {
+      const img = (
+        <ImageWithSkeleton
+          url={url}
+          alt={message.mediaName || 'Изображение'}
+          uploading={message.uploading}
+          progress={message.uploadProgress}
+        />
       )
+      return message.uploading ? (
+        <span className="block">{img}</span>
+      ) : (
+        <a href={url} target="_blank" rel="noreferrer" className="block">
+          {img}
+        </a>
+      )
+    }
     case 'video_note':
       // Телеграм-стиль кружок: круглый, клик = play/pause, прогресс-обод.
       return <VideoNotePlayer src={url} size={176} className="mb-1" />
     case 'video':
       return (
-        <video
-          src={url}
-          controls
-          preload="metadata"
-          playsInline
-          className="mb-1 max-h-72 w-auto max-w-full rounded-lg"
-        />
+        <span className="relative mb-1 block">
+          <video
+            src={url}
+            controls={!message.uploading}
+            preload="metadata"
+            playsInline
+            className="max-h-72 w-auto max-w-full rounded-lg"
+          />
+          {message.uploading && <UploadOverlay progress={message.uploadProgress} />}
+        </span>
       )
     case 'voice':
     case 'audio':

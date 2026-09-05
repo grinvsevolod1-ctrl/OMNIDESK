@@ -377,14 +377,184 @@ export function useGodComposer({
     [media],
   )
 
+  // Object URLs minted for optimistic previews. They must OUTLIVE the staging
+  // tray (media.clear() revokes ITS copies), so we mint fresh ones here and
+  // revoke them all on unmount — the preview stays visible for the message's
+  // whole on-screen life, Telegram-style.
+  const previewUrls = useRef<string[]>([])
+  useEffect(
+    () => () => {
+      previewUrls.current.forEach((u) => URL.revokeObjectURL(u))
+      previewUrls.current = []
+    },
+    [],
+  )
+
+  const mediaTypeOf = (file: File): MediaType =>
+    file.type.startsWith('image/')
+      ? 'image'
+      : file.type.startsWith('video/')
+        ? 'video'
+        : file.type.startsWith('audio/')
+          ? 'audio'
+          : 'document'
+
+  /**
+   * Upload one staged file, streaming its progress into the optimistic message
+   * `tempId`. XHR (not fetch) is used because it exposes upload progress events.
+   * On success the temp message is upgraded in place to the real id + media url;
+   * on failure it is dropped and a toast is shown.
+   */
+  const uploadOne = useCallback(
+    (opts: { file: File; tempId: string; convId: string; caption: string }) =>
+      new Promise<void>((resolve) => {
+        const { file, tempId, convId, caption } = opts
+        const fd = new FormData()
+        fd.set('file', file)
+        fd.set('conversationId', convId)
+        fd.set('direction', 'in')
+        if (caption) fd.set('caption', caption)
+
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', '/wijegniwjgwjog/api/upload')
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return
+          const p = e.loaded / e.total
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempId ? { ...m, uploadProgress: p } : m,
+            ),
+          )
+        }
+        xhr.onload = () => {
+          let res: Awaited<ReturnType<typeof secretSendMediaMessageAction>> | null =
+            null
+          try {
+            res = JSON.parse(xhr.responseText)
+          } catch {
+            res = null
+          }
+          if (res && res.ok && res.id) {
+            const realId = res.id
+            const createdAt = res.createdAt
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === tempId
+                  ? {
+                      ...m,
+                      id: realId,
+                      createdAt: createdAt ?? m.createdAt,
+                      uploading: false,
+                      uploadProgress: 1,
+                      // Persist the server url for reloads, but keep the local
+                      // preview so the on-screen <img> never re-fetches now.
+                      mediaUrl: `/api/media/${realId}`,
+                    }
+                  : m,
+              ),
+            )
+            void loadList({ silent: true })
+          } else {
+            toast.error(
+              res && !res.ok
+                ? res.message
+                : xhr.status === 413
+                  ? 'Файл слишком большой для сервера.'
+                  : 'Не удалось отправить файл.',
+            )
+            setMessages((prev) => prev.filter((m) => m.id !== tempId))
+          }
+          resolve()
+        }
+        xhr.onerror = () => {
+          toast.error('Не удалось отправить файл')
+          setMessages((prev) => prev.filter((m) => m.id !== tempId))
+          resolve()
+        }
+        xhr.send(fd)
+      }),
+    [loadList, setMessages],
+  )
+
+  // Telegram-style batch send: staged files appear in the thread INSTANTLY as
+  // optimistic bubbles (local preview + progress ring), grouped into one album
+  // when two or more visual files are sent together. The first file carries the
+  // caption. Uploads run in parallel; each bubble upgrades to the real message
+  // as its request resolves.
   const sendStagedFiles = useCallback(() => {
     const staged = media.files
     if (staged.length === 0) return
+    const convId = selectedIdRef.current
+    if (!convId) return
     const caption = valueRef.current.trim()
+
+    const items = staged.map((s) => {
+      const mediaType = mediaTypeOf(s.file)
+      const isVisual = mediaType === 'image' || mediaType === 'video'
+      let localPreviewUrl: string | undefined
+      if (isVisual) {
+        localPreviewUrl = URL.createObjectURL(s.file)
+        previewUrls.current.push(localPreviewUrl)
+      }
+      return {
+        file: s.file,
+        tempId: `temp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+        mediaType,
+        isVisual,
+        localPreviewUrl,
+      }
+    })
+
+    // Only 2+ visual files form an album; a lone photo stays a normal bubble.
+    const visualCount = items.filter((it) => it.isVisual).length
+    const albumId =
+      visualCount >= 2
+        ? `album-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+        : undefined
+
     media.clear()
     applyValue('')
-    staged.forEach((s, i) => uploadFile(s.file, undefined, i === 0 ? caption : ''))
-  }, [media, uploadFile, applyValue])
+    setUploading(true)
+    pinOnNextGrowth()
+
+    const base = Date.now()
+    const optimistic: Message[] = items.map((it, i) => ({
+      id: it.tempId,
+      conversationId: convId,
+      direction: 'in',
+      body: i === 0 ? caption : '',
+      author: conversation?.contactName || 'Клиент',
+      // +i keeps the batch strictly ordered even at sub-ms send speed.
+      createdAt: new Date(base + i).toISOString(),
+      mediaType: it.mediaType,
+      mediaMime: it.file.type || undefined,
+      mediaName: it.file.name || undefined,
+      localPreviewUrl: it.localPreviewUrl,
+      uploading: true,
+      uploadProgress: 0,
+      albumId: it.isVisual ? albumId : undefined,
+    }))
+    setMessages((prev) => [...prev, ...optimistic])
+
+    void Promise.all(
+      items.map((it, i) =>
+        uploadOne({
+          file: it.file,
+          tempId: it.tempId,
+          convId,
+          caption: i === 0 ? caption : '',
+        }),
+      ),
+    ).finally(() => setUploading(false))
+  }, [
+    media,
+    applyValue,
+    conversation,
+    pinOnNextGrowth,
+    selectedIdRef,
+    setMessages,
+    uploadOne,
+  ])
 
   // Keep the refs read by `sendMessage` pointing at the live tray + sender.
   mediaRef.current = { count: media.count }
