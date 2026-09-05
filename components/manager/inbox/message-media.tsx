@@ -7,9 +7,27 @@
  * the Message it's handed, with only local view state (failed/lightbox).
  */
 
-import { useEffect, useState } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { createPortal } from 'react-dom'
-import { Download, ExternalLink, FileText, Info, Play, X } from 'lucide-react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  FileText,
+  Info,
+  Play,
+  X,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { TgsSticker } from '@/components/manager/inbox/tgs-sticker'
@@ -97,35 +115,58 @@ function mediaFilename(message: Message): string {
 }
 
 /**
- * Fullscreen viewer for an image or video, with download + open-in-new-tab.
- * Rendered as a fixed overlay (only one is ever open per message bubble).
+ * Fullscreen gallery viewer. Shows one media item from `items` at a time and
+ * lets you move through the WHOLE conversation like Telegram: swipe left/right
+ * (touch), ← / → keys, or the on-screen chevrons; a swipe DOWN closes. A counter
+ * shows position; Download / Open always act on the CURRENT item.
+ *
+ * Rendered as a portal to <body> because message rows use `content-visibility`,
+ * a containment context that breaks position:fixed descendants (the overlay
+ * would otherwise offset inside the bubble instead of covering the screen).
  */
 function MediaLightbox({
-  message,
+  items,
+  index,
+  onIndexChange,
   onClose,
 }: {
-  message: Message
+  items: Message[]
+  index: number
+  onIndexChange: (next: number) => void
   onClose: () => void
 }) {
-  const url = message.mediaUrl
-  const effType = effectiveMediaType(message)
-  const isVideo = effType === 'video' || effType === 'video_note'
+  const current = items[index]
+  const hasPrev = index > 0
+  const hasNext = index < items.length - 1
+  const goPrev = useCallback(() => {
+    if (index > 0) onIndexChange(index - 1)
+  }, [index, onIndexChange])
+  const goNext = useCallback(() => {
+    if (index < items.length - 1) onIndexChange(index + 1)
+  }, [index, items.length, onIndexChange])
 
-  // Close on Escape for keyboard users.
+  // Keyboard: Esc closes, ← / → navigate.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowLeft') goPrev()
+      else if (e.key === 'ArrowRight') goNext()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, goPrev, goNext])
 
+  // Touch: horizontal swipe navigates, a downward swipe closes. `drag` gives the
+  // current media a little live follow so the gesture feels physical.
+  const touch = useRef<{ x: number; y: number } | null>(null)
+  const [drag, setDrag] = useState(0)
+
+  if (!current) return null
+  const url = current.mediaUrl
   if (!url) return null
+  const effType = effectiveMediaType(current)
+  const isVideo = effType === 'video' || effType === 'video_note'
 
-  // Message rows use `content-visibility: auto`, which creates a containment
-  // context that BREAKS position:fixed descendants (the overlay ends up
-  // offset inside the bubble instead of covering the screen). Portaling to
-  // document.body restores true fullscreen positioning.
   return createPortal(
     <div
       role="dialog"
@@ -136,67 +177,188 @@ function MediaLightbox({
     >
       {/* Тулбар прижат к верху фикс-оверлея: в standalone-PWA верх экрана
           занят статус-баром / Dynamic Island, поэтому добавляем safe-area
-          отступы (top/left/right) — иначе «Скачать»/«Закрыть» уезжают под
-          системную строку и по ним нельзя нажать. */}
+          отступы (top/left/right) — иначе кнопки уезжают под системную строку. */}
       <div
-        className="flex shrink-0 items-center justify-end gap-2 p-3"
+        className="flex shrink-0 items-center gap-2 p-3"
         style={{
           paddingTop: 'max(0.75rem, env(safe-area-inset-top))',
           paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
           paddingLeft: 'max(0.75rem, env(safe-area-inset-left))',
         }}
-      >
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={(e) => {
-            e.stopPropagation()
-            void downloadMedia(url, mediaFilename(message))
-          }}
-        >
-          <Download className="size-4" />
-          Скачать
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={(e) => {
-            e.stopPropagation()
-            window.open(url, '_blank', 'noopener,noreferrer')
-          }}
-        >
-          <ExternalLink className="size-4" />
-          Открыть
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          aria-label="Закрыть"
-          onClick={onClose}
-        >
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div
-        className="flex min-h-0 flex-1 items-center justify-center p-4 animate-in zoom-in-95 fade-in duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        {effType === 'video_note' ? (
-          <VideoNotePlayer src={url} size={384} autoPlay />
-        ) : isVideo ? (
-          <video src={url} controls autoPlay className="max-h-full max-w-full rounded-lg" />
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={url || '/placeholder.svg'}
-            alt={message.body || 'Изображение'}
-            className="max-h-full max-w-full rounded-lg object-contain"
-          />
-        )}
+        {items.length > 1 ? (
+          <span className="rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium tabular-nums text-white/90">
+            {index + 1} / {items.length}
+          </span>
+        ) : null}
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void downloadMedia(url, mediaFilename(current))}
+          >
+            <Download className="size-4" />
+            Скачать
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+          >
+            <ExternalLink className="size-4" />
+            Открыть
+          </Button>
+          <Button
+            variant="secondary"
+            size="icon"
+            aria-label="Закрыть"
+            onClick={onClose}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Сцена: клик по пустому фону закрывает, по самому медиа — нет. */}
+      <div
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4"
+        onClick={onClose}
+        onTouchStart={(e) => {
+          touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+          setDrag(0)
+        }}
+        onTouchMove={(e) => {
+          if (!touch.current) return
+          setDrag(e.touches[0].clientX - touch.current.x)
+        }}
+        onTouchEnd={(e) => {
+          const t = touch.current
+          touch.current = null
+          if (!t) {
+            setDrag(0)
+            return
+          }
+          const dx = e.changedTouches[0].clientX - t.x
+          const dy = e.changedTouches[0].clientY - t.y
+          if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+            if (dx > 0) goPrev()
+            else goNext()
+          } else if (dy > 90 && Math.abs(dy) > Math.abs(dx)) {
+            onClose()
+          }
+          setDrag(0)
+        }}
+      >
+        {hasPrev ? (
+          <button
+            type="button"
+            aria-label="Предыдущее"
+            onClick={(e) => {
+              e.stopPropagation()
+              goPrev()
+            }}
+            className="absolute left-2 top-1/2 z-10 hidden -translate-y-1/2 rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20 sm:block"
+          >
+            <ChevronLeft className="size-6" />
+          </button>
+        ) : null}
+        {hasNext ? (
+          <button
+            type="button"
+            aria-label="Следующее"
+            onClick={(e) => {
+              e.stopPropagation()
+              goNext()
+            }}
+            className="absolute right-2 top-1/2 z-10 hidden -translate-y-1/2 rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20 sm:block"
+          >
+            <ChevronRight className="size-6" />
+          </button>
+        ) : null}
+
+        <div
+          key={current.id}
+          className="flex max-h-full max-w-full items-center justify-center animate-in fade-in duration-150"
+          style={{ transform: drag ? `translateX(${drag}px)` : undefined }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {effType === 'video_note' ? (
+            <VideoNotePlayer src={url} size={384} autoPlay />
+          ) : isVideo ? (
+            <video
+              src={url}
+              controls
+              autoPlay
+              className="max-h-full max-w-full rounded-lg"
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={url || '/placeholder.svg'}
+              alt={current.body || 'Изображение'}
+              className="max-h-full max-w-full select-none rounded-lg object-contain"
+              draggable={false}
+            />
+          )}
+        </div>
       </div>
     </div>,
     document.body,
   )
+}
+
+/** A viewable media item is an image/video/«кружок» with a streamable URL. */
+function isGalleryMedia(m: Message): boolean {
+  if (!m.mediaUrl) return false
+  const t = effectiveMediaType(m)
+  return t === 'image' || t === 'video' || t === 'video_note'
+}
+
+type MediaGalleryValue = { open: (messageId: string) => void }
+const MediaGalleryContext = createContext<MediaGalleryValue | null>(null)
+
+/**
+ * Provides ONE conversation-wide media gallery to every media thumbnail beneath
+ * it. Collects all viewable media in `messages` (thread order), so opening any
+ * photo/video lets the user swipe through the entire chat, Telegram-style.
+ * MessageMedia / album cells call `open(messageId)` instead of managing their
+ * own single-item lightbox.
+ */
+export function MediaGalleryProvider({
+  messages,
+  children,
+}: {
+  messages: Message[]
+  children: ReactNode
+}) {
+  const items = useMemo(() => messages.filter(isGalleryMedia), [messages])
+  const [index, setIndex] = useState<number | null>(null)
+  const open = useCallback(
+    (messageId: string) => {
+      const i = items.findIndex((m) => m.id === messageId)
+      if (i >= 0) setIndex(i)
+    },
+    [items],
+  )
+  const value = useMemo(() => ({ open }), [open])
+  return (
+    <MediaGalleryContext.Provider value={value}>
+      {children}
+      {index !== null && items[index] ? (
+        <MediaLightbox
+          items={items}
+          index={index}
+          onIndexChange={setIndex}
+          onClose={() => setIndex(null)}
+        />
+      ) : null}
+    </MediaGalleryContext.Provider>
+  )
+}
+
+function useMediaGallery(): MediaGalleryValue | null {
+  return useContext(MediaGalleryContext)
 }
 
 /**
@@ -207,10 +369,16 @@ function MediaLightbox({
  * media (so download / open-in-tab / safe-area insets all come for free).
  */
 export function MessageMediaAlbum({ items }: { items: Message[] }) {
-  const [openId, setOpenId] = useState<string | null>(null)
+  const gallery = useMediaGallery()
+  // Fallback gallery over just this album if no provider is present (defensive —
+  // in the inbox MediaGalleryProvider always wraps the thread).
+  const [localIndex, setLocalIndex] = useState<number | null>(null)
+  const openCell = (m: Message) => {
+    if (gallery) gallery.open(m.id)
+    else setLocalIndex(items.findIndex((x) => x.id === m.id))
+  }
   const n = items.length
   const cols = n <= 4 ? 2 : 3
-  const open = items.find((m) => m.id === openId) ?? null
   return (
     <>
       <div
@@ -225,12 +393,17 @@ export function MessageMediaAlbum({ items }: { items: Message[] }) {
             message={m}
             // 3-photo album: the first image spans the full width above the pair.
             className={n === 3 && idx === 0 ? 'col-span-2' : undefined}
-            onOpen={() => setOpenId(m.id)}
+            onOpen={() => openCell(m)}
           />
         ))}
       </div>
-      {open ? (
-        <MediaLightbox message={open} onClose={() => setOpenId(null)} />
+      {!gallery && localIndex !== null && items[localIndex] ? (
+        <MediaLightbox
+          items={items}
+          index={localIndex}
+          onIndexChange={setLocalIndex}
+          onClose={() => setLocalIndex(null)}
+        />
       ) : null}
     </>
   )
@@ -307,8 +480,13 @@ export function MessageMedia({ message }: { message: Message }) {
   const [failed, setFailed] = useState(false)
   const [lightbox, setLightbox] = useState(false)
   const [imgLoaded, setImgLoaded] = useState(false)
+  const gallery = useMediaGallery()
   const url = message.mediaUrl
   const type = effectiveMediaType(message)
+  // Открытие: если есть общий провайдер треда — листаемая галерея по всему
+  // чату; иначе локальный одиночный лайтбокс (см. fallback ниже).
+  const openViewer = () =>
+    gallery ? gallery.open(message.id) : setLightbox(true)
 
   if (!type) return null
 
@@ -378,7 +556,7 @@ export function MessageMedia({ message }: { message: Message }) {
       <>
         <button
           type="button"
-          onClick={() => setLightbox(true)}
+          onClick={openViewer}
           className={cn(
             'group relative block cursor-zoom-in overflow-hidden rounded-lg',
             // Пока картинка грузится — приглушённый фон с «шиммером», чтобы не
@@ -402,8 +580,13 @@ export function MessageMedia({ message }: { message: Message }) {
             onError={() => setFailed(true)}
           />
         </button>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
+        {lightbox && !gallery ? (
+          <MediaLightbox
+            items={[message]}
+            index={0}
+            onIndexChange={() => {}}
+            onClose={() => setLightbox(false)}
+          />
         ) : null}
       </>
     )
@@ -443,7 +626,7 @@ export function MessageMedia({ message }: { message: Message }) {
         <div className="flex items-center gap-3 text-xs">
           <button
             type="button"
-            onClick={() => setLightbox(true)}
+            onClick={openViewer}
             className="flex items-center gap-1 opacity-70 hover:opacity-100"
           >
             <ExternalLink className="size-3.5" />
@@ -458,8 +641,13 @@ export function MessageMedia({ message }: { message: Message }) {
             Скачать
           </button>
         </div>
-        {lightbox ? (
-          <MediaLightbox message={message} onClose={() => setLightbox(false)} />
+        {lightbox && !gallery ? (
+          <MediaLightbox
+            items={[message]}
+            index={0}
+            onIndexChange={() => {}}
+            onClose={() => setLightbox(false)}
+          />
         ) : null}
       </div>
     )

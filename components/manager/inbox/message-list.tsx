@@ -18,6 +18,7 @@ import {
 } from '@/components/manager/message-context-menu'
 import {
   isMediaPlaceholder,
+  MediaGalleryProvider,
   MessageMedia,
   MessageMediaAlbum,
 } from '@/components/manager/inbox/message-media'
@@ -295,6 +296,7 @@ export function MessageList({
         backgroundSize: '22px 22px',
       }}
     >
+      <MediaGalleryProvider messages={thread}>
       <div className="mx-auto flex max-w-3xl flex-col gap-1">
         {/* Cold-thread hydration: transcript is being fetched on first open. */}
         {threadLoading && thread.length === 0 ? (
@@ -648,6 +650,7 @@ export function MessageList({
           </div>
         ) : null}
       </div>
+      </MediaGalleryProvider>
     </div>
   )
 }
