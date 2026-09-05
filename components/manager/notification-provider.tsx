@@ -40,13 +40,26 @@ export function useNotifications(): NotificationState {
 }
 
 function detectIosNeedsInstall(): boolean {
-  if (typeof navigator === 'undefined') return false
+  if (typeof navigator === 'undefined' || typeof window === 'undefined') {
+    return false
+  }
   const ua = navigator.userAgent || ''
-  const isIos = /iphone|ipad|ipod/i.test(ua)
+  // iPhone/iPod/iPad report directly. iPadOS 13+ in Safari sends a desktop
+  // "Macintosh" UA, so treat a touch-capable Mac as an iPad too — otherwise an
+  // Apple tablet falls through to the "unsupported" screen that (uselessly)
+  // tells the user to switch to Chrome, which on iOS/iPadOS still can't do Web
+  // Push. Every Apple browser is WebKit; the ONLY path to notifications is a
+  // home-screen standalone app.
+  const isAppleTouch =
+    /iphone|ipad|ipod/i.test(ua) ||
+    (/Macintosh/i.test(ua) &&
+      typeof document !== 'undefined' &&
+      'ontouchend' in document)
+  if (!isAppleTouch) return false
   const isStandalone =
     (window.navigator as unknown as { standalone?: boolean }).standalone ===
       true || window.matchMedia('(display-mode: standalone)').matches
-  return isIos && !isStandalone
+  return !isStandalone
 }
 
 export function NotificationProvider({ children }: { children: ReactNode }) {

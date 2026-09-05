@@ -62,6 +62,17 @@ export default function RootLayout({
       className={`dark ${geistSans.variable} ${geistMono.variable}`}
     >
       <head>
+        {/* iOS standalone trigger. Next 16's `appleWebApp.capable` only emits
+            the modern `mobile-web-app-capable`, which iOS Safari IGNORES — so a
+            home-screen icon opened in Safari-chrome (visible site title +
+            back/refresh/share toolbar) instead of a real app window, and iOS
+            Web Push (standalone-only) never became available. The Apple-prefixed
+            tag is what actually puts the launched icon into standalone mode;
+            with it, `apple-mobile-web-app-status-bar-style` and the safe-area
+            insets the shell already pads against finally take effect.
+            Must be re-added on every deploy — remove it and iOS regresses to a
+            browser tab. */}
+        <meta name="apple-mobile-web-app-capable" content="yes" />
         {/* Build id baked into THIS server-rendered HTML shell. A PWA (esp. an
             installed iOS standalone window) can cold-open a stale shell that the
             OS/webview cached from an older deploy; UpdateWatcher reads this on
