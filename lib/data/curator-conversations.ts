@@ -107,10 +107,14 @@ export async function unlinkConversationFromCurator(
 export async function listConversationsForCurator(
   curatorId: string,
 ): Promise<Conversation[]> {
-  const rows = await query<ConversationRow & { channel_name: string | null }>(
-    `SELECT ${conversationColumns('c')}, ch.name AS channel_name
+  const rows = await query<
+    ConversationRow & { channel_name: string | null; manager_name: string | null }
+  >(
+    `SELECT ${conversationColumns('c')}, ch.name AS channel_name,
+            m.name AS manager_name
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
+       LEFT JOIN managers m ON m.id = c.manager_id
       WHERE c.curator_id = $1
       ORDER BY c.last_message_at DESC
       LIMIT $2`,
@@ -119,6 +123,7 @@ export async function listConversationsForCurator(
   return rows.map((r) => ({
     ...toConversation(r),
     channelName: r.channel_name ?? undefined,
+    managerName: r.manager_name ?? undefined,
   }))
 }
 

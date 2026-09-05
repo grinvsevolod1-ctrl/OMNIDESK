@@ -27,6 +27,7 @@ import {
   Radio,
   Reply,
   Search,
+  UserCheck,
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -705,8 +706,8 @@ function CuratorInfoPanel({
     active.channelType
   const rows: { icon: typeof Radio; label: string; value: string }[] = []
   rows.push({ icon: Radio, label: 'Канал', value: channelShort })
-  if (active.channelName)
-    rows.push({ icon: Radio, label: 'Источник', value: active.channelName })
+  if (active.managerName)
+    rows.push({ icon: UserCheck, label: 'Передал', value: active.managerName })
   if (active.transferredToCuratorAt)
     rows.push({
       icon: CalendarClock,

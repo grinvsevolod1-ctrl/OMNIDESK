@@ -35,6 +35,13 @@ export interface Conversation {
   channelType: ChannelType
   /** Display name of the source channel/integration (site, account, etc.). */
   channelName?: string
+  /**
+   * Имя менеджера-владельца диалога (managers.name по manager_id). У куратора в
+   * сведениях о лиде показывается как «Передал» — кто отдал ему диалог.
+   * Заполняется только там, где запрос делает JOIN на managers (иначе
+   * undefined; в админ-выборках может приходить null).
+   */
+  managerName?: string | null
   contactName: string
   contactHandle: string
   /**
