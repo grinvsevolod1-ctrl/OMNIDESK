@@ -111,7 +111,30 @@ export function DashboardShell({
     [slotEl],
   )
 
-
+  // iOS standalone PWA: `fixed inset-0` местами берёт высоту «маленького»
+  // вьюпорта и оставляет снизу щель, где просвечивает фон страницы (bg-background,
+  // темнее композера) — та же чёрная полоса, что была справа. Пишем реальную
+  // видимую высоту в --app-vh (visualViewport.height). Оболочка остаётся
+  // `fixed inset-0` (left/right/top прибиты → ширина всегда целая, правой полосы
+  // нет), а заданная height перекрывает bottom:0 (при top+height свойство bottom
+  // по спеке игнорируется) → низ ровно по видимому краю, без щели.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const vv = window.visualViewport
+    const apply = () => {
+      const h = vv?.height ?? window.innerHeight
+      document.documentElement.style.setProperty('--app-vh', `${h}px`)
+    }
+    apply()
+    vv?.addEventListener('resize', apply)
+    window.addEventListener('resize', apply)
+    window.addEventListener('orientationchange', apply)
+    return () => {
+      vv?.removeEventListener('resize', apply)
+      window.removeEventListener('resize', apply)
+      window.removeEventListener('orientationchange', apply)
+    }
+  }, [])
 
   // Sign out cleanly: drop THIS device's push subscription BEFORE ending the
   // session, otherwise the server row survives and the dispatcher keeps pushing
@@ -199,12 +222,17 @@ export function DashboardShell({
   return (
     <ShellHeaderContext.Provider value={headerCtx}>
     <TooltipProvider>
-      {/* fixed inset-0: слой прибит ко ВСЕМ четырём краям экрана (top/right/
-          bottom/left = 0), поэтому в standalone-PWA на iOS занимает ровно весь
-          вьюпорт — без чёрных полос body справа и снизу. overflow-hidden
-          отрезает любое внутреннее переполнение, а pb-safe композера кроет
+      {/* fixed inset-0 (left/right/top прибиты → ширина всегда целая, правой
+          полосы нет) + height:var(--app-vh) = реальная видимая высота
+          (visualViewport). При заданных top+height свойство bottom по спеке
+          игнорируется, поэтому низ идёт ровно по видимому краю экрана — без
+          чёрной щели body снизу в iOS-PWA. Фолбэк 100dvh до гидрации.
+          overflow-hidden режет внутреннее переполнение, pb-safe композера кроет
           home-indicator. */}
-      <div className="fixed inset-0 flex overflow-hidden bg-background">
+      <div
+        className="fixed inset-0 flex overflow-hidden bg-background"
+        style={{ height: 'var(--app-vh, 100dvh)' }}
+      >
         {/* Desktop sidebar */}
         <aside
           className={cn(
