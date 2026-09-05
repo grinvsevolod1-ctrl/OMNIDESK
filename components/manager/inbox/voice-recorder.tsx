@@ -24,6 +24,10 @@ export interface VoiceRecorderProps {
   onSend: (audio: { base64: string; mime: string; durationSec: number }) => void
   /** Fired when mic access fails, with a human-readable reason. */
   onError: (message: string) => void
+  /** Mirrors the internal `recording` state to the parent so it can keep this
+   *  component mounted in the mic/send toggle slot for the whole recording,
+   *  even if the draft text changes underneath (e.g. an inserted contact). */
+  onRecordingChange?: (recording: boolean) => void
 }
 
 /** Pick the best audio container the browser can record. Telegram voice
@@ -44,7 +48,12 @@ function pickMime(): string {
   return ''
 }
 
-export function VoiceRecorder({ disabled, onSend, onError }: VoiceRecorderProps) {
+export function VoiceRecorder({
+  disabled,
+  onSend,
+  onError,
+  onRecordingChange,
+}: VoiceRecorderProps) {
   const [recording, setRecording] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const recorderRef = useRef<MediaRecorder | null>(null)
@@ -55,10 +64,12 @@ export function VoiceRecorder({ disabled, onSend, onError }: VoiceRecorderProps)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const onSendRef = useRef(onSend)
   const onErrorRef = useRef(onError)
+  const onRecordingChangeRef = useRef(onRecordingChange)
   useEffect(() => {
     onSendRef.current = onSend
     onErrorRef.current = onError
-  }, [onSend, onError])
+    onRecordingChangeRef.current = onRecordingChange
+  }, [onSend, onError, onRecordingChange])
 
   const teardown = useCallback(() => {
     if (timerRef.current) {
@@ -70,6 +81,7 @@ export function VoiceRecorder({ disabled, onSend, onError }: VoiceRecorderProps)
     recorderRef.current = null
     setRecording(false)
     setSeconds(0)
+    onRecordingChangeRef.current?.(false)
   }, [])
 
   // Never leave the mic open if the component unmounts mid-recording
@@ -142,6 +154,7 @@ export function VoiceRecorder({ disabled, onSend, onError }: VoiceRecorderProps)
     streamRef.current = stream
     rec.start()
     setRecording(true)
+    onRecordingChangeRef.current?.(true)
     setSeconds(0)
     timerRef.current = setInterval(() => {
       setSeconds((s) => {

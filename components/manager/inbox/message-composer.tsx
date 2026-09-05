@@ -19,14 +19,13 @@ import {
   ChevronDown,
   Loader2,
   Paperclip,
-  SendHorizonal,
   BrainCircuit,
   Zap,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EmojiPicker, StickerPicker } from '@/components/manager/inbox/pickers'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
-import { ScheduleSendButton } from '@/components/manager/inbox/schedule-send'
+import { ComposerSendButton } from '@/components/manager/inbox/composer-send-button'
 import { TelemostIcon } from '@/components/channel-icons'
 import { cn } from '@/lib/utils'
 import type { ChannelType, QuickReply, StickerItem } from '@/lib/types'
@@ -110,6 +109,13 @@ export const MessageComposer = memo(function MessageComposer({
 }: MessageComposerProps) {
   const [text, setText] = useState(() => getInitialDraft(conversationId))
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(false)
+  // Whether the voice recorder currently has an active recording. Kept here
+  // (not just inside VoiceRecorder) so the mic/send toggle below can keep the
+  // recorder mounted in its slot for the WHOLE recording even if `text`
+  // changes underneath it (e.g. an inserted contact) — otherwise swapping the
+  // slot to the Send button mid-recording would unmount the recorder and
+  // silently drop the take.
+  const [recordingVoice, setRecordingVoice] = useState(false)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -317,69 +323,8 @@ export const MessageComposer = memo(function MessageComposer({
           submit()
         }}
       >
-        <EmojiPicker
-          onPick={(emoji) => {
-            setText((d) => d + emoji)
-            requestAnimationFrame(resizeComposer)
-          }}
-        />
-        {channelType === 'telegram' ? (
-          <>
-            <StickerPicker channelId={channelId} onSend={onSendSticker} />
-            <VoiceRecorder
-              disabled={pending || aiLed}
-              onSend={onSendVoice}
-              onError={onVoiceError}
-            />
-            {/* "Send later": hidden while editing — editing an existing
-                message must not fork into a scheduled duplicate. */}
-            {!editing ? (
-              <ScheduleSendButton
-                disabled={pending || aiLed || !text.trim()}
-                hasText={Boolean(text.trim())}
-                onSchedule={(iso) => {
-                  const body = text.trim()
-                  if (!body) return
-                  onScheduleSend(body, iso)
-                  setText('')
-                  persistRef.current('')
-                  requestAnimationFrame(resizeComposer)
-                }}
-              />
-            ) : null}
-          </>
-        ) : null}
-        {channelType === 'whatsapp' || channelType === 'vk' ? (
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) {
-                  onSendMediaFile(f, text.trim())
-                  setText('')
-                  persistRef.current('')
-                }
-                e.target.value = ''
-              }}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-              disabled={pending}
-              onClick={() => fileInputRef.current?.click()}
-              aria-label="Прикрепить файл"
-              title="Прикрепить файл (фото, видео, документ)"
-            >
-              <Paperclip className="size-4" />
-            </Button>
-          </>
-        ) : null}
+        {/* Rare, high-value action — kept outside the pill so it never
+            competes for space with the everyday emoji/attach/mic row. */}
         {telemostEnabled ? (
           <Button
             type="button"
@@ -398,53 +343,125 @@ export const MessageComposer = memo(function MessageComposer({
             )}
           </Button>
         ) : null}
-        <textarea
-          ref={composerRef}
-          value={text}
-          rows={1}
-          onChange={(e) => {
-            setText(e.target.value)
-            resizeComposer()
-          }}
-          onKeyDown={(e) => {
-            // Don't submit mid-IME-composition (CJK): Enter confirms the
-            // candidate, and Safari reports keyCode 229 for that.
-            if (e.nativeEvent.isComposing || e.keyCode === 229) return
-            // Enter sends, Shift+Enter inserts a newline (messenger UX).
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              submit()
-            }
-          }}
-          onMouseDown={(e) => {
-            // While the AI leads the thread the composer is locked — vibrate the
-            // AI button to point the manager at the fix.
-            if (aiLed) {
-              e.preventDefault()
-              onBlockedInteract()
-            }
-          }}
-          readOnly={aiLed}
-          placeholder={
-            aiLed
-              ? 'ИИ отвечает за вас. Отключите ИИ, чтобы писать.'
-              : 'Написать сообщение…'
-          }
-          aria-label="Текст ответа"
+
+        {/* Telegram-style unified input pill: emoji + textarea + attach all
+            live inside ONE rounded container that grows with the text, so the
+            row never wraps or overflows on a phone screen. */}
+        <div
           className={cn(
-            'scrollbar-thin max-h-40 min-h-[40px] flex-1 resize-none rounded-2xl bg-muted px-4 py-2.5 text-sm leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/30',
-            aiLed && 'cursor-not-allowed opacity-60',
+            'flex flex-1 items-end gap-0.5 rounded-2xl bg-muted pl-1 pr-1 transition-colors focus-within:bg-card focus-within:ring-[3px] focus-within:ring-ring/30',
+            aiLed && 'opacity-60',
           )}
-        />
-        <Button
-          type="submit"
-          size="icon"
-          className="size-10 shrink-0 rounded-full"
-          disabled={pending || !text.trim() || aiLed}
-          aria-label="Отправить"
         >
-          <SendHorizonal className="size-4" />
-        </Button>
+          <EmojiPicker
+            onPick={(emoji) => {
+              setText((d) => d + emoji)
+              requestAnimationFrame(resizeComposer)
+            }}
+          />
+          <textarea
+            ref={composerRef}
+            value={text}
+            rows={1}
+            onChange={(e) => {
+              setText(e.target.value)
+              resizeComposer()
+            }}
+            onKeyDown={(e) => {
+              // Don't submit mid-IME-composition (CJK): Enter confirms the
+              // candidate, and Safari reports keyCode 229 for that.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return
+              // Enter sends, Shift+Enter inserts a newline (messenger UX).
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                submit()
+              }
+            }}
+            onMouseDown={(e) => {
+              // While the AI leads the thread the composer is locked — vibrate
+              // the AI button to point the manager at the fix.
+              if (aiLed) {
+                e.preventDefault()
+                onBlockedInteract()
+              }
+            }}
+            readOnly={aiLed}
+            placeholder={
+              aiLed
+                ? 'ИИ отвечает за вас. Отключите ИИ, чтобы писать.'
+                : 'Написать сообщение…'
+            }
+            aria-label="Текст ответа"
+            className={cn(
+              'scrollbar-thin max-h-40 min-h-[40px] flex-1 resize-none bg-transparent px-1 py-2.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground',
+              aiLed && 'cursor-not-allowed',
+            )}
+          />
+          {channelType === 'telegram' ? (
+            <StickerPicker channelId={channelId} onSend={onSendSticker} />
+          ) : null}
+          {channelType === 'whatsapp' || channelType === 'vk' ? (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) {
+                    onSendMediaFile(f, text.trim())
+                    setText('')
+                    persistRef.current('')
+                  }
+                  e.target.value = ''
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-10 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+                disabled={pending}
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Прикрепить файл"
+                title="Прикрепить файл (фото, видео, документ)"
+              >
+                <Paperclip className="size-4" />
+              </Button>
+            </>
+          ) : null}
+        </div>
+
+        {/* Trailing action slot, Telegram-style: mic while the draft is empty,
+            Send once there's text — never both at once, so it never bloats
+            the row. Holding Send offers "send later" (Telegram only). */}
+        {channelType === 'telegram' && !editing && (recordingVoice || !text.trim()) ? (
+          <VoiceRecorder
+            disabled={pending || aiLed}
+            onSend={onSendVoice}
+            onError={onVoiceError}
+            onRecordingChange={setRecordingVoice}
+          />
+        ) : (
+          <ComposerSendButton
+            disabled={pending || !text.trim() || aiLed}
+            // "Send later" would fork an edit into a scheduled duplicate, so
+            // it's off while editing an existing message.
+            canSchedule={
+              channelType === 'telegram' && !editing && Boolean(text.trim())
+            }
+            onSubmit={submit}
+            onSchedule={(iso) => {
+              const body = text.trim()
+              if (!body) return
+              onScheduleSend(body, iso)
+              setText('')
+              persistRef.current('')
+              requestAnimationFrame(resizeComposer)
+            }}
+          />
+        )}
       </form>
     </div>
   )
