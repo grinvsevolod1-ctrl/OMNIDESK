@@ -14,6 +14,7 @@
  */
 import { requireHead } from '@/lib/auth'
 import {
+  listArchivedLeadsForHead,
   listCuratorsOfHead,
   listLeadCardsForHead,
   isCuratorOfHead,
@@ -40,6 +41,12 @@ export async function listMyGroupCuratorsAction() {
 export async function listGroupLeadsAction() {
   const session = await requireHead()
   return listLeadCardsForHead(session.sub)
+}
+
+/** Head: архивные лиды всех кураторов и менеджеров моей группы. */
+export async function listGroupArchivedLeadsAction() {
+  const session = await requireHead()
+  return listArchivedLeadsForHead(session.sub)
 }
 
 /** Гейт: лид существует и принадлежит куратору моей группы. */

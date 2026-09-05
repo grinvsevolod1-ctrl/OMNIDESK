@@ -10,7 +10,9 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import useSWR from 'swr'
 import {
+  Archive,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   Briefcase,
@@ -24,7 +26,10 @@ import {
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { listGroupLeadsAction } from '@/app/actions/heads'
+import {
+  listGroupArchivedLeadsAction,
+  listGroupLeadsAction,
+} from '@/app/actions/heads'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { EmptyState, PageHeader } from '@/components/page-parts'
@@ -59,10 +64,13 @@ const VIEW_STORAGE_KEY = 'head-leads-view-mode'
 const HeadLeadRow = memo(function HeadLeadRow({
   lead,
   view,
+  isArchived,
   onOpen,
 }: {
   lead: LeadCard
   view: 'list' | 'grid'
+  /** Строка во вкладке «Архив»: показываем дату архивации, а не передачи. */
+  isArchived: boolean
   onOpen: (id: string) => void
 }) {
   const executor = lead.curatorId ? (
@@ -76,7 +84,12 @@ const HeadLeadRow = memo(function HeadLeadRow({
       <span className="truncate">{lead.managerName ?? '—'}</span>
     </>
   )
-  const date = lead.transferredAt ? formatMskDateTime(lead.transferredAt) : '—'
+  const date =
+    isArchived && lead.archivedAt
+      ? formatMskDateTime(lead.archivedAt)
+      : lead.transferredAt
+        ? formatMskDateTime(lead.transferredAt)
+        : '—'
 
   if (view === 'grid') {
     return (
@@ -224,6 +237,14 @@ export function HeadLeadsView({
   const [leads, setLeads] = useState(initialLeads)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
+  // Вкладка «Активные» / «Архив». Архив грузится лениво при первом открытии.
+  const [tab, setTab] = useState<'active' | 'archive'>('active')
+  const { data: archived } = useSWR(
+    tab === 'archive' ? 'head-group-archived-leads' : null,
+    () => listGroupArchivedLeadsAction(),
+    { revalidateOnFocus: false },
+  )
+
   // Вид: список / карточки — как у куратора, выбор переживает перелогин.
   const [view, setView] = useState<'list' | 'grid'>('list')
   useEffect(() => {
@@ -252,9 +273,11 @@ export function HeadLeadsView({
   // Стабильный колбэк для мемоизированных строк.
   const openLead = useCallback((id: string) => setSelectedId(id), [])
 
+  const source = tab === 'archive' ? (archived ?? []) : leads
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    let out = leads
+    let out = source
     if (memberFilter) {
       const [kind, id] = memberFilter.split(':')
       out =
@@ -272,16 +295,25 @@ export function HeadLeadsView({
       )
     }
     const key = (l: LeadCard) =>
-      new Date(l.transferredAt ?? l.createdAt).getTime()
+      new Date(
+        tab === 'archive'
+          ? (l.archivedAt ?? l.transferredAt ?? l.createdAt)
+          : (l.transferredAt ?? l.createdAt),
+      ).getTime()
     return [...out].sort((a, b) =>
       sort === 'newest' ? key(b) - key(a) : key(a) - key(b),
     )
-  }, [leads, memberFilter, statusFilter, search, sort])
+  }, [source, tab, memberFilter, statusFilter, search, sort])
   const shown = filtered.slice(0, visible)
 
   const selectedLead = useMemo(
-    () => (selectedId ? (leads.find((l) => l.id === selectedId) ?? null) : null),
-    [selectedId, leads],
+    () =>
+      selectedId
+        ? (leads.find((l) => l.id === selectedId) ??
+          archived?.find((l) => l.id === selectedId) ??
+          null)
+        : null,
+    [selectedId, leads, archived],
   )
 
   const searchExpanded = searchFocused || search.length > 0
@@ -306,6 +338,32 @@ export function HeadLeadsView({
           </p>
         </div>
       ) : null}
+
+      <div className="flex w-full max-w-xs items-center gap-1 rounded-lg border border-border bg-muted/40 p-1">
+        <button
+          type="button"
+          onClick={() => setTab('active')}
+          className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            tab === 'active'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Активные
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('archive')}
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            tab === 'archive'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Archive className="size-3.5" />
+          Архив
+        </button>
+      </div>
 
       {/* Сводка по подчинённым: кураторы и менеджеры отдельными рядами,
           клик по чипу фильтрует список по этому сотруднику. */}
@@ -459,12 +517,16 @@ export function HeadLeadsView({
           title={
             search || statusFilter || memberFilter
               ? 'Ничего не найдено'
-              : 'Пока нет лидов'
+              : tab === 'archive'
+                ? 'Архив пуст'
+                : 'Пока нет лидов'
           }
           description={
             search || statusFilter || memberFilter
               ? 'Попробуйте изменить фильтры или запрос поиска.'
-              : 'Когда у ваших сотрудников появятся лиды, они отобразятся здесь.'
+              : tab === 'archive'
+                ? 'Архивированные лиды ваших сотрудников появятся здесь.'
+                : 'Когда у ваших сотрудников появятся лиды, они отобразятся здесь.'
           }
         />
       ) : view === 'grid' ? (
@@ -474,6 +536,7 @@ export function HeadLeadsView({
               key={lead.id}
               lead={lead}
               view="grid"
+              isArchived={tab === 'archive'}
               onOpen={openLead}
             />
           ))}
@@ -486,6 +549,7 @@ export function HeadLeadsView({
                 key={lead.id}
                 lead={lead}
                 view="list"
+                isArchived={tab === 'archive'}
                 onOpen={openLead}
               />
             ))}

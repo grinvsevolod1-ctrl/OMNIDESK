@@ -331,3 +331,38 @@ export async function listLeadCardsForHead(
   )
   return rows.map(toLeadCard)
 }
+
+/**
+ * Архивные лиды группы руководителя, свежий архив первым. Симметрично
+ * listLeadCardsForHead, но archived_at IS NOT NULL: карточки его КУРАТОРОВ
+ * (переданные) и его МЕНЕДЖЕРОВ. Пуловые (curator_id IS NULL) в архив не
+ * попадают, поэтому эта ветка здесь не нужна. Полная информация карточки —
+ * тот же CARD_SELECT, что и для активных, чтобы деталь открывалась целиком.
+ */
+export async function listArchivedLeadsForHead(
+  headId: string,
+  limit = 300,
+): Promise<LeadCard[]> {
+  const rows = await query<LeadCardRow>(
+    `SELECT ${CARD_SELECT}
+       FROM lead_cards lc
+       LEFT JOIN managers m ON m.id = lc.manager_id
+       LEFT JOIN managers c ON c.id = lc.curator_id
+      WHERE lc.archived_at IS NOT NULL
+        AND (
+          (lc.curator_id IN (
+              SELECT id FROM managers
+               WHERE role = 'curator' AND team_id IN ${HEAD_TEAMS}
+             )
+           AND lc.transferred_at IS NOT NULL)
+          OR lc.manager_id IN (
+              SELECT id FROM managers
+               WHERE role = 'manager' AND team_id IN ${HEAD_TEAMS}
+            )
+        )
+      ORDER BY lc.archived_at DESC
+      LIMIT $2`,
+    [headId, Math.max(1, Math.min(500, limit))],
+  )
+  return rows.map(toLeadCard)
+}
