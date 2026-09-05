@@ -197,7 +197,12 @@ export function DashboardShell({
   return (
     <ShellHeaderContext.Provider value={headerCtx}>
     <TooltipProvider>
-      <div className="flex h-dvh overflow-hidden bg-background">
+      {/* fixed inset-0 вместо h-dvh: в standalone-PWA на iOS `100dvh` занижает
+          реальную высоту экрана — оболочка выходила короче, и снизу под
+          композером зияла полоса body (bg-background). Фиксированный слой с
+          inset:0 всегда точно совпадает с видимым вьюпортом (включая safe-area),
+          так что композер прижат к низу, а его pb-safe кроет home-indicator. */}
+      <div className="fixed inset-0 flex overflow-hidden bg-background">
         {/* Desktop sidebar */}
         <aside
           className={cn(
@@ -356,7 +361,7 @@ export function DashboardShell({
             </Button>
 
             {/* Приёмник контекстной шапки диалога (портал из инбокса/чатов).
-                На остальных страницах пуст — просто занимает левую часть. */}
+                На остальных страницах ��уст — просто занимает левую часть. */}
             <div
               ref={setSlotEl}
               className="flex min-w-0 flex-1 items-center gap-1.5"
