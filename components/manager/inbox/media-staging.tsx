@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileText, UploadCloud, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { compressImageFile } from '@/lib/compress-image'
 
 // Telegram-style multi-file staging shared by every composer (manager, curator,
 // god messenger). Files are collected into a tray, optionally captioned, then
@@ -43,21 +44,47 @@ export function useMediaStaging() {
     filesRef.current = files
   }, [files])
 
-  const addFiles = useCallback((incoming: FileList | File[]) => {
-    setFiles((prev) => {
-      const room = MAX_STAGED_FILES - prev.length
-      if (room <= 0) return prev
-      const next = Array.from(incoming)
-        .slice(0, room)
-        .map((file) => ({
+  const addFiles = useCallback(async (incoming: FileList | File[]) => {
+    const room = MAX_STAGED_FILES - filesRef.current.length
+    if (room <= 0) return
+    const picked = Array.from(incoming).slice(0, room)
+    if (picked.length === 0) return
+
+    // Сжимаем фото ПЕРЕД постановкой в очередь: даунскейл до 2048px + JPEG
+    // превращает 8–12 МБ снимок с камеры в ~0.5–1.5 МБ, поэтому и отправка, и
+    // само превью грузятся в разы быстрее. compressImageFile безопасен —
+    // не-изображения, GIF/SVG и мелкие файлы возвращаются как есть, а любая
+    // ошибка декодирования отдаёт оригинал. Общий чокпоинт: подхватывают все
+    // композеры (менеджер, куратор), использующие useMediaStaging.
+    const prepared = await Promise.all(
+      picked.map(async (file) => {
+        const out = file.type.startsWith('image/')
+          ? await compressImageFile(file)
+          : file
+        return {
           id: makeId(),
-          file,
-          previewUrl: file.type.startsWith('image/')
-            ? URL.createObjectURL(file)
+          file: out,
+          previewUrl: out.type.startsWith('image/')
+            ? URL.createObjectURL(out)
             : null,
-        }))
-      if (next.length === 0) return prev
-      return [...prev, ...next]
+        }
+      }),
+    )
+
+    setFiles((prev) => {
+      // Повторный кламп: пока шло асинхронное сжатие, очередь могла пополниться.
+      const stillRoom = MAX_STAGED_FILES - prev.length
+      if (stillRoom <= 0) {
+        prepared.forEach((p) => {
+          if (p.previewUrl) URL.revokeObjectURL(p.previewUrl)
+        })
+        return prev
+      }
+      const accepted = prepared.slice(0, stillRoom)
+      prepared.slice(stillRoom).forEach((p) => {
+        if (p.previewUrl) URL.revokeObjectURL(p.previewUrl)
+      })
+      return [...prev, ...accepted]
     })
   }, [])
 

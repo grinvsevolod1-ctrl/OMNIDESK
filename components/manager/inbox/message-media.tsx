@@ -299,6 +299,7 @@ export function MessageMedia({ message }: { message: Message }) {
               imgLoaded ? 'opacity-100' : 'opacity-0',
             )}
             loading="lazy"
+            decoding="async"
             onLoad={() => setImgLoaded(true)}
             onError={() => setFailed(true)}
           />
