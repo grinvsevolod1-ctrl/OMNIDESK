@@ -186,6 +186,7 @@ export function MessageList({
   highlightedId,
   onBubbleClick,
   readOnlyActions = false,
+  hideDeliveryStatus = false,
 }: {
   active: Conversation
   activeId: string | null
@@ -216,6 +217,13 @@ export function MessageList({
    * Реакции при этом всё равно ОТОБРАЖАЮТСЯ (они пришли от собеседника).
    */
   readOnlyActions?: boolean
+  /**
+   * Скрыть тики доставки/ошибки отправки у исходящих (роль без владения
+   * отправкой — куратор по кадрам). Диалоги передаются человеку/ведутся из
+   * другого места, поэтому статус «Не отправлено» вводил бы куратора в
+   * заблуждение — будто его сообщение не ушло. Время при этом остаётся.
+   */
+  hideDeliveryStatus?: boolean
 }) {
   // Infinite scroll up: when the top sentinel becomes visible near the top of
   // the feed, older messages load automatically — no button press needed.
@@ -528,7 +536,7 @@ export function MessageList({
                             </button>
                           ) : null}
                           {timeShort(m.createdAt)}
-                          {isOut ? (
+                          {isOut && !hideDeliveryStatus ? (
                             <DeliveryTicks
                               status={m.status}
                               errorReason={m.errorReason}

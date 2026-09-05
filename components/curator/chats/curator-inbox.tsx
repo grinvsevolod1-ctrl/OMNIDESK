@@ -603,6 +603,7 @@ function CuratorThread({
           onForward={onForward}
           onDelete={onDelete}
           onShowHistory={() => {}}
+          hideDeliveryStatus
         />
       )}
 
