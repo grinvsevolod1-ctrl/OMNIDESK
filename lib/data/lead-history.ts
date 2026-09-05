@@ -6,7 +6,74 @@
 import { randomUUID } from 'crypto'
 import { query, type DbExecutor } from '../db'
 import { isLeadStatus, type LeadStatus } from '../lead-status'
+import { sendPushToManager } from '../push'
 import type { LeadTransfer } from './lead-cards-core'
+
+/** Человекочитаемое имя канала для тела push-уведомления. */
+function channelLabelForPush(type: string | null): string {
+  switch (type) {
+    case 'whatsapp':
+      return 'WhatsApp'
+    case 'telegram':
+      return 'Telegram'
+    case 'livechat':
+      return 'Онлайн-чат'
+    case 'max':
+      return 'MAX'
+    case 'vk':
+      return 'VK'
+    default:
+      return 'Диалог'
+  }
+}
+
+/**
+ * Push «вам передан диалог» менеджеру по кадрам (куратору) в момент ПЕРЕДАЧИ
+ * лида — до того, как клиент напишет следующее сообщение. Диспетчер
+ * (lib/push-dispatcher.ts) шлёт push только на ВХОДЯЩЕЕ сообщение, поэтому без
+ * этого хука куратор узнавал о переданном лиде лишь при следующем ответе
+ * клиента (а часто — вообще пропускал). Уведомление несёт conversationId +
+ * replyRole:'curator', так что с телефона можно ответить прямо из шторки
+ * (см. public/sw.js + app/api/push/reply). Лиды без диалога
+ * (conversation_id IS NULL) не трогаем. Строго best-effort: сбой доставки
+ * НИКОГДА не должен ломать передачу.
+ */
+export async function notifyCuratorTransferred(
+  leadCardId: string,
+  curatorId: string,
+): Promise<void> {
+  try {
+    const rows = await query<{
+      conversation_id: string | null
+      contact_name: string | null
+      contact_handle: string | null
+      channel_type: string | null
+    }>(
+      `SELECT c.id AS conversation_id, c.contact_name, c.contact_handle,
+              c.channel_type
+         FROM lead_cards lc
+         JOIN conversations c ON c.id = lc.conversation_id
+        WHERE lc.id = $1`,
+      [leadCardId],
+    )
+    const row = rows[0]
+    if (!row?.conversation_id) return
+    const who =
+      row.contact_name?.trim() || row.contact_handle?.trim() || 'Новый контакт'
+    await sendPushToManager(curatorId, {
+      title: 'Вам передан диалог',
+      body: `${who} · ${channelLabelForPush(row.channel_type)}`,
+      url: '/curator/chats',
+      // Один пузырёк на диалог: последующие входящие с тем же тегом заменят его.
+      tag: `conv:${row.conversation_id}`,
+      // Включает инлайн-ответ из уведомления под ролью куратора.
+      conversationId: row.conversation_id,
+      replyRole: 'curator',
+    })
+  } catch {
+    /* best-effort: передача важнее уведомления */
+  }
+}
 
 /**
  * Типы событий в журнале. Помимо подтверждений статуса журнал хранит события
@@ -161,11 +228,16 @@ export async function recordTransfer(
   }
   if (db) {
     // See recordStatusHistory: inside a transaction errors must propagate.
+    // The pickup push is fired by the transactional callers AFTER commit (so a
+    // rollback can't emit a spurious "вам передан диалог"), not here.
     await run()
     return
   }
   try {
     await run()
+    // Non-transactional path (autocommit already persisted the link above):
+    // safe to notify the receiving curator right now.
+    void notifyCuratorTransferred(input.leadCardId, input.toCuratorId)
   } catch {
     /* best-effort outside transactions: history must not break the transfer */
   }

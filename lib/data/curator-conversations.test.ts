@@ -14,7 +14,15 @@ vi.mock('../db', () => ({
   withTransaction: vi.fn(),
 }))
 
-import { recordTransfer } from './lead-history'
+const sendPushToManagerMock =
+  vi.fn<(managerId: string, payload: unknown) => Promise<unknown>>()
+
+vi.mock('../push', () => ({
+  sendPushToManager: (managerId: string, payload: unknown) =>
+    sendPushToManagerMock(managerId, payload),
+}))
+
+import { notifyCuratorTransferred, recordTransfer } from './lead-history'
 import {
   getConversationForCurator,
   listMessagesForCurator,
@@ -24,6 +32,52 @@ import { isConversationAiLed } from './ai-assist-enrollment'
 beforeEach(() => {
   queryMock.mockReset()
   queryMock.mockResolvedValue([])
+  sendPushToManagerMock.mockReset()
+  sendPushToManagerMock.mockResolvedValue({ sent: 1, pruned: 0 })
+})
+
+describe('notifyCuratorTransferred (push при передаче)', () => {
+  it('шлёт куратору push с conversationId и replyRole=curator', async () => {
+    queryMock.mockResolvedValueOnce([
+      {
+        conversation_id: 'conv-7',
+        contact_name: 'Иван Петров',
+        contact_handle: '@ivan',
+        channel_type: 'telegram',
+      },
+    ])
+
+    await notifyCuratorTransferred('lead-1', 'cur-9')
+
+    expect(sendPushToManagerMock).toHaveBeenCalledTimes(1)
+    const [managerId, payload] = sendPushToManagerMock.mock.calls[0]
+    expect(managerId).toBe('cur-9')
+    expect(payload).toMatchObject({
+      conversationId: 'conv-7',
+      replyRole: 'curator',
+      url: '/curator/chats',
+      tag: 'conv:conv-7',
+    })
+    // Тело несёт имя контакта и канал.
+    expect(String((payload as { body: string }).body)).toContain('Иван Петров')
+    expect(String((payload as { body: string }).body)).toContain('Telegram')
+  })
+
+  it('лид без диалога (conversation_id NULL) не шлёт push', async () => {
+    queryMock.mockResolvedValueOnce([]) // JOIN conversations ничего не вернул
+    await notifyCuratorTransferred('lead-2', 'cur-9')
+    expect(sendPushToManagerMock).not.toHaveBeenCalled()
+  })
+
+  it('сбой доставки не пробрасывается (best-effort)', async () => {
+    queryMock.mockResolvedValueOnce([
+      { conversation_id: 'conv-8', contact_name: null, contact_handle: null, channel_type: null },
+    ])
+    sendPushToManagerMock.mockRejectedValueOnce(new Error('push down'))
+    await expect(
+      notifyCuratorTransferred('lead-3', 'cur-9'),
+    ).resolves.toBeUndefined()
+  })
 })
 
 describe('recordTransfer → conversation link', () => {

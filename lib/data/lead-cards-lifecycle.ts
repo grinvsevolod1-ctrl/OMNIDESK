@@ -17,7 +17,11 @@ import {
   type LeadCard,
   type LeadCardComment,
 } from './lead-cards-core'
-import { recordStatusHistory, recordTransfer } from './lead-history'
+import {
+  notifyCuratorTransferred,
+  recordStatusHistory,
+  recordTransfer,
+} from './lead-history'
 import { getLeadCardById } from './lead-cards-queries'
 
 /**
@@ -104,6 +108,8 @@ export async function transferLeadToCurator(
 
   const card = await getLeadCardById(id)
   if (!card) throw new Error('Lead transfer failed')
+  // Post-commit: alert the receiving curator that a dialog just landed.
+  void notifyCuratorTransferred(id, newCuratorId)
   return card
 }
 
@@ -162,6 +168,9 @@ export async function claimPoolLead(input: {
   })
 
   if (!claimedId) return null
+  // Post-commit: the curator who claimed it gets an immediate "передан диалог"
+  // push (with inline reply), not just the next inbound message.
+  void notifyCuratorTransferred(claimedId, input.curatorId)
   return getLeadCardById(claimedId)
 }
 
