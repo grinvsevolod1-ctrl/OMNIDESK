@@ -11,7 +11,7 @@
  */
 
 import type React from 'react'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import {
   Check,
   ChevronLeft,
@@ -133,6 +133,25 @@ export function ThreadPane({
     resizeComposer()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft])
+
+  // Coalesced, off-critical-path resize for the typing hot path. Measuring the
+  // textarea forces a synchronous reflow; running it inside onChange delayed the
+  // typed character from painting. rAF lets the character paint first and
+  // collapses bursts of keystrokes into one resize per frame.
+  const resizeRaf = useRef<number | null>(null)
+  const scheduleResize = () => {
+    if (resizeRaf.current != null) return
+    resizeRaf.current = requestAnimationFrame(() => {
+      resizeRaf.current = null
+      resizeComposer()
+    })
+  }
+  useEffect(
+    () => () => {
+      if (resizeRaf.current != null) cancelAnimationFrame(resizeRaf.current)
+    },
+    [],
+  )
 
   const hasDraft = Boolean(draft.trim())
 
@@ -346,10 +365,10 @@ export function ThreadPane({
                   <textarea
                     ref={composerRef}
                     value={draft}
-                    onChange={(e) => {
-                      setDraft(e.target.value)
-                      resizeComposer()
-                    }}
+              onChange={(e) => {
+                setDraft(e.target.value)
+                scheduleResize()
+              }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
                         e.preventDefault()

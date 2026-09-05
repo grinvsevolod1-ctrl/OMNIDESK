@@ -167,6 +167,26 @@ export const MessageComposer = memo(function MessageComposer({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [])
 
+  // Coalesced, off-critical-path resize for the typing hot path. Measuring the
+  // textarea (height:auto → read scrollHeight) forces a synchronous reflow of
+  // the whole inbox; doing it inside onChange blocked the typed character from
+  // painting, so text lagged. Scheduling it in rAF lets the character paint
+  // first and collapses bursts of keystrokes into a single resize per frame.
+  const resizeRaf = useRef<number | null>(null)
+  const scheduleResize = useCallback(() => {
+    if (resizeRaf.current != null) return
+    resizeRaf.current = requestAnimationFrame(() => {
+      resizeRaf.current = null
+      resizeComposer()
+    })
+  }, [resizeComposer])
+  useEffect(
+    () => () => {
+      if (resizeRaf.current != null) cancelAnimationFrame(resizeRaf.current)
+    },
+    [],
+  )
+
   // Вставка готового текста извне (например, контакт куратора после передачи
   // лида — см. use-lead-card). Событие адресное: чужие диалоги игнорируют.
   // Текст ЗАМЕНЯЕТ черновик (сценарий один: отправить контакт кандидату),
@@ -382,7 +402,7 @@ export const MessageComposer = memo(function MessageComposer({
             rows={1}
             onChange={(e) => {
               setText(e.target.value)
-              resizeComposer()
+              scheduleResize()
             }}
             onKeyDown={(e) => {
               // Don't submit mid-IME-composition (CJK): Enter confirms the
