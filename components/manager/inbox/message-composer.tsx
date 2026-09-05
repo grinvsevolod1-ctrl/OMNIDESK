@@ -545,14 +545,21 @@ export const MessageComposer = memo(function MessageComposer({
             onPointerUp={clearLongPress}
             onPointerLeave={clearLongPress}
             onContextMenu={(e) => {
-              // Suppress the mobile long-press context menu so it doesn't fight
-              // the "schedule" gesture.
-              if (canSchedule && hasText) e.preventDefault()
+              // Desktop trigger for scheduling: right-click opens the "send
+              // later" popover directly (long-press is the mobile gesture, but
+              // holding a mouse button is unnatural). Also suppresses the native
+              // context menu so it doesn't fight the schedule affordance.
+              if (canSchedule && hasText) {
+                e.preventDefault()
+                clearLongPress()
+                longPressFired.current = true
+                setScheduleOpen(true)
+              }
             }}
             aria-label="Отправить"
             title={
               canSchedule
-                ? 'Отправить · удерживайте, чтобы запланировать'
+                ? 'Отправить · удерживайте или ПКМ, чтобы запланировать'
                 : 'Отправить'
             }
           >
