@@ -32,6 +32,12 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
 import { isComposing } from './utils'
+import {
+  DropOverlay,
+  MediaTray,
+  MEDIA_ACCEPT,
+  type MediaStaging,
+} from '@/components/manager/inbox/media-staging'
 import { MessageBubble } from './message-bubble'
 import { snippetOf } from './reply'
 import { EmojiPicker } from './emoji-picker'
@@ -82,6 +88,8 @@ interface ThreadPaneProps {
   onFilePicked: (e: React.ChangeEvent<HTMLInputElement>) => void
   startRecording: () => void
   finishRecording: (cancel: boolean) => void
+  media: MediaStaging
+  sendStagedFiles: () => void
 }
 
 export function ThreadPane({
@@ -121,6 +129,8 @@ export function ThreadPane({
   onFilePicked,
   startRecording,
   finishRecording,
+  media,
+  sendStagedFiles,
 }: ThreadPaneProps) {
   const showThread = selectedId !== null
 
@@ -279,9 +289,12 @@ export function ThreadPane({
           </div>
 
           <div
-            className="border-t border-border bg-background px-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] pt-2 sm:px-3"
+            className="relative border-t border-border bg-background px-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] pt-2 sm:px-3"
             data-no-swipe
+            {...media.dragHandlers}
           >
+            <DropOverlay active={media.dragActive} />
+            <MediaTray files={media.files} onRemove={media.removeFile} disabled={uploading} />
             {(replyTo || editing) && (
               <div className="mb-2 flex items-center gap-2 rounded-xl border-l-2 border-primary bg-muted/60 py-2 pl-3 pr-2">
                 {editing ? (
@@ -381,6 +394,8 @@ export function ThreadPane({
                   <input
                     ref={fileInputRef}
                     type="file"
+                    multiple
+                    accept={MEDIA_ACCEPT}
                     className="hidden"
                     onChange={onFilePicked}
                     aria-hidden="true"
@@ -406,12 +421,14 @@ export function ThreadPane({
                 {/* Свап Микрофон ⇄ Отправка: пустое поле показывает микрофон
                     (голосовое), любой введённый текст превращает кнопку в
                     «отправить»; режим редактирования всегда показывает галочку. */}
-                {hasDraft || editing ? (
+                {hasDraft || editing || media.count > 0 ? (
                   <Button
                     size="icon"
                     className="size-10 shrink-0 rounded-full transition-transform duration-150 animate-in fade-in-0 zoom-in-95 active:scale-90"
                     onClick={sendMessage}
-                    disabled={pending || (!hasDraft && !editing)}
+                    disabled={
+                      pending || uploading || (!hasDraft && !editing && media.count === 0)
+                    }
                     aria-label={editing ? 'Сохранить' : 'Отправить'}
                   >
                     {pending ? (

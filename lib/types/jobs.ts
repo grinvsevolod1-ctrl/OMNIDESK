@@ -13,6 +13,9 @@ export type JobAction =
   | 'send_sticker'
   // Send a voice note recorded in the panel composer (payload: base64 audio).
   | 'send_voice'
+  // Send a photo/document from the composer (payload: base64 file + caption).
+  // One job per file; a multi-photo batch enqueues several send_file jobs.
+  | 'send_file'
   // Telegram-only message actions: react with an emoji, delete (revoke),
   // edit the text of an already-sent message, and forward to another chat.
   | 'react_message'

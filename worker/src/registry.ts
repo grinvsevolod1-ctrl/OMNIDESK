@@ -233,6 +233,58 @@ class Registry {
           throw err
         }
       }
+      case 'send_file': {
+        // Photo/document sent from the panel composer. The file arrives as
+        // base64 in the payload (capped panel-side); a multi-photo batch
+        // enqueues one send_file job per file, so ordering is preserved by
+        // the sequential job queue. `asPhoto` renders an inline image bubble,
+        // otherwise a document. Only the first file of a batch carries the
+        // caption (Telegram album semantics).
+        const target = String(payload.target ?? '')
+        const fileB64 = String(payload.file ?? '')
+        const name = payload.name ? String(payload.name) : 'file'
+        const mime = payload.mime ? String(payload.mime) : undefined
+        const asPhoto = Boolean(payload.asPhoto)
+        const caption = payload.caption ? String(payload.caption) : undefined
+        const replyToProviderId = payload.replyToProviderId
+          ? Number(payload.replyToProviderId)
+          : undefined
+        const dbMessageId = payload.messageId
+          ? String(payload.messageId)
+          : null
+        if (!target || !fileB64) {
+          throw new Error('send_file requires target and file')
+        }
+        try {
+          const result = await session.personalSendFile(target, {
+            buffer: Buffer.from(fileB64, 'base64'),
+            name,
+            mime: mime ?? null,
+            asPhoto,
+            caption,
+            replyToMsgId: replyToProviderId,
+          })
+          if (dbMessageId && result?.providerMessageId) {
+            await repo.setMessageProviderId(
+              dbMessageId,
+              result.providerMessageId,
+            )
+          }
+          return { sent: true }
+        } catch (err) {
+          // Same failure surfacing as text/voice sends. Media is intentionally
+          // NOT auto-resent by the delivery-recovery sweep.
+          if (dbMessageId) {
+            const reason = isConnectionSendFailure(err)
+              ? OFFLINE_SEND_REASON
+              : telegramSendFailureReason(err)
+            await repo
+              .setMessageStatus(dbMessageId, 'failed', reason)
+              .catch(() => {})
+          }
+          throw err
+        }
+      }
       case 'mark_read': {
         const target = String(payload.target ?? '')
         if (!target) throw new Error('mark_read requires target')

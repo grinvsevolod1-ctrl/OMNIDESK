@@ -20,6 +20,7 @@ import {
 } from '@/app/actions/admin-secret'
 import type { MediaType, Message } from '@/lib/types'
 import { parseReply, snippetOf } from './reply'
+import { useMediaStaging } from '@/components/manager/inbox/media-staging'
 
 /**
  * Composer logic of the god messenger: draft / reply / edit state, send-as-
@@ -63,6 +64,10 @@ export function useGodComposer({
 
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // `sendMessage` (defined before the staging hook) reaches the tray + batch
+  // sender through refs to avoid a declaration-order cycle with `uploadFile`.
+  const mediaRef = useRef<{ count: number }>({ count: 0 })
+  const sendStagedRef = useRef<() => void>(() => {})
 
   const resizeComposer = useCallback(() => {
     const el = composerRef.current
@@ -185,6 +190,11 @@ export function useGodComposer({
 
   /* ----- send / save edit (as the client) ----- */
   const sendMessage = useCallback(() => {
+    // Staged files take priority: the textarea draft becomes the group caption.
+    if (mediaRef.current.count > 0) {
+      sendStagedRef.current()
+      return
+    }
     const text = valueRef.current.trim()
     if (!text || !selectedIdRef.current) return
     const convId = selectedIdRef.current
@@ -272,8 +282,12 @@ export function useGodComposer({
   }, [replyTo, editing, conversation, loadList, pinOnNextGrowth, selectedIdRef, setMessages, applyValue])
 
   /* ----- attachments ----- */
+  // `captionOverride` lets the batch sender pass an explicit caption (empty for
+  // all-but-first file) instead of consuming the live textarea draft. When it is
+  // undefined the single-file path keeps its original behaviour (take + clear
+  // the current draft).
   const uploadFile = useCallback(
-    (file: File, kind?: 'voice') => {
+    (file: File, kind?: 'voice', captionOverride?: string) => {
       const convId = selectedIdRef.current
       if (!convId) return
       const fd = new FormData()
@@ -281,10 +295,14 @@ export function useGodComposer({
       fd.set('conversationId', convId)
       fd.set('direction', 'in')
       if (kind) fd.set('kind', kind)
-      const caption = kind ? '' : valueRef.current.trim()
+      const caption = kind
+        ? ''
+        : captionOverride !== undefined
+          ? captionOverride.trim()
+          : valueRef.current.trim()
       if (caption) {
         fd.set('caption', caption)
-        applyValue('')
+        if (captionOverride === undefined) applyValue('')
       }
       setUploading(true)
       pinOnNextGrowth()
@@ -344,14 +362,33 @@ export function useGodComposer({
     [applyValue, conversation, loadList, pinOnNextGrowth, selectedIdRef, setMessages],
   )
 
+  // Telegram-style multi-file staging: picked/dropped files land in the tray,
+  // then send as a batch with the textarea draft as the group caption (first
+  // file carries it). Single-file selection still works — the tray simply holds
+  // one item.
+  const media = useMediaStaging()
+
   const onFilePicked = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
+      const files = e.target.files
       e.target.value = ''
-      if (file) uploadFile(file)
+      if (files && files.length) media.addFiles(files)
     },
-    [uploadFile],
+    [media],
   )
+
+  const sendStagedFiles = useCallback(() => {
+    const staged = media.files
+    if (staged.length === 0) return
+    const caption = valueRef.current.trim()
+    media.clear()
+    applyValue('')
+    staged.forEach((s, i) => uploadFile(s.file, undefined, i === 0 ? caption : ''))
+  }, [media, uploadFile, applyValue])
+
+  // Keep the refs read by `sendMessage` pointing at the live tray + sender.
+  mediaRef.current = { count: media.count }
+  sendStagedRef.current = sendStagedFiles
 
   /* ----- voice notes ----- */
   const stopRecordTimer = () => {
@@ -441,5 +478,7 @@ export function useGodComposer({
     onFilePicked,
     startRecording,
     finishRecording,
+    media,
+    sendStagedFiles,
   }
 }

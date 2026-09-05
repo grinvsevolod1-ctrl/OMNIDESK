@@ -35,6 +35,7 @@ import {
   sendCuratorMessageAction,
   sendCuratorScheduledMessageAction,
   sendCuratorStickerAction,
+  sendCuratorTelegramMediaAction,
   sendCuratorVoiceAction,
 } from '@/app/actions/curator-messages'
 
@@ -398,6 +399,39 @@ export function useCuratorChats({
     (file: File, caption: string) => {
       if (!activeId || !active) return
       const channelType = active.channelType
+      // Telegram media rides the MTProto session via a worker job (base64),
+      // with a tighter ~15 MB cap; WA/VK use the CDN upload route below.
+      if (channelType === 'telegram') {
+        const TG_MAX_BYTES = 15 * 1024 * 1024
+        if (file.size > TG_MAX_BYTES) {
+          toast.error('Файл слишком большой для Telegram (максимум ~15 МБ).')
+          return
+        }
+        startTransition(async () => {
+          try {
+            const reader = new FileReader()
+            const base64: string = await new Promise((resolve, reject) => {
+              reader.onload = () => {
+                const dataUrl = String(reader.result)
+                resolve(dataUrl.slice(dataUrl.indexOf(',') + 1))
+              }
+              reader.onerror = () => reject(reader.error)
+              reader.readAsDataURL(file)
+            })
+            const res = await sendCuratorTelegramMediaAction(
+              activeId,
+              { base64, mime: file.type || 'application/octet-stream', name: file.name },
+              caption,
+            )
+            if (res.ok) toast.success(res.message ?? 'Файл отправлен.')
+            else toast.error(res.message ?? 'Не удалось отправить файл.')
+          } catch (err) {
+            console.error('[v0] curator telegram media send failed:', err)
+            toast.error('Не удалось отправить файл. Попробуйте ещё раз.')
+          }
+        })
+        return
+      }
       if (channelType !== 'whatsapp' && channelType !== 'vk') return
       const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
       if (file.size > MAX_UPLOAD_BYTES) {

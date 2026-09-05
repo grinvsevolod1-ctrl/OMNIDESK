@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { requireManager } from '@/lib/auth'
 import {
   addMessage,
+  enqueueJob,
   getConversation,
   getVkDispatchByConversationId,
   getWhatsappCloudDispatchByConversationId,
@@ -257,6 +258,102 @@ export async function sendVkMediaAction(
   }
   if (sent.data.messageId) {
     await setMessageProviderId(msg.id, sent.data.messageId).catch(() => {})
+  }
+
+  revalidatePath('/app/inbox')
+  return { ok: true, message: 'Отправлено.' }
+}
+
+/**
+ * Telegram media send (photo/document + optional caption). Unlike WA/VK, the
+ * file is not uploaded to a CDN first — the bytes ride the job payload as
+ * base64 and the worker streams them through the personal MTProto session
+ * (personalSendFile). Outbound Telegram media has no persisted bytes; the
+ * thread renders it via on-demand live download keyed by the backfilled
+ * providerMessageId (same path as outbound voice notes).
+ *
+ * base64-in-jsonb is heavy, so the cap here is deliberately conservative — it
+ * comfortably covers photos and everyday documents while keeping job rows sane.
+ */
+const TG_MEDIA_MAX_BYTES = 15 * 1024 * 1024
+
+function classifyTelegramUpload(mime: string): {
+  asPhoto: boolean
+  mediaType: MediaType
+} {
+  // Real raster images (not webp stickers, not animated gifs) go as inline
+  // photo bubbles; everything else is delivered as a document but still tagged
+  // by kind so the panel renders the right player.
+  if (mime.startsWith('image/') && mime !== 'image/webp' && mime !== 'image/gif') {
+    return { asPhoto: true, mediaType: 'image' }
+  }
+  if (mime.startsWith('video/')) return { asPhoto: false, mediaType: 'video' }
+  if (mime.startsWith('audio/')) return { asPhoto: false, mediaType: 'audio' }
+  return { asPhoto: false, mediaType: 'document' }
+}
+
+export async function sendTelegramMediaAction(
+  conversationId: string,
+  file: { base64: string; mime: string; name: string },
+  caption: string,
+  replyToProviderId?: string,
+): Promise<SimpleResult> {
+  const session = await requireManager()
+  if (!file?.base64) return { ok: false, message: 'Пустой файл.' }
+  const approxBytes = Math.floor(file.base64.length * 0.75)
+  if (approxBytes > TG_MEDIA_MAX_BYTES) {
+    return { ok: false, message: 'Файл слишком большой (лимит ~15 МБ).' }
+  }
+  const mime = file.mime || 'application/octet-stream'
+  const trimmedCaption = caption.trim()
+
+  const conv = await getConversation(conversationId, session.sub)
+  if (!conv) return { ok: false, message: 'Диалог не найден.' }
+  if (conv.channelType !== 'telegram') {
+    return { ok: false, message: 'Этот способ доступен только для Telegram.' }
+  }
+
+  const { asPhoto, mediaType } = classifyTelegramUpload(mime)
+
+  // Record the outbound row immediately so it shows in the thread; the worker
+  // backfills the provider id after the actual send, and a rejected send flags
+  // this row 'failed' with the reason.
+  const msg = await addMessage({
+    conversationId,
+    managerId: session.sub,
+    body: trimmedCaption,
+    preview: trimmedCaption || MEDIA_KIND_LABEL[mediaType],
+    author: session.name,
+    mediaType,
+    mediaMime: mime,
+    mediaName: asPhoto ? undefined : file.name || undefined,
+  })
+  if (!msg) return { ok: false, message: 'Диалог не найден.' }
+
+  try {
+    await enqueueJob({
+      channelId: conv.channelId,
+      managerId: session.sub,
+      action: 'send_file',
+      payload: {
+        target: conv.contactHandle,
+        file: file.base64,
+        name: file.name || 'file',
+        mime,
+        asPhoto,
+        caption: trimmedCaption || undefined,
+        replyToProviderId: replyToProviderId || undefined,
+        messageId: msg.id,
+      },
+    })
+  } catch (err) {
+    console.error('[panel] failed to enqueue send_file job:', err)
+    await markMessageFailed(
+      msg.id,
+      'Не удалось поставить файл в очередь. Попробуйте ещё раз.',
+    ).catch(() => {})
+    revalidatePath('/app/inbox')
+    return { ok: false, message: 'Не удалось отправить файл.' }
   }
 
   revalidatePath('/app/inbox')

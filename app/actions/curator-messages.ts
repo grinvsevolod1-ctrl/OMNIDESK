@@ -469,6 +469,75 @@ export async function sendCuratorVoiceAction(
   return { ok: true, message: 'Голосовое отправлено.' }
 }
 
+/** Hard cap on Telegram media routed through the MTProto session (pre-base64). */
+const CURATOR_TG_MEDIA_MAX_BYTES = 15 * 1024 * 1024
+
+/**
+ * Send a photo/document to a Telegram conversation the curator owns. Bytes ride
+ * the worker job (base64) exactly like a voice note; delivery runs under the
+ * channel owner-manager. WA/VK media uses the CDN upload route instead.
+ */
+export async function sendCuratorTelegramMediaAction(
+  conversationId: string,
+  file: { base64: string; mime: string; name: string },
+  caption: string,
+): Promise<SimpleResult> {
+  const session = await requireCurator()
+  if (!file?.base64) return { ok: false, message: 'Пустой файл.' }
+  const approxBytes = Math.floor(file.base64.length * 0.75)
+  if (approxBytes > CURATOR_TG_MEDIA_MAX_BYTES) {
+    return { ok: false, message: 'Файл слишком большой для Telegram (~15 МБ).' }
+  }
+
+  const conv = await getConversationForCurator(conversationId, session.sub)
+  if (!conv) return { ok: false, message: 'Диалог не найден.' }
+  if (conv.channelType !== 'telegram') {
+    return { ok: false, message: 'Этот способ доступен только для Telegram.' }
+  }
+
+  const isImage = file.mime.startsWith('image/')
+  const trimmed = caption.trim()
+  const msg = await addMessage({
+    conversationId,
+    managerId: conv.managerId,
+    curatorId: session.sub,
+    body: trimmed || (isImage ? '[Фото]' : `[Файл] ${file.name}`),
+    author: session.name,
+    mediaType: isImage ? 'image' : 'document',
+    mediaMime: file.mime || 'application/octet-stream',
+    mediaName: file.name,
+  })
+  if (!msg) return { ok: false, message: 'Диалог не найден.' }
+
+  try {
+    await enqueueJob({
+      channelId: conv.channelId,
+      managerId: conv.managerId,
+      action: 'send_file',
+      payload: {
+        target: conv.contactHandle,
+        file: file.base64,
+        mime: file.mime || null,
+        name: file.name,
+        caption: trimmed || undefined,
+        asPhoto: isImage,
+        messageId: msg.id,
+      },
+    })
+  } catch (err) {
+    console.error('[panel] curator send_file enqueue failed:', err)
+    await markMessageFailed(
+      msg.id,
+      'Не удалось поставить файл в очередь. Попробуйте ещё раз.',
+    ).catch(() => {})
+    revalidatePath(CURATOR_CHATS_PATH)
+    return { ok: false, message: 'Не удалось отправить файл.' }
+  }
+
+  revalidatePath(CURATOR_CHATS_PATH)
+  return { ok: true, message: 'Файл отправлен.' }
+}
+
 /** Schedule a message for later delivery (Telegram only, curator-scoped). */
 export async function sendCuratorScheduledMessageAction(
   conversationId: string,

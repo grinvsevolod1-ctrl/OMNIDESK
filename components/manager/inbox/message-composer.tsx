@@ -28,6 +28,12 @@ import { Button } from '@/components/ui/button'
 import { EmojiPicker, StickerPicker } from '@/components/manager/inbox/pickers'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
 import { ScheduleSendPopover } from '@/components/manager/inbox/schedule-send'
+import {
+  useMediaStaging,
+  MediaTray,
+  DropOverlay,
+  MEDIA_ACCEPT,
+} from '@/components/manager/inbox/media-staging'
 import { TelemostIcon } from '@/components/channel-icons'
 import { cn } from '@/lib/utils'
 import type { ChannelType, QuickReply, StickerItem } from '@/lib/types'
@@ -57,7 +63,7 @@ export interface MessageComposerProps {
   onPersistDraft: (text: string) => void
   onSend: (text: string) => void
   onSendSticker: (sticker: StickerItem) => void
-  onSendMediaFile: (file: File, caption: string) => void
+  onSendMediaFile: (file: File, caption: string) => void | Promise<void>
   /** Send a recorded voice note (Telegram only). */
   onSendVoice: (audio: {
     base64: string
@@ -137,6 +143,11 @@ export const MessageComposer = memo(function MessageComposer({
   // "Send later" popover (Telegram): opened by long-pressing the send button,
   // anchored to it — there is no separate clock button anymore.
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  // Telegram-style multi-file staging: pick/drop up to 10 files, caption them
+  // with the textarea, then send as a batch. `sendingMedia` disables the tray
+  // while the sequential upload loop runs.
+  const media = useMediaStaging()
+  const [sendingMedia, setSendingMedia] = useState(false)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const sendBtnRef = useRef<HTMLButtonElement | null>(null)
@@ -281,9 +292,40 @@ export const MessageComposer = memo(function MessageComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingId, applyValue])
 
+  // Send the staged files as a batch. The textarea holds the single caption for
+  // the whole group (Telegram album semantics) — only the first file carries it.
+  // Uploads run sequentially so message order is preserved.
+  const sendStagedMedia = useCallback(async () => {
+    if (media.count === 0) return
+    if (aiLed) {
+      onBlockedInteract()
+      return
+    }
+    const caption = valueRef.current.trim()
+    const staged = media.files
+    media.clear()
+    if (persistTimer.current) clearTimeout(persistTimer.current)
+    applyValue('')
+    if (!editingRef.current) persistRef.current('')
+    setSendingMedia(true)
+    try {
+      for (let i = 0; i < staged.length; i++) {
+        await onSendMediaFile(staged[i].file, i === 0 ? caption : '')
+      }
+    } finally {
+      setSendingMedia(false)
+    }
+  }, [media, aiLed, onBlockedInteract, applyValue, onSendMediaFile])
+
   const submit = useCallback(() => {
     if (aiLed) {
       onBlockedInteract()
+      return
+    }
+    // Staged files take priority: a caption-only textarea becomes the group
+    // caption, so we never also send it as a separate text message.
+    if (media.count > 0) {
+      void sendStagedMedia()
       return
     }
     const body = valueRef.current.trim()
@@ -296,7 +338,7 @@ export const MessageComposer = memo(function MessageComposer({
     // Skipped while editing: submitting an edit must not wipe the stashed
     // unsent draft (it is restored by the edit effect right after).
     if (!editingRef.current) persistRef.current('')
-  }, [aiLed, onSend, onBlockedInteract, applyValue])
+  }, [aiLed, onSend, onBlockedInteract, applyValue, media.count, sendStagedMedia])
 
   function insertQuickReply(value: string) {
     const base = valueRef.current.trimEnd()
@@ -309,7 +351,13 @@ export const MessageComposer = memo(function MessageComposer({
   // Scheduling is only offered for Telegram and never while editing.
   const isTelegram = channelType === 'telegram'
   const canSchedule = isTelegram && !editing
-  const showMic = isTelegram && !hasText && !aiLed && !editing
+  // Attachments are allowed on every channel now, but not while the AI leads the
+  // thread or the manager is editing an existing message.
+  const canAttach = !aiLed && !editing
+  const hasStaged = media.count > 0
+  // Staged files always show the send button (even with no caption); scheduling
+  // a media batch is not supported, so a long-press/right-click is a no-op then.
+  const showMic = isTelegram && !hasText && !hasStaged && !aiLed && !editing
 
   const clearLongPress = useCallback(() => {
     if (longPressTimer.current) {
@@ -339,7 +387,20 @@ export const MessageComposer = memo(function MessageComposer({
   useEffect(() => clearLongPress, [clearLongPress])
 
   return (
-    <div className={cn('bg-card', replyActive ? '' : 'border-t border-border')}>
+    <div
+      className={cn(
+        'relative bg-card',
+        replyActive ? '' : 'border-t border-border',
+      )}
+      {...(canAttach ? media.dragHandlers : {})}
+    >
+      {canAttach ? <DropOverlay active={media.dragActive} /> : null}
+      {/* Staged files awaiting send — thumbnails with per-item remove. */}
+      <MediaTray
+        files={media.files}
+        onRemove={media.removeFile}
+        disabled={sendingMedia}
+      />
       {/* Quick replies tray — manager's saved canned answers, one tap to
           insert into the draft. Collapsed by default to keep the composer
           uncluttered. */}
@@ -465,20 +526,16 @@ export const MessageComposer = memo(function MessageComposer({
           {isTelegram ? (
             <StickerPicker channelId={channelId} onSend={onSendSticker} />
           ) : null}
-          {channelType === 'whatsapp' || channelType === 'vk' ? (
+          {canAttach ? (
             <>
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 className="hidden"
-                accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
+                accept={MEDIA_ACCEPT}
                 onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) {
-                    onSendMediaFile(f, valueRef.current.trim())
-                    applyValue('')
-                    persistRef.current('')
-                  }
+                  if (e.target.files?.length) media.addFiles(e.target.files)
                   e.target.value = ''
                 }}
               />
@@ -487,10 +544,10 @@ export const MessageComposer = memo(function MessageComposer({
                 variant="ghost"
                 size="icon"
                 className="size-9 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-                disabled={pending}
+                disabled={pending || media.isFull}
                 onClick={() => fileInputRef.current?.click()}
-                aria-label="Прикрепить файл"
-                title="Прикрепить файл (фото, видео, документ)"
+                aria-label="Прикрепить файлы"
+                title="Прикрепить файлы (фото, видео, документы — до 10 за раз)"
               >
                 <Paperclip className="size-5" />
               </Button>
@@ -531,7 +588,7 @@ export const MessageComposer = memo(function MessageComposer({
             type="button"
             size="icon"
             className="size-10 shrink-0 rounded-full transition-transform duration-150 animate-in fade-in-0 zoom-in-95 active:scale-90"
-            disabled={pending || !hasText || aiLed}
+            disabled={pending || sendingMedia || aiLed || (!hasText && !hasStaged)}
             onClick={() => {
               // A long-press already opened the schedule popover — swallow the
               // trailing click so it doesn't also send.
@@ -567,7 +624,7 @@ export const MessageComposer = memo(function MessageComposer({
           </Button>
         )}
 
-        {/* Отложенная отправка (Telegram): контролируемый попап, привязанный к
+        {/* Отложенная отправка (Telegram): контролируемый ��опап, привязанный к
             кнопке отправки; открывается долгим нажатием, не при редактировании. */}
         {canSchedule ? (
           <ScheduleSendPopover

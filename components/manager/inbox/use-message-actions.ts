@@ -15,7 +15,21 @@ import {
   editMessageAction,
   forwardMessageAction,
 } from '@/app/actions/messages'
+import { sendTelegramMediaAction } from '@/app/actions/account-media'
 import type { Conversation, Message, StickerItem } from '@/lib/types'
+
+/** Read a File into a bare base64 string (no data: prefix) for job payloads. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = String(reader.result)
+      resolve(dataUrl.slice(dataUrl.indexOf(',') + 1))
+    }
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
 
 /**
  * Everything a manager can DO to messages in the open thread: send (with
@@ -279,9 +293,32 @@ export function useMessageActions({
   // Attach + send a file on a WhatsApp or VK conversation. The bytes are
   // uploaded provider-side (through the account's proxy); on success the realtime
   // insert (or refresh) shows the new message with its media bubble.
-  function handleSendMediaFile(file: File, caption: string) {
+  async function handleSendMediaFile(file: File, caption: string) {
     if (!activeId) return
     const channelType = active?.channelType
+    // Telegram media rides the MTProto session via a worker job (no CDN upload),
+    // so it takes a different path with its own tighter size cap (~15 MB) — the
+    // bytes are base64-encoded into the job payload.
+    if (channelType === 'telegram') {
+      const TG_MAX_BYTES = 15 * 1024 * 1024
+      if (file.size > TG_MAX_BYTES) {
+        toast.error('Файл слишком большой для Telegram (максимум ~15 МБ).')
+        return
+      }
+      try {
+        const base64 = await fileToBase64(file)
+        const res = await sendTelegramMediaAction(
+          activeId,
+          { base64, mime: file.type || 'application/octet-stream', name: file.name },
+          caption,
+        )
+        if (!res.ok) toast.error(res.message || 'Не удалось отправить файл.')
+      } catch (err) {
+        console.error('[v0] telegram media send failed:', err)
+        toast.error('Не удалось отправить файл. Попробуйте ещё раз.')
+      }
+      return
+    }
     if (channelType !== 'whatsapp' && channelType !== 'vk') return
     // Client-side guard so an over-large file fails with a clear message instead
     // of blowing past the Server Action body limit (which returns an opaque
