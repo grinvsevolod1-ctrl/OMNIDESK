@@ -161,6 +161,9 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
     title,
     body,
     url: targetUrl,
+    // Stamp the addressee so the service worker can suppress this push on a
+    // device that is no longer signed in as this operator (logout leak fix).
+    userId: targetId,
     // Collapse repeated messages from the same conversation into one bubble.
     tag: event.conversationId
       ? `conv:${event.conversationId}`

@@ -108,6 +108,20 @@ export async function removeSubscription(
   )
 }
 
+/**
+ * Remove a manager subscription by endpoint ALONE — used by the service
+ * worker's identity gate (/api/push/detach) on a device where the session has
+ * ended: there is no `manager_id` to scope by because nobody is signed in.
+ * Safe without a session because a push endpoint is an unguessable capability
+ * URL — possessing it proves you are that device, and the only power granted is
+ * to stop that device's own deliveries (self-service, never data exposure).
+ */
+export async function removeSubscriptionByEndpoint(
+  endpoint: string,
+): Promise<void> {
+  await query('DELETE FROM push_subscriptions WHERE endpoint = $1', [endpoint])
+}
+
 interface SubscriptionRow {
   endpoint: string
   p256dh: string
@@ -313,6 +327,15 @@ export async function sendPushToGod(
 export interface PushPayload {
   title: string
   body: string
+  /**
+   * The operator this push is addressed to (manager/curator id). The service
+   * worker compares it against the device's CURRENT session (/api/push/whoami)
+   * and refuses to show the notification when the session is gone or belongs to
+   * a different user — closing the "logged out but still getting notifications"
+   * leak. Omitted for security alerts and visitor/god pushes, which are always
+   * shown (they carry their own auth or target a separate subscription table).
+   */
+  userId?: string
   /** Where to navigate when the notification is clicked. */
   url?: string
   /** Collapse key so repeat messages from one chat replace each other. */

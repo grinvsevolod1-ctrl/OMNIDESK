@@ -98,8 +98,66 @@ self.addEventListener('push', (event) => {
     ]
   }
 
-  event.waitUntil(self.registration.showNotification(title, options))
+  event.waitUntil(showGated(data, title, options))
 })
+
+/**
+ * Identity gate for message pushes.
+ *
+ * A Web Push subscription outlives the session: after sign-out (or a forced
+ * "log out other devices", password change, or account block) the server row
+ * can linger and the dispatcher keeps pushing to a device nobody is signed in
+ * on — the "logged out but still getting notifications" bug. The service worker
+ * is the only agent left on such a device, so it must decide here.
+ *
+ * Message pushes carry `userId` (the addressed operator). Before showing, ask
+ * the server who is signed in on THIS device (/api/push/whoami re-validates the
+ * session against the DB). If nobody — or a different user — is signed in, we
+ * DON'T show the notification and detach this endpoint so deliveries stop for
+ * good. Verification failures fail OPEN (still show) so a transient network
+ * blip never hides a real message from the rightful owner. Pushes without a
+ * userId (security alerts, visitor/god) are always shown.
+ */
+async function showGated(data, title, options) {
+  if (!data || !data.userId) {
+    return self.registration.showNotification(title, options)
+  }
+
+  let currentUserId // undefined = could not determine → fail open
+  try {
+    const res = await fetch('/api/push/whoami', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+    if (res.ok) {
+      const json = await res.json()
+      currentUserId = json && json.userId ? json.userId : null
+    }
+  } catch (e) {
+    currentUserId = undefined
+  }
+
+  // Only suppress when we POSITIVELY know the signed-in user differs (or none).
+  if (currentUserId !== undefined && currentUserId !== data.userId) {
+    try {
+      const sub = await self.registration.pushManager.getSubscription()
+      if (sub && sub.endpoint) {
+        await fetch('/api/push/detach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        }).catch(() => {})
+      }
+    } catch (e) {
+      /* best-effort detach; nothing else to do */
+    }
+    return // do not reveal the previous account's notification
+  }
+
+  return self.registration.showNotification(title, options)
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
