@@ -141,30 +141,40 @@ function SwipeToReply({
         const t = e.touches[0]
         const dX = t.clientX - s.x
         const dY = t.clientY - s.y
+        // Направление решаем один раз. Свайп — в ЛЮБУЮ сторону (в Telegram для
+        // ответа тянут вправо), поэтому раньше свайп вправо «не работал» —
+        // обрезался в 0. Теперь ведём баббл по знаку жеста в обе стороны.
         if (!s.active) {
-          if (Math.abs(dX) > 10 && Math.abs(dX) > Math.abs(dY) * 1.3) {
+          if (Math.abs(dX) > 8 && Math.abs(dX) > Math.abs(dY) * 1.2) {
             s.active = true
-          } else if (Math.abs(dY) > 10) {
+          } else if (Math.abs(dY) > 8) {
             start.current = null
             return
           } else {
             return
           }
         }
-        set(Math.max(Math.min(dX, 0), -88))
+        set(Math.max(Math.min(dX, 88), -88))
       }}
       onTouchEnd={() => {
-        if (start.current?.active && dxRef.current <= -SWIPE_REPLY_THRESHOLD) {
+        if (
+          start.current?.active &&
+          Math.abs(dxRef.current) >= SWIPE_REPLY_THRESHOLD
+        ) {
           onReply()
         }
         reset()
       }}
       onTouchCancel={reset}
     >
-      {/* Иконка ответа проявляется по мере сдвига; строго в пределах обёртки,
-          pointer-events-none — за край не вылезает, полосу не создаёт. */}
+      {/* Иконка ответа проявляется по мере сдвига на трейлинг-краю (со стороны,
+          противоположной движению пальца). pointer-events-none — не мешает
+          тапам и не вылезает за обёртку. */}
       <div
-        className="pointer-events-none absolute inset-y-0 right-1 flex items-center"
+        className={cn(
+          'pointer-events-none absolute inset-y-0 flex items-center',
+          dx > 0 ? 'left-1' : 'right-1',
+        )}
         style={{ opacity: Math.min(1, Math.abs(dx) / SWIPE_REPLY_THRESHOLD) }}
         aria-hidden
       >
@@ -286,11 +296,18 @@ export function MessageList({
   // без правок родителей. Если оригинал ещё не догружен в DOM — тихо ничего.
   const [jumpHighlight, setJumpHighlight] = useState<string | null>(null)
   const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const jumpToMessage = (id: string) => {
+  const jumpToMessage = (id: string, attempt = 0) => {
     const container = messagesScrollRef.current
     if (!container) return
     const el = container.querySelector(`[data-message-id="${CSS.escape(id)}"]`)
-    if (!el) return
+    if (!el) {
+      // Оригинал мог быть ещё не отрисован (content-visibility / ленивое окно
+      // ленты) — пробуем несколько раз с нарастающей паузой, потом сдаёмся.
+      if (attempt < 5) {
+        window.setTimeout(() => jumpToMessage(id, attempt + 1), 80 * (attempt + 1))
+      }
+      return
+    }
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     setJumpHighlight(id)
     if (jumpTimer.current) clearTimeout(jumpTimer.current)

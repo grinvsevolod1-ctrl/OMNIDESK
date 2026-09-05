@@ -12,6 +12,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -156,16 +157,36 @@ function MediaLightbox({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, goPrev, goNext])
 
-  // Touch: horizontal swipe navigates, a downward swipe closes. `drag` gives the
-  // current media a little live follow so the gesture feels physical.
-  const touch = useRef<{ x: number; y: number } | null>(null)
+  // Плавное листание как в Telegram: горизонтальный слайд-трек. Палец ведёт
+  // текущий кадр в реальном времени, на отпускании — инерционная доводка к
+  // соседнему; свайп вниз закрывает. Смещение в пикселях от измеренной ширины
+  // сцены (stageW), поэтому трек едет ровно на один кадр.
+  const stageRef = useRef<HTMLDivElement>(null)
+  const [stageW, setStageW] = useState(0)
+  const [ready, setReady] = useState(false)
   const [drag, setDrag] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const touch = useRef<{ x: number; y: number; axis: '' | 'x' | 'y' } | null>(
+    null,
+  )
+
+  // Замер ДО отрисовки (useLayoutEffect), чтобы при открытии не на первом кадре
+  // трек сразу встал на нужный слайд без «прыжка». Анимацию включаем следующим
+  // кадром — тогда переходы между кадрами уже плавные.
+  useLayoutEffect(() => {
+    const measure = () => setStageW(stageRef.current?.clientWidth ?? 0)
+    measure()
+    const raf = requestAnimationFrame(() => setReady(true))
+    window.addEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', measure)
+    }
+  }, [])
 
   if (!current) return null
   const url = current.mediaUrl
   if (!url) return null
-  const effType = effectiveMediaType(current)
-  const isVideo = effType === 'video' || effType === 'video_note'
 
   return createPortal(
     <div
@@ -220,32 +241,58 @@ function MediaLightbox({
         </div>
       </div>
 
-      {/* Сцена: клик по пустому фону закрывает, по самому медиа — нет. */}
+      {/* Сцена-слайдер: клик по пустому фону закрывает; трек с кадрами едет по
+          горизонтали, overflow-hidden прячет соседние. */}
       <div
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4"
+        ref={stageRef}
+        className="relative min-h-0 flex-1 overflow-hidden"
         onClick={onClose}
         onTouchStart={(e) => {
-          touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
-          setDrag(0)
+          touch.current = {
+            x: e.touches[0].clientX,
+            y: e.touches[0].clientY,
+            axis: '',
+          }
+          setDragging(true)
         }}
         onTouchMove={(e) => {
-          if (!touch.current) return
-          setDrag(e.touches[0].clientX - touch.current.x)
+          const t = touch.current
+          if (!t) return
+          const dX = e.touches[0].clientX - t.x
+          const dY = e.touches[0].clientY - t.y
+          // Ось жеста фиксируем один раз: горизонталь — листаем, вертикаль —
+          // готовим закрытие свайпом вниз.
+          if (t.axis === '') {
+            if (Math.abs(dX) > 8 || Math.abs(dY) > 8)
+              t.axis = Math.abs(dX) > Math.abs(dY) ? 'x' : 'y'
+          }
+          if (t.axis === 'x') {
+            // Резина на крайних кадрах, чтобы было понятно, что дальше некуда.
+            let d = dX
+            if ((index === 0 && d > 0) || (index === items.length - 1 && d < 0))
+              d *= 0.35
+            setDrag(d)
+          }
         }}
         onTouchEnd={(e) => {
           const t = touch.current
           touch.current = null
+          setDragging(false)
           if (!t) {
             setDrag(0)
             return
           }
-          const dx = e.changedTouches[0].clientX - t.x
-          const dy = e.changedTouches[0].clientY - t.y
-          if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
-            if (dx > 0) goPrev()
-            else goNext()
-          } else if (dy > 90 && Math.abs(dy) > Math.abs(dx)) {
+          const dX = e.changedTouches[0].clientX - t.x
+          const dY = e.changedTouches[0].clientY - t.y
+          if (t.axis === 'y' && dY > 90) {
             onClose()
+            setDrag(0)
+            return
+          }
+          const threshold = Math.max(48, (stageW || 320) * 0.18)
+          if (t.axis === 'x' && Math.abs(dX) > threshold) {
+            if (dX < 0) goNext()
+            else goPrev()
           }
           setDrag(0)
         }}
@@ -277,34 +324,69 @@ function MediaLightbox({
           </button>
         ) : null}
 
+        {/* Трек шириной во все кадры; сдвиг = -index кадров + палец. Анимация
+            transform с «мягкой» кривой даёт быструю плавную доводку. */}
         <div
-          key={current.id}
-          className="flex max-h-full max-w-full items-center justify-center animate-in fade-in duration-150"
-          style={{ transform: drag ? `translateX(${drag}px)` : undefined }}
-          onClick={(e) => e.stopPropagation()}
+          className="flex h-full"
+          style={{
+            transform: `translate3d(${-index * stageW + drag}px, 0, 0)`,
+            transition:
+              dragging || !ready
+                ? 'none'
+                : 'transform 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
+          }}
         >
-          {effType === 'video_note' ? (
-            <VideoNotePlayer src={url} size={384} autoPlay />
-          ) : isVideo ? (
-            <video
-              src={url}
-              controls
-              autoPlay
-              className="max-h-full max-w-full rounded-lg"
-            />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={url || '/placeholder.svg'}
-              alt={current.body || 'Изображение'}
-              className="max-h-full max-w-full select-none rounded-lg object-contain"
-              draggable={false}
-            />
-          )}
+          {items.map((it, i) => (
+            <div
+              key={it.id}
+              className="flex h-full shrink-0 items-center justify-center p-4"
+              style={{ width: stageW || '100%' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Держим в DOM только текущий и соседей — экономим память и не
+                  тянем все видео/фото чата разом. */}
+              {Math.abs(i - index) <= 1 ? (
+                <GallerySlide message={it} active={i === index} />
+              ) : null}
+            </div>
+          ))}
         </div>
       </div>
     </div>,
     document.body,
+  )
+}
+
+/** Один кадр слайдера: фото / видео / «кружок». Автоплей — только у активного. */
+function GallerySlide({
+  message,
+  active,
+}: {
+  message: Message
+  active: boolean
+}) {
+  const url = message.mediaUrl
+  if (!url) return null
+  const effType = effectiveMediaType(message)
+  if (effType === 'video_note')
+    return <VideoNotePlayer src={url} size={384} autoPlay={active} />
+  if (effType === 'video')
+    return (
+      <video
+        src={url}
+        controls
+        autoPlay={active}
+        className="max-h-full max-w-full rounded-lg"
+      />
+    )
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url || '/placeholder.svg'}
+      alt={message.body || 'Изображение'}
+      className="max-h-full max-w-full select-none rounded-lg object-contain"
+      draggable={false}
+    />
   )
 }
 
