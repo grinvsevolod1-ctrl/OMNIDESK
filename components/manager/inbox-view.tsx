@@ -23,12 +23,14 @@ import { TransferDialog } from '@/components/manager/inbox/transfer-dialog'
 import { ConversationList } from '@/components/manager/inbox/conversation-list'
 import { AiHandoffBanner } from '@/components/manager/inbox/ai-handoff-banner'
 import { ThreadHeader } from '@/components/manager/inbox/thread-header'
+import { useShellHeader } from '@/components/dashboard-shell'
 import { MessageList } from '@/components/manager/inbox/message-list'
 import { ComposerBanners } from '@/components/manager/inbox/composer-banners'
 import { useInbox } from '@/components/manager/inbox/use-inbox'
 import { useInboxShortcuts } from '@/components/manager/inbox/use-inbox-shortcuts'
 import { useThreadSearch } from '@/components/manager/inbox/thread-search'
 import { useCallback, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 /* -------------------------------------------------------------------------- */
 /*  Presentational shell. All state/effects/actions live in useInbox; this    */
@@ -175,6 +177,16 @@ export function InboxView({
   // j/k and Alt+arrows walk the filtered list without touching the mouse.
   useInboxShortcuts({ filtered, activeId, setActiveId })
 
+  // Контекстная шапка открытого диалога живёт в ЕДИНСТВЕННОЙ шапке дашборда:
+  // пока диалог открыт, ThreadHeader рисуется через портал в слот шапки (см.
+  // useShellHeader) — отдельной второй полосы-заголовка под системной шапкой
+  // больше нет. Флаг threadOpen прячет бургер/ролевые кнопки на мобиле.
+  const shellHeader = useShellHeader()
+  useEffect(() => {
+    shellHeader?.setThreadOpen(Boolean(active))
+    return () => shellHeader?.setThreadOpen(false)
+  }, [active, shellHeader])
+
   /**
    * Скролл к сообщению по id для поиска/медиа-навигации. true — сообщение
    * уже в DOM (проскроллили), false — надо догружать историю.
@@ -220,6 +232,32 @@ export function InboxView({
       )
     },
   })
+
+  // Контекстная шапка диалога — тот же ThreadHeader, но теперь он уезжает в
+  // портал шапки дашборда (см. ниже). Собираем узел здесь, где доступны все
+  // обработчики из useInbox.
+  const threadHeaderNode = active ? (
+    <ThreadHeader
+      active={active}
+      activePresence={activePresence}
+      activeAiLed={activeAiLed}
+      transferred={activeTransferred}
+      rework={activeRework}
+      curatorName={active.curatorName}
+      aiButtonPulse={aiButtonPulse}
+      statusPending={statusPending}
+      activeStatusValue={activeStatusValue}
+      hasTransferTargets={transferTargets.length > 0}
+      onBack={() => setActiveId(null)}
+      onOpenDetails={() => setDetailsOpen(true)}
+      onToggleDetails={() => setDetailsOpen((v) => !v)}
+      onToggleAi={() => toggleAi(active.id, !activeAiLed)}
+      onChangeStatus={(v) => changeStatus(active.id, v)}
+      onOpenTransfer={() => openTransfer(active.id)}
+      onOpenSearch={threadSearch.openText}
+      onBrowseMedia={threadSearch.openMedia}
+    />
+  ) : null
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-card">
@@ -301,26 +339,13 @@ export function InboxView({
       >
         {active ? (
           <>
-            <ThreadHeader
-              active={active}
-              activePresence={activePresence}
-              activeAiLed={activeAiLed}
-              transferred={activeTransferred}
-              rework={activeRework}
-              curatorName={active.curatorName}
-              aiButtonPulse={aiButtonPulse}
-              statusPending={statusPending}
-              activeStatusValue={activeStatusValue}
-              hasTransferTargets={transferTargets.length > 0}
-              onBack={() => setActiveId(null)}
-              onOpenDetails={() => setDetailsOpen(true)}
-              onToggleDetails={() => setDetailsOpen((v) => !v)}
-              onToggleAi={() => toggleAi(active.id, !activeAiLed)}
-              onChangeStatus={(v) => changeStatus(active.id, v)}
-              onOpenTransfer={() => openTransfer(active.id)}
-              onOpenSearch={threadSearch.openText}
-              onBrowseMedia={threadSearch.openMedia}
-            />
+            {/* Шапка диалога уезжает в портал единственной шапки дашборда;
+                пока слот не смонтирован — ничего не рисуем (без второй полосы). */}
+            {shellHeader
+              ? shellHeader.slotEl
+                ? createPortal(threadHeaderNode, shellHeader.slotEl)
+                : null
+              : threadHeaderNode}
 
             {/* Бар поиска/медиа-навигации — под шапкой, над сообщениями. */}
             {threadSearch.bar}

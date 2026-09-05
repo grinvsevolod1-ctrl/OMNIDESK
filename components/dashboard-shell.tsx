@@ -6,8 +6,17 @@
  * column. The navigation rail itself (icons, types, sliding highlight) lives
  * in dashboard-nav.tsx; NavIcon/NavItem are re-exported for compatibility.
  */
+import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
 import { ChevronLeft, Loader2, LogOut, Menu, PanelLeft, X } from 'lucide-react'
 import { logoutAction } from '@/app/actions/auth'
 import { updateMyAvatarAction } from '@/app/actions/account'
@@ -28,6 +37,22 @@ import { cn } from '@/lib/utils'
 
 export type { NavIcon, NavItem } from '@/components/dashboard-nav'
 import type { NavItem } from '@/components/dashboard-nav'
+
+/**
+ * Мост для полноэкранных разделов (инбокс менеджера, «Чаты» куратора): они
+ * рисуют контекстную шапку открытого диалога ПРЯМО в единственной шапке
+ * дашборда — через портал в `slotEl`, — вместо второй полосы-заголовка под ней.
+ * `setThreadOpen(true)` прячет бургер и ролевые кнопки на мобиле, отдавая место
+ * данным лида и кнопке «назад».
+ */
+interface ShellHeaderContextValue {
+  slotEl: HTMLDivElement | null
+  setThreadOpen: (open: boolean) => void
+}
+const ShellHeaderContext = createContext<ShellHeaderContextValue | null>(null)
+export function useShellHeader(): ShellHeaderContextValue | null {
+  return useContext(ShellHeaderContext)
+}
 
 interface DashboardShellProps {
   nav: NavItem[]
@@ -71,6 +96,20 @@ export function DashboardShell({
     user.avatarUrl ?? null,
   )
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false)
+
+  // Портал-приёмник контекстной шапки диалога (см. useShellHeader) и флаг
+  // «открыт диалог» — он прячет бургер/ролевые кнопки на мобиле. Ссылка на
+  // «Настройки» берётся из nav текущей роли: тап по аватару ведёт туда.
+  const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null)
+  const [threadOpen, setThreadOpen] = useState(false)
+  const settingsHref = useMemo(
+    () => nav.find((n) => n.icon === 'settings')?.href ?? null,
+    [nav],
+  )
+  const headerCtx = useMemo<ShellHeaderContextValue>(
+    () => ({ slotEl, setThreadOpen }),
+    [slotEl],
+  )
 
   // Sign out cleanly: drop THIS device's push subscription BEFORE ending the
   // session, otherwise the server row survives and the dispatcher keeps pushing
@@ -156,6 +195,7 @@ export function DashboardShell({
   }
 
   return (
+    <ShellHeaderContext.Provider value={headerCtx}>
     <TooltipProvider>
       <div className="flex h-dvh overflow-hidden bg-background">
         {/* Desktop sidebar */}
@@ -308,32 +348,66 @@ export function DashboardShell({
             <Button
               variant="ghost"
               size="icon-sm"
-              className="lg:hidden"
+              className={cn('lg:hidden', threadOpen && 'hidden')}
               onClick={() => setMobileOpen(true)}
               aria-label="Открыть меню"
             >
               <Menu className="size-4" />
             </Button>
 
-            <div className="ml-auto flex items-center gap-2">
-              {headerSlot}
-              <div className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm">
-                <button
-                  type="button"
-                  onClick={() => setAvatarPickerOpen(true)}
-                  aria-label="Изменить аватар"
-                  className="group relative rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            {/* Приёмник контекстной шапки диалога (портал из инбокса/чатов).
+                На остальных страницах пуст — просто занимает левую часть. */}
+            <div
+              ref={setSlotEl}
+              className="flex min-w-0 flex-1 items-center gap-1.5"
+            />
+
+            <div className="flex items-center gap-2">
+              {headerSlot ? (
+                <div
+                  className={cn(
+                    'flex items-center gap-2',
+                    threadOpen && 'hidden sm:flex',
+                  )}
                 >
-                  <Avatar className="size-7">
-                    {avatarUrl ? (
-                      <AvatarImage src={avatarUrl} alt={user.name} />
-                    ) : null}
-                    <AvatarFallback className="bg-secondary text-xs font-medium text-secondary-foreground">
-                      {initials(user.name)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className="absolute inset-0 rounded-full ring-1 ring-inset ring-transparent transition group-hover:ring-primary" />
-                </button>
+                  {headerSlot}
+                </div>
+              ) : null}
+              <div className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm">
+                {settingsHref ? (
+                  <Link
+                    href={settingsHref}
+                    aria-label="Профиль и настройки"
+                    className="group relative rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Avatar className="size-7">
+                      {avatarUrl ? (
+                        <AvatarImage src={avatarUrl} alt={user.name} />
+                      ) : null}
+                      <AvatarFallback className="bg-secondary text-xs font-medium text-secondary-foreground">
+                        {initials(user.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="absolute inset-0 rounded-full ring-1 ring-inset ring-transparent transition group-hover:ring-primary" />
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAvatarPickerOpen(true)}
+                    aria-label="Изменить аватар"
+                    className="group relative rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Avatar className="size-7">
+                      {avatarUrl ? (
+                        <AvatarImage src={avatarUrl} alt={user.name} />
+                      ) : null}
+                      <AvatarFallback className="bg-secondary text-xs font-medium text-secondary-foreground">
+                        {initials(user.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="absolute inset-0 rounded-full ring-1 ring-inset ring-transparent transition group-hover:ring-primary" />
+                  </button>
+                )}
                 <span className="hidden max-w-[160px] flex-col leading-tight sm:flex">
                   <span className="truncate font-medium">{user.name}</span>
                   <span className="truncate text-xs text-muted-foreground">
@@ -393,5 +467,6 @@ export function DashboardShell({
         onSaved={setAvatarUrl}
       />
     </TooltipProvider>
+    </ShellHeaderContext.Provider>
   )
 }

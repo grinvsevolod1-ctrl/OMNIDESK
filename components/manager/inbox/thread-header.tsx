@@ -92,7 +92,7 @@ export function ThreadHeader({
       ? active.contactHandle
       : undefined
   return (
-    <div className="flex h-14 items-center gap-3 border-b border-border px-3 sm:px-4">
+    <div className="flex w-full min-w-0 items-center gap-2">
       <Button
         variant="ghost"
         size="icon-sm"

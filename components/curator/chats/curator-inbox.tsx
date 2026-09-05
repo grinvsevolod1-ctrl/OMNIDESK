@@ -13,6 +13,7 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -48,6 +49,7 @@ import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { LeadStatusForm } from '@/components/curator/lead-panel-forms'
 import { CuratorOutreachButton } from '@/components/curator/chats/curator-outreach'
 import { useCuratorChats } from '@/components/curator/chats/use-curator-chats'
+import { useShellHeader } from '@/components/dashboard-shell'
 import type { PanelChannelType } from '@/lib/types'
 import type { CuratorConversationStatus } from '@/lib/data/curator-conversations'
 
@@ -191,6 +193,15 @@ export function CuratorInbox({
   const [filter, setFilter] = useState<ListFilter>('all')
   const [sort, setSort] = useState<SortMode>('recent')
   const [infoOpen, setInfoOpen] = useState(false)
+
+  // Пока диалог открыт, его шапка (назад + данные лида) рисуется через портал в
+  // единственной шапке дашборда — второй полосы-заголовка нет. Флаг прячет
+  // бургер/ролевые кнопки на мобиле (см. useShellHeader).
+  const shellHeader = useShellHeader()
+  useEffect(() => {
+    shellHeader?.setThreadOpen(Boolean(active))
+    return () => shellHeader?.setThreadOpen(false)
+  }, [active, shellHeader])
 
   const totalUnread = useMemo(
     () => conversations.reduce((sum, c) => sum + (c.unread || 0), 0),
@@ -483,6 +494,7 @@ function CuratorThread({
   pending: boolean
 }) {
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
+  const shellHeader = useShellHeader()
   // Персистентные черновики (как у менеджера): unsent-текст переживает смену
   // диалога, refresh и краш — зеркалится в localStorage. Ключ — id диалога.
   const { getDraft, persistDraft } = useDrafts()
@@ -499,61 +511,68 @@ function CuratorThread({
     if (el) el.scrollTop = el.scrollHeight
   }, [activeId, lastId])
 
+  // Шапка диалога уезжает в портал единственной шапки дашборда (назад + данные
+  // лида + статус + сведения) — отдельной второй полосы под системной шапкой нет.
+  const headerNode = (
+    <div className="flex w-full min-w-0 items-center gap-2">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="md:hidden"
+        onClick={onBack}
+        aria-label="Назад к списку"
+      >
+        <ArrowLeft className="size-4" />
+      </Button>
+      <ContactAvatar
+        name={active.contactName}
+        channel={active.channelType}
+        channelId={active.channelId}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-semibold">
+            {active.contactName}
+          </span>
+          {active.contactUsername ? (
+            <span className="truncate text-xs text-muted-foreground">
+              @{active.contactUsername}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span>{channelShort}</span>
+          {active.channelName ? (
+            <>
+              <span aria-hidden>·</span>
+              <span className="truncate">{active.channelName}</span>
+            </>
+          ) : null}
+        </div>
+      </div>
+      {leadStatus ? (
+        <LeadStatusBadge
+          status={leadStatus.status}
+          className="hidden shrink-0 sm:inline-flex"
+        />
+      ) : null}
+      <Button
+        variant={infoOpen ? 'secondary' : 'ghost'}
+        size="icon"
+        onClick={onToggleInfo}
+        aria-label="Сведения о диалоге"
+        aria-pressed={infoOpen}
+      >
+        <Info className="size-4" />
+      </Button>
+    </div>
+  )
+
   return (
     <>
-      {/* Шапка треда */}
-      <header className="flex items-center gap-3 border-b border-border bg-card px-3 py-2.5 sm:px-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="md:hidden"
-          onClick={onBack}
-          aria-label="Назад к списку"
-        >
-          <ArrowLeft className="size-4" />
-        </Button>
-        <ContactAvatar
-          name={active.contactName}
-          channel={active.channelType}
-          channelId={active.channelId}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold">
-              {active.contactName}
-            </span>
-            {active.contactUsername ? (
-              <span className="truncate text-xs text-muted-foreground">
-                @{active.contactUsername}
-              </span>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span>{channelShort}</span>
-            {active.channelName ? (
-              <>
-                <span aria-hidden>·</span>
-                <span className="truncate">{active.channelName}</span>
-              </>
-            ) : null}
-          </div>
-        </div>
-        {leadStatus ? (
-          <LeadStatusBadge
-            status={leadStatus.status}
-            className="hidden shrink-0 sm:inline-flex"
-          />
-        ) : null}
-        <Button
-          variant={infoOpen ? 'secondary' : 'ghost'}
-          size="icon"
-          onClick={onToggleInfo}
-          aria-label="Сведения о диалоге"
-          aria-pressed={infoOpen}
-        >
-          <Info className="size-4" />
-        </Button>
-      </header>
+      {shellHeader?.slotEl
+        ? createPortal(headerNode, shellHeader.slotEl)
+        : null}
 
       {/* Лента — богатый MessageList менеджера в режиме read-only-действий */}
       {threadLoading && thread.length === 0 ? (
