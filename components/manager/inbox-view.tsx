@@ -1,8 +1,10 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { MessageCircle } from 'lucide-react'
+import { MessageCircle, Trash2, Wrench } from 'lucide-react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { leadStatusLabel } from '@/lib/lead-status'
 // Edit-history is opened on demand (message context menu), so defer its JS and
 // its SWR fetcher until an operator actually opens it — see the conditional
 // render below, which only mounts it once historyMessage is set.
@@ -112,6 +114,8 @@ export function InboxView({
     viewBucket,
     setViewBucket,
     transferredCount,
+    reworkCount,
+    trashRework,
     search,
     setSearch,
     typeFilter,
@@ -142,6 +146,7 @@ export function InboxView({
     pending,
     activeAiLed,
     activeTransferred,
+    activeRework,
     activeTyping,
     activePresence,
     availableTypes,
@@ -261,6 +266,7 @@ export function InboxView({
         showMuted={showMuted}
         setShowMuted={setShowMuted}
         transferredCount={transferredCount}
+        reworkCount={reworkCount}
         viewBucket={viewBucket}
         setViewBucket={setViewBucket}
         hasActiveFilters={hasActiveFilters}
@@ -300,6 +306,7 @@ export function InboxView({
               activePresence={activePresence}
               activeAiLed={activeAiLed}
               transferred={activeTransferred}
+              rework={activeRework}
               curatorName={active.curatorName}
               aiButtonPulse={aiButtonPulse}
               statusPending={statusPending}
@@ -350,6 +357,35 @@ export function InboxView({
                   : undefined
               }
             />
+
+            {/* «Доработки»: куратор потерял лид (Игнор/Отказался/Не связался/
+                архив) — он вернулся менеджеру на дожим. Композер ВКЛючён; если
+                исходный аккаунт в ЧС/офлайн, отправка незаметно уходит с
+                аккаунта для исходящих (см. resolveTelegramDelivery). Кнопка
+                «В trash» убирает лид из раздела, когда дожать не удалось. */}
+            {activeRework ? (
+              <div className="flex items-center gap-3 border-t border-amber-500/30 bg-amber-500/10 px-4 py-2.5">
+                <Wrench className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <p className="min-w-0 flex-1 text-xs text-amber-800 dark:text-amber-200">
+                  Лид вернулся на дожим · причина:{' '}
+                  <span className="font-medium">
+                    {active.curatorArchived
+                      ? 'архив'
+                      : leadStatusLabel(active.curatorLeadStatus)}
+                  </span>
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0 gap-1.5 text-amber-700 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300"
+                  onClick={() => trashRework(active.id)}
+                  title="Убрать лид из «Доработок» — дожать не удалось"
+                >
+                  <Trash2 className="size-4" />
+                  В trash
+                </Button>
+              </div>
+            ) : null}
 
             <ComposerBanners
               editTarget={editTarget}

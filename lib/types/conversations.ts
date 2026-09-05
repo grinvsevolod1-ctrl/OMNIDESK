@@ -121,6 +121,13 @@ export interface Conversation {
   curatorLeadStatus?: string | null
   /** Лид-карточка ушла в архив у куратора (lead_cards.archived_at). */
   curatorArchived?: boolean
+  /**
+   * Менеджер убрал вернувшийся на дожим лид «в trash» (lead_cards
+   * .rework_trashed_at, миграция 155) — карточка исчезает из «Доработок» и
+   * больше нигде у менеджера не показывается. Терминальное менеджерское
+   * состояние, кураторский статус при этом не трогается.
+   */
+  curatorReworkTrashed?: boolean
 }
 
 /**

@@ -29,16 +29,19 @@ import { sourceLabel, type SortMode } from '@/components/manager/inbox/visual'
  *                   the manager's default list; visible under «Переданные».
  *   'rework'      — the curator gave up on it (Игнор/Отказался/Не связался) or
  *                   archived it, so it returns to the manager for a follow-up
- *                   push. Surfaced under «Доработки» (Этап 4).
+ *                   push. Surfaced under «Доработки» with the composer enabled.
+ *   'archived'    — the manager also gave up and sent it «в trash». Terminal:
+ *                   hidden from every manager segment.
  *
  * Single source of truth shared by the list filter, the counters and the open
  * thread, so all three always agree.
  */
-export type ManagerBucket = 'active' | 'transferred' | 'rework'
+export type ManagerBucket = 'active' | 'transferred' | 'rework' | 'archived'
 
 export function managerBucket(c: Conversation): ManagerBucket {
   if (!c.transferred) return 'active'
-  if (c.curatorArchived || isReworkStatus(c.curatorLeadStatus)) return 'rework'
+  const rework = c.curatorArchived || isReworkStatus(c.curatorLeadStatus)
+  if (rework) return c.curatorReworkTrashed ? 'archived' : 'rework'
   return 'transferred'
 }
 
@@ -80,19 +83,13 @@ export function filterAndSortConversations({
 }: FilterSortParams): Conversation[] {
   const q = search.trim().toLowerCase()
   const list = conversations.filter((c) => {
-    // Segment gate. The open thread is exempt so it never vanishes mid-read
-    // (e.g. the curator picks it up while the manager has it open).
-    if (c.id !== activeId) {
-      const bucket = managerBucket(c)
-      if (viewBucket === 'transferred') {
-        if (bucket !== 'transferred') return false
-      } else if (bucket === 'transferred') {
-        // Default 'active' view hides threads the curator is actively working.
-        // 'rework' threads stay here (read-only) until Этап 4 gives them their
-        // own «Доработки» segment.
-        return false
-      }
-    }
+    // Segment gate. Trashed leads ('archived') are terminal — gone from every
+    // segment, even when open, so trashing one makes it vanish immediately.
+    const bucket = managerBucket(c)
+    if (bucket === 'archived') return false
+    // The open thread is exempt from the segment match so it never vanishes
+    // mid-read (e.g. the curator picks it up while the manager has it open).
+    if (c.id !== activeId && bucket !== viewBucket) return false
     // Muted contacts are hidden by default; reveal them via the toggle. The
     // currently-open thread always stays visible so it never vanishes mid-chat.
     if (isMuted(c) && !showMuted && c.id !== activeId) return false

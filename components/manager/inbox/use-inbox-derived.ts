@@ -155,6 +155,13 @@ export function useInboxDerived({
     [conversations],
   )
 
+  // Leads the curator gave up on that returned to the manager for a follow-up
+  // push — drives the «Доработки» segment chip + its reminder highlight.
+  const reworkCount = useMemo(
+    () => conversations.filter((c) => managerBucket(c) === 'rework').length,
+    [conversations],
+  )
+
   const unreadTotal = useMemo(
     () => conversations.reduce((n, c) => n + (c.unread > 0 ? 1 : 0), 0),
     [conversations],
@@ -184,6 +191,7 @@ export function useInboxDerived({
     awaitingReply,
     mutedCount,
     transferredCount,
+    reworkCount,
     unreadTotal,
     forwardTargets,
     pendingHandoffs,

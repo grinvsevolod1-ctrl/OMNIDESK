@@ -37,16 +37,19 @@ export async function listConversations(
       curator_name: string | null
       lead_status: string | null
       lead_archived: boolean | null
+      lead_trashed: boolean | null
     }
   >(
     // lead_cards has a UNIQUE partial index on conversation_id (migration 112),
-    // so the join yields at most one card. lead_status/lead_archived let the
-    // manager inbox split transferred threads into «у куратора в работе»
-    // (hidden) vs «Доработки» (returned for follow-up). See managerBucket().
+    // so the join yields at most one card. lead_status/lead_archived/lead_trashed
+    // let the manager inbox split transferred threads into «у куратора в работе»
+    // (hidden), «Доработки» (returned for follow-up) and trashed (gone). See
+    // managerBucket().
     `SELECT ${conversationColumns('c')}, ch.name AS channel_name,
             cur.name AS curator_name,
             lc.status AS lead_status,
-            (lc.archived_at IS NOT NULL) AS lead_archived
+            (lc.archived_at IS NOT NULL) AS lead_archived,
+            (lc.rework_trashed_at IS NOT NULL) AS lead_trashed
        FROM conversations c
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers cur ON cur.id = c.curator_id
@@ -62,7 +65,33 @@ export async function listConversations(
     curatorName: r.curator_name ?? undefined,
     curatorLeadStatus: r.lead_status ?? null,
     curatorArchived: Boolean(r.lead_archived),
+    curatorReworkTrashed: Boolean(r.lead_trashed),
   }))
+}
+
+/**
+ * Менеджер убирает вернувшийся на дожим лид «в trash»: карточка исчезает из
+ * раздела «Доработки». Скоуп — через владельца диалога (conversations.manager_id
+ * = менеджер), так что чужой лид не тронуть. Возвращает true, если строка
+ * обновлена. Кураторский статус лида НЕ трогаем — это отдельное менеджерское
+ * терминальное поле (см. миграцию 155).
+ */
+export async function trashReworkLead(
+  conversationId: string,
+  managerId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `UPDATE lead_cards lc
+        SET rework_trashed_at = now()
+       FROM conversations c
+      WHERE lc.conversation_id = c.id
+        AND c.id = $1
+        AND c.manager_id = $2
+        AND lc.rework_trashed_at IS NULL
+      RETURNING lc.id`,
+    [conversationId, managerId],
+  )
+  return rows.length > 0
 }
 
 /**

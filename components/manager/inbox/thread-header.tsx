@@ -43,6 +43,7 @@ export function ThreadHeader({
   activePresence,
   activeAiLed,
   transferred = false,
+  rework = false,
   curatorName,
   aiButtonPulse,
   statusPending,
@@ -62,6 +63,8 @@ export function ThreadHeader({
   activeAiLed: boolean
   /** Лид передан куратору (миграция 151): у менеджера — только чтение. */
   transferred?: boolean
+  /** Лид вернулся на дожим («Доработки»): композер включён, но ИИ молчит. */
+  rework?: boolean
   /** Имя куратора для бейджа, когда transferred. */
   curatorName?: string
   aiButtonPulse: boolean
@@ -124,7 +127,11 @@ export function ThreadHeader({
               </span>
             ) : null}
             {activePresence ? <PresenceBadge state={activePresence} /> : null}
-            {transferred ? (
+            {rework ? (
+              <span className="shrink-0 rounded bg-amber-500/20 px-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                На дожиме
+              </span>
+            ) : transferred ? (
               <span className="shrink-0 rounded bg-primary/15 px-1.5 text-[11px] font-medium text-primary">
                 {curatorName ? `Передан ${curatorName}` : 'Передан куратору'}
               </span>
@@ -137,9 +144,9 @@ export function ThreadHeader({
       </button>
 
       <div className="flex items-center gap-1.5">
-        {/* Диалог передан куратору — ИИ менеджера отключён и переключать его
-            нельзя (curator_id гейт), поэтому кнопку скрываем. */}
-        {transferred ? null : (
+        {/* Диалог привязан к куратору (в работе или на дожиме) — ИИ менеджера
+            по гейту curator_id молчит, переключать его нельзя, кнопку скрываем. */}
+        {transferred || rework ? null : (
           <Button
             variant={activeAiLed ? 'default' : 'ghost'}
             size="sm"
@@ -227,7 +234,7 @@ export function ThreadHeader({
               <Info className="size-4" />
               Данные и источник
             </DropdownMenuItem>
-            {hasTransferTargets && !transferred ? (
+            {hasTransferTargets && !transferred && !rework ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onOpenTransfer}>

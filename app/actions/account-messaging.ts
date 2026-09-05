@@ -5,10 +5,16 @@ import { requireManager } from '@/lib/auth'
 import {
   addMessage,
   enqueueJob,
+  getChannelById,
   getConversation,
+  getOutreachChannel,
   markConversationRead,
   markMessageFailed,
+  trashReworkLead,
 } from '@/lib/data'
+import { writeAudit } from '@/lib/data/audit'
+import { isTelegramDeliveryImpaired } from '@/lib/channel-health'
+import type { Conversation } from '@/lib/types'
 import { deliverMaxMessage } from '@/lib/max-dispatch'
 import { deliverVkMessage, markVkConversationRead } from '@/lib/vk-dispatch'
 import {
@@ -17,6 +23,70 @@ import {
 } from '@/lib/whatsapp-dispatch'
 import type { StickerItem } from '@/lib/types'
 import type { SimpleResult } from './account-shared'
+
+/**
+ * Куда доставлять исходящее Telegram-сообщение по вернувшемуся на дожим лиду.
+ *
+ * Дожим («Доработки») — единственный случай, когда менеджер пишет в переданный
+ * (curator_id) диалог. Если наш исходный аккаунт у этого контакта в ЧС
+ * (contactBlocked) ИЛИ канал не в сети / забанен / ограничен, обычная отправка
+ * всё равно не дойдёт — поэтому НЕЗАМЕТНО уходим с общего аккаунта для
+ * исходящих (getOutreachChannel). Для менеджера это прозрачно: он видит обычную
+ * успешную отправку в том же треде; факт подмены пишем только в журнал аудита.
+ *
+ * Возвращает канал/владельца/цель для enqueue. По умолчанию — исходный канал.
+ * Подмену делаем только для переданных диалогов (дожим), чтобы не менять
+ * поведение обычной отправки.
+ */
+async function resolveTelegramDelivery(
+  conv: Conversation,
+  actor: { id: string; name: string },
+): Promise<{ channelId: string; managerId: string | null; target: string }> {
+  const fallback = {
+    channelId: conv.channelId,
+    managerId: actor.id,
+    target: conv.contactHandle,
+  }
+  if (!conv.transferred) return fallback
+
+  const owning = await getChannelById(conv.channelId)
+  if (!isTelegramDeliveryImpaired(owning, Boolean(conv.contactBlocked))) {
+    return fallback
+  }
+
+  const outreach = await getOutreachChannel()
+  if (
+    !outreach ||
+    outreach.status !== 'connected' ||
+    outreach.id === conv.channelId
+  ) {
+    return fallback
+  }
+
+  await writeAudit({
+    actorRole: 'manager',
+    actorId: actor.id,
+    actorLabel: actor.name,
+    action: 'conversation.rework_fallback',
+    entityType: 'conversation',
+    entityId: conv.id,
+    details: {
+      reason: conv.contactBlocked ? 'contact_blocked' : 'channel_offline',
+      fromChannelId: conv.channelId,
+      viaChannelId: outreach.id,
+    },
+  }).catch(() => {})
+
+  // Первый контакт с общего аккаунта резолвится по @username надёжнее числового
+  // id (у outreach-аккаунта нет access_hash на этот контакт).
+  return {
+    channelId: outreach.id,
+    managerId: outreach.managerId,
+    target: conv.contactUsername
+      ? `@${conv.contactUsername}`
+      : conv.contactHandle,
+  }
+}
 
 export async function sendMessageAction(
   conversationId: string,
@@ -58,15 +128,22 @@ export async function sendMessageAction(
       }
     }
   } else if (conv && conv.channelType === 'telegram') {
+    // Resolve the sending account: for a returned-for-follow-up («Доработки»)
+    // lead whose original account is blocked/offline, this silently swaps to
+    // the shared outreach account. Transparent to the manager.
+    const delivery = await resolveTelegramDelivery(conv, {
+      id: session.sub,
+      name: session.name,
+    })
     try {
       await enqueueJob({
-        channelId: conv.channelId,
-        managerId: session.sub,
+        channelId: delivery.channelId,
+        managerId: delivery.managerId,
         action: 'send_message',
         // Pass the optimistic row id so the worker can backfill the provider
         // message id and attach delivery/read receipts — and flag the row
         // 'failed' if the send is rejected.
-        payload: { target: conv.contactHandle, body: text, messageId: msg.id },
+        payload: { target: delivery.target, body: text, messageId: msg.id },
       })
     } catch (err) {
       // If we can't even queue the job, the worker will never see this message.
@@ -93,6 +170,32 @@ export async function sendMessageAction(
 
   revalidatePath('/app/inbox')
   return { ok: true, message: 'Отправлено.' }
+}
+
+/**
+ * «Доработки»: менеджер убирает вернувшийся на дожим лид «в trash» — карточка
+ * исчезает из раздела. Терминальное менеджерское действие; кураторский статус
+ * лида не трогается. Скоуп — по владельцу диалога (manager_id), чужой лид не
+ * тронуть.
+ */
+export async function trashReworkLeadAction(
+  conversationId: string,
+): Promise<SimpleResult> {
+  const session = await requireManager()
+  const ok = await trashReworkLead(conversationId, session.sub)
+  if (!ok) {
+    return { ok: false, message: 'Лид не найден или уже убран.' }
+  }
+  await writeAudit({
+    actorRole: 'manager',
+    actorId: session.sub,
+    actorLabel: session.name,
+    action: 'lead.rework_trashed',
+    entityType: 'conversation',
+    entityId: conversationId,
+  }).catch(() => {})
+  revalidatePath('/app/inbox')
+  return { ok: true, message: 'Лид убран из «Доработок».' }
 }
 
 /**

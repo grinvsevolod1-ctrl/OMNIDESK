@@ -6,6 +6,7 @@ import {
   BellOff,
   Search,
   SlidersHorizontal,
+  Wrench,
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -70,6 +71,7 @@ export function ConversationListHeader({
   showMuted,
   setShowMuted,
   transferredCount,
+  reworkCount,
   viewBucket,
   setViewBucket,
   hasActiveFilters,
@@ -101,6 +103,8 @@ export function ConversationListHeader({
   setShowMuted: (updater: (v: boolean) => boolean) => void
   /** Кол-во диалогов, которые куратор ведёт прямо сейчас (для чипа «Переданные»). */
   transferredCount: number
+  /** Кол-во вернувшихся на дожим лидов (для чипа «Доработки» + подсветки). */
+  reworkCount: number
   /** Текущий сегмент инбокса. */
   viewBucket: 'active' | 'transferred' | 'rework'
   setViewBucket: (b: 'active' | 'transferred' | 'rework') => void
@@ -363,6 +367,37 @@ export function ConversationListHeader({
             <ArrowLeftRight className="size-3" />
             Переданные
             <span className="text-[10px] opacity-60">{transferredCount}</span>
+          </button>
+        ) : null}
+
+        {/* «Доработки»: лиды, которые куратор потерял (Игнор/Отказался/Не
+            связался/архив) — вернулись менеджеру на дожим. Пока есть незакрытые,
+            чип мягко подсвечен-напоминалкой (amber), даже когда сегмент не
+            открыт. */}
+        {reworkCount > 0 || viewBucket === 'rework' ? (
+          <button
+            type="button"
+            aria-pressed={viewBucket === 'rework'}
+            onClick={() =>
+              setViewBucket(viewBucket === 'rework' ? 'active' : 'rework')
+            }
+            className={cn(
+              'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
+              viewBucket === 'rework'
+                ? 'bg-amber-500/20 text-amber-700 dark:text-amber-400'
+                : reworkCount > 0
+                  ? 'bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-400'
+                  : 'text-muted-foreground hover:bg-muted',
+            )}
+            title={
+              viewBucket === 'rework'
+                ? 'Вернуться к активным диалогам'
+                : 'Лиды, вернувшиеся на дожим от куратора'
+            }
+          >
+            <Wrench className="size-3" />
+            Доработки
+            <span className="text-[10px] opacity-70">{reworkCount}</span>
           </button>
         ) : null}
 

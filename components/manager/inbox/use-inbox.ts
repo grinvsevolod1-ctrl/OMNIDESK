@@ -9,8 +9,12 @@ import {
   useTransition,
 } from 'react'
 import { useRouter } from 'next/navigation'
-import { markConversationReadAction } from '@/app/actions/account'
+import {
+  markConversationReadAction,
+  trashReworkLeadAction,
+} from '@/app/actions/account'
 import { acknowledgeAiHandoffAction } from '@/app/actions/messages'
+import { toast } from 'sonner'
 import { leadStatusOptionValue } from '@/lib/types'
 import type { ChannelType, Conversation, Message } from '@/lib/types'
 import { useInboxFilters } from '@/components/manager/inbox/use-inbox-filters'
@@ -18,6 +22,7 @@ import { useDrafts } from '@/components/manager/inbox/use-drafts'
 import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
 import {
   filterAndSortConversations,
+  managerBucket,
   type ManagerBucket,
 } from '@/components/manager/inbox/filtering'
 import { useReplyReminder } from '@/components/manager/inbox/use-reply-reminder'
@@ -123,7 +128,10 @@ export function useInbox({
   // Which inbox segment is shown. 'active' (default) hides threads a curator is
   // actively working; 'transferred' shows only those («Переданные»). 'rework'
   // («Доработки») is wired in Этап 4.
-  const [viewBucket, setViewBucket] = useState<ManagerBucket>('active')
+  // Only the three user-selectable segments; 'archived' (trashed) is never a
+  // view — those threads are hidden everywhere.
+  const [viewBucket, setViewBucket] =
+    useState<Exclude<ManagerBucket, 'archived'>>('active')
 
   // List filtering + sorting state (search, Set filters, sort mode).
   const {
@@ -168,6 +176,7 @@ export function useInbox({
     awaitingReply,
     mutedCount,
     transferredCount,
+    reworkCount,
     unreadTotal,
     forwardTargets,
     pendingHandoffs,
@@ -227,15 +236,18 @@ export function useInbox({
     ],
   )
 
-  // If the «Переданные» segment empties out (curator finished every thread),
-  // fall back to the active view so the manager isn't left staring at an empty
-  // list with no visible way back.
+  // If the open segment empties out (curator finished / manager trashed the
+  // last one), fall back to the active view so the manager isn't left staring
+  // at an empty list with no visible way back.
   useEffect(() => {
-    if (viewBucket === 'transferred' && transferredCount === 0) {
+    if (
+      (viewBucket === 'transferred' && transferredCount === 0) ||
+      (viewBucket === 'rework' && reworkCount === 0)
+    ) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setViewBucket('active')
     }
-  }, [viewBucket, transferredCount])
+  }, [viewBucket, transferredCount, reworkCount])
 
   // When the channel-type filter changes, drop any selected sources that no
   // longer belong to a visible type, so stale selections can't hide everything.
@@ -305,10 +317,34 @@ export function useInbox({
     return aiMasterEnabled && !active.aiPaused
   }, [active, aiOverrides, aiMasterEnabled])
 
-  // Лид передан куратору (миграция 151): менеджер видит переписку только для
-  // чтения — композер блокируется, передача/AI-переключатель скрываются, из
-  // напоминаний диалог исключается. Ответственность за общение у куратора.
-  const activeTransferred = Boolean(active?.transferred)
+  // Сегмент открытого диалога.
+  //  • 'transferred' — куратор ведёт его прямо сейчас: у менеджера только
+  //    чтение (композер блокируется, AI-переключатель скрыт).
+  //  • 'rework' — куратор потерял лид, он вернулся на дожим: композер ВКЛючён,
+  //    сверху баннер + кнопка «В trash». AI-переключатель всё равно скрыт
+  //    (curator_id стоит, ИИ по гейту молчит).
+  const activeBucket = active ? managerBucket(active) : 'active'
+  const activeTransferred = activeBucket === 'transferred'
+  const activeRework = activeBucket === 'rework'
+  // Переключатель ИИ скрываем для ЛЮБОГО переданного диалога (и работа, и дожим).
+  const activeCuratorLinked = Boolean(active?.transferred)
+
+  // Убрать вернувшийся на дожим лид «в trash»: закрываем тред и обновляем список.
+  const trashRework = useCallback(
+    (conversationId: string) => {
+      startStatusTransition(async () => {
+        const res = await trashReworkLeadAction(conversationId)
+        if (!res.ok) {
+          toast.error(res.message)
+          return
+        }
+        if (activeId === conversationId) setActiveId(null)
+        toast.success(res.message)
+        router.refresh()
+      })
+    },
+    [activeId, router, startStatusTransition],
+  )
 
   // NOTE: The outbound "agent is typing" indicator (a server action fired on
   // every keystroke) was removed for performance - a network round-trip per
@@ -454,10 +490,12 @@ export function useInbox({
     // muted toggle
     showMuted,
     setShowMuted,
-    // segment view (Активные / Переданные / Доработки)
+    // segment view (Active / Transferred / Rework)
     viewBucket,
     setViewBucket,
     transferredCount,
+    reworkCount,
+    trashRework,
     // filters
     search,
     setSearch,
@@ -493,6 +531,7 @@ export function useInbox({
     // active thread derived
     activeAiLed,
     activeTransferred,
+    activeRework,
     activeTyping,
     activePresence,
     availableTypes,

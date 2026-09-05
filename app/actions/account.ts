@@ -23,6 +23,7 @@ export {
   sendScheduledMessageAction,
   sendStickerAction,
   sendVoiceAction,
+  trashReworkLeadAction,
 } from './account-messaging'
 export {
   sendVkMediaAction,
