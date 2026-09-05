@@ -4,6 +4,7 @@ import { isGodUnlocked } from '@/lib/god-gate'
 import {
   getMessageOwner,
   getMessageOwnerAdmin,
+  getMessageOwnerForCurator,
   getStoredEditMediaBytes,
   getStoredMediaBytes,
   getUrlMediaDescriptor,
@@ -43,9 +44,13 @@ export async function GET(
   if (!id) return new Response('Bad request', { status: 400 })
 
   // Ownership check: the message must belong to a conversation this manager
-  // owns (or exist at all, for the admin-wide surfaces).
+  // owns, or — for a curator session — a conversation transferred to THEM
+  // (recordTransfer sets curator_id; see getMessageOwnerForCurator), or exist
+  // at all for the admin-wide surfaces.
   const owner = session
-    ? await getMessageOwner(id, session.sub)
+    ? session.role === 'curator'
+      ? await getMessageOwnerForCurator(id, session.sub)
+      : await getMessageOwner(id, session.sub)
     : await getMessageOwnerAdmin(id)
   if (!owner) return new Response('Not found', { status: 404 })
 

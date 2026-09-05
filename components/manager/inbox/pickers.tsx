@@ -299,7 +299,7 @@ export function StickerPicker({
         ) : !stickers || stickers.length === 0 ? (
           <p className="px-2 py-8 text-center text-xs text-muted-foreground">
             Нет доступных стикеров. Добавьте стикеры в избранное в Telegram, и
-            они п��явятся здесь.
+            они появятся здесь.
           </p>
         ) : (
           <div className="scrollbar-thin grid max-h-64 grid-cols-4 gap-1 overflow-y-auto">

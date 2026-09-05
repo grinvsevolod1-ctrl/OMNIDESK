@@ -394,6 +394,30 @@ export async function editMessageBodyForCurator(
 }
 
 /**
+ * Curator-scoped variant of `getMessageOwner`. Mirrors it exactly but checks
+ * `c.curator_id = $2` instead of `c.manager_id = $2` — a curator only owns
+ * messages that live in a conversation TRANSFERRED to them (recordTransfer).
+ * Used by the media route and message-edit-history route so a curator's own
+ * inbox can stream/download the same photos, videos, voice notes and files a
+ * manager sees, without widening a manager session's own scope.
+ */
+export async function getMessageOwnerForCurator(
+  messageId: string,
+  curatorId: string,
+): Promise<{ channelId: string; channelType: ChannelType } | null> {
+  const rows = await query<{ channel_id: string; type: ChannelType }>(
+    `SELECT ch.id AS channel_id, ch.type
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       JOIN channels ch ON ch.id = c.channel_id
+      WHERE m.id = $1 AND c.curator_id = $2`,
+    [messageId, curatorId],
+  )
+  if (rows.length === 0) return null
+  return { channelId: rows[0].channel_id, channelType: rows[0].type }
+}
+
+/**
  * Curator-scoped channel resolver for the sticker proxy routes. A curator can
  * reach a channel only THROUGH a conversation transferred to them on it, so we
  * authorize by the existence of such a conversation and hand back the channel

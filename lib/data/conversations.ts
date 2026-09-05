@@ -340,6 +340,7 @@ export {
   getMessageDispatchForCurator,
   getMessageOwner,
   getMessageOwnerAdmin,
+  getMessageOwnerForCurator,
   markMessageDeleted,
   markMessageDeletedForCurator,
   setMessageReaction,

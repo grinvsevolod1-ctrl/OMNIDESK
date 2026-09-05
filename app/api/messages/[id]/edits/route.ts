@@ -1,5 +1,9 @@
 import { getSession } from '@/lib/auth'
-import { getMessageEditHistory, getMessageOwner } from '@/lib/data'
+import {
+  getMessageEditHistory,
+  getMessageOwner,
+  getMessageOwnerForCurator,
+} from '@/lib/data'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -22,7 +26,10 @@ export async function GET(
   const { id } = await params
   if (!id) return json({ error: 'bad_request' }, 400)
 
-  const owner = await getMessageOwner(id, session.sub)
+  const owner =
+    session.role === 'curator'
+      ? await getMessageOwnerForCurator(id, session.sub)
+      : await getMessageOwner(id, session.sub)
   if (!owner) return json({ error: 'not_found' }, 404)
 
   const history = await getMessageEditHistory(id)
