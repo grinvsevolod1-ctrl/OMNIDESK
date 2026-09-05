@@ -54,6 +54,8 @@ export interface LeadsFilters {
   search: string
   sort: 'newest' | 'oldest'
   orphanedOnly: boolean
+  /** Показывать архив (archived_at IS NOT NULL) вместо активных лидов. */
+  archivedOnly: boolean
   preset: PeriodPreset
   day: string
   from: string
@@ -88,6 +90,7 @@ export function useLeadsData({
     search: '',
     sort: 'newest',
     orphanedOnly: false,
+    archivedOnly: false,
     preset: 'all',
     day: today,
     from: shiftDay(today, -6),
@@ -122,6 +125,7 @@ export function useLeadsData({
         search: next.search ?? cur.search,
         sort: next.sort ?? cur.sort,
         orphanedOnly: next.orphanedOnly ?? cur.orphanedOnly,
+        archivedOnly: next.archivedOnly ?? cur.archivedOnly,
         offset: next.offset ?? 0,
         preset: next.preset ?? cur.preset,
         day: next.day ?? cur.day,
@@ -140,10 +144,13 @@ export function useLeadsData({
               from: range.from,
               to: range.to,
               orphanedOnly: f.orphanedOnly,
+              archivedOnly: f.archivedOnly,
               limit: LEADS_PAGE_SIZE,
               offset: f.offset,
             }),
-            f.preset === 'all'
+            // Плашка статистики за период считает активных лидов — для архива
+            // она не имеет смысла, поэтому в режиме архива её не запрашиваем.
+            f.preset === 'all' || f.archivedOnly
               ? Promise.resolve(null)
               : getLeadCardStatsAdminAction({
                   from: range.from,
@@ -200,6 +207,11 @@ export function useLeadsData({
     updateFilters({ orphanedOnly: !stateRef.current.orphanedOnly })
   }, [updateFilters])
 
+  // Переключатель «Архив»: список заменяется архивными лидами (или обратно).
+  const toggleArchived = useCallback(() => {
+    updateFilters({ archivedOnly: !stateRef.current.archivedOnly })
+  }, [updateFilters])
+
   const goToOffset = useCallback(
     (nextOffset: number) => reload({ offset: nextOffset }),
     [reload],
@@ -245,6 +257,7 @@ export function useLeadsData({
       from: range.from,
       to: range.to,
       orphanedOnly: f.orphanedOnly,
+      archivedOnly: f.archivedOnly,
       limit: LEADS_PAGE_SIZE,
       offset: f.offset,
     })
@@ -282,6 +295,7 @@ export function useLeadsData({
         status: f.status || null,
         search: f.search || null,
         orphanedOnly: f.orphanedOnly,
+        archivedOnly: f.archivedOnly,
         from: range.from,
         to: range.to,
         sort: f.sort,
@@ -309,6 +323,7 @@ export function useLeadsData({
     setSearchFocused,
     toggleSort,
     toggleOrphaned,
+    toggleArchived,
     goToOffset,
     refresh,
     transfer,

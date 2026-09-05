@@ -72,6 +72,7 @@ export function AllLeadsSection({
     setSearchFocused,
     toggleSort,
     toggleOrphaned,
+    toggleArchived,
     goToOffset,
     refresh,
     transfer,
@@ -95,9 +96,13 @@ export function AllLeadsSection({
     <section className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">Все лиды</h2>
+          <h2 className="text-lg font-semibold tracking-tight">
+            {filters.archivedOnly ? 'Архив лидов' : 'Все лиды'}
+          </h2>
           <p className="text-sm text-muted-foreground">
-            Все переданные лиды по всем менеджерам по кадрам. Всего: {total}.
+            {filters.archivedOnly
+              ? `Лиды с нерабочим статусом, ушедшие из активного рабочего места. Всего: ${total}. Откройте карточку, чтобы вернуть лид из архива.`
+              : `Все переданные лиды по всем менеджерам по кадрам. Всего: ${total}.`}
           </p>
         </div>
         {orphanedCount > 0 ? (
@@ -141,6 +146,7 @@ export function AllLeadsSection({
         search={filters.search}
         sort={filters.sort}
         orphanedOnly={filters.orphanedOnly}
+        archivedOnly={filters.archivedOnly}
         exporting={exporting}
         searchExpanded={searchExpanded}
         curators={curators}
@@ -150,6 +156,7 @@ export function AllLeadsSection({
         onSearchFocus={() => setSearchFocused(true)}
         onSearchBlur={() => setSearchFocused(false)}
         onToggleSort={toggleSort}
+        onToggleArchived={toggleArchived}
         onExport={exportExcel}
         onTrashChanged={refresh}
       />

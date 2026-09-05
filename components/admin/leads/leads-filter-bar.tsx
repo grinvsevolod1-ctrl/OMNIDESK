@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  Archive,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   FileSpreadsheet,
@@ -10,7 +11,6 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { LeadsArchiveDialog } from '@/components/admin/leads-archive-dialog'
 import { LeadsTrashDialog } from '@/components/admin/leads-trash-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,6 +40,7 @@ export function LeadsFilterBar({
   search,
   sort,
   orphanedOnly,
+  archivedOnly,
   exporting,
   searchExpanded,
   curators,
@@ -49,6 +50,7 @@ export function LeadsFilterBar({
   onSearchFocus,
   onSearchBlur,
   onToggleSort,
+  onToggleArchived,
   onExport,
   onTrashChanged,
 }: {
@@ -57,6 +59,7 @@ export function LeadsFilterBar({
   search: string
   sort: 'newest' | 'oldest'
   orphanedOnly: boolean
+  archivedOnly: boolean
   exporting: boolean
   searchExpanded: boolean
   curators: CuratorWithLoad[]
@@ -66,6 +69,7 @@ export function LeadsFilterBar({
   onSearchFocus: () => void
   onSearchBlur: () => void
   onToggleSort: () => void
+  onToggleArchived: () => void
   onExport: () => void
   onTrashChanged: () => void
 }) {
@@ -203,7 +207,24 @@ export function LeadsFilterBar({
         {!searchExpanded ? 'Excel' : null}
       </Button>
 
-      <LeadsArchiveDialog onChanged={onTrashChanged} />
+      {/* «Архив» — не модалка, а переключатель выборки: список заменяется
+          архивными лидами (archived_at IS NOT NULL), их можно смотреть и
+          вести так же, как обычные (открыть карточку, вернуть из архива). */}
+      <Button
+        variant={archivedOnly ? 'default' : 'outline'}
+        size="sm"
+        className="h-9"
+        onClick={onToggleArchived}
+        aria-pressed={archivedOnly}
+        aria-label="Показать архив лидов"
+        title={
+          archivedOnly ? 'Вернуться к активным лидам' : 'Показать архив лидов'
+        }
+      >
+        <Archive className="size-4 shrink-0" />
+        {!searchExpanded ? 'Архив' : null}
+      </Button>
+
       <LeadsTrashDialog onChanged={onTrashChanged} />
     </div>
   )
