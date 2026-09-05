@@ -343,7 +343,12 @@ export function MessageList({
                             </button>
                           ) : null}
                           {timeShort(m.createdAt)}
-                          {isOut ? <DeliveryTicks status={m.status} /> : null}
+                          {isOut ? (
+                            <DeliveryTicks
+                              status={m.status}
+                              errorReason={m.errorReason}
+                            />
+                          ) : null}
                         </span>
                       </div>
                     </div>
@@ -355,7 +360,7 @@ export function MessageList({
                         'flex max-w-[80%] flex-col gap-1 sm:max-w-[70%]',
                         isOut ? 'items-end' : 'items-start',
                         // Подсветка цели поиска/медиа-навигации — как в
-                        // Telegram: мягкое кольцо вокруг сообщения.
+                        // Telegram: мягкое кольц�� вокруг сообщения.
                         highlightedId === m.id &&
                           'rounded-2xl ring-2 ring-primary/70 ring-offset-2 ring-offset-background transition-shadow',
                         onBubbleClick && 'cursor-pointer',

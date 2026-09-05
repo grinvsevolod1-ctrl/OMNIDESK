@@ -42,7 +42,16 @@ function toNotification(r: LeadNotificationRow): LeadNotification {
   }
 }
 
-/** Create a notice for one recipient (curator). Never throws — best effort. */
+/**
+ * Create a notice for one recipient (curator). Never throws — best effort.
+ *
+ * Deduped: if the same recipient already has an UNSEEN notice of the same kind
+ * for the same lead, we skip the insert instead of stacking a second identical
+ * modal. Without this, repeated return-from-archive / pool-available events on
+ * one lead pile up as duplicate popups the curator must dismiss one by one.
+ * The guard only applies when a leadCardId is present (kind+lead is the natural
+ * identity); lead-less notices are always inserted.
+ */
 export async function createLeadNotification(input: {
   recipientId: string
   leadCardId: string | null
@@ -51,6 +60,16 @@ export async function createLeadNotification(input: {
   body: string
   leadName?: string | null
 }): Promise<void> {
+  if (input.leadCardId) {
+    const existing = await query<{ id: string }>(
+      `SELECT id FROM lead_notifications
+        WHERE recipient_id = $1 AND lead_card_id = $2 AND kind = $3
+          AND seen_at IS NULL
+        LIMIT 1`,
+      [input.recipientId, input.leadCardId, input.kind],
+    )
+    if (existing.length > 0) return
+  }
   await query(
     `INSERT INTO lead_notifications
        (recipient_id, lead_card_id, kind, title, body, lead_name)

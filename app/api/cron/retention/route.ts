@@ -62,6 +62,15 @@ const SWEEPS: Sweep[] = [
   // Истёкшие 2FA-пропуска (миграция 134): проверка при входе и так их не
   // пускает (expires_at > now()), здесь только уборка мёртвых строк.
   { table: 'trusted_devices', days: 0, ageColumn: 'expires_at' },
+  // In-app уведомления кураторов (миграция 149): очередь модалок, растущая
+  // без границ. Прочитанные (seen_at) держим 30 дней ради разбора, старьё
+  // выметаем; непрочитанные по возрасту не трогаем (могут быть актуальны).
+  {
+    table: 'lead_notifications',
+    days: 30,
+    ageColumn: 'seen_at',
+    extra: `AND seen_at IS NOT NULL`,
+  },
 ]
 
 async function handle(request: Request): Promise<Response> {

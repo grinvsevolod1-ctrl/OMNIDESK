@@ -2,13 +2,14 @@ export type MessageDirection = 'in' | 'out'
 
 /**
  * Delivery lifecycle of an OUTBOUND message, mirroring messenger ticks:
+ *   pending   -> queued locally, not yet acked      (clock)
  *   sent      -> accepted by the provider          (single ✓)
  *   delivered -> reached the contact's device      (double ✓, grey)
  *   read      -> the contact opened/read it         (double ✓, blue)
  *   failed    -> the provider rejected the send     (! warning)
  * Inbound messages have no status (undefined).
  */
-export type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
+export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
 
 /** Kinds of media a message can carry (mirrors the DB check constraint). */
 export type MediaType =
