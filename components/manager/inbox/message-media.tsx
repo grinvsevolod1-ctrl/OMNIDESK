@@ -134,7 +134,18 @@ function MediaLightbox({
       className="fixed inset-0 z-[100] flex flex-col bg-black/90 animate-in fade-in duration-200"
       onClick={onClose}
     >
-      <div className="flex shrink-0 items-center justify-end gap-2 p-3">
+      {/* Тулбар прижат к верху фикс-оверлея: в standalone-PWA верх экрана
+          занят статус-баром / Dynamic Island, поэтому добавляем safe-area
+          отступы (top/left/right) — иначе «Скачать»/«Закрыть» уезжают под
+          системную строку и по ним нельзя нажать. */}
+      <div
+        className="flex shrink-0 items-center justify-end gap-2 p-3"
+        style={{
+          paddingTop: 'max(0.75rem, env(safe-area-inset-top))',
+          paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
+          paddingLeft: 'max(0.75rem, env(safe-area-inset-left))',
+        }}
+      >
         <Button
           variant="secondary"
           size="sm"
