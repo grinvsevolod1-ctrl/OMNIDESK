@@ -51,6 +51,11 @@ export async function listRecoverableOutbound(
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
       WHERE c.channel_id = $1
+        -- God-created ("synthetic") dialogs are settled locally and NEVER
+        -- reach Telegram (migration 153/154): a resend would hit "Could not
+        -- find the input entity" and flip the row to a failed red tick. Keep
+        -- them out of the recovery sweep entirely.
+        AND c.god_synthetic = false
         AND m.direction = 'out'
         AND m.provider_message_id IS NULL
         AND m.deleted_at IS NULL

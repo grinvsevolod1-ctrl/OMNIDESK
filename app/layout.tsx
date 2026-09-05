@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
 import { UpdateWatcher } from '@/components/update-watcher'
 import { ErrorReporter } from '@/components/error-reporter'
+import { RUNTIME_BUILD_ID } from '@/lib/build-id'
 import './globals.css'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -60,6 +61,14 @@ export default function RootLayout({
       data-scroll-behavior="smooth"
       className={`dark ${geistSans.variable} ${geistMono.variable}`}
     >
+      <head>
+        {/* Build id baked into THIS server-rendered HTML shell. A PWA (esp. an
+            installed iOS standalone window) can cold-open a stale shell that the
+            OS/webview cached from an older deploy; UpdateWatcher reads this on
+            mount and, if it no longer matches the live build, reloads once so
+            every user always lands on the current version. */}
+        <meta name="x-app-build" content={RUNTIME_BUILD_ID} />
+      </head>
       <body className="bg-background text-foreground font-sans antialiased">
         {children}
         <Toaster />

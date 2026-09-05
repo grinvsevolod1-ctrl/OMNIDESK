@@ -444,7 +444,7 @@ export function ThreadPane({
               <div className="flex items-end gap-1.5">
                 {/* Единая «пилюля» (Telegram-style): эмодзи, расширяющееся поле
                     и скрепка внутри одного скруглённого контейнера, который
-                    подсвечивается п��и фокусе и растёт вместе с текстом. */}
+                    подсвечивается при фокусе и растёт вместе с текстом. */}
                 <div className="flex flex-1 items-end gap-0.5 rounded-3xl bg-muted px-1.5 py-1 transition-all focus-within:bg-card focus-within:ring-[3px] focus-within:ring-ring/30">
                   <EmojiPicker
                     onPick={(emoji) => applyValue(valueRef.current + emoji, true)}

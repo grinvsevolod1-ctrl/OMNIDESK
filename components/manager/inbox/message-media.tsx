@@ -300,7 +300,7 @@ export function MessageMedia({ message }: { message: Message }) {
   }
 
   if (type === 'video_note') {
-    // Телеграм-стиль кружок: play/pause по клик��, круговой прогресс-обод,
+    // Телеграм-стиль кружок: play/pause по клику, круговой прогресс-обод,
     // оставшееся время внутри. Скачивание — маленькой кнопкой под кружком.
     return (
       <div className="flex flex-col gap-1">

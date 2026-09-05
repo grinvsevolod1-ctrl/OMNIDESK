@@ -624,7 +624,7 @@ export const MessageComposer = memo(function MessageComposer({
           </Button>
         )}
 
-        {/* Отложенная отправка (Telegram): контролируемый ��опап, привязанный к
+        {/* Отложенная отправка (Telegram): контролируемый попап, привязанный к
             кнопке отправки; открывается долгим нажатием, не при редактировании. */}
         {canSchedule ? (
           <ScheduleSendPopover

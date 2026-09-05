@@ -360,7 +360,7 @@ export function MessageList({
                         'flex max-w-[80%] flex-col gap-1 sm:max-w-[70%]',
                         isOut ? 'items-end' : 'items-start',
                         // Подсветка цели поиска/медиа-навигации — как в
-                        // Telegram: мягкое кольц�� вокруг сообщения.
+                        // Telegram: мягкое кольцо вокруг сообщения.
                         highlightedId === m.id &&
                           'rounded-2xl ring-2 ring-primary/70 ring-offset-2 ring-offset-background transition-shadow',
                         onBubbleClick && 'cursor-pointer',

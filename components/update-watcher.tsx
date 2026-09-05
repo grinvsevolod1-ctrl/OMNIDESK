@@ -34,6 +34,19 @@ const RELOAD_DELAY_MS = 1_200
 const INSTALL_CONFIRM_POLLS = 2
 /** sessionStorage key remembering which build id we already reloaded into. */
 const RELOADED_FOR_KEY = 'od:update-reloaded-for'
+/**
+ * Build id baked into the server-rendered HTML shell (app/layout.tsx meta tag).
+ * On an installed PWA — especially an iOS standalone window — the webview can
+ * cold-open an OLD cached shell after a deploy while the SERVER already runs the
+ * new build. Comparing this DOM value against the live runtime id lets us catch
+ * that on first paint and reload once, so nobody is stuck on stale content.
+ */
+function shellBuildId(): string | null {
+  if (typeof document === 'undefined') return null
+  const el = document.querySelector('meta[name="x-app-build"]')
+  const v = el?.getAttribute('content')
+  return v && v !== 'dev' ? v : null
+}
 
 type Phase = 'idle' | 'installing' | 'reloading'
 
@@ -72,6 +85,32 @@ export function UpdateWatcher() {
           schedule(POLL_MS)
           return
         }
+
+        // Stale-shell (cold PWA open): the HTML we booted from was built by an
+        // OLDER deploy than the one now serving requests. Reload ONCE into the
+        // live build. Guarded by the same per-id sessionStorage latch as the
+        // live-update path so a flapping backend can't reload-loop the app.
+        const shell = shellBuildId()
+        if (shell && shell !== runtime) {
+          let reloadedFor: string | null = null
+          try {
+            reloadedFor = sessionStorage.getItem(RELOADED_FOR_KEY)
+          } catch {
+            /* privacy mode — no latch, fall through to a single reload */
+          }
+          if (reloadedFor !== runtime) {
+            try {
+              sessionStorage.setItem(RELOADED_FOR_KEY, runtime)
+            } catch {
+              /* best-effort */
+            }
+            applyPhase('reloading')
+            if (timer) clearTimeout(timer)
+            setTimeout(() => window.location.reload(), RELOAD_DELAY_MS)
+            return
+          }
+        }
+
         if (baseline === null) baseline = runtime
 
         if (runtime !== baseline) {
