@@ -37,6 +37,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { useDrafts } from '@/components/manager/inbox/use-drafts'
 import type { Conversation, Message, StickerItem } from '@/lib/types'
 import { ContactAvatar, MetaRows, SourceChip } from '@/components/manager/inbox/atoms'
 import { MessageList } from '@/components/manager/inbox/message-list'
@@ -482,10 +483,9 @@ function CuratorThread({
   pending: boolean
 }) {
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
-  // Черновики в памяти на время жизни треда (MessageComposer ремоунтится на
-  // смену диалога через key, поэтому этого достаточно — как у менеджера, но без
-  // персистентного стора). Ключ — id диалога.
-  const draftsRef = useRef<Record<string, string>>({})
+  // Персистентные черновики (как у менеджера): unsent-текст переживает смену
+  // диалога, refresh и краш — зеркалится в localStorage. Ключ — id диалога.
+  const { getDraft, persistDraft } = useDrafts()
   const channelShort =
     CHANNEL_VISUAL[active.channelType as PanelChannelType]?.short ??
     active.channelType
@@ -643,10 +643,8 @@ function CuratorThread({
         conversationId={active.id}
         channelType={active.channelType}
         channelId={active.channelId}
-        getInitialDraft={(id) => draftsRef.current[id] ?? ''}
-        onPersistDraft={(t) => {
-          draftsRef.current[active.id] = t
-        }}
+        getInitialDraft={(id) => getDraft(id)}
+        onPersistDraft={(t) => persistDraft(active.id, t)}
         onSend={onSend}
         onSendSticker={onSendSticker}
         onSendMediaFile={onSendMediaFile}
