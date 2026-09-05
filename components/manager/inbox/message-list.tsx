@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, type RefObject } from 'react'
 import { ChevronUp, History, Loader2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -12,17 +12,67 @@ import {
 import {
   isMediaPlaceholder,
   MessageMedia,
+  MessageMediaAlbum,
 } from '@/components/manager/inbox/message-media'
 import { CHANNEL_VISUAL, dayLabel, timeShort } from '@/components/manager/inbox/visual'
 import { DeliveryTicks } from '@/components/manager/inbox/atoms'
 import type { Conversation, Message, PanelChannelType } from '@/lib/types'
 import type { VisitorTyping } from '@/components/manager/inbox/use-inbox-realtime'
 
+/** Max time gap for grouping consecutive media into one album (Telegram sends
+ *  album members within a second or two of each other). */
+const ALBUM_TIME_WINDOW_MS = 5000
+
+/**
+ * Do two consecutive messages belong to the same Telegram-style album? Only
+ * photos and videos group (stickers, кружки, voice, files stay standalone), and
+ * only within the same direction and a few seconds of each other — exactly how
+ * a batch of photos arrives from / is sent to the provider. Deleted messages
+ * never group so their marker stays readable.
+ */
+function sameAlbum(a: Message, b: Message): boolean {
+  if (a.deletedAt || b.deletedAt) return false
+  if (a.direction !== b.direction) return false
+  const visual = (m: Message) =>
+    m.mediaType === 'image' || m.mediaType === 'video'
+  if (!visual(a) || !visual(b)) return false
+  const gap = Math.abs(
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  )
+  return gap <= ALBUM_TIME_WINDOW_MS
+}
+
+/**
+ * Pre-compute albums for a thread: map each album HEAD id → its members and the
+ * index right after the album (so tail-corner rounding can look past the group),
+ * and a set of non-head member ids to SKIP in the render loop. Singles never
+ * enter the map, so non-media threads pay almost nothing.
+ */
+function computeAlbums(thread: Message[]): {
+  heads: Map<string, { items: Message[]; endIndex: number }>
+  skip: Set<string>
+} {
+  const heads = new Map<string, { items: Message[]; endIndex: number }>()
+  const skip = new Set<string>()
+  let i = 0
+  while (i < thread.length) {
+    let j = i + 1
+    while (j < thread.length && sameAlbum(thread[j - 1], thread[j])) j++
+    if (j - i >= 2) {
+      const items = thread.slice(i, j)
+      heads.set(items[0].id, { items, endIndex: j })
+      for (let k = i + 1; k < j; k++) skip.add(thread[k].id)
+    }
+    i = j
+  }
+  return { heads, skip }
+}
+
 /**
  * The scrollable message feed of the open thread: older-history loader, day
  * separators, bubbles (media / reply preview / deleted markers / reactions),
- * the message context menu and the live "visitor is typing" preview.
- * Extracted verbatim from inbox-view.tsx.
+ * album grids for grouped photos, the message context menu and the live
+ * "visitor is typing" preview. Extracted verbatim from inbox-view.tsx.
  */
 export function MessageList({
   active,
@@ -109,6 +159,10 @@ export function MessageList({
     return () => observer.disconnect()
   }, [canLoadOlder, activeId, messagesScrollRef])
 
+  // Group consecutive photos/videos into Telegram-style albums (recomputed only
+  // when the thread reference changes).
+  const albums = useMemo(() => computeAlbums(thread), [thread])
+
   return (
     <div
       ref={messagesScrollRef}
@@ -155,20 +209,27 @@ export function MessageList({
           </div>
         ) : null}
         {thread.map((m, i) => {
+          // Album members (all but the first) are folded into the head's grid.
+          if (albums.skip.has(m.id)) return null
+          const album = albums.heads.get(m.id)
           const prev = thread[i - 1]
           const showDay =
             !prev || dayLabel(prev.createdAt) !== dayLabel(m.createdAt)
           const isOut = m.direction === 'out'
           const prevSameSide =
             prev && prev.direction === m.direction && !showDay
-          const next = thread[i + 1]
+          // For an album head, "next" is the message AFTER the whole group, so
+          // the tail corner and end-of-thread animation look past the members
+          // we skipped.
+          const nextIndex = album ? album.endIndex : i + 1
+          const next = thread[nextIndex]
           // Последний в «пачке» одного отправителя — только у него рисуем
           // острый уголок-хвост (как в Telegram); внутри группы углы скруглены.
           const nextSameSide =
             next &&
             next.direction === m.direction &&
             dayLabel(next.createdAt) === dayLabel(m.createdAt)
-          const isLast = i === thread.length - 1
+          const isLast = nextIndex >= thread.length
           return (
             // content-visibility lets the browser skip layout/paint of
             // off-screen bubbles — a large win on 300-message threads.
@@ -289,7 +350,11 @@ export function MessageList({
                             isDeleted ? 'opacity-60' : '',
                           )}
                         >
-                          <MessageMedia message={m} />
+                          {album ? (
+                            <MessageMediaAlbum items={album.items} />
+                          ) : (
+                            <MessageMedia message={m} />
+                          )}
                         </div>
                       ) : null}
                       {deletedLabel ? (

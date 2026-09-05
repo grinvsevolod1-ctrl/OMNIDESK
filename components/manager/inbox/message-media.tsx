@@ -9,7 +9,7 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Download, ExternalLink, FileText, Info, X } from 'lucide-react'
+import { Download, ExternalLink, FileText, Info, Play, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { TgsSticker } from '@/components/manager/inbox/tgs-sticker'
@@ -196,6 +196,104 @@ function MediaLightbox({
       </div>
     </div>,
     document.body,
+  )
+}
+
+/**
+ * Telegram-style album grid: several image/video messages sent together render
+ * as one grid instead of a messy tall column of separate bubbles. Layout mirrors
+ * Telegram: 2→two-up, 3→one wide over a pair, 4→2×2, 5+→three columns. Every
+ * cell is a square crop that opens the SAME fullscreen lightbox used for single
+ * media (so download / open-in-tab / safe-area insets all come for free).
+ */
+export function MessageMediaAlbum({ items }: { items: Message[] }) {
+  const [openId, setOpenId] = useState<string | null>(null)
+  const n = items.length
+  const cols = n <= 4 ? 2 : 3
+  const open = items.find((m) => m.id === openId) ?? null
+  return (
+    <>
+      <div
+        className={cn(
+          'grid w-64 max-w-full gap-0.5 sm:w-72',
+          cols === 2 ? 'grid-cols-2' : 'grid-cols-3',
+        )}
+      >
+        {items.map((m, idx) => (
+          <AlbumCell
+            key={m.id}
+            message={m}
+            // 3-photo album: the first image spans the full width above the pair.
+            className={n === 3 && idx === 0 ? 'col-span-2' : undefined}
+            onOpen={() => setOpenId(m.id)}
+          />
+        ))}
+      </div>
+      {open ? (
+        <MediaLightbox message={open} onClose={() => setOpenId(null)} />
+      ) : null}
+    </>
+  )
+}
+
+/** One square cell of a MessageMediaAlbum. */
+function AlbumCell({
+  message,
+  className,
+  onOpen,
+}: {
+  message: Message
+  className?: string
+  onOpen: () => void
+}) {
+  const [failed, setFailed] = useState(false)
+  const url = message.mediaUrl
+  const isVideo = effectiveMediaType(message) === 'video'
+  if (!url || failed) {
+    return (
+      <div
+        className={cn(
+          'flex aspect-square items-center justify-center rounded-md bg-muted/60 text-muted-foreground',
+          className,
+        )}
+      >
+        <Info className="size-4" />
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label="Открыть вложение"
+      className={cn(
+        'relative block aspect-square cursor-zoom-in overflow-hidden rounded-md bg-muted',
+        className,
+      )}
+    >
+      {isVideo ? (
+        <>
+          <video src={url} preload="metadata" className="size-full object-cover" />
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="rounded-full bg-black/45 p-2">
+              <Play className="size-4 fill-white text-white" />
+            </span>
+          </span>
+        </>
+      ) : (
+        // External chat media of unknown size — plain img (next/image can't
+        // optimize arbitrary CDN sources); square-cropped to the cell.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={url || '/placeholder.svg'}
+          alt={message.mediaName || 'Вложение'}
+          loading="lazy"
+          decoding="async"
+          className="size-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      )}
+    </button>
   )
 }
 
