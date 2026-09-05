@@ -42,14 +42,27 @@ import { formatMskDateTimeFull as formatDateTime } from '@/lib/time'
 import type { Manager } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
+function StatusAssignedAt({ at }: { at: string }) {
+  return (
+    <time
+      dateTime={at}
+      className="whitespace-nowrap text-[11px] leading-none tabular-nums text-muted-foreground"
+    >
+      {formatDateTime(at)}
+    </time>
+  )
+}
+
 function StatusBadge({
   status,
   needsUpdate,
   previousStatus,
+  at,
 }: {
   status: LeadStatus | null
   needsUpdate: boolean
   previousStatus: LeadStatus | null
+  at?: string | null
 }) {
   if (needsUpdate) {
     return (
@@ -65,25 +78,35 @@ function StatusBadge({
             вчера: {leadStatusLabel(previousStatus)}
           </span>
         ) : null}
+        {at ? <StatusAssignedAt at={at} /> : null}
       </div>
     )
   }
   if (!status) {
     return (
-      <Badge variant="outline" className="border-transparent bg-muted text-muted-foreground">
-        Не указан
-      </Badge>
+      <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <Badge
+          variant="outline"
+          className="border-transparent bg-muted text-muted-foreground"
+        >
+          Не указан
+        </Badge>
+        {at ? <StatusAssignedAt at={at} /> : null}
+      </span>
     )
   }
   const tone = LEAD_STATUS_TONE[status]
   return (
-    <Badge
-      variant="outline"
-      className={cn('gap-1.5 border-transparent', tone.bg, tone.text)}
-    >
-      <span className={cn('size-1.5 rounded-full', tone.dot)} />
-      {leadStatusLabel(status)}
-    </Badge>
+    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+      <Badge
+        variant="outline"
+        className={cn('gap-1.5 border-transparent', tone.bg, tone.text)}
+      >
+        <span className={cn('size-1.5 rounded-full', tone.dot)} />
+        {leadStatusLabel(status)}
+      </Badge>
+      {at ? <StatusAssignedAt at={at} /> : null}
+    </span>
   )
 }
 
@@ -258,11 +281,12 @@ export function CuratorLeadsDialog({
                             </p>
                           ) : null}
                           <div className="mt-1.5">
-                            <StatusBadge
-                              status={lead.status}
-                              needsUpdate={needs}
-                              previousStatus={lead.previousStatus}
-                            />
+              <StatusBadge
+                status={lead.status}
+                needsUpdate={needs}
+                previousStatus={lead.previousStatus}
+                at={lead.statusConfirmedAt}
+              />
                           </div>
                         </button>
 
@@ -354,11 +378,12 @@ export function CuratorLeadsDialog({
                     </p>
                   ) : null}
                   <div className="mt-3">
-                    <StatusBadge
-                      status={detail.card.status}
-                      needsUpdate={leadNeedsDailyStatus(detail.card)}
-                      previousStatus={detail.card.previousStatus}
-                    />
+              <StatusBadge
+                status={detail.card.status}
+                needsUpdate={leadNeedsDailyStatus(detail.card)}
+                previousStatus={detail.card.previousStatus}
+                at={detail.card.statusConfirmedAt}
+              />
                   </div>
                 </div>
 

@@ -70,11 +70,12 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
             className="inline-flex cursor-pointer"
             aria-label="Изменить статус"
           >
-            <LeadStatusBadge
-              status={lead.status}
-              needsUpdate={needs}
-              previousStatus={lead.previousStatus}
-            />
+          <LeadStatusBadge
+            status={lead.status}
+            needsUpdate={needs}
+            previousStatus={lead.previousStatus}
+            at={lead.statusConfirmedAt}
+          />
           </button>
         }
       />

@@ -114,17 +114,29 @@ export const ManagerLeadRow = memo(function ManagerLeadRow({
       {/* Статус — левые края бейджей выровнены по колонке. */}
       <span className="min-w-0 overflow-hidden">
         {tone && lead.status ? (
-          <Badge
-            variant="outline"
-            className={cn(
-              'max-w-full gap-1.5 border-transparent',
-              tone.bg,
-              tone.text,
-            )}
-          >
-            <span className={cn('size-1.5 shrink-0 rounded-full', tone.dot)} />
-            <span className="truncate">{leadStatusLabel(lead.status)}</span>
-          </Badge>
+          <div className="flex min-w-0 flex-col items-start gap-0.5">
+            <Badge
+              variant="outline"
+              className={cn(
+                'max-w-full gap-1.5 border-transparent',
+                tone.bg,
+                tone.text,
+              )}
+            >
+              <span
+                className={cn('size-1.5 shrink-0 rounded-full', tone.dot)}
+              />
+              <span className="truncate">{leadStatusLabel(lead.status)}</span>
+            </Badge>
+            {lead.statusConfirmedAt ? (
+              <time
+                dateTime={lead.statusConfirmedAt}
+                className="whitespace-nowrap text-[11px] leading-none tabular-nums text-muted-foreground"
+              >
+                {formatDateTime(lead.statusConfirmedAt)}
+              </time>
+            ) : null}
+          </div>
         ) : (
           <span className="text-xs text-muted-foreground">—</span>
         )}

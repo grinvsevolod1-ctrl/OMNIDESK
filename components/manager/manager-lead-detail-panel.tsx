@@ -134,10 +134,11 @@ export function ManagerLeadDetailPanel({
                 <p className="text-sm text-muted-foreground">{card.vacancy}</p>
               ) : null}
               <div className="mt-2">
-                <LeadStatusBadge
-                  status={card.status}
-                  previousStatus={card.previousStatus}
-                />
+          <LeadStatusBadge
+            status={card.status}
+            previousStatus={card.previousStatus}
+            at={card.statusConfirmedAt}
+          />
               </div>
             </div>
 

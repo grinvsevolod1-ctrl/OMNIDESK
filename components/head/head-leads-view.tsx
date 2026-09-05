@@ -96,11 +96,12 @@ const HeadLeadRow = memo(function HeadLeadRow({
               {[lead.vacancy, lead.phone].filter(Boolean).join(' · ') || '—'}
             </p>
           </div>
-          <LeadStatusBadge
-            status={lead.status}
-            previousStatus={lead.previousStatus}
-          />
-        </div>
+            <LeadStatusBadge
+              status={lead.status}
+              previousStatus={lead.previousStatus}
+              at={lead.statusConfirmedAt}
+            />
+          </div>
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           {executor}
           {lead.city ? (
@@ -147,11 +148,12 @@ const HeadLeadRow = memo(function HeadLeadRow({
           {date}
         </span>
         <span className="flex justify-end">
-          <LeadStatusBadge
-            status={lead.status}
-            previousStatus={lead.previousStatus}
-          />
-        </span>
+            <LeadStatusBadge
+              status={lead.status}
+              previousStatus={lead.previousStatus}
+              at={lead.statusConfirmedAt}
+            />
+          </span>
       </button>
     </li>
   )
@@ -290,7 +292,7 @@ export function HeadLeadsView({
         title="Обзор группы"
         description={
           canEdit
-            ? 'Лиды ваших кураторов и менеджеров. Вы можете править карточки, статусы и передавать лидов между кураторами группы.'
+            ? 'Лиды ваших куратор��в и менеджеров. Вы можете править карточки, статусы и передавать лидов между кураторами группы.'
             : 'Лиды ваших кураторов и менеджеров. Режим «только просмотр» — правки недоступны.'
         }
       />

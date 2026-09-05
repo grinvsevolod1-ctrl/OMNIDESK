@@ -159,10 +159,11 @@ const BuyerLeadRow = memo(function BuyerLeadRow({ lead }: { lead: LeadCard }) {
         {formatMskDateTime(lead.createdAt)}
       </span>
       <span className="flex justify-end">
-        <LeadStatusBadge
-          status={lead.status}
-          previousStatus={lead.previousStatus}
-        />
+            <LeadStatusBadge
+              status={lead.status}
+              previousStatus={lead.previousStatus}
+              at={lead.statusConfirmedAt}
+            />
       </span>
     </li>
   )

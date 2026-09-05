@@ -24,10 +24,11 @@ export function LeadCardDetails({ state }: { state: LeadCardState }) {
         <div className="flex flex-col gap-2 border-t border-border pt-3.5">
           <p className="text-sm font-semibold">Статус у менеджера по кадрам</p>
           {detail?.card ? (
-            <LeadStatusBadge
-              status={detail.card.status}
-              previousStatus={detail.card.previousStatus}
-            />
+          <LeadStatusBadge
+            status={detail.card.status}
+            previousStatus={detail.card.previousStatus}
+            at={detail.card.statusConfirmedAt}
+          />
           ) : null}
           {detail?.statusHistory?.length ? (
             <ul className="flex flex-col gap-1">

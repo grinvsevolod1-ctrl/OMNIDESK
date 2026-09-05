@@ -37,6 +37,7 @@ import {
   STATUS_COMMENT_MIN_LEN,
   leadStatusLabel,
 } from '@/lib/lead-status'
+import { formatMskDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 /* ------------------------- Статус + комментарий ------------------------- */
@@ -61,6 +62,7 @@ export function StatusInlineEditor({
   variant?: 'admin' | 'curator'
   trigger?: React.ReactElement
 }) {
+  const assignedAt = lead.statusConfirmedAt
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<string>(lead.status ?? '')
   const [comment, setComment] = useState('')
@@ -91,7 +93,7 @@ export function StatusInlineEditor({
           trigger ?? (
             <button
               type="button"
-              className="inline-flex cursor-pointer"
+              className="inline-flex cursor-pointer flex-wrap items-center gap-x-1.5 gap-y-0.5"
               aria-label="Изменить статус"
               onClick={(e) => e.stopPropagation()}
             >
@@ -115,6 +117,14 @@ export function StatusInlineEditor({
                   Статус…
                 </Badge>
               )}
+              {assignedAt && lead.status ? (
+                <time
+                  dateTime={assignedAt}
+                  className="whitespace-nowrap text-[11px] leading-none tabular-nums text-muted-foreground"
+                >
+                  {formatMskDateTime(assignedAt)}
+                </time>
+              ) : null}
             </button>
           )
         }

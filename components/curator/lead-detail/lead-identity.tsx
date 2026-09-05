@@ -49,11 +49,12 @@ export function LeadIdentity({
         )}
       </div>
       <div className="mt-2">
-        <LeadStatusBadge
-          status={card.status}
-          needsUpdate={leadNeedsDailyStatus(card)}
-          previousStatus={card.previousStatus}
-        />
+          <LeadStatusBadge
+            status={card.status}
+            needsUpdate={leadNeedsDailyStatus(card)}
+            previousStatus={card.previousStatus}
+            at={card.statusConfirmedAt}
+          />
       </div>
     </div>
   )
