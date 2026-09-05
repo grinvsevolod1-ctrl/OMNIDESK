@@ -14,6 +14,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
 } from 'react'
 import {
   ChevronDown,
@@ -30,6 +31,19 @@ import { ScheduleSendPopover } from '@/components/manager/inbox/schedule-send'
 import { TelemostIcon } from '@/components/channel-icons'
 import { cn } from '@/lib/utils'
 import type { ChannelType, QuickReply, StickerItem } from '@/lib/types'
+
+// Native CSS auto-grow (Chromium 123+): the textarea sizes itself to its content
+// with ZERO JS and ZERO layout reads, so on those browsers we never measure the
+// element on the typing hot path (measuring forces a synchronous reflow of the
+// whole thread, which is what made typing feel laggy). Safari/Firefox fall back
+// to the coalesced rAF resize below. The style is always applied — harmless
+// where unsupported — so server and client markup stay identical (no hydration
+// mismatch); only the JS measure path is skipped at runtime.
+const FIELD_SIZING_STYLE = { fieldSizing: 'content' } as CSSProperties
+const SUPPORTS_FIELD_SIZING =
+  typeof CSS !== 'undefined' &&
+  typeof CSS.supports === 'function' &&
+  CSS.supports('field-sizing', 'content')
 
 export interface MessageComposerProps {
   conversationId: string
@@ -108,7 +122,17 @@ export const MessageComposer = memo(function MessageComposer({
   replyActive,
   editing = null,
 }: MessageComposerProps) {
-  const [text, setText] = useState(() => getInitialDraft(conversationId))
+  // Uncontrolled input: the textarea owns its value in the DOM, mirrored here in
+  // `valueRef`. Typing therefore triggers NO React re-render — a controlled
+  // `value` re-rendered the whole composer subtree on every keystroke, so
+  // characters painted late (the reported lag). The ONLY React state driven by
+  // typing is `hasText`, and it flips just once when crossing empty↔non-empty
+  // for the mic⇄send swap.
+  const initialDraft = useRef(getInitialDraft(conversationId))
+  const valueRef = useRef(initialDraft.current)
+  const [hasText, setHasText] = useState(() =>
+    Boolean(initialDraft.current.trim()),
+  )
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(false)
   // "Send later" popover (Telegram): opened by long-pressing the send button,
   // anchored to it — there is no separate clock button anymore.
@@ -121,44 +145,41 @@ export const MessageComposer = memo(function MessageComposer({
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressFired = useRef(false)
 
-  // Mirror the latest text + persist callback in refs so the unmount cleanup can
-  // save the current value without listing `text` in its deps. The refs are
-  // updated in effects (never during render) to satisfy the refs lint rule.
-  const textRef = useRef(text)
-  useEffect(() => {
-    textRef.current = text
-  }, [text])
   const persistRef = useRef(onPersistDraft)
   useEffect(() => {
     persistRef.current = onPersistDraft
   }, [onPersistDraft])
-  useEffect(() => {
-    // On unmount (i.e. switching to another conversation) save the unsent
-    // draft. If the manager was mid-edit, the input holds the EDIT text — save
-    // the stashed real draft instead so the edit never leaks into drafts.
-    return () =>
-      persistRef.current(
-        editingRef.current ? (stashedDraftRef.current ?? '') : textRef.current,
-      )
-  }, [])
-  // Mirror `editing` in a ref so the persistence paths below can check it
-  // without adding it to their deps.
+  // Mirror `editing` in a ref so the persistence paths can check it without
+  // adding it to their deps.
   const editingRef = useRef(editing)
   useEffect(() => {
     editingRef.current = editing
   }, [editing])
 
-  // ALSO persist while typing (debounced). Unmount-only persistence loses the
-  // draft whenever the tree never unmounts cleanly — a hard reload, a crash,
-  // navigating via browser chrome — which managers reported as vanished text.
-  // 400ms of idle keeps this far from the per-keystroke hot path. Suspended
-  // while editing an existing message: the edit text must never overwrite the
-  // unsent draft.
+  // Debounced draft persistence, driven from the change handler (there is no
+  // `text` state to key an effect on anymore). 400ms of idle keeps it off the
+  // typing hot path; the unmount cleanup below covers hard reloads/crashes.
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scheduleDraftPersist = useCallback(() => {
+    if (editingRef.current) return
+    if (persistTimer.current) clearTimeout(persistTimer.current)
+    persistTimer.current = setTimeout(() => {
+      persistTimer.current = null
+      persistRef.current(valueRef.current)
+    }, 400)
+  }, [])
+
   useEffect(() => {
-    if (editing) return
-    const t = setTimeout(() => persistRef.current(text), 400)
-    return () => clearTimeout(t)
-  }, [text, editing])
+    // On unmount (i.e. switching to another conversation) save the unsent
+    // draft. If the manager was mid-edit, the input holds the EDIT text — save
+    // the stashed real draft instead so the edit never leaks into drafts.
+    return () => {
+      if (persistTimer.current) clearTimeout(persistTimer.current)
+      persistRef.current(
+        editingRef.current ? (stashedDraftRef.current ?? '') : valueRef.current,
+      )
+    }
+  }, [])
 
   const resizeComposer = useCallback(() => {
     const el = composerRef.current
@@ -174,6 +195,9 @@ export const MessageComposer = memo(function MessageComposer({
   // first and collapses bursts of keystrokes into a single resize per frame.
   const resizeRaf = useRef<number | null>(null)
   const scheduleResize = useCallback(() => {
+    // Chromium sizes the textarea natively via `field-sizing: content` — no
+    // measure, no reflow — so the hot path does nothing here.
+    if (SUPPORTS_FIELD_SIZING) return
     if (resizeRaf.current != null) return
     resizeRaf.current = requestAnimationFrame(() => {
       resizeRaf.current = null
@@ -187,6 +211,36 @@ export const MessageComposer = memo(function MessageComposer({
     [],
   )
 
+  // Programmatic value changes (emoji, quick reply, edit prefill, external
+  // insert, clear-after-send). Writes straight to the uncontrolled textarea,
+  // mirrors `valueRef`, flips `hasText` only on an empty↔non-empty transition,
+  // and resizes. `focusEnd` focuses and drops the caret at the end.
+  const applyValue = useCallback(
+    (next: string, focusEnd = false) => {
+      valueRef.current = next
+      const el = composerRef.current
+      if (el) {
+        el.value = next
+        if (focusEnd) {
+          el.focus()
+          const end = next.length
+          el.setSelectionRange(end, end)
+        }
+      }
+      setHasText((prev) => {
+        const now = Boolean(next.trim())
+        return prev === now ? prev : now
+      })
+      resizeComposer()
+    },
+    [resizeComposer],
+  )
+
+  const handleEmojiPick = useCallback(
+    (emoji: string) => applyValue(valueRef.current + emoji, true),
+    [applyValue],
+  )
+
   // Вставка готового текста извне (например, контакт куратора после передачи
   // лида — см. use-lead-card). Событие адресное: чужие диалоги игнорируют.
   // Текст ЗАМЕНЯЕТ черновик (сценарий один: отправить контакт кандидату),
@@ -198,21 +252,12 @@ export const MessageComposer = memo(function MessageComposer({
       ).detail
       if (!detail?.text || detail.conversationId !== conversationId) return
       if (editingRef.current) return // не затираем режим редактирования
-      setText(detail.text)
-      requestAnimationFrame(() => {
-        const el = composerRef.current
-        if (el) {
-          el.focus()
-          const end = el.value.length
-          el.setSelectionRange(end, end)
-        }
-        resizeComposer()
-      })
+      applyValue(detail.text, true)
     }
     window.addEventListener('omnidesk:composer-insert', onInsert)
     return () =>
       window.removeEventListener('omnidesk:composer-insert', onInsert)
-  }, [conversationId, resizeComposer])
+  }, [conversationId, applyValue])
 
   // Entering edit mode: stash the current unsent draft and prefill the input
   // with the message being edited. Leaving edit mode (submit or cancel):
@@ -223,65 +268,45 @@ export const MessageComposer = memo(function MessageComposer({
   useEffect(() => {
     if (editingId) {
       if (stashedDraftRef.current === null) {
-        stashedDraftRef.current = textRef.current
+        stashedDraftRef.current = valueRef.current
       }
-      setText(editingBody)
-      requestAnimationFrame(() => {
-        const el = composerRef.current
-        if (el) {
-          el.focus()
-          const end = el.value.length
-          el.setSelectionRange(end, end)
-        }
-        resizeComposer()
-      })
+      applyValue(editingBody, true)
     } else if (stashedDraftRef.current !== null) {
-      setText(stashedDraftRef.current)
+      applyValue(stashedDraftRef.current)
       stashedDraftRef.current = null
-      requestAnimationFrame(resizeComposer)
     }
     // editingBody intentionally read only when editingId changes: retargeting
     // to another message updates it, re-renders of the same edit do not reset
     // the manager's in-progress changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingId, resizeComposer])
+  }, [editingId, applyValue])
 
   const submit = useCallback(() => {
     if (aiLed) {
       onBlockedInteract()
       return
     }
-    const body = text.trim()
+    const body = valueRef.current.trim()
     if (!body) return
     onSend(body)
-    setText('')
+    if (persistTimer.current) clearTimeout(persistTimer.current)
+    applyValue('')
     // Clear the persisted draft immediately — otherwise the debounced persist
     // (or a stale localStorage entry) could resurrect an already-sent message.
     // Skipped while editing: submitting an edit must not wipe the stashed
     // unsent draft (it is restored by the edit effect right after).
     if (!editingRef.current) persistRef.current('')
-    requestAnimationFrame(resizeComposer)
-  }, [aiLed, text, onSend, onBlockedInteract, resizeComposer])
+  }, [aiLed, onSend, onBlockedInteract, applyValue])
 
   function insertQuickReply(value: string) {
-    setText((prev) => {
-      const base = prev.trimEnd()
-      return base ? `${base} ${value}` : value
-    })
-    requestAnimationFrame(() => {
-      const el = composerRef.current
-      if (!el) return
-      el.focus()
-      const end = el.value.length
-      el.setSelectionRange(end, end)
-      resizeComposer()
-    })
+    const base = valueRef.current.trimEnd()
+    applyValue(base ? `${base} ${value}` : value, true)
   }
 
   // Telegram-style send/mic swap: an empty field shows the mic (voice note),
-  // any drafted text turns the button into "send". Scheduling is only offered
-  // for Telegram and never while editing an existing message.
-  const hasText = Boolean(text.trim())
+  // any drafted text turns the button into "send". `hasText` is React state
+  // flipped only on empty↔non-empty transitions (see applyValue / onChange).
+  // Scheduling is only offered for Telegram and never while editing.
   const isTelegram = channelType === 'telegram'
   const canSchedule = isTelegram && !editing
   const showMic = isTelegram && !hasText && !aiLed && !editing
@@ -386,23 +411,25 @@ export const MessageComposer = memo(function MessageComposer({
             текстом. */}
         <div
           className={cn(
-            'flex flex-1 items-end gap-0.5 rounded-3xl bg-muted px-1.5 py-1 transition-all focus-within:bg-card focus-within:ring-[3px] focus-within:ring-ring/30',
+            'flex flex-1 items-end gap-0.5 rounded-3xl bg-muted px-1.5 py-1 transition-[background-color,box-shadow] duration-150 focus-within:bg-card focus-within:ring-[3px] focus-within:ring-ring/30',
             aiLed && 'opacity-60',
           )}
         >
-          <EmojiPicker
-            onPick={(emoji) => {
-              setText((d) => d + emoji)
-              requestAnimationFrame(resizeComposer)
-            }}
-          />
+          <EmojiPicker onPick={handleEmojiPick} />
           <textarea
             ref={composerRef}
-            value={text}
+            defaultValue={initialDraft.current}
             rows={1}
             onChange={(e) => {
-              setText(e.target.value)
+              const v = e.target.value
+              valueRef.current = v
+              // Flip the mic⇄send swap only on empty↔non-empty transitions; the
+              // updater returns the same value otherwise so React bails out and
+              // typing causes NO re-render (the actual fix for the lag).
+              const now = Boolean(v.trim())
+              setHasText((prev) => (prev === now ? prev : now))
               scheduleResize()
+              scheduleDraftPersist()
             }}
             onKeyDown={(e) => {
               // Don't submit mid-IME-composition (CJK): Enter confirms the
@@ -429,8 +456,9 @@ export const MessageComposer = memo(function MessageComposer({
                 : 'Написать сообщение…'
             }
             aria-label="Текст ответа"
+            style={FIELD_SIZING_STYLE}
             className={cn(
-              'scrollbar-thin max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-1.5 py-2 text-sm leading-relaxed outline-none placeholder:text-muted-foreground',
+              'scrollbar-thin max-h-40 min-h-[36px] flex-1 resize-none overflow-y-auto bg-transparent px-1.5 py-2 text-sm leading-relaxed outline-none placeholder:text-muted-foreground',
               aiLed && 'cursor-not-allowed',
             )}
           />
@@ -447,8 +475,8 @@ export const MessageComposer = memo(function MessageComposer({
                 onChange={(e) => {
                   const f = e.target.files?.[0]
                   if (f) {
-                    onSendMediaFile(f, text.trim())
-                    setText('')
+                    onSendMediaFile(f, valueRef.current.trim())
+                    applyValue('')
                     persistRef.current('')
                   }
                   e.target.value = ''
@@ -540,12 +568,11 @@ export const MessageComposer = memo(function MessageComposer({
             onOpenChange={setScheduleOpen}
             anchor={sendBtnRef}
             onSchedule={(iso) => {
-              const body = text.trim()
+              const body = valueRef.current.trim()
               if (!body) return
               onScheduleSend(body, iso)
-              setText('')
+              applyValue('')
               persistRef.current('')
-              requestAnimationFrame(resizeComposer)
             }}
           />
         ) : null}

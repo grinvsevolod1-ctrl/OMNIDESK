@@ -62,8 +62,10 @@ interface ThreadPaneProps {
   onBackPointerMove: (e: React.PointerEvent) => void
   onBackPointerEnd: (e: React.PointerEvent) => void
   /* Composer plumbing (use-god-composer) */
-  draft: string
-  setDraft: React.Dispatch<React.SetStateAction<string>>
+  valueRef: React.MutableRefObject<string>
+  applyValue: (next: string, focusEnd?: boolean) => void
+  markDraft: (next: string) => void
+  hasDraft: boolean
   replyTo: Message | null
   editing: Message | null
   replyLabel: string
@@ -99,8 +101,10 @@ export function ThreadPane({
   onBackPointerDown,
   onBackPointerMove,
   onBackPointerEnd,
-  draft,
-  setDraft,
+  valueRef,
+  applyValue,
+  markDraft,
+  hasDraft,
   replyTo,
   editing,
   replyLabel,
@@ -120,30 +124,20 @@ export function ThreadPane({
 }: ThreadPaneProps) {
   const showThread = selectedId !== null
 
-  // Auto-grow the textarea with its content (Telegram-style), capped at 160px.
-  // Runs on every draft change so it also collapses back after send/clear and
-  // grows when the input is prefilled for an edit.
-  const resizeComposer = () => {
-    const el = composerRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-  }
-  useEffect(() => {
-    resizeComposer()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft])
-
-  // Coalesced, off-critical-path resize for the typing hot path. Measuring the
-  // textarea forces a synchronous reflow; running it inside onChange delayed the
-  // typed character from painting. rAF lets the character paint first and
-  // collapses bursts of keystrokes into one resize per frame.
+  // Auto-grow the textarea (Telegram-style), capped at 160px. The textarea is
+  // uncontrolled (owned by `use-god-composer`), so programmatic value changes
+  // resize inside `applyValue`; only the typing hot path resizes here. Measuring
+  // the textarea forces a synchronous reflow, so we coalesce it into a single
+  // rAF per frame — the typed character paints first, then the box grows.
   const resizeRaf = useRef<number | null>(null)
   const scheduleResize = () => {
     if (resizeRaf.current != null) return
     resizeRaf.current = requestAnimationFrame(() => {
       resizeRaf.current = null
-      resizeComposer()
+      const el = composerRef.current
+      if (!el) return
+      el.style.height = 'auto'
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`
     })
   }
   useEffect(
@@ -152,8 +146,6 @@ export function ThreadPane({
     },
     [],
   )
-
-  const hasDraft = Boolean(draft.trim())
 
   return (
     <section
@@ -357,18 +349,18 @@ export function ThreadPane({
                     подсвечивается при фокусе и растёт вместе с текстом. */}
                 <div className="flex flex-1 items-end gap-0.5 rounded-3xl bg-muted px-1.5 py-1 transition-all focus-within:bg-card focus-within:ring-[3px] focus-within:ring-ring/30">
                   <EmojiPicker
-                    onPick={(emoji) => {
-                      setDraft((d) => d + emoji)
-                      composerRef.current?.focus()
-                    }}
+                    onPick={(emoji) => applyValue(valueRef.current + emoji, true)}
                   />
                   <textarea
                     ref={composerRef}
-                    value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value)
-                scheduleResize()
-              }}
+                    defaultValue={valueRef.current}
+                    onChange={(e) => {
+                      // Mirrors the DOM value into valueRef and flips hasDraft only
+                      // on empty↔non-empty transitions, so ordinary keystrokes cause
+                      // NO re-render of the messenger (the lag fix).
+                      markDraft(e.target.value)
+                      scheduleResize()
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
                         e.preventDefault()
@@ -419,7 +411,7 @@ export function ThreadPane({
                     size="icon"
                     className="size-10 shrink-0 rounded-full transition-transform duration-150 animate-in fade-in-0 zoom-in-95 active:scale-90"
                     onClick={sendMessage}
-                    disabled={pending || !draft.trim()}
+                    disabled={pending || (!hasDraft && !editing)}
                     aria-label={editing ? 'Сохранить' : 'Отправить'}
                   >
                     {pending ? (

@@ -58,6 +58,10 @@ export function GodMessenger({
     setVisibleCount(MESSAGES_WINDOW)
   }, [])
 
+  // Stable so the memoised ChatListPane doesn't re-render on every draft
+  // keystroke (its other props are unchanged while typing).
+  const openCreate = useCallback(() => setCreateOpen(true), [])
+
   const thread = useGodThread({ deepLinkId, search, onThreadSwitch })
 
   const scroll = useGodScroll({
@@ -104,8 +108,8 @@ export function GodMessenger({
           loadingList={thread.loadingList}
           conversations={thread.conversations}
           selectedId={thread.selectedId}
-          onSelect={(id) => thread.selectThread(id)}
-          onCreate={() => setCreateOpen(true)}
+          onSelect={thread.selectThread}
+          onCreate={openCreate}
           managerNameOf={managerNameOf}
         />
 
@@ -128,8 +132,10 @@ export function GodMessenger({
           onBackPointerDown={scroll.onBackPointerDown}
           onBackPointerMove={scroll.onBackPointerMove}
           onBackPointerEnd={scroll.onBackPointerEnd}
-          draft={composer.draft}
-          setDraft={composer.setDraft}
+          valueRef={composer.valueRef}
+          applyValue={composer.applyValue}
+          markDraft={composer.markDraft}
+          hasDraft={composer.hasDraft}
           replyTo={composer.replyTo}
           editing={composer.editing}
           replyLabel={replyLabel}

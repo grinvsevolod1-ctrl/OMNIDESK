@@ -39,7 +39,14 @@ export function useGodComposer({
   loadList: (opts?: { silent?: boolean }) => Promise<void>
   pinOnNextGrowth: () => void
 }) {
-  const [draft, setDraft] = useState('')
+  // Uncontrolled draft: the textarea owns its value in the DOM, mirrored here in
+  // `valueRef`. Typing therefore triggers NO React re-render of the messenger —
+  // a controlled `value` re-rendered the whole god messenger (list + thread) on
+  // every keystroke, so characters painted late (the reported lag). The only
+  // React state driven by typing is `hasDraft`, flipped once when crossing
+  // empty↔non-empty (send button enable + mic⇄send swap).
+  const valueRef = useRef('')
+  const [hasDraft, setHasDraft] = useState(false)
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [editing, setEditing] = useState<Message | null>(null)
   const [menuFor, setMenuFor] = useState<Message | null>(null)
@@ -57,6 +64,49 @@ export function useGodComposer({
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
+  const resizeComposer = useCallback(() => {
+    const el = composerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }, [])
+
+  // Programmatic value changes (emoji, edit prefill, clear-after-send, error
+  // restore). Writes straight to the uncontrolled textarea, mirrors `valueRef`,
+  // flips `hasDraft` only on an empty↔non-empty transition, and resizes.
+  // `focusEnd` focuses and drops the caret at the end.
+  const applyValue = useCallback(
+    (next: string, focusEnd = false) => {
+      valueRef.current = next
+      const el = composerRef.current
+      if (el) {
+        el.value = next
+        if (focusEnd) {
+          el.focus()
+          const end = next.length
+          el.setSelectionRange(end, end)
+        }
+      }
+      setHasDraft((prev) => {
+        const now = Boolean(next.trim())
+        return prev === now ? prev : now
+      })
+      resizeComposer()
+    },
+    [resizeComposer],
+  )
+
+  // Typing hot path: mirror the DOM value into `valueRef` and flip `hasDraft`
+  // only on an empty↔non-empty transition (the updater bails out otherwise, so
+  // ordinary keystrokes cause no re-render at all).
+  const markDraft = useCallback((next: string) => {
+    valueRef.current = next
+    setHasDraft((prev) => {
+      const now = Boolean(next.trim())
+      return prev === now ? prev : now
+    })
+  }, [])
+
   /** Called by the parent when the selected thread changes. */
   const resetForNewThread = useCallback(() => {
     setReplyTo(null)
@@ -72,18 +122,20 @@ export function useGodComposer({
     composerRef.current?.focus()
   }, [])
 
-  const startEdit = useCallback((message: Message) => {
-    setReplyTo(null)
-    setEditing(message)
-    setDraft(parseReply(message.body).text)
-    composerRef.current?.focus()
-  }, [])
+  const startEdit = useCallback(
+    (message: Message) => {
+      setReplyTo(null)
+      setEditing(message)
+      applyValue(parseReply(message.body).text, true)
+    },
+    [applyValue],
+  )
 
   const cancelComposeExtras = useCallback(() => {
     setReplyTo(null)
-    if (editing) setDraft('')
+    if (editing) applyValue('')
     setEditing(null)
-  }, [editing])
+  }, [editing, applyValue])
 
   /* ----- message action sheet ----- */
   const menuAction = useCallback(
@@ -133,13 +185,13 @@ export function useGodComposer({
 
   /* ----- send / save edit (as the client) ----- */
   const sendMessage = useCallback(() => {
-    const text = draft.trim()
+    const text = valueRef.current.trim()
     if (!text || !selectedIdRef.current) return
     const convId = selectedIdRef.current
 
     if (editing) {
       const target = editing
-      setDraft('')
+      applyValue('')
       setEditing(null)
       startTransition(async () => {
         const res = await secretEditMessageAction({
@@ -164,7 +216,7 @@ export function useGodComposer({
         } else {
           toast.error(res.message)
           // Restore edit state only if the user hasn't started typing anew.
-          setDraft((cur) => cur || text)
+          if (!valueRef.current.trim()) applyValue(text)
           setEditing((cur) => cur ?? target)
         }
       })
@@ -172,7 +224,7 @@ export function useGodComposer({
     }
 
     const target = replyTo
-    setDraft('')
+    applyValue('')
     setReplyTo(null)
     pinOnNextGrowth()
     startTransition(async () => {
@@ -213,11 +265,11 @@ export function useGodComposer({
       } else if (!res.ok) {
         toast.error(res.message)
         // Don't clobber text the user typed while the request was in flight.
-        setDraft((cur) => cur || text)
+        if (!valueRef.current.trim()) applyValue(text)
         setReplyTo((cur) => cur ?? target)
       }
     })
-  }, [draft, replyTo, editing, conversation, loadList, pinOnNextGrowth, selectedIdRef, setMessages])
+  }, [replyTo, editing, conversation, loadList, pinOnNextGrowth, selectedIdRef, setMessages, applyValue])
 
   /* ----- attachments ----- */
   const uploadFile = useCallback(
@@ -229,10 +281,10 @@ export function useGodComposer({
       fd.set('conversationId', convId)
       fd.set('direction', 'in')
       if (kind) fd.set('kind', kind)
-      const caption = kind ? '' : draft.trim()
+      const caption = kind ? '' : valueRef.current.trim()
       if (caption) {
         fd.set('caption', caption)
-        setDraft('')
+        applyValue('')
       }
       setUploading(true)
       pinOnNextGrowth()
@@ -289,7 +341,7 @@ export function useGodComposer({
         .catch(() => toast.error('Не удалось отправить файл'))
         .finally(() => setUploading(false))
     },
-    [draft, conversation, loadList, pinOnNextGrowth, selectedIdRef, setMessages],
+    [applyValue, conversation, loadList, pinOnNextGrowth, selectedIdRef, setMessages],
   )
 
   const onFilePicked = useCallback(
@@ -366,8 +418,10 @@ export function useGodComposer({
   )
 
   return {
-    draft,
-    setDraft,
+    valueRef,
+    applyValue,
+    markDraft,
+    hasDraft,
     replyTo,
     editing,
     menuFor,

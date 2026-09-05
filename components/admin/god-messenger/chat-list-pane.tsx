@@ -1,5 +1,6 @@
 'use client'
 
+import { memo } from 'react'
 import Link from 'next/link'
 import {
   ChevronLeft,
@@ -26,7 +27,7 @@ import { parseReply } from './reply'
  * godUnread (manager replies the god user hasn't seen) — not the
  * manager-side `unread`.
  */
-export function ChatListPane({
+export const ChatListPane = memo(function ChatListPane({
   showThread,
   live,
   pushAvailable,
@@ -241,4 +242,4 @@ export function ChatListPane({
       </div>
     </aside>
   )
-}
+})
