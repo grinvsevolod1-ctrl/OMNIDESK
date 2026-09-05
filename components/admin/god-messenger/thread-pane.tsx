@@ -11,6 +11,7 @@
  */
 
 import type React from 'react'
+import { useEffect } from 'react'
 import {
   Check,
   ChevronLeft,
@@ -118,6 +119,22 @@ export function ThreadPane({
   finishRecording,
 }: ThreadPaneProps) {
   const showThread = selectedId !== null
+
+  // Auto-grow the textarea with its content (Telegram-style), capped at 160px.
+  // Runs on every draft change so it also collapses back after send/clear and
+  // grows when the input is prefilled for an edit.
+  const resizeComposer = () => {
+    const el = composerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }
+  useEffect(() => {
+    resizeComposer()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft])
+
+  const hasDraft = Boolean(draft.trim())
 
   return (
     <section
@@ -314,77 +331,89 @@ export function ThreadPane({
               </div>
             ) : (
               <div className="flex items-end gap-1.5">
-                <EmojiPicker
-                  onPick={(emoji) => {
-                    setDraft((d) => d + emoji)
-                    composerRef.current?.focus()
-                  }}
-                />
-                <textarea
-                  ref={composerRef}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
-                      e.preventDefault()
-                      sendMessage()
+                {/* Единая «пилюля» (Telegram-style): эмодзи, расширяющееся поле
+                    и скрепка внутри одного скруглённого контейнера, который
+                    подсвечивается при фокусе и растёт вместе с текстом. */}
+                <div className="flex flex-1 items-end gap-0.5 rounded-3xl bg-muted px-1.5 py-1 transition-all focus-within:bg-card focus-within:ring-[3px] focus-within:ring-ring/30">
+                  <EmojiPicker
+                    onPick={(emoji) => {
+                      setDraft((d) => d + emoji)
+                      composerRef.current?.focus()
+                    }}
+                  />
+                  <textarea
+                    ref={composerRef}
+                    value={draft}
+                    onChange={(e) => {
+                      setDraft(e.target.value)
+                      resizeComposer()
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
+                        e.preventDefault()
+                        sendMessage()
+                      }
+                      if (e.key === 'Escape' && (editing || replyTo)) {
+                        cancelComposeExtras()
+                      }
+                    }}
+                    rows={1}
+                    placeholder={
+                      editing
+                        ? 'Новый текст сообщения…'
+                        : 'Сообщение от имени клиента…'
                     }
-                    if (e.key === 'Escape' && (editing || replyTo)) {
-                      cancelComposeExtras()
-                    }
-                  }}
-                  rows={1}
-                  placeholder={
-                    editing
-                      ? 'Новый текст сообщения…'
-                      : 'Сообщение от имени клиента…'
-                  }
-                  className="max-h-40 min-h-[52px] flex-1 resize-none rounded-3xl border border-input bg-card px-4 py-3.5 text-base leading-relaxed outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                />
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  onChange={onFilePicked}
-                  aria-hidden="true"
-                  tabIndex={-1}
-                />
-                {!editing && (
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading}
-                    className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-                    aria-label="Прикрепить файл"
-                  >
-                    {uploading ? (
-                      <Loader2 className="size-5 animate-spin" />
-                    ) : (
-                      <Paperclip className="size-5" />
-                    )}
-                  </button>
-                )}
-                {draft.trim() || editing ? (
+                    className="scrollbar-thin max-h-40 min-h-[36px] flex-1 resize-none bg-transparent px-1.5 py-2 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
+                  />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={onFilePicked}
+                    aria-hidden="true"
+                    tabIndex={-1}
+                  />
+                  {!editing && (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                      className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-50"
+                      aria-label="Прикрепить файл"
+                    >
+                      {uploading ? (
+                        <Loader2 className="size-5 animate-spin" />
+                      ) : (
+                        <Paperclip className="size-5" />
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {/* Свап Микрофон ⇄ Отправка: пустое поле показывает микрофон
+                    (голосовое), любой введённый текст превращает кнопку в
+                    «отправить»; режим редактирования всегда показывает галочку. */}
+                {hasDraft || editing ? (
                   <Button
                     size="icon"
-                    className="size-12 shrink-0 rounded-full"
+                    className="size-10 shrink-0 rounded-full transition-transform duration-150 animate-in fade-in-0 zoom-in-95 active:scale-90"
                     onClick={sendMessage}
                     disabled={pending || !draft.trim()}
                     aria-label={editing ? 'Сохранить' : 'Отправить'}
                   >
                     {pending ? (
-                      <Loader2 className="size-5 animate-spin" />
+                      <Loader2 className="size-4 animate-spin" />
                     ) : editing ? (
-                      <Check className="size-5" />
+                      <Check className="size-4" />
                     ) : (
-                      <Send className="size-5" />
+                      <Send className="size-4" />
                     )}
                   </Button>
                 ) : (
                   <Button
                     size="icon"
                     variant="secondary"
-                    className="size-12 shrink-0 rounded-full"
+                    className="size-10 shrink-0 rounded-full animate-in fade-in-0 zoom-in-95"
                     onClick={startRecording}
                     disabled={uploading}
                     aria-label="Записать голосовое сообщение"
