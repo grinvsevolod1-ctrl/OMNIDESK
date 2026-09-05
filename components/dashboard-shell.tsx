@@ -161,15 +161,18 @@ export function DashboardShell({
         {/* Desktop sidebar */}
         <aside
           className={cn(
-            'hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-200 ease-out lg:flex',
+            'hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar pl-safe transition-[width] duration-200 ease-out lg:flex',
             effectiveCollapsed ? 'w-16' : 'w-64',
           )}
         >
+          {/* pt-safe + height calc — как у основной шапки: на iPad в standalone
+              логотип не заезжает под системную строку. */}
           <div
             className={cn(
-              'flex h-14 items-center border-b border-sidebar-border',
+              'flex h-14 items-center border-b border-sidebar-border pt-safe',
               effectiveCollapsed ? 'justify-center px-0' : 'gap-2 px-5',
             )}
+            style={{ height: 'calc(3.5rem + env(safe-area-inset-top))' }}
           >
             <BrandMark className="size-5 shrink-0 text-foreground" />
             {!effectiveCollapsed ? (
@@ -199,10 +202,11 @@ export function DashboardShell({
             />
           </div>
 
-          {/* Collapse toggle */}
+          {/* Collapse toggle — pb-safe-2, чтобы кнопка не пряталась за
+              home-indicator на устройствах без кнопки «Домой». */}
           <div
             className={cn(
-              'border-t border-sidebar-border py-2',
+              'border-t border-sidebar-border py-2 pb-safe-2',
               effectiveCollapsed ? 'px-2' : 'px-3',
             )}
           >
@@ -243,8 +247,15 @@ export function DashboardShell({
               onClick={() => setMobileOpen(false)}
               aria-hidden="true"
             />
-            <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[80%] flex-col border-r border-sidebar-border bg-sidebar">
-              <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-5">
+            {/* pl-safe: в ландшафте не заезжаем под вырез/островок слева. */}
+            <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[80%] flex-col border-r border-sidebar-border bg-sidebar pl-safe">
+              {/* Шапка дрокера повторяет safe-area шапки основной колонки
+                  (pt-safe + та же высота), иначе в standalone-PWA логотип
+                  «Omnidesk» заезжает под системную строку с часами. */}
+              <div
+                className="flex h-14 items-center gap-2 border-b border-sidebar-border px-5 pt-safe"
+                style={{ height: 'calc(3.5rem + env(safe-area-inset-top))' }}
+              >
                 <BrandMark className="size-5 text-foreground" />
                 <span className="text-sm font-semibold tracking-tight">
                   Omnidesk
@@ -259,7 +270,8 @@ export function DashboardShell({
                   <X className="size-4" />
                 </Button>
               </div>
-              <div className="flex-1 overflow-y-auto p-3">
+              {/* pb-safe-3: нижние пункты меню не прячутся за home-indicator. */}
+              <div className="flex-1 overflow-y-auto p-3 pb-safe-3">
                 <NavLinks
                   nav={nav}
                   pathname={pathname}
