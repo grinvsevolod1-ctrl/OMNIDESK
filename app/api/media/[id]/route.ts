@@ -49,24 +49,29 @@ async function handleMediaGet(
 ): Promise<Response> {
   const session = await getSession()
   // The god messenger / god console are admin-wide surfaces: they may stream
-  // ANY message's media once their own gate cookie is verified. A manager
-  // session is scoped to conversations that manager owns.
-  const adminWide =
-    !session && ((await isMessengerUnlocked()) || (await isGodUnlocked()))
-  if (!session && !adminWide) return new Response('Unauthorized', { status: 401 })
+  // ANY message's media once their own passcode gate cookie is verified. Those
+  // gates are cryptographically independent of the normal login, so we honour
+  // them EVEN WHEN an admin session is also present — otherwise an admin opening
+  // the god messenger (role 'admin', session.sub = admin id) would be scoped by
+  // manager ownership and every god-conversation photo would 404/502. A plain
+  // manager session (no gate cookie) stays scoped to the conversations it owns.
+  const gateUnlocked =
+    (await isMessengerUnlocked()) || (await isGodUnlocked())
+  if (!session && !gateUnlocked)
+    return new Response('Unauthorized', { status: 401 })
 
   const { id } = await params
   if (!id) return new Response('Bad request', { status: 400 })
 
-  // Ownership check: the message must belong to a conversation this manager
-  // owns, or — for a curator session — a conversation transferred to THEM
-  // (recordTransfer sets curator_id; see getMessageOwnerForCurator), or exist
-  // at all for the admin-wide surfaces.
-  const owner = session
-    ? session.role === 'curator'
-      ? await getMessageOwnerForCurator(id, session.sub)
-      : await getMessageOwner(id, session.sub)
-    : await getMessageOwnerAdmin(id)
+  // Ownership check: an unlocked god/messenger gate may stream ANY message; a
+  // curator session is scoped to conversations transferred to THEM (recordTransfer
+  // sets curator_id; see getMessageOwnerForCurator); otherwise a manager session
+  // is scoped to conversations it owns.
+  const owner = gateUnlocked
+    ? await getMessageOwnerAdmin(id)
+    : session!.role === 'curator'
+      ? await getMessageOwnerForCurator(id, session!.sub)
+      : await getMessageOwner(id, session!.sub)
   if (!owner) return new Response('Not found', { status: 404 })
 
   // Historical (pre-edit) version of the media, addressed by edit id. Ownership
