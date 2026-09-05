@@ -25,7 +25,7 @@ import {
 } from '@/lib/data'
 import { writeAudit } from '@/lib/data/audit'
 import { getAdminAvatar, setAdminAvatar } from '@/lib/data/admin-avatar'
-import { isDemonAvatarPreset } from '@/lib/avatar-presets'
+import { isAvatarPreset } from '@/lib/avatar-presets'
 import type { SimpleResult } from './account-shared'
 
 /**
@@ -296,8 +296,8 @@ export async function updateMyAvatarAction(
     return { ok: true, message: 'Аватар удалён.' }
   }
 
-  // Готовый демонический образ — короткий путь /avatars/demon-XX.png.
-  const isPreset = isDemonAvatarPreset(value)
+  // Готовый образ — короткий путь /avatars/avatar-XX.webp.
+  const isPreset = isAvatarPreset(value)
   if (!isPreset) {
     if (value.length > MAX_AVATAR_DATAURL_LEN) {
       return {
@@ -333,7 +333,7 @@ export async function updateMyAvatarAction(
 /**
  * Аватарка администратора. У админа нет строки в `managers`, поэтому его аватар
  * хранится в kv-таблице `app_settings` (ключ на каждого админа). Принимает либо
- * готовый образ (/avatars/demon-XX.png), либо сжатый на клиенте data:-URL;
+ * готовый образ (/avatars/avatar-XX.webp), либо сжатый на клиенте data:-URL;
  * пустая строка / null — сброс к инициалам. Никаких сторонних хранилищ.
  */
 export async function updateAdminAvatarAction(
@@ -349,7 +349,7 @@ export async function updateAdminAvatarAction(
     return { ok: true, message: 'Аватар удалён.' }
   }
 
-  const isPreset = isDemonAvatarPreset(value)
+  const isPreset = isAvatarPreset(value)
   if (!isPreset) {
     if (value.length > MAX_AVATAR_DATAURL_LEN) {
       return {

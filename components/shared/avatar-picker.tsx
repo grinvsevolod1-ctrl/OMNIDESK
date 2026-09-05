@@ -1,19 +1,20 @@
 'use client'
 
 /**
- * Диалог выбора аватарки: сетка из 20 готовых «демонических» образов + загрузка
- * собственного фото + сброс. Общий для всех ролей — конкретное сохранение
- * приходит пропом `action` (менеджер/куратор/руководитель/байер → своя строка
- * в managers; админ → app_settings). Загруженное фото сжимается на клиенте в
- * квадрат 256×256 (JPEG data:-URL), готовый образ уходит коротким путём
- * /avatars/demon-XX.png. Никаких сторонних хранилищ.
+ * Диалог выбора аватарки: сетка из 20 готовых образов (дружелюбные мультяшные
+ * зверята) + загрузка собственного фото + сброс. Общий для всех ролей —
+ * конкретное сохранение приходит пропом `action` (менеджер/куратор/
+ * руководитель/байер → своя строка в managers; админ → app_settings).
+ * Загруженное фото сжимается на клиенте в квадрат 256×256 (JPEG data:-URL),
+ * готовый образ уходит коротким путём /avatars/avatar-XX.webp. Никаких
+ * сторонних хранилищ.
  */
 
 import { useRef, useState, useTransition } from 'react'
 import Image from 'next/image'
 import { Camera, Check, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { DEMON_AVATARS } from '@/lib/avatar-presets'
+import { AVATAR_PRESETS } from '@/lib/avatar-presets'
 import type { SimpleResult } from '@/app/actions/account-shared'
 import {
   Dialog,
@@ -128,7 +129,7 @@ export function AvatarPickerDialog({
         </DialogHeader>
 
         <div className="grid grid-cols-5 gap-2">
-          {DEMON_AVATARS.map((src, i) => {
+          {AVATAR_PRESETS.map((src, i) => {
             const selected = currentAvatar === src
             return (
               <button
@@ -148,7 +149,7 @@ export function AvatarPickerDialog({
               >
                 <Image
                   src={src || '/placeholder.svg'}
-                  alt={`Демонический образ ${i + 1}`}
+                  alt={`Образ ${i + 1}`}
                   fill
                   sizes="64px"
                   className="object-cover"

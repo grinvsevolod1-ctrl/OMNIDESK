@@ -4,7 +4,7 @@ import { query } from '@/lib/db'
  * Аватарка администратора. У админа нет строки в `managers` (это env-аккаунт),
  * поэтому его аватар хранится в общей kv-таблице `app_settings` под ключом
  * `admin_avatar:{sub}` — своя картинка на каждого админа. Значение — либо путь
- * к готовому образу (/avatars/demon-XX.png), либо data:-URL загруженного фото.
+ * к готовому образу (/avatars/avatar-XX.webp), либо data:-URL загруженного фото.
  */
 
 function keyFor(sub: string): string {

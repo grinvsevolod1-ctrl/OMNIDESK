@@ -6,6 +6,7 @@
  */
 import { randomUUID } from 'crypto'
 import { query } from '../db'
+import { randomAvatarPreset } from '../avatar-presets'
 import type { AccountRole, Manager, ManagerStatus } from '../types'
 import {
   excludeAdminSql,
@@ -244,10 +245,22 @@ export async function createManager(input: {
   if (role === 'curator' && !city) {
     throw new Error('Curator requires a non-empty city')
   }
+  // Каждый новый аккаунт сразу получает случайный готовый образ, чтобы у
+  // сотрудника никогда не было пустой аватарки (сотрудник потом может сменить).
+  const avatarUrl = randomAvatarPreset()
   const rows = await query<ManagerRow>(
-    `INSERT INTO managers (id, name, email, username, password_hash, status, role, city)
-     VALUES ($1, $2, $3, $4, $5, 'active', $6, $7) RETURNING *`,
-    [id, input.name.trim(), email, username, input.passwordHash, role, city],
+    `INSERT INTO managers (id, name, email, username, password_hash, status, role, city, avatar_url)
+     VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8) RETURNING *`,
+    [
+      id,
+      input.name.trim(),
+      email,
+      username,
+      input.passwordHash,
+      role,
+      city,
+      avatarUrl,
+    ],
   )
   return toManager(rows[0])
 }
