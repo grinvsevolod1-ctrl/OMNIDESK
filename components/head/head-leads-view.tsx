@@ -239,11 +239,17 @@ export function HeadLeadsView({
 
   // Вкладка «Активные» / «Архив». Архив грузится лениво при первом открытии.
   const [tab, setTab] = useState<'active' | 'archive'>('active')
-  const { data: archived } = useSWR(
+  const { data: archived, mutate: reloadArchive } = useSWR(
     tab === 'archive' ? 'head-group-archived-leads' : null,
     () => listGroupArchivedLeadsAction(),
     { revalidateOnFocus: false },
   )
+
+  // Как у админа: каждое открытие вкладки «Архив» подтягивает список заново
+  // с сервера, а не показывает возможно устаревший кэш.
+  useEffect(() => {
+    if (tab === 'archive') void reloadArchive()
+  }, [tab, reloadArchive])
 
   // Вид: список / карточки — как у куратора, выбор переживает перелогин.
   const [view, setView] = useState<'list' | 'grid'>('list')

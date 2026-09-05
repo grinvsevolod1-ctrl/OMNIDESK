@@ -117,6 +117,12 @@ export function CuratorLeadsView({
     { revalidateOnFocus: false, keepPreviousData: true },
   )
 
+  // Как у админа: каждое открытие вкладки «Архив» подтягивает список заново
+  // с сервера, а не показывает возможно устаревший кэш.
+  useEffect(() => {
+    if (tab === 'archive') void reloadArchive()
+  }, [tab, reloadArchive])
+
   const refresh = useCallback(async () => {
     const { listMyCuratorLeadsAction } = await import(
       '@/app/actions/lead-cards'
