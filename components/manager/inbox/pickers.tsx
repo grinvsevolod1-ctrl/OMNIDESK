@@ -162,7 +162,7 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
             type="button"
             variant="ghost"
             size="icon"
-            className="size-10 shrink-0 rounded-full text-muted-foreground"
+            className="size-9 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
             aria-label="Эмодзи"
           >
             <Smile className="size-5" />
@@ -284,7 +284,7 @@ export function StickerPicker({
             type="button"
             variant="ghost"
             size="icon"
-            className="size-10 shrink-0 rounded-full text-muted-foreground"
+            className="size-9 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
             aria-label="Стикеры"
           >
             <Sticker className="size-5" />
