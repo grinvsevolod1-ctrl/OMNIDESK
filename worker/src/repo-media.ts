@@ -23,6 +23,8 @@ export async function getMessageMedia(messageId: string): Promise<{
   mediaMime: string | null
   mediaName: string | null
   mediaRef: unknown
+  providerMessageId: string | null
+  contactHandle: string | null
 } | null> {
   const row = await one<{
     channel_id: string
@@ -31,9 +33,12 @@ export async function getMessageMedia(messageId: string): Promise<{
     media_mime: string | null
     media_name: string | null
     media_ref: unknown
+    provider_message_id: string | null
+    contact_handle: string | null
   }>(
     `SELECT c.channel_id, ch.type,
-            m.media_type, m.media_mime, m.media_name, m.media_ref
+            m.media_type, m.media_mime, m.media_name, m.media_ref,
+            m.provider_message_id, c.contact_handle
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
        JOIN channels ch ON ch.id = c.channel_id
@@ -49,6 +54,8 @@ export async function getMessageMedia(messageId: string): Promise<{
     mediaName: row.media_name,
     // pg returns jsonb already parsed; pass through as-is.
     mediaRef: row.media_ref,
+    providerMessageId: row.provider_message_id,
+    contactHandle: row.contact_handle,
   }
 }
 

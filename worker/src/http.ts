@@ -90,6 +90,19 @@ export function startHttpServer(): void {
       if (typeof (session as { downloadMedia?: unknown }).downloadMedia !== 'function') {
         return json(res, 415, { error: 'unsupported_channel' })
       }
+      // Outbound media (photo/voice/sticker we sent from the panel) is recorded
+      // with media_ref = NULL — only provider_message_id is backfilled after the
+      // send. Reconstruct the { peer, msgId } descriptor the downloader expects
+      // from the conversation's contact_handle + provider id so those bubbles
+      // re-download just like inbound ones. Inbound rows keep their stored ref.
+      const downloadRef =
+        info.mediaRef ??
+        (info.providerMessageId && info.contactHandle
+          ? { peer: info.contactHandle, msgId: info.providerMessageId }
+          : null)
+      if (!downloadRef) {
+        return json(res, 410, { error: 'media_unavailable' })
+      }
       let media: { buffer: Buffer; mime: string | null; name: string | null } | null
       try {
         media = await (
@@ -98,7 +111,7 @@ export function startHttpServer(): void {
               ref: unknown,
             ) => Promise<{ buffer: Buffer; mime: string | null; name: string | null } | null>
           }
-        ).downloadMedia(info.mediaRef)
+        ).downloadMedia(downloadRef)
       } catch (err) {
         logger.warn({ err, messageId }, 'media download failed')
         return json(res, 410, { error: 'media_unavailable' })
@@ -175,7 +188,7 @@ export function startHttpServer(): void {
     if (url.pathname.startsWith('/personal/')) {
       // GET-эндпоинты несут channelId в query, POST-эндпоинты (send/edit/
       // delete/read) — в JSON-теле. Тело читается ОДИН раз здесь, до гейта:
-      // раньше гейт смотрел только в query, для POST получал '' и ВСЕГДА
+      // раньше гейт смотрел только в query, д��я POST получал '' и ВСЕГДА
       // отвечал session_offline — отправка не работала, хотя чтение работало.
       let body: Record<string, unknown> = {}
       if (req.method === 'POST') {
