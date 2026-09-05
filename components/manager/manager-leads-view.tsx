@@ -28,6 +28,7 @@ import {
   presetRange,
   shiftDay,
 } from '@/components/admin/leads/period-range'
+import { PeriodFilter } from '@/components/shared/period-filter'
 import { useXlsxExport } from '@/components/shared/use-xlsx-export'
 import { ManagerLeadDetailPanel } from '@/components/manager/manager-lead-detail-panel'
 import { ManagerLeadRow } from '@/components/manager/manager-lead-row'
@@ -35,7 +36,6 @@ import { StatCard } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -216,117 +216,77 @@ export function ManagerLeadsView({
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Period + status filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        {/* На узких экранах пресеты уходят в горизонтальный скролл, не ломая сетку */}
-        <div className="scrollbar-thin -mx-1 max-w-full overflow-x-auto px-1 sm:mx-0 sm:px-0">
-          {/* h-9 с внутренними h-7 — та же высота, что у остальных контролов ряда */}
-          <div className="flex h-9 w-max items-center gap-1 rounded-lg border border-border bg-muted/30 p-1">
-            {presetButtons.map((p) => (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => setPreset(p.key)}
-                className={cn(
-                  'flex h-7 shrink-0 items-center whitespace-nowrap rounded-md px-3 text-sm transition-colors',
-                  preset === p.key
-                    ? 'bg-background font-medium shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
+      {/* Единый переключатель периода (общий PeriodFilter) + статус + экспорт
+          в одном ряду: фильтр статуса и кнопка Excel уходят в слот trailing. */}
+      <PeriodFilter
+        presets={presetButtons}
+        preset={preset}
+        day={day}
+        from={from}
+        to={to}
+        today={today}
+        onPreset={setPreset}
+        onDay={setDay}
+        onFrom={setFrom}
+        onTo={setTo}
+        trailing={
+          <>
+            <Select
+              value={status}
+              onValueChange={(v) => setStatus((v as string) ?? '')}
+            >
+              <SelectTrigger
+                className="h-9 gap-2 font-medium"
+                aria-label="Фильтр по статусу"
               >
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
+                <ListFilter className="size-4 shrink-0 text-muted-foreground" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="w-auto min-w-56">
+                <SelectItem value="">Все лиды (по умолчанию)</SelectItem>
+                <SelectItem value="transferred">
+                  Передан менеджеру по кадрам
+                </SelectItem>
+                <SelectItem value="not_transferred">Не передан</SelectItem>
+                <SelectItem value="none">
+                  Без статуса менеджера по кадрам
+                </SelectItem>
+                {LEAD_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    <span className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          'size-1.5 shrink-0 rounded-full',
+                          LEAD_STATUS_TONE[s].dot,
+                        )}
+                      />
+                      {LEAD_STATUS_LABELS[s]}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
-        {preset === 'day' ? (
-          <Input
-            type="date"
-            value={day}
-            max={today}
-            onChange={(e) => setDay(e.target.value || today)}
-            className="h-9 w-40"
-            aria-label="Выбрать день"
-          />
-        ) : null}
-
-        {preset === 'range' ? (
-          <div className="flex w-full items-center gap-1.5 sm:w-auto">
-            <Input
-              type="date"
-              value={from}
-              max={to}
-              onChange={(e) => setFrom(e.target.value || from)}
-              className="h-9 min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label="Начало периода"
-            />
-            <span className="shrink-0 text-sm text-muted-foreground">—</span>
-            <Input
-              type="date"
-              value={to}
-              max={today}
-              onChange={(e) => setTo(e.target.value || to)}
-              className="h-9 min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label="Конец периода"
-            />
-          </div>
-        ) : null}
-
-        <Select
-          value={status}
-          onValueChange={(v) => setStatus((v as string) ?? '')}
-        >
-          <SelectTrigger
-            className="h-9 gap-2 font-medium"
-            aria-label="Фильтр по статусу"
-          >
-            <ListFilter className="size-4 shrink-0 text-muted-foreground" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="w-auto min-w-56">
-            <SelectItem value="">Все лиды (по умолчанию)</SelectItem>
-            <SelectItem value="transferred">
-              Передан менеджеру по кадрам
-            </SelectItem>
-            <SelectItem value="not_transferred">Не передан</SelectItem>
-            <SelectItem value="none">
-              Без статуса менеджера по кадрам
-            </SelectItem>
-            {LEAD_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                <span className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'size-1.5 shrink-0 rounded-full',
-                      LEAD_STATUS_TONE[s].dot,
-                    )}
-                  />
-                  {LEAD_STATUS_LABELS[s]}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Выгрузка текущей выборки (период + статус) в Excel */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-9"
-          disabled={exporting}
-          onClick={exportExcel}
-          aria-label="Выгрузить в Excel"
-          title="Выгрузить текущую выборку в Excel"
-        >
-          {exporting ? (
-            <Loader2 className="size-4 shrink-0 animate-spin" />
-          ) : (
-            <FileSpreadsheet className="size-4 shrink-0" />
-          )}
-          Excel
-        </Button>
-      </div>
+            {/* Выгрузка текущей выборки (период + статус) в Excel */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              disabled={exporting}
+              onClick={exportExcel}
+              aria-label="Выгрузить в Excel"
+              title="Выгрузить текущую выборку в Excel"
+            >
+              {exporting ? (
+                <Loader2 className="size-4 shrink-0 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="size-4 shrink-0" />
+              )}
+              Excel
+            </Button>
+          </>
+        }
+      />
 
       {/* Stats for the selected period */}
       <section className="flex flex-col gap-3">

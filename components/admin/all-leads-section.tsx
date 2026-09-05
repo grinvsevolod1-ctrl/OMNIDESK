@@ -4,12 +4,13 @@ import { memo, useCallback, useMemo, useState } from 'react'
 import { AdminLeadRow } from '@/components/admin/leads/admin-lead-row'
 import { LeadsFilterBar } from '@/components/admin/leads/leads-filter-bar'
 import { LeadsPagination } from '@/components/admin/leads/leads-pagination'
-import { LeadsPeriodFilter } from '@/components/admin/leads/leads-period-filter'
 import { LeadsPeriodStats } from '@/components/admin/leads/leads-period-stats'
+import type { PeriodPreset } from '@/components/admin/leads/period-range'
 import {
   LEADS_PAGE_SIZE,
   useLeadsData,
 } from '@/components/admin/leads/use-leads-data'
+import { PeriodFilter } from '@/components/shared/period-filter'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { Card } from '@/components/ui/card'
 import type { CuratorWithLoad, LeadCard } from '@/lib/data/lead-cards'
@@ -24,6 +25,16 @@ import { cn } from '@/lib/utils'
  * лаги открытой карточки.
  */
 const MemoLeadDetailPanel = memo(LeadDetailPanel)
+
+/** Пресеты периода списка «Все лиды»: со «Всё время» и одиночным «День». */
+const LEADS_PRESETS: { key: PeriodPreset; label: string }[] = [
+  { key: 'all', label: 'Всё время' },
+  { key: 'today', label: 'Сегодня' },
+  { key: '7d', label: '7 дней' },
+  { key: '30d', label: '30 дней' },
+  { key: 'day', label: 'День' },
+  { key: 'range', label: 'Период' },
+]
 
 /**
  * Admin overview of ALL transferred leads. Презентационный контейнер: вся
@@ -106,7 +117,8 @@ export function AllLeadsSection({
       </div>
 
       {/* Пресеты периода: статистика по датам (сегодня / период / день) */}
-      <LeadsPeriodFilter
+      <PeriodFilter
+        presets={LEADS_PRESETS}
         preset={filters.preset}
         day={filters.day}
         from={filters.from}

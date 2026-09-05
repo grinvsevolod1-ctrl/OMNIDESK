@@ -9,12 +9,12 @@ export type PeriodPreset =
   | '7d'
   | '30d'
   | '90d'
-  | 'custom'
+  | 'range'
 
 export interface OverviewPrefs {
   view: OverviewView
   preset: PeriodPreset
-  /** YYYY-MM-DD, только для preset='custom'. */
+  /** YYYY-MM-DD, только для preset='range'. */
   customFrom: string
   customTo: string
 }
@@ -39,14 +39,17 @@ function createPrefsStore(key: string) {
       const raw = localStorage.getItem(key)
       if (!raw) return DEFAULTS
       const p = JSON.parse(raw) as Partial<OverviewPrefs>
+      // Легаси: раньше произвольный диапазон назывался 'custom' — читаем как 'range'.
+      const rawPreset = p.preset as string | undefined
+      const savedPreset = rawPreset === 'custom' ? 'range' : rawPreset
       return {
         view: p.view === 'list' ? 'list' : 'cards',
         preset:
-          p.preset &&
-          ['today', 'yesterday', '7d', '30d', '90d', 'custom'].includes(
-            p.preset,
+          savedPreset &&
+          ['today', 'yesterday', '7d', '30d', '90d', 'range'].includes(
+            savedPreset,
           )
-            ? p.preset
+            ? (savedPreset as PeriodPreset)
             : '7d',
         customFrom: typeof p.customFrom === 'string' ? p.customFrom : '',
         customTo: typeof p.customTo === 'string' ? p.customTo : '',

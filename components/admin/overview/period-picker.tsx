@@ -1,16 +1,10 @@
 'use client'
 
-import { useState } from 'react'
-import { CalendarRange } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { PeriodFilter } from '@/components/shared/period-filter'
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
-import { startOfDay, ymd } from '@/components/admin/dashboard/source-groups/shared'
-import { cn } from '@/lib/utils'
+  startOfDay,
+  ymd,
+} from '@/components/admin/dashboard/source-groups/shared'
 import type { PeriodPreset } from './use-overview-prefs'
 
 export interface ResolvedPeriod {
@@ -21,12 +15,18 @@ export interface ResolvedPeriod {
   label: string
 }
 
-const PRESETS: { id: Exclude<PeriodPreset, 'custom'>; label: string }[] = [
-  { id: 'today', label: 'Сегодня' },
-  { id: 'yesterday', label: 'Вчера' },
-  { id: '7d', label: '7 дней' },
-  { id: '30d', label: '30 дней' },
-  { id: '90d', label: '90 дней' },
+const PRESETS: { key: Exclude<PeriodPreset, 'range'>; label: string }[] = [
+  { key: 'today', label: 'Сегодня' },
+  { key: 'yesterday', label: 'Вчера' },
+  { key: '7d', label: '7 дней' },
+  { key: '30d', label: '30 дней' },
+  { key: '90d', label: '90 дней' },
+]
+
+/** Полный список пресетов Обзора для инлайнового переключателя. */
+const OVERVIEW_PRESETS: { key: PeriodPreset; label: string }[] = [
+  ...PRESETS,
+  { key: 'range', label: 'Период' },
 ]
 
 const FMT = new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'short' })
@@ -41,8 +41,8 @@ function fmtRange(from: Date, toExclusive: Date): string {
 
 /**
  * Разворачивает пресет/произвольные даты в границы [from, to).
- * Обе даты custom-диапазона включительны: «по 15 фев» захватывает весь день.
- * Невалидный custom тихо падает на 7 дней — фильтр никогда не «ломается».
+ * Обе даты произвольного диапазона включительны: «по 15 фев» захватывает весь
+ * день. Невалидный диапазон тихо падает на 7 дней — фильтр никогда не «ломается».
  */
 export function resolvePeriod(
   preset: PeriodPreset,
@@ -54,7 +54,11 @@ export function resolvePeriod(
   tomorrow.setDate(todayStart.getDate() + 1)
 
   if (preset === 'today')
-    return { from: todayStart, to: tomorrow, label: `Сегодня · ${FMT.format(todayStart)}` }
+    return {
+      from: todayStart,
+      to: tomorrow,
+      label: `Сегодня · ${FMT.format(todayStart)}`,
+    }
 
   if (preset === 'yesterday') {
     const from = new Date(todayStart)
@@ -62,7 +66,7 @@ export function resolvePeriod(
     return { from, to: todayStart, label: `Вчера · ${FMT.format(from)}` }
   }
 
-  if (preset === 'custom') {
+  if (preset === 'range') {
     const f = customFrom ? startOfDay(new Date(`${customFrom}T00:00:00`)) : null
     const t = customTo ? startOfDay(new Date(`${customTo}T00:00:00`)) : null
     if (f && t && !Number.isNaN(f.getTime()) && !Number.isNaN(t.getTime())) {
@@ -79,13 +83,14 @@ export function resolvePeriod(
   const days = preset === '30d' ? 30 : preset === '90d' ? 90 : 7
   const from = new Date(todayStart)
   from.setDate(todayStart.getDate() - (days - 1))
-  const label = `${PRESETS.find((p) => p.id === preset)?.label ?? '7 дней'} · ${fmtRange(from, tomorrow)}`
+  const label = `${OVERVIEW_PRESETS.find((p) => p.key === preset)?.label ?? '7 дней'} · ${fmtRange(from, tomorrow)}`
   return { from, to: tomorrow, label }
 }
 
 /**
- * Переключатель периода Обзора: быстрые пресеты + произвольный диапазон дат.
- * Текущий период всегда подписан явными датами — видно, что именно выбрано.
+ * Переключатель периода Обзора — тонкий адаптер над общим PeriodFilter.
+ * Быстрые пресеты + инлайновый диапазон дат (тот же вид, что в списках лидов).
+ * Выбранный период всегда подписан явными датами справа — видно, что выбрано.
  */
 export function PeriodPicker({
   preset,
@@ -104,115 +109,39 @@ export function PeriodPicker({
     customTo?: string
   }) => void
 }) {
-  const [open, setOpen] = useState(false)
-  // Черновик дат внутри поповера — применяется кнопкой, а не на каждый ввод.
-  const [draftFrom, setDraftFrom] = useState(customFrom)
-  const [draftTo, setDraftTo] = useState(customTo)
-
   const todayYmd = ymd(new Date())
 
+  // При переключении на «Период» заполняем оба инпута текущим окном, чтобы
+  // диапазон не начинался с пустых полей (и сразу был осмысленным).
+  const handlePreset = (key: PeriodPreset) => {
+    if (key === 'range') {
+      const lastDay = new Date(resolved.to)
+      lastDay.setDate(lastDay.getDate() - 1)
+      onChange({
+        preset: 'range',
+        customFrom: customFrom || ymd(resolved.from),
+        customTo: customTo || ymd(lastDay),
+      })
+    } else {
+      onChange({ preset: key })
+    }
+  }
+
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-      <div
-        role="group"
-        aria-label="Период"
-        className="flex items-center rounded-lg border border-border p-0.5"
-      >
-        {PRESETS.map((p) => (
-          <Button
-            key={p.id}
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange({ preset: p.id })}
-            className={cn(
-              'h-7 rounded-md px-2.5 text-xs',
-              preset === p.id
-                ? 'bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground'
-                : 'text-muted-foreground',
-            )}
-            aria-pressed={preset === p.id}
-          >
-            {p.label}
-          </Button>
-        ))}
-
-        <Popover
-          open={open}
-          onOpenChange={(v) => {
-            setOpen(v)
-            if (v) {
-              setDraftFrom(customFrom)
-              setDraftTo(customTo)
-            }
-          }}
-        >
-          <PopoverTrigger
-            className={cn(
-              'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors',
-              preset === 'custom'
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-            )}
-            aria-pressed={preset === 'custom'}
-          >
-            <CalendarRange className="size-3.5" />
-            Даты
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-auto p-3">
-            <form
-              className="flex flex-col gap-2.5"
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (!draftFrom || !draftTo) return
-                onChange({
-                  preset: 'custom',
-                  customFrom: draftFrom,
-                  customTo: draftTo,
-                })
-                setOpen(false)
-              }}
-            >
-              <div className="flex items-center gap-2">
-                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                  С
-                  <Input
-                    type="date"
-                    value={draftFrom}
-                    max={todayYmd}
-                    onChange={(e) => setDraftFrom(e.target.value)}
-                    className="h-8 w-36"
-                    required
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                  По (включительно)
-                  <Input
-                    type="date"
-                    value={draftTo}
-                    max={todayYmd}
-                    onChange={(e) => setDraftTo(e.target.value)}
-                    className="h-8 w-36"
-                    required
-                  />
-                </label>
-              </div>
-              <Button
-                type="submit"
-                size="sm"
-                className="h-8"
-                disabled={!draftFrom || !draftTo}
-              >
-                Показать период
-              </Button>
-            </form>
-          </PopoverContent>
-        </Popover>
-      </div>
-
-      {/* Явная подпись выбранного периода — никакой двусмысленности */}
-      <p className="text-xs text-muted-foreground tabular-nums">
-        {resolved.label}
-      </p>
-    </div>
+    <PeriodFilter
+      presets={OVERVIEW_PRESETS}
+      preset={preset}
+      from={customFrom}
+      to={customTo}
+      today={todayYmd}
+      onPreset={handlePreset}
+      onFrom={(v) => onChange({ preset: 'range', customFrom: v, customTo })}
+      onTo={(v) => onChange({ preset: 'range', customFrom, customTo: v })}
+      trailing={
+        <p className="text-xs tabular-nums text-muted-foreground">
+          {resolved.label}
+        </p>
+      }
+    />
   )
 }
