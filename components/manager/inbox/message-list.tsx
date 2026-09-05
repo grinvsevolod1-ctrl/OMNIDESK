@@ -1,7 +1,14 @@
 'use client'
 
-import { useEffect, useMemo, useRef, type RefObject } from 'react'
-import { ChevronUp, History, Loader2, Trash2 } from 'lucide-react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react'
+import { ChevronUp, History, Loader2, Reply, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -66,6 +73,89 @@ function computeAlbums(thread: Message[]): {
     i = j
   }
   return { heads, skip }
+}
+
+/** Horizontal drag past this many px triggers a reply on release. */
+const SWIPE_REPLY_THRESHOLD = 56
+
+/**
+ * Свайп-влево по сообщению → быстрый ответ (как в Telegram/WhatsApp) — чтобы не
+ * приходилось долго жать на сообщение и лезть в меню. Только touch и только по
+ * горизонтали: пока жест вертикальный, лента скроллится как обычно
+ * (touch-action: pan-y). За порогом баббл слегка уезжает влево и открывается
+ * иконка ответа; при отпускании — плавно возвращается и вызывает onReply. Где
+ * ответ недоступен (не-Telegram, удалённое сообщение, десктоп) обёртка
+ * прозрачна и ничего не перехватывает.
+ */
+function SwipeToReply({
+  enabled,
+  onReply,
+  children,
+}: {
+  enabled: boolean
+  onReply: () => void
+  children: ReactNode
+}) {
+  const [dx, setDx] = useState(0)
+  const start = useRef<{ x: number; y: number; active: boolean } | null>(null)
+  if (!enabled) return <>{children}</>
+  return (
+    <div
+      className="relative"
+      style={{ touchAction: 'pan-y' }}
+      onTouchStart={(e) => {
+        const t = e.touches[0]
+        start.current = { x: t.clientX, y: t.clientY, active: false }
+      }}
+      onTouchMove={(e) => {
+        const s = start.current
+        if (!s) return
+        const t = e.touches[0]
+        const dX = t.clientX - s.x
+        const dY = t.clientY - s.y
+        // Решаем направление жеста один раз: горизонталь — наш свайп,
+        // вертикаль — отдаём скроллу и больше не вмешиваемся.
+        if (!s.active) {
+          if (Math.abs(dX) > 10 && Math.abs(dX) > Math.abs(dY) * 1.3) {
+            s.active = true
+          } else if (Math.abs(dY) > 10) {
+            start.current = null
+            return
+          } else {
+            return
+          }
+        }
+        setDx(Math.max(Math.min(dX, 0), -96))
+      }}
+      onTouchEnd={() => {
+        if (start.current?.active && dx <= -SWIPE_REPLY_THRESHOLD) onReply()
+        start.current = null
+        setDx(0)
+      }}
+      onTouchCancel={() => {
+        start.current = null
+        setDx(0)
+      }}
+    >
+      <div
+        className="pointer-events-none absolute inset-y-0 right-2 flex items-center"
+        style={{ opacity: Math.min(1, Math.abs(dx) / SWIPE_REPLY_THRESHOLD) }}
+        aria-hidden
+      >
+        <span className="rounded-full bg-primary/15 p-1.5 text-primary">
+          <Reply className="size-4" />
+        </span>
+      </div>
+      <div
+        style={{
+          transform: `translateX(${dx}px)`,
+          transition: dx === 0 ? 'transform 0.18s ease-out' : 'none',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -162,6 +252,29 @@ export function MessageList({
   // Group consecutive photos/videos into Telegram-style albums (recomputed only
   // when the thread reference changes).
   const albums = useMemo(() => computeAlbums(thread), [thread])
+
+  // Тап по цитате-ответу → прыжок к оригиналу (как в Telegram): скроллим к нему
+  // и на пару секунд подсвечиваем кольцом. Контейнер прокрутки уже прокинут
+  // сюда (messagesScrollRef), так что это работает и у менеджера, и у куратора
+  // без правок родителей. Если оригинал ещё не догружен в DOM — тихо ничего.
+  const [jumpHighlight, setJumpHighlight] = useState<string | null>(null)
+  const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const jumpToMessage = (id: string) => {
+    const container = messagesScrollRef.current
+    if (!container) return
+    const el = container.querySelector(`[data-message-id="${CSS.escape(id)}"]`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setJumpHighlight(id)
+    if (jumpTimer.current) clearTimeout(jumpTimer.current)
+    jumpTimer.current = setTimeout(() => setJumpHighlight(null), 1600)
+  }
+  useEffect(
+    () => () => {
+      if (jumpTimer.current) clearTimeout(jumpTimer.current)
+    },
+    [],
+  )
 
   return (
     <div
@@ -324,12 +437,19 @@ export function MessageList({
                         </p>
                       ) : null}
                       {m.replyTo ? (
-                        <div
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            // Не даём клику всплыть в onBubbleClick (режим
+                            // прикрепления медиа к карточке).
+                            e.stopPropagation()
+                            if (m.replyTo) jumpToMessage(m.replyTo.id)
+                          }}
                           className={cn(
-                            'mb-1 rounded-md border-l-2 px-2 py-1 text-left text-xs',
+                            'mb-1 block w-full rounded-md border-l-2 px-2 py-1 text-left text-xs transition-colors',
                             isOut
-                              ? 'border-primary-foreground/50 bg-primary-foreground/10'
-                              : 'border-primary/60 bg-muted/60',
+                              ? 'border-primary-foreground/50 bg-primary-foreground/10 hover:bg-primary-foreground/20'
+                              : 'border-primary/60 bg-muted/60 hover:bg-muted',
                           )}
                         >
                           <p className="font-semibold opacity-90">
@@ -339,7 +459,7 @@ export function MessageList({
                             {m.replyTo.body ||
                               (m.replyTo.mediaType ? '[вложение]' : '')}
                           </p>
-                        </div>
+                        </button>
                       ) : null}
                       {hasMedia ? (
                         <div
@@ -420,13 +540,18 @@ export function MessageList({
                   )
 
                   return (
+                    <SwipeToReply
+                      enabled={isTelegram && !isDeleted}
+                      onReply={() => onReply(m)}
+                    >
                     <div
                       className={cn(
                         'flex max-w-[80%] flex-col gap-1 sm:max-w-[70%]',
                         isOut ? 'items-end' : 'items-start',
-                        // Подсветка цели поиска/медиа-навигации — как в
-                        // Telegram: мягкое кольцо вокруг сообщения.
-                        highlightedId === m.id &&
+                        // Подсветка цели поиска/медиа-навигации/прыжка к
+                        // цитате — как в Telegram: мягкое кольцо вокруг
+                        // сообщения.
+                        (highlightedId === m.id || jumpHighlight === m.id) &&
                           'rounded-2xl ring-2 ring-primary/70 ring-offset-2 ring-offset-background transition-shadow',
                         onBubbleClick && 'cursor-pointer',
                       )}
@@ -488,6 +613,7 @@ export function MessageList({
                         </div>
                       ) : null}
                     </div>
+                    </SwipeToReply>
                   )
                 })()}
               </div>
