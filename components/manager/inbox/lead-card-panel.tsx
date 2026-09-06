@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { formatMskDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { LeadCardForm } from './lead-card/lead-card-form'
 import { LeadCardDetails } from './lead-card/lead-card-details'
@@ -137,11 +138,7 @@ export function LeadCardPanel({
 
           {transferredAt ? (
             <p className="rounded-lg bg-emerald-500/10 px-3 py-2.5 text-xs text-emerald-700 dark:text-emerald-400">
-              Передано{' '}
-              {new Date(transferredAt).toLocaleString('ru-RU', {
-                dateStyle: 'short',
-                timeStyle: 'short',
-              })}
+              Передано {formatMskDateTime(transferredAt)}
             </p>
           ) : null}
 
