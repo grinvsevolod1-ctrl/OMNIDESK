@@ -2,6 +2,7 @@ import { getSession } from '@/lib/auth'
 import { isMessengerUnlocked } from '@/lib/messenger-gate'
 import { isGodUnlocked } from '@/lib/god-gate'
 import {
+  getMediaDiagnostics,
   getMessageOwner,
   getMessageOwnerAdmin,
   getMessageOwnerForCurator,
@@ -11,6 +12,7 @@ import {
   getUrlMediaDescriptor,
   getWhatsappMediaDescriptor,
   MEDIA_MAX_STORE_BYTES,
+  restoreMediaFromJobPayload,
   storeMessageMediaBytes,
 } from '@/lib/data'
 import { proxiedFetch } from '@/lib/proxy-agent'
@@ -75,9 +77,21 @@ async function handleMediaGet(
       : await getMessageOwner(id, session!.sub)
   if (!owner) return new Response('Not found', { status: 404 })
 
+  const search = new URL(request.url).searchParams
+
+  // Owner-scoped diagnostics (same ownership gate as the bytes): explains WHY a
+  // bubble shows «Медиа недоступно» — archive / job payload / provider id /
+  // synthetic — as metadata only, so the cause can be read off in the browser
+  // instead of correlating worker logs.
+  if (search.get('diag') === '1') {
+    return Response.json(await getMediaDiagnostics(id), {
+      headers: { 'cache-control': 'no-store' },
+    })
+  }
+
   // Historical (pre-edit) version of the media, addressed by edit id. Ownership
   // is already established via the message id above.
-  const editId = new URL(request.url).searchParams.get('edit')
+  const editId = search.get('edit')
   if (editId) {
     const hist = await getStoredEditMediaBytes(editId)
     if (!hist) return new Response('Media unavailable', { status: 410 })
@@ -90,6 +104,16 @@ async function handleMediaGet(
   const stored = await getStoredMediaBytes(id)
   if (stored) {
     return bytesResponse(stored.bytes, stored.mime, true)
+  }
+
+  // Legacy outbound media (sent before archive-at-send-time, or whose archive
+  // write failed): the send job still holds the file for 7 days. Restore from
+  // there and serve — the per-request twin of migration 158, so recovery does
+  // not hinge on deploy timing and also covers god-synthetic dialogs where a
+  // live re-download can never succeed.
+  const fromJob = await restoreMediaFromJobPayload(id)
+  if (fromJob) {
+    return bytesResponse(fromJob.bytes, fromJob.mime, true)
   }
 
   // WhatsApp Cloud has no worker: the panel resolves the media id and downloads

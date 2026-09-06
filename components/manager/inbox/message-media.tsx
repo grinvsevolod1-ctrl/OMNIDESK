@@ -502,9 +502,49 @@ export function MessageMediaAlbum({ items }: { items: Message[] }) {
  */
 const MEDIA_RETRY_DELAYS_MS = [1500, 4000]
 
+/**
+ * Журнал ретраев ЖИВЁТ ВНЕ инстанса компонента, по URL медиа.
+ *
+ * Плитки альбома и пузыри перемонтируются при каждой пересборке треда
+ * (router.refresh после realtime-события, перегруппировка альбома), и
+ * состояние внутри инстанса каждый раз стартовало цикл «запрос → 410 →
+ * ретрай» с нуля: ровный поток заведомо обречённых запросов к медиа, про
+ * которое уже известно, что его нет, а таймеры ретраев вообще не успевали
+ * сработать — следующий ремаунт их обнулял. Новый инстанс продолжает с того
+ * места, где остановился предыдущий, включая «уже упало, не спрашивай».
+ * Записи протухают, чтобы файл, ставший доступным позже (архив восстановлен,
+ * воркер поднялся), получил новый шанс без перезагрузки страницы.
+ */
+type MediaRetryEntry = { attempt: number; failed: boolean; at: number }
+const mediaRetryLedger = new Map<string, MediaRetryEntry>()
+const MEDIA_RETRY_LEDGER_MAX = 500
+const MEDIA_RETRY_LEDGER_TTL_MS = 60_000
+
+function readMediaRetry(url: string | undefined): MediaRetryEntry {
+  const fresh: MediaRetryEntry = { attempt: 0, failed: false, at: Date.now() }
+  if (!url) return fresh
+  const hit = mediaRetryLedger.get(url)
+  if (!hit) return fresh
+  if (Date.now() - hit.at > MEDIA_RETRY_LEDGER_TTL_MS) {
+    mediaRetryLedger.delete(url)
+    return fresh
+  }
+  return hit
+}
+
+function writeMediaRetry(url: string, entry: MediaRetryEntry) {
+  if (
+    !mediaRetryLedger.has(url) &&
+    mediaRetryLedger.size >= MEDIA_RETRY_LEDGER_MAX
+  ) {
+    const oldest = mediaRetryLedger.keys().next().value
+    if (oldest !== undefined) mediaRetryLedger.delete(oldest)
+  }
+  mediaRetryLedger.set(url, entry)
+}
+
 function useRetryingMediaSrc(url: string | undefined) {
-  const [attempt, setAttempt] = useState(0)
-  const [failed, setFailed] = useState(false)
+  const [entry, setEntry] = useState<MediaRetryEntry>(() => readMediaRetry(url))
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(
@@ -515,25 +555,38 @@ function useRetryingMediaSrc(url: string | undefined) {
   )
 
   const onMediaError = useCallback(() => {
-    if (attempt >= MEDIA_RETRY_DELAYS_MS.length) {
-      setFailed(true)
+    if (!url) return
+    const current = readMediaRetry(url)
+    if (current.failed) {
+      setEntry(current)
+      return
+    }
+    const next: MediaRetryEntry =
+      current.attempt >= MEDIA_RETRY_DELAYS_MS.length
+        ? { attempt: current.attempt, failed: true, at: Date.now() }
+        : { attempt: current.attempt + 1, failed: false, at: Date.now() }
+    // Advance the shared ledger NOW so an instance remounted before our timer
+    // fires picks up the next attempt instead of restarting from zero.
+    writeMediaRetry(url, next)
+    if (next.failed) {
+      setEntry(next)
       return
     }
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
       timerRef.current = null
-      setAttempt((a) => a + 1)
-    }, MEDIA_RETRY_DELAYS_MS[attempt])
-  }, [attempt])
+      setEntry(next)
+    }, MEDIA_RETRY_DELAYS_MS[current.attempt])
+  }, [url])
 
   // Cache-buster only on retries so the browser doesn't replay the failed
   // response; `?edit=` URLs already carry a query string — append with `&`.
   const src =
-    url && attempt > 0
-      ? `${url}${url.includes('?') ? '&' : '?'}r=${attempt}`
+    url && entry.attempt > 0
+      ? `${url}${url.includes('?') ? '&' : '?'}r=${entry.attempt}`
       : url
 
-  return { src, failed, onMediaError }
+  return { src, failed: entry.failed, onMediaError }
 }
 
 function AlbumCell({

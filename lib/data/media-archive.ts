@@ -139,6 +139,189 @@ export async function getStoredMediaBytes(
   return resolveBlobBytes(rows[0])
 }
 
+/**
+ * Lazy self-heal for OUTBOUND media sent from the panel before bytes were
+ * archived at send time (or whose archive write failed). The send_file /
+ * send_voice job still carries the whole file as base64 in
+ * channel_jobs.payload for 7 days (purgeFinishedChannelJobs), so we pull it
+ * from there, persist it through storeMessageMediaBytes and hand the bytes
+ * back so the request that triggered the restore is served immediately.
+ *
+ * This is the per-request twin of migration 158: it does not depend on when
+ * (or whether) that one-shot backfill ran relative to the deploy, and it also
+ * covers god-synthetic dialogs, where the worker never talks to Telegram and a
+ * live re-download can never succeed. Only OUTBOUND rows without a blob reach
+ * the job lookup (indexed by migration 159), so inbound traffic pays one PK
+ * read. Returns null when nothing usable exists — purged job, inbound row,
+ * text-only message.
+ */
+export async function restoreMediaFromJobPayload(
+  messageId: string,
+): Promise<{ bytes: Buffer; mime: string | null; name: string | null } | null> {
+  const rows = await query<{
+    direction: 'in' | 'out'
+    media_type: string | null
+    media_mime: string | null
+    media_name: string | null
+    media_blob_id: string | null
+  }>(
+    `SELECT direction, media_type, media_mime, media_name, media_blob_id
+       FROM messages
+      WHERE id = $1`,
+    [messageId],
+  )
+  const msg = rows[0]
+  if (!msg || msg.direction !== 'out' || !msg.media_type || msg.media_blob_id) {
+    return null
+  }
+
+  const jobs = await query<{
+    action: 'send_file' | 'send_voice'
+    b64: string | null
+    mime: string | null
+    name: string | null
+  }>(
+    `SELECT action,
+            CASE WHEN action = 'send_file' THEN payload->>'file'
+                 ELSE payload->>'audio' END AS b64,
+            payload->>'mime' AS mime,
+            payload->>'name' AS name
+       FROM channel_jobs
+      WHERE action IN ('send_file', 'send_voice')
+        AND payload->>'messageId' = $1
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [messageId],
+  )
+  const job = jobs[0]
+  if (!job?.b64) return null
+
+  const bytes = Buffer.from(job.b64, 'base64')
+  if (bytes.byteLength === 0) return null
+
+  const mime =
+    msg.media_mime ||
+    job.mime ||
+    (job.action === 'send_voice' ? 'audio/ogg' : null)
+  const name = msg.media_name || job.name || null
+  // Persist best-effort; even when archiving is disabled or the file is over
+  // the cap we still serve the bytes we just decoded.
+  await storeMessageMediaBytes(messageId, bytes, mime, name).catch(() => null)
+  return { bytes, mime, name }
+}
+
+/**
+ * Owner-facing diagnostics for one message's media (`/api/media/{id}?diag=1`):
+ * WHY a bubble shows «Медиа недоступно» without reading server logs. Metadata
+ * only — booleans and sizes, never bytes, handles or ids of other rows.
+ */
+export async function getMediaDiagnostics(
+  messageId: string,
+): Promise<Record<string, unknown>> {
+  const rows = await query<{
+    direction: 'in' | 'out'
+    media_type: string | null
+    media_mime: string | null
+    created_at: string | Date
+    has_provider_id: boolean
+    has_media_ref: boolean
+    has_contact_handle: boolean
+    god_synthetic: boolean | null
+    channel_type: string
+    blob_on_disk: boolean | null
+    blob_inline: boolean | null
+  }>(
+    `SELECT m.direction, m.media_type, m.media_mime, m.created_at,
+            (m.provider_message_id IS NOT NULL) AS has_provider_id,
+            (m.media_ref IS NOT NULL) AS has_media_ref,
+            (COALESCE(c.contact_handle, '') <> '') AS has_contact_handle,
+            c.god_synthetic, c.channel_type,
+            (b.file_path IS NOT NULL) AS blob_on_disk,
+            (b.bytes IS NOT NULL) AS blob_inline
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       LEFT JOIN media_blobs b ON b.id = m.media_blob_id
+      WHERE m.id = $1`,
+    [messageId],
+  )
+  const m = rows[0]
+  if (!m) return { id: messageId, found: false }
+
+  const jobs = await query<{
+    action: string
+    status: string
+    created_at: string | Date
+    b64_len: number | null
+  }>(
+    `SELECT action, status, created_at,
+            length(COALESCE(payload->>'file', payload->>'audio')) AS b64_len
+       FROM channel_jobs
+      WHERE action IN ('send_file', 'send_voice')
+        AND payload->>'messageId' = $1
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [messageId],
+  )
+  const job = jobs[0]
+    ? {
+        action: jobs[0].action,
+        status: jobs[0].status,
+        ageHours: Math.round(
+          (Date.now() - new Date(jobs[0].created_at).getTime()) / 36e5,
+        ),
+        hasBytes: (jobs[0].b64_len ?? 0) > 0,
+        approxBytes: Math.floor(((jobs[0].b64_len ?? 0) * 3) / 4),
+      }
+    : null
+
+  const blob = m.blob_on_disk
+    ? 'disk'
+    : m.blob_inline
+      ? 'inline'
+      : m.blob_on_disk === null && m.blob_inline === null
+        ? 'none'
+        : 'empty'
+  const synthetic = Boolean(m.god_synthetic)
+
+  let verdict: string
+  if (blob === 'disk' || blob === 'inline') {
+    verdict =
+      'Байты заархивированы — должны отдаваться из архива. Если всё равно 410, файл на диске недоступен (MEDIA_STORE_DIR).'
+  } else if (job?.hasBytes) {
+    verdict =
+      'Байты есть в payload джоба — восстановятся при следующем запросе медиа (lazy restore).'
+  } else if (m.direction === 'out' && synthetic) {
+    verdict =
+      'God-синтетический диалог: в Telegram ничего не отправлялось, provider id нет, джоб уже вычищен (7 дней) — восстановить нечем.'
+  } else if (m.direction === 'out' && !m.has_provider_id) {
+    verdict =
+      'Исходящее без provider id и без джоба — воркер не может найти сообщение в Telegram; восстановить нечем.'
+  } else if (!m.has_media_ref && !(m.has_provider_id && m.has_contact_handle)) {
+    verdict =
+      'Нет ни media_ref, ни пары provider id + contact handle — воркеру нечего скачивать.'
+  } else {
+    verdict =
+      'Живая до-качка через воркер должна работать — смотри pm2 logs worker («media download failed»).'
+  }
+
+  return {
+    id: messageId,
+    found: true,
+    channelType: m.channel_type,
+    direction: m.direction,
+    mediaType: m.media_type,
+    mediaMime: m.media_mime,
+    createdAt: new Date(m.created_at).toISOString(),
+    synthetic,
+    providerId: m.has_provider_id,
+    contactHandle: m.has_contact_handle,
+    mediaRef: m.has_media_ref,
+    blob,
+    job,
+    verdict,
+  }
+}
+
 /** Stored media bytes for a specific edit-history version, or null. */
 export async function getStoredEditMediaBytes(
   editId: string,

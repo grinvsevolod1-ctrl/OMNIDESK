@@ -44,6 +44,9 @@ const files = (await readdir(directory))
   .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
 
 const client = new Client({ connectionString: databaseUrl })
+// Surface RAISE NOTICE from migrations (e.g. backfill counters) in the deploy
+// log; node-postgres drops them silently unless something listens.
+client.on('notice', (n) => console.log(`  notice: ${n.message}`))
 await client.connect()
 
 // Load the checksum of every file up front so both commands share the logic.

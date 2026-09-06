@@ -44,7 +44,7 @@ export async function listMessages(
      JOIN conversations c ON c.id = m.conversation_id
      ${MESSAGE_REPLY_JOIN}
      WHERE m.conversation_id = $1 AND c.manager_id = $2
-     ORDER BY m.created_at DESC
+     ORDER BY m.created_at DESC, m.id DESC
      LIMIT $3`,
     [conversationId, managerId, MESSAGE_HISTORY_LIMIT],
   )
@@ -82,7 +82,8 @@ export async function listMessagesForConversations(
        FROM (
          SELECT ${MESSAGE_SELECT},
                 ROW_NUMBER() OVER (
-                  PARTITION BY m.conversation_id ORDER BY m.created_at DESC
+                  PARTITION BY m.conversation_id
+                  ORDER BY m.created_at DESC, m.id DESC
                 ) AS rn
            FROM messages m
            JOIN conversations c ON c.id = m.conversation_id
@@ -90,7 +91,10 @@ export async function listMessagesForConversations(
           WHERE c.manager_id = $1 AND m.conversation_id = ANY($2)
        ) ranked
       WHERE rn <= $3
-      ORDER BY conversation_id ASC, created_at ASC`,
+      -- id as a tiebreaker keeps the order stable across refreshes when two
+      -- messages share a timestamp (album photos sent in one go); a flapping
+      -- order re-keys the album head and remounts its tiles on every refresh.
+      ORDER BY conversation_id ASC, created_at ASC, id ASC`,
     [managerId, conversationIds, BATCH_PRELOAD_LIMIT],
   )
 
@@ -124,7 +128,7 @@ export async function listMessagesBefore(
      JOIN conversations c ON c.id = m.conversation_id
      ${MESSAGE_REPLY_JOIN}
      WHERE m.conversation_id = $1 AND c.manager_id = $2 AND m.created_at < $3
-     ORDER BY m.created_at DESC
+     ORDER BY m.created_at DESC, m.id DESC
      LIMIT $4`,
     [conversationId, managerId, before, capped],
   )
