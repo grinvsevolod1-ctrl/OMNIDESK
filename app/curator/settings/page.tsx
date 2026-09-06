@@ -12,6 +12,7 @@ import {
   SettingsShell,
   type SettingsTab,
 } from '@/components/shared/settings-shell'
+import { AppInstallCard } from '@/components/shared/app-install-card'
 import { TwofaSettings } from '@/components/shared/twofa-settings'
 import { Card } from '@/components/ui/card'
 import { requireCurator } from '@/lib/auth'
@@ -154,6 +155,7 @@ export default async function CuratorSettingsPage() {
           email={session.email}
           roleLabel="Менеджер по кадрам"
         />
+        <AppInstallCard />
       </SettingsShell>
     </div>
   )

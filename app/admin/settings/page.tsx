@@ -8,6 +8,7 @@ import {
   SettingsShell,
   type SettingsTab,
 } from '@/components/shared/settings-shell'
+import { AppInstallCard } from '@/components/shared/app-install-card'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AvatarUploader } from '@/components/shared/avatar-uploader'
@@ -165,6 +166,7 @@ export default async function AdminSettingsPage() {
           email={user.email}
           roleLabel="Администратор"
         />
+        <AppInstallCard />
       </SettingsShell>
     </div>
   )

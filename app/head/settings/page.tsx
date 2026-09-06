@@ -10,6 +10,7 @@ import {
   SettingsShell,
   type SettingsTab,
 } from '@/components/shared/settings-shell'
+import { AppInstallCard } from '@/components/shared/app-install-card'
 import { TwofaSettings } from '@/components/shared/twofa-settings'
 import { Card } from '@/components/ui/card'
 import { requireHead } from '@/lib/auth'
@@ -112,6 +113,7 @@ export default async function HeadSettingsPage() {
           email={session.email}
           roleLabel="Руководитель"
         />
+        <AppInstallCard />
       </SettingsShell>
     </div>
   )
