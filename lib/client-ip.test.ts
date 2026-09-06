@@ -1,7 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { clientIpFromHeaders, isValidIp } from './client-ip'
 
 const ORIGINAL_TRUST_PROXY = process.env.TRUST_PROXY
+
+// Start every case from "proxy trusted" (TRUST_PROXY unset), independent of the
+// ambient environment. Without this, a dev `.env.local` that sets
+// TRUST_PROXY=false leaks in and makes the header-parsing cases return
+// 'unknown' — a false failure that never reproduces in clean CI.
+beforeEach(() => {
+  delete process.env.TRUST_PROXY
+})
 
 afterEach(() => {
   if (ORIGINAL_TRUST_PROXY === undefined) delete process.env.TRUST_PROXY
