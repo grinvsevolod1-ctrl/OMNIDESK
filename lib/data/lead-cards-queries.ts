@@ -103,12 +103,20 @@ export async function getLeadCardById(id: string): Promise<LeadCard | null> {
 }
 
 /**
- * Рабочее место куратора: ЗАКРЕПЛЁННЫЕ за ним лиды + ПУЛОВЫЕ лиды его команды,
- * которые ему «светятся» (миграция 150). Пуловый лид виден, пока он не взят
- * (curator_id IS NULL) и не в архиве, а куратору он адресован через
- * уведомление lead_pool_available (город матчится по региону при передаче —
- * единый источник правды сопоставления). Пуловые (isPool) идут первыми,
- * затем закреплённые по времени передачи.
+ * Рабочее место куратора: ЗАКРЕПЛЁННЫЕ за ним лиды + ВЕСЬ ПУЛ его команды,
+ * ещё не взятый в работу (миграция 150). Видимость пула = праву его взять:
+ * claimPoolLead закрепляет ЛЮБОЙ пуловый лид команды за куратором (проверка
+ * только team_id), поэтому и ВИДЕТ куратор все незанятые пуловые лиды своей
+ * команды.
+ *
+ * Раньше видимость дополнительно гейтилась наличием уведомления
+ * lead_pool_available (город матчится по региону при передаче). Но это
+ * уведомление создаётся best-effort и таргетируется по городу: при промахе
+ * сопоставления (город лида нет в справочнике регионов) или молчаливом сбое
+ * INSERT лид становился невидимым для ВСЕХ подходящих кураторов, хотя лежал
+ * в пуле команды и был доступен к claim. Уведомление осталось механизмом
+ * проактивного алерта (пуш/модалка по городу), но больше не прячет лид.
+ * Пуловые (isPool) идут первыми, затем закреплённые по времени передачи.
  */
 export async function listLeadCardsForCurator(
   curatorId: string,
@@ -123,14 +131,8 @@ export async function listLeadCardsForCurator(
           (lc.curator_id = $1 AND lc.transferred_at IS NOT NULL)
           OR (
             lc.curator_id IS NULL
-            AND lc.team_id = (SELECT team_id FROM managers WHERE id = $1)
             AND lc.team_id IS NOT NULL
-            AND EXISTS (
-              SELECT 1 FROM lead_notifications ln
-               WHERE ln.lead_card_id = lc.id
-                 AND ln.recipient_id = $1
-                 AND ln.kind = 'lead_pool_available'
-            )
+            AND lc.team_id = (SELECT team_id FROM managers WHERE id = $1)
           )
         )
       ORDER BY (lc.curator_id IS NULL) DESC,
