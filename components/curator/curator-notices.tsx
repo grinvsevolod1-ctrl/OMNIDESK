@@ -1,7 +1,7 @@
 'use client'
 
 import { useTransition } from 'react'
-import { Loader2, Sparkles, Undo2 } from 'lucide-react'
+import { Inbox, Loader2, UserPlus, Undo2 } from 'lucide-react'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
@@ -84,7 +84,7 @@ export function CuratorNotices({
               }
             >
               {isPool ? (
-                <Sparkles className="size-4" />
+                <Inbox className="size-4" />
               ) : (
                 <Undo2 className="size-4" />
               )}
@@ -158,7 +158,7 @@ export function CuratorNotices({
                 {pending ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  <Sparkles className="size-4" />
+                  <UserPlus className="size-4" />
                 )}
                 Взять в работу
               </Button>

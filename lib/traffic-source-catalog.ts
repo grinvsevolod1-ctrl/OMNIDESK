@@ -31,6 +31,8 @@ export interface CatalogPlatform {
   hex: string
   /** Slug в theSVG или null (тогда показываем монограмму). */
   logoSlug: string | null
+  /** Локальный логотип (имеет приоритет над theSVG). Рисуется во всю плитку. */
+  logoUrl?: string
   /** Валюта по умолчанию для площадки. */
   defaultCurrency: 'RUB' | 'USD' | 'EUR' | 'USDT'
   /** Синонимы для поиска. */
@@ -68,8 +70,9 @@ export const TRAFFIC_SOURCE_CATALOG: CatalogPlatform[] = [
     key: 'yandex_direct',
     name: 'Яндекс Директ',
     category: 'search',
-    hex: 'FC3F1D',
-    logoSlug: 'yandex',
+    hex: '000000',
+    logoSlug: null,
+    logoUrl: '/logos/yandex-direct.svg',
     defaultCurrency: 'RUB',
     aliases: ['яндекс', 'директ', 'yandex direct'],
   },

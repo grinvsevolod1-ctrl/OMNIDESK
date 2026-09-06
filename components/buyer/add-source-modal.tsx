@@ -9,7 +9,7 @@
  */
 
 import { useMemo, useState, useTransition } from 'react'
-import { ArrowLeft, Check, Loader2, Search, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Megaphone, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createBuyerSourceAction } from '@/app/actions/buyer'
 import { PlatformLogo } from '@/components/buyer/platform-logo'
@@ -156,7 +156,7 @@ export function AddSourceModal({
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent
-        className="flex h-[88vh] max-h-[860px] w-[min(96vw,1100px)] max-w-none flex-col gap-0 overflow-hidden p-0"
+        className="flex h-[92vh] max-h-[960px] w-[95vw] max-w-none flex-col gap-0 overflow-hidden p-0 md:h-[86vh] md:w-[85vw] xl:w-[80vw] xl:max-w-[1500px]"
         showCloseButton={false}
       >
         {!selected ? (
@@ -166,7 +166,7 @@ export function AddSourceModal({
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <DialogTitle className="flex items-center gap-2 text-xl">
-                    <Sparkles className="size-5 text-primary" />
+                    <Megaphone className="size-5 text-primary" />
                     Добавить источник трафика
                   </DialogTitle>
                   <DialogDescription>
@@ -212,7 +212,7 @@ export function AddSourceModal({
                       <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                         {group.label}
                       </h3>
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                         {group.items.map((p) => (
                           <PlatformCard
                             key={p.key}

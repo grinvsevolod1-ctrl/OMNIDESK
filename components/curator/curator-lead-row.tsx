@@ -14,7 +14,7 @@
  */
 
 import { memo } from 'react'
-import { Archive, ArchiveRestore, AtSign, MapPin, Sparkles } from 'lucide-react'
+import { Archive, ArchiveRestore, AtSign, Inbox, MapPin, UserPlus } from 'lucide-react'
 import {
   CityInlineEditor,
   StatusInlineEditor,
@@ -85,7 +85,7 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
   /** Бейдж «в пуле» — пуловый лид ещё не закреплён. */
   const poolBadge = (
     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-      <Sparkles className="size-3" />В пуле
+      <Inbox className="size-3" />В пуле
     </span>
   )
 
@@ -101,7 +101,7 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
         onClaim(lead.id)
       }}
     >
-      <Sparkles className="size-3.5" />
+      <UserPlus className="size-3.5" />
       Взять
     </Button>
   )
@@ -121,7 +121,7 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
               onClaim(lead.id)
             }}
           >
-            <Sparkles className="size-4" />
+            <UserPlus className="size-4" />
           </Button>
         }
       />

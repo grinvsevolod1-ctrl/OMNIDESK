@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Яндекс Директ">
+  <rect width="48" height="48" rx="11" fill="#000000"/>
+  <g fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16 32 L32 16"/>
+    <path d="M20.5 16 L32 16 L32 27.5"/>
+  </g>
+</svg>

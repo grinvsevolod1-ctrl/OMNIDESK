@@ -38,7 +38,8 @@ export function PlatformLogo({
   rounded?: string
 }) {
   const [failed, setFailed] = useState(false)
-  const url = platformLogoUrl(platform.logoSlug)
+  const isCustom = Boolean(platform.logoUrl)
+  const url = platform.logoUrl ?? platformLogoUrl(platform.logoSlug)
   const showMonogram = !url || failed
 
   if (showMonogram) {
@@ -59,6 +60,27 @@ export function PlatformLogo({
         aria-hidden
       >
         {platformMonogram(platform)}
+      </span>
+    )
+  }
+
+  // Локальный логотип уже содержит собственный фон (напр. Яндекс Директ —
+  // чёрная плитка с белой стрелкой) — рисуем во всю плитку без белой подложки.
+  if (isCustom) {
+    return (
+      <span
+        className={cn('flex shrink-0 overflow-hidden', rounded, className)}
+        style={{ width: size, height: size }}
+      >
+        <img
+          src={url || '/placeholder.svg'}
+          alt=""
+          width={size}
+          height={size}
+          className="h-full w-full object-cover"
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
       </span>
     )
   }
