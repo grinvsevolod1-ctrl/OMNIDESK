@@ -40,7 +40,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `152`
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `157`
   (140 — статус «Не связался», 141 — роль head, 142 — правка комментариев:
   только автором в МСК-день создания, прошлый текст — в
   `lead_card_comment_revisions`, бейдж «изменён» виден всем; 143 —
@@ -76,7 +76,10 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   руководитель) — сжатый на клиенте квадрат 256×256 в data:-URL, БЕЗ сторонних
   хранилищ, грузится в `/{app,curator,head}/settings` (`AvatarUploader` +
   `updateMyAvatarAction`), показывается в шапке dashboard-shell; у админа
-  строки в БД нет — только инициалы).
+  строки в БД нет — только инициалы); 153–156 — god-синтетические диалоги +
+  бэкофилл, `contact_name` в realtime-событиях, переработка корзины
+  лид-карточек, бэкофилл аватарок; 157 — `device_push_tokens`: токены APNs/FCM
+  для нативной Capacitor-оболочки (см. «Нативная оболочка» ниже).
 - **AI SDK** (Vercel) + AI Gateway. Модель — строка (напр. `openai/gpt-4.1`),
   переопределяется настройкой из админки.
 - **Worker** (`worker/`) — отдельный Node-процесс: teleproto (Telegram
@@ -96,6 +99,20 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 - **Виджет лайв-чата** — `widget-src/livechat.js`, собирается esbuild'ом
   (`scripts/build-widget.mjs`, minify) в `public/livechat.js`. НЕ редактируй
   `public/livechat.js` руками. `pnpm build` собирает виджет автоматически.
+- **PWA + нативная оболочка** — панель ставится на телефон/ПК как PWA (манифест
+  `app/manifest.ts` с maskable-иконкой и screenshots; приглашение установки
+  `components/pwa-install-prompt.tsx` + карточка в настройках
+  `components/shared/app-install-card.tsx`). Для iPhone, где Apple не доставляет
+  Web Push в WKWebView, есть **Capacitor-оболочка** в `native/` (отдельный
+  `package.json`, НЕ в pnpm-workspace и НЕ в зависимостях панели; исключена из
+  корневых tsconfig/eslint). Это remote-URL приложение: WebView грузит боевой
+  домен, а нативный push идёт через APNs/FCM — `lib/native-push.ts` (ES256/RS256
+  JWT на `node:crypto`, HTTP/2, без новых зависимостей), токены регистрируются
+  `app/api/native-push/{register,unregister}` и клиентским мостом
+  `lib/capacitor-push.ts` (через глобал `window.Capacitor`, без npm-импортов).
+  `push-dispatcher` на каждое входящее шлёт И web-push, И нативно (тот же
+  адресат/payload); оба транспорта env-gated и no-op без ключей. Инструкция
+  сборки — `native/README.md`.
 - **Деплой** — `deploy.sh` на VPS: git pull → install → миграции → build в
   `.next.new` → атомарный swap → PM2 reload. Миграции применяются ДО кода.
 
@@ -250,7 +267,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    сохраняется — чат-диалог с markdown-рендером (заголовки/таблицы/списки,
    свой мини-рендерер без зависимостей и без innerHTML) + копирование
    (`components/admin/secret-sites/report-dialog.tsx`).
-6. **Личные Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
+6. **Личн��е Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
    миграция 135) — каналы `type='telegram_personal'` в `channels`, живут
    на воркере (`worker/src/personal.ts`, teleproto). Все admin-видимые выборки
    каналов ОБЯЗАНЫ исключать их фильтром `type <> 'telegram_personal'`
@@ -305,7 +322,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    `use-auto-import.ts`, пока открыта вкладка: creating → requesting_code
    (request-code у GMT) → waiting_code (креды из GET /purchases/:id) →
    submitting_code → submitting_password (2FA, если нужен) → finalizing
-   (поллинг session_status до 'online'), переиспользуя personal*-actions
+   (п��ллинг session_status до 'online'), переиспользуя personal*-actions
    вкладки Telegram. Всё идемпотентно: канал дедуплится по номеру (E.164),
    креды перечитываются из GET (повторный request-code = conflict, не
    фатально). Single-покупка стартует импорт автоматически; на любой
@@ -837,7 +854,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
     исключение — «кликабельные» не-кнопки (li и т.п.): им `cursor-pointer`.
 - **Поллинг в UI** — только через `lib/hooks/use-shared-poll.ts`.
 - **Воркараунд GramJS:** `client.catchUp()` в библиотеке `telegram` — пустая
-  заглушка; восстановление пропущенных сообщений сделано своим dialog sync с
+  заглушка; восстановление пропущенных сообщений сд��лано своим dialog sync с
   per-chat watermarks (миграция 105). При обновлении зависимости проверь,
   не реализовали ли `catchUp()`.
 - **Только личные чаты в инбоксе:** группы/супергруппы/каналы TG отсекаются

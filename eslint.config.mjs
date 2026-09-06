@@ -8,6 +8,10 @@ const eslintConfig = [
     // shipped as-is and aren't part of the linted Next.js source tree.
     ignores: [
       'worker/**',
+      // The Capacitor native shell has its own package.json + tsconfig and is
+      // not part of the linted Next.js source tree (its deps aren't installed
+      // at the web-app root).
+      'native/**',
       '.next/**',
       'node_modules/**',
       'next-env.d.ts',

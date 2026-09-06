@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Omnidesk</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0a0a0a;
+        color: #ededed;
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      .wrap {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        padding: max(env(safe-area-inset-top), 1.5rem) 1.5rem
+          max(env(safe-area-inset-bottom), 1.5rem);
+        text-align: center;
+      }
+      .mark {
+        width: 56px;
+        height: 56px;
+        display: grid;
+        place-items: center;
+      }
+      .mark svg {
+        width: 100%;
+        height: 100%;
+      }
+      h1 {
+        font-size: 1.125rem;
+        font-weight: 600;
+        margin: 0;
+      }
+      p {
+        margin: 0;
+        max-width: 22rem;
+        line-height: 1.5;
+        color: #a1a1a1;
+        font-size: 0.9375rem;
+      }
+      button {
+        margin-top: 0.5rem;
+        appearance: none;
+        border: 0;
+        border-radius: 9999px;
+        padding: 0.75rem 1.5rem;
+        font-size: 0.9375rem;
+        font-weight: 600;
+        background: #ededed;
+        color: #0a0a0a;
+      }
+      button:active {
+        opacity: 0.8;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M12 3 22 20H2L12 3Z" fill="#ededed" />
+        </svg>
+      </div>
+      <h1>Нет соединения</h1>
+      <p>
+        Не удалось загрузить панель Omnidesk. Проверьте подключение к интернету и
+        повторите попытку.
+      </p>
+      <button type="button" onclick="location.reload()">Повторить</button>
+    </div>
+  </body>
+</html>

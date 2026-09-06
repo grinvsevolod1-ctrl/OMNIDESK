@@ -1,5 +1,6 @@
 import 'server-only'
 import { getConversationCuratorId, isConversationMuted } from './data'
+import { isNativePushConfigured, sendNativePushToManager } from './native-push'
 import {
   isPushConfigured,
   sendPushToGod,
@@ -157,7 +158,7 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
   const title = `${sender} · ${channel}`
   const body = event.body ? truncate(event.body) : 'Новое сообщение'
 
-  void sendPushToManager(targetId, {
+  const payload = {
     title,
     body,
     url: targetUrl,
@@ -172,24 +173,37 @@ async function handleEvent(event: RealtimeEvent): Promise<void> {
     // the notification). Only when we know the conversation to reply into.
     conversationId: event.conversationId,
     replyRole,
-  }).catch(() => {
+  }
+
+  // Web Push (browsers + installed PWAs).
+  void sendPushToManager(targetId, payload).catch(() => {
     /* delivery failures are handled/logged inside sendPushToManager */
   })
+
+  // Native push (Capacitor iOS/Android). Same addressee + payload, different
+  // transport — APNs reaches iPhones where Web Push cannot. No-op when native
+  // push is unconfigured, so servers without APNs/FCM behave exactly as before.
+  if (isNativePushConfigured()) {
+    void sendNativePushToManager(targetId, payload).catch(() => {
+      /* delivery failures are handled/logged inside sendNativePushToManager */
+    })
+  }
 }
 
 /** Idempotently start the dispatcher. Safe to call multiple times. */
 export function startPushDispatcher(): void {
   if (globalForDispatcher.__pushDispatcherStarted) return
-  if (!isPushConfigured()) {
-    // No VAPID keys — nothing to dispatch. This is THE most common reason
+  if (!isPushConfigured() && !isNativePushConfigured()) {
+    // No transport at all — nothing to dispatch. This is THE most common reason
     // pushes "silently stop" after a server move/redeploy, so say it loudly
     // in the boot log instead of failing invisibly: without the warning the
     // only symptom is managers not getting pushes, with no error anywhere.
     console.warn(
-      '[push] Dispatcher NOT started: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY are missing. ' +
-        'Web Push to managers is disabled. Generate keys with ' +
-        `node -e "console.log(require('web-push').generateVAPIDKeys())" ` +
-        'and set them in the environment, then restart the panel.',
+      '[push] Dispatcher NOT started: no push transport configured. ' +
+        'For Web Push set VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY (generate with ' +
+        `node -e "console.log(require('web-push').generateVAPIDKeys())"); ` +
+        'for native push set APNS_* and/or FCM_SERVICE_ACCOUNT_JSON. ' +
+        'Then restart the panel.',
     )
     return
   }
@@ -200,6 +214,7 @@ export function startPushDispatcher(): void {
     })
   })
   console.log(
-    '[push] Dispatcher started: VAPID configured, listening for inbound messages.',
+    `[push] Dispatcher started (web: ${isPushConfigured()}, native: ${isNativePushConfigured()}), ` +
+      'listening for inbound messages.',
   )
 }

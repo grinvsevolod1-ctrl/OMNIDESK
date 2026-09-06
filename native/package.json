@@ -1,0 +1,26 @@
+{
+  "name": "omnidesk-native",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Capacitor iOS/Android shell for the OMNIDESK panel (remote-URL + native push). Kept in its own package so Capacitor never enters the web app's dependency graph or deploy.",
+  "scripts": {
+    "add:ios": "cap add ios",
+    "add:android": "cap add android",
+    "sync": "cap sync",
+    "sync:ios": "cap sync ios",
+    "sync:android": "cap sync android",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android",
+    "copy": "cap copy"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/app": "^8.0.1",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/ios": "^8.5.1",
+    "@capacitor/push-notifications": "^8.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.1"
+  }
+}

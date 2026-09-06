@@ -21,6 +21,7 @@ import { ChevronLeft, Loader2, LogOut, Menu, PanelLeft, X } from 'lucide-react'
 import { logoutAction } from '@/app/actions/auth'
 import { updateMyAvatarAction } from '@/app/actions/account'
 import type { SimpleResult } from '@/app/actions/account-shared'
+import { unregisterNativePush } from '@/lib/capacitor-push'
 import { unsubscribePushThisDevice } from '@/lib/push-client'
 import { AvatarPickerDialog } from '@/components/shared/avatar-picker'
 import { BrandMark } from '@/components/brand'
@@ -142,7 +143,12 @@ export function DashboardShell({
   const handleLogout = useCallback(async () => {
     setLoggingOut(true)
     try {
-      await unsubscribePushThisDevice()
+      // Drop both transports for THIS device: the Web Push subscription and,
+      // inside the native shell, the APNs/FCM token. Both are best-effort.
+      await Promise.allSettled([
+        unsubscribePushThisDevice(),
+        unregisterNativePush(),
+      ])
     } finally {
       await logoutAction()
     }

@@ -11,6 +11,7 @@ import {
 } from 'react'
 import { toast } from 'sonner'
 import { getPushConfigAction } from '@/app/actions/push'
+import { initNativePush, isNativePlatform } from '@/lib/capacitor-push'
 import { ensurePushSubscription } from '@/lib/push-client'
 
 export type PushSupport = 'checking' | 'ok' | 'unsupported' | 'ios-needs-install'
@@ -83,6 +84,22 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false
     async function init() {
+      // Capacitor native shell: push goes through APNs/FCM via the OS, not Web
+      // Push. Kick off native registration and mark the push requirement as
+      // satisfied so the browser-oriented gate (and the "install the PWA on
+      // iOS" screen) never shows inside the real app — the OS owns the
+      // permission prompt here.
+      if (isNativePlatform()) {
+        void initNativePush()
+        if (!cancelled) {
+          setSupport('ok')
+          setConfigured(true)
+          setPermission('granted')
+          setSubscribed(true)
+        }
+        return
+      }
+
       if (
         typeof window === 'undefined' ||
         !('serviceWorker' in navigator) ||
