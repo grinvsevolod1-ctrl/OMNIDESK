@@ -9,16 +9,15 @@
 import { useState } from 'react'
 import { FileText, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { formatMskTime } from '@/lib/time'
 import type {
   PersonalDialog,
   PersonalMessage,
 } from '@/app/actions/admin-secret/telegram-personal'
 
+// `ts` is a Telegram unix timestamp in seconds; render as MSK "HH:MM".
 export function formatTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatMskTime(ts * 1000)
 }
 
 export function formatDialogTime(ts: number | null): string {

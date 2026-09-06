@@ -500,14 +500,6 @@ export class TelegramSession {
   }
 
   /**
-   * Send an outgoing message to a stored handle (@username or numeric peer id).
-   * When `replyToMsgId` is given the message is sent as a Telegram reply to that
-   * message. When `scheduleAt` (unix seconds) is given, Telegram schedules the
-   * send SERVER-SIDE (messages.sendMessage schedule_date) — it delivers at that
-   * time even if the worker is down. Returns the new Telegram message id so the
-   * caller can persist it (needed to later delete / forward / react to it).
-   */
-  /**
    * The messaging dependency bundle handed to the split-out outgoing-ops
    * module (telegram-messaging.ts). Throttling and flood cooldown stay owned
    * by the class; the module only invokes them.
@@ -521,6 +513,14 @@ export class TelegramSession {
     }
   }
 
+  /**
+   * Send an outgoing message to a stored handle (@username or numeric peer id).
+   * When `replyToMsgId` is given the message is sent as a Telegram reply to that
+   * message. When `scheduleAt` (unix seconds) is given, Telegram schedules the
+   * send SERVER-SIDE (messages.sendMessage schedule_date) — it delivers at that
+   * time even if the worker is down. Returns the new Telegram message id so the
+   * caller can persist it (needed to later delete / forward / react to it).
+   */
   async sendMessage(
     target: string,
     body: string,
@@ -602,8 +602,6 @@ export class TelegramSession {
   ): Promise<{ providerMessageId: string | null }> {
     return forwardMessageIn(this.messagingDeps, fromTarget, msgId, toTarget)
   }
-
-
 
   /**
    * Re-download the media bytes for a previously ingested message. `ref` is the

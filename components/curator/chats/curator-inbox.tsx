@@ -12,7 +12,7 @@
  * вёрстка и локальный UI-стейт панелей.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
@@ -44,6 +44,7 @@ import type { Conversation, Message, StickerItem } from '@/lib/types'
 import { ContactAvatar, MetaRows, SourceChip } from '@/components/manager/inbox/atoms'
 import { MessageList } from '@/components/manager/inbox/message-list'
 import { MessageComposer } from '@/components/manager/inbox/message-composer'
+import { useThreadScroll } from '@/components/manager/inbox/use-thread-scroll'
 import { CHANNEL_VISUAL, listStamp } from '@/components/manager/inbox/visual'
 import type { ForwardTarget } from '@/components/manager/message-context-menu'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
@@ -494,7 +495,15 @@ function CuratorThread({
   onToggleInfo: () => void
   pending: boolean
 }) {
-  const messagesScrollRef = useRef<HTMLDivElement | null>(null)
+  // Same battle-tested auto-scroll as the manager inbox: follow new messages
+  // only while pinned to the bottom, so scrolling up to read history isn't
+  // yanked back down when a new message arrives. Curator has no visitor-typing
+  // preview, so activeTypingDraft is always empty.
+  const { messagesScrollRef, handleThreadScroll } = useThreadScroll({
+    activeId,
+    threadLength: thread.length,
+    activeTypingDraft: '',
+  })
   const shellHeader = useShellHeader()
   // Персистентные черновики (как у менеджера): unsent-текст переживает смену
   // диалога, refresh и краш — зеркалится в localStorage. Ключ — id диалога.
@@ -502,15 +511,6 @@ function CuratorThread({
   const channelShort =
     CHANNEL_VISUAL[active.channelType as PanelChannelType]?.short ??
     active.channelType
-
-  // Автопрокрутка вниз при открытии диалога и приходе нового последнего
-  // сообщения. Ключуемся на id последнего сообщения — подгрузка старой истории
-  // (меняет первый, не последний) прокрутку не дёргает.
-  const lastId = thread.length ? thread[thread.length - 1].id : null
-  useEffect(() => {
-    const el = messagesScrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [activeId, lastId])
 
   // Шапка диалога уезжает в портал единственной шапки дашборда (назад + данные
   // лида + статус + сведения) — отдельной второй полосы под системной шапкой нет.
@@ -596,7 +596,7 @@ function CuratorThread({
           forwardTargets={forwardTargets}
           activeTyping={null}
           messagesScrollRef={messagesScrollRef}
-          onThreadScroll={() => {}}
+          onThreadScroll={handleThreadScroll}
           onReply={onReply}
           onEdit={onEdit}
           onReact={onReact}

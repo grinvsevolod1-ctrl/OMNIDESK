@@ -5,6 +5,7 @@
  * с фильтрами таблицы (или вся база при пустых фильтрах), батчами по 500 —
  * рассчитано на 1500+ лидов без нагрузки на память.
  */
+import { formatMskDateTimeNumeric } from '@/lib/time'
 import {
   requireAdmin,
   requireBuyer,
@@ -38,16 +39,7 @@ export interface ExportLeadsResult {
 }
 
 function fmtDate(iso: string | null): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return new Intl.DateTimeFormat('ru-RU', {
-    timeZone: 'Europe/Moscow',
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(d)
+  return iso ? formatMskDateTimeNumeric(iso) : ''
 }
 
 export async function exportLeadsExcelAction(filter: {

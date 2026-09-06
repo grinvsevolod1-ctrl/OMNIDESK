@@ -10,6 +10,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Check, Copy, Loader2 } from 'lucide-react'
+import { formatMskDateTime } from '@/lib/time'
 import type {
   GmtMoney,
   GmtPurchase,
@@ -25,13 +26,10 @@ export function fmtMoney(m: GmtMoney | null | undefined): string {
   return `${m.amount} ${m.currency_code}`
 }
 
+// Delegates to the shared MSK formatter so god-panel timestamps match the rest
+// of the product regardless of the viewer's local timezone.
 export function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatMskDateTime(iso)
 }
 
 /** `+7999…` из любого формата — ключ для сверки с импортированными номерами. */
