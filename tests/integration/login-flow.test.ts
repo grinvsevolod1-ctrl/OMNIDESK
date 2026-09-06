@@ -30,7 +30,14 @@ async function freshAuth() {
 describe('admin credential verification (env-only)', () => {
   beforeEach(() => {
     savedEnv = {}
-    for (const k of ENV_KEYS) savedEnv[k] = process.env[k]
+    // Save AND clear every admin env key so each test controls its own
+    // credentials. Without the clear, an ambient ADMIN_USERNAME/ADMIN_EMAIL
+    // (e.g. from a sourced .env.local) leaks in and breaks the identifier
+    // matching tests — the suite must be hermetic regardless of environment.
+    for (const k of ENV_KEYS) {
+      savedEnv[k] = process.env[k]
+      delete process.env[k]
+    }
   })
   afterEach(() => {
     for (const k of ENV_KEYS) {
