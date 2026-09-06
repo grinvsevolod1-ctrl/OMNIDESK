@@ -180,13 +180,15 @@ async function handleMediaGet(
         status: personal?.status || 502,
       })
     }
-    const headers = new Headers()
-    for (const h of ['content-type', 'content-length', 'content-disposition']) {
-      const v = personal.headers.get(h)
-      if (v) headers.set(h, v)
-    }
-    headers.set('cache-control', 'private, max-age=86400')
-    return new Response(personal.body, { status: 200, headers })
+    // Archive a bounded copy while streaming: personal/synthetic media is read
+    // LIVE from Telegram and is NOT persisted at ingest, so a later re-fetch can
+    // fail (410) once the far side edits/deletes it or the live descriptor goes
+    // stale. Teeing the first successful load into media_blobs makes every
+    // subsequent view durable and provider-independent — the same self-healing
+    // the WhatsApp/VK paths already do above.
+    const personalMime =
+      personal.headers.get('content-type') || 'application/octet-stream'
+    return serveAndArchive(id, personal, personalMime, null)
   }
 
   const upstream = await streamFromWorker(
@@ -199,14 +201,12 @@ async function handleMediaGet(
     return new Response('Media unavailable', { status: upstream.status || 502 })
   }
 
-  const headers = new Headers()
-  for (const h of ['content-type', 'content-length', 'content-disposition']) {
-    const v = upstream.headers.get(h)
-    if (v) headers.set(h, v)
-  }
-  headers.set('cache-control', 'private, max-age=86400')
-
-  return new Response(upstream.body, { status: 200, headers })
+  // Same self-healing archive as above: once the worker re-downloads the bytes
+  // from the provider, keep a bounded copy so the file survives the contact
+  // editing/deleting it (and future loads skip the worker round-trip entirely).
+  const upstreamMime =
+    upstream.headers.get('content-type') || 'application/octet-stream'
+  return serveAndArchive(id, upstream, upstreamMime, null)
 }
 
 /** Serve a buffer we already hold in memory. `immutable` when it came from the
