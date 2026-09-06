@@ -32,9 +32,15 @@ import {
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { TgsSticker } from '@/components/manager/inbox/tgs-sticker'
+import {
+  SelectionBadge,
+  useTileSelection,
+} from '@/components/manager/inbox/media-selection'
 import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import type { Message } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { effectiveMediaType, isGalleryMedia } from '@/lib/media-albums'
+import { mediaFilename } from '@/lib/media-download'
 
 /** Placeholder labels we synthesise at ingest for media without a caption. */
 const MEDIA_PLACEHOLDERS = new Set([
@@ -85,35 +91,7 @@ async function downloadMedia(url: string, filename: string): Promise<void> {
   }
 }
 
-/**
- * Effective media type with defensive re-typing for historical rows:
- * telegram «кружки» ingested before video_note support were stored as
- * voice/audio while keeping their video/* MIME.
- */
-function effectiveMediaType(message: Message): Message['mediaType'] {
-  const t = message.mediaType
-  if (
-    (t === 'voice' || t === 'audio') &&
-    message.mediaMime?.startsWith('video/')
-  ) {
-    return 'video_note'
-  }
-  return t
-}
 
-/** Suggest a filename for a downloaded media item from its type/name. */
-function mediaFilename(message: Message): string {
-  if (message.mediaName) return message.mediaName
-  const ext =
-    message.mediaType === 'image'
-      ? 'jpg'
-      : message.mediaType === 'video' || message.mediaType === 'video_note'
-        ? 'mp4'
-        : message.mediaType === 'voice' || message.mediaType === 'audio'
-          ? 'ogg'
-          : 'bin'
-  return `media-${message.id.slice(0, 8)}.${ext}`
-}
 
 /**
  * Fullscreen gallery viewer. Shows one media item from `items` at a time and
@@ -390,13 +368,6 @@ function GallerySlide({
   )
 }
 
-/** A viewable media item is an image/video/«кружок» with a streamable URL. */
-function isGalleryMedia(m: Message): boolean {
-  if (!m.mediaUrl) return false
-  const t = effectiveMediaType(m)
-  return t === 'image' || t === 'video' || t === 'video_note'
-}
-
 type MediaGalleryValue = { open: (messageId: string) => void }
 const MediaGalleryContext = createContext<MediaGalleryValue | null>(null)
 
@@ -647,6 +618,8 @@ function AlbumCell({
   const { src, failed, onMediaError, onMediaSettled } =
     useRetryingMediaSrc(url)
   const isVideo = effectiveMediaType(message) === 'video'
+  // Bulk selection mode: the cell toggles its checkmark instead of opening.
+  const selection = useTileSelection(message)
   if (!url || failed) {
     return (
       <div
@@ -662,13 +635,24 @@ function AlbumCell({
   return (
     <button
       type="button"
-      onClick={onOpen}
-      aria-label="Открыть вложение"
+      onClick={selection ? selection.onSelect : onOpen}
+      aria-label={
+        selection
+          ? selection.selected
+            ? 'Снять выбор'
+            : 'Выбрать вложение'
+          : 'Открыть вложение'
+      }
+      aria-pressed={selection ? selection.selected : undefined}
       className={cn(
-        'relative block aspect-square cursor-zoom-in overflow-hidden rounded-md bg-muted',
+        'relative block aspect-square overflow-hidden rounded-md bg-muted',
+        selection ? 'cursor-pointer' : 'cursor-zoom-in',
+        selection?.selected &&
+          'ring-2 ring-primary ring-offset-1 ring-offset-background',
         className,
       )}
     >
+      {selection ? <SelectionBadge selected={selection.selected} /> : null}
       {isVideo ? (
         <>
           <video
@@ -716,6 +700,8 @@ export function MessageMedia({ message }: { message: Message }) {
   const { src, failed, onMediaError, onMediaSettled } =
     useRetryingMediaSrc(url)
   const type = effectiveMediaType(message)
+  // Bulk selection mode (photos/videos only): tap toggles the checkmark.
+  const selection = useTileSelection(message)
   // Открытие: если есть общий провайдер треда — листаемая галерея по всему
   // чату; иначе локальный одиночный лайтбокс (см. fallback ниже).
   const openViewer = () =>
@@ -792,15 +778,26 @@ export function MessageMedia({ message }: { message: Message }) {
       <>
         <button
           type="button"
-          onClick={openViewer}
+          onClick={selection ? selection.onSelect : openViewer}
           className={cn(
-            'group relative block cursor-zoom-in overflow-hidden rounded-lg',
+            'group relative block overflow-hidden rounded-lg',
+            selection ? 'cursor-pointer' : 'cursor-zoom-in',
+            selection?.selected &&
+              'ring-2 ring-primary ring-offset-2 ring-offset-background',
             // Пока картинка грузится — приглушённый фон с «шиммером», чтобы не
             // было пустого прыжка (как превью-заглушка в Telegram).
             !imgLoaded && 'min-h-40 min-w-40 skeleton-shimmer bg-muted/60',
           )}
-          aria-label="Открыть изображение"
+          aria-label={
+            selection
+              ? selection.selected
+                ? 'Снять выбор'
+                : 'Выбрать изображение'
+              : 'Открыть изображение'
+          }
+          aria-pressed={selection ? selection.selected : undefined}
         >
+          {selection ? <SelectionBadge selected={selection.selected} /> : null}
           {/* External chat media of unknown size — see note above; plain img. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -857,13 +854,34 @@ export function MessageMedia({ message }: { message: Message }) {
   if (type === 'video') {
     return (
       <div className="flex flex-col gap-1">
-        <video
-          src={src}
-          controls
-          className="max-h-80 max-w-full rounded-lg"
-          onLoadedMetadata={onMediaSettled}
-          onError={onMediaError}
-        />
+        <div
+          className={cn(
+            'relative',
+            selection?.selected &&
+              'rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-background',
+          )}
+        >
+          <video
+            src={src}
+            controls={!selection}
+            className="max-h-80 max-w-full rounded-lg"
+            onLoadedMetadata={onMediaSettled}
+            onError={onMediaError}
+          />
+          {selection ? (
+            // Selection mode: a full-size hit target over the player so a tap
+            // toggles the checkmark instead of scrubbing the video.
+            <button
+              type="button"
+              onClick={selection.onSelect}
+              aria-label={selection.selected ? 'Снять выбор' : 'Выбрать видео'}
+              aria-pressed={selection.selected}
+              className="absolute inset-0 rounded-lg"
+            >
+              <SelectionBadge selected={selection.selected} />
+            </button>
+          ) : null}
+        </div>
         <div className="flex items-center gap-3 text-xs">
           <button
             type="button"

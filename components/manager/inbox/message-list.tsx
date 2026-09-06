@@ -22,59 +22,19 @@ import {
   MessageMedia,
   MessageMediaAlbum,
 } from '@/components/manager/inbox/message-media'
+import {
+  MediaSelectionBar,
+  MediaSelectionChip,
+  MediaSelectionProvider,
+  useMediaSelection,
+} from '@/components/manager/inbox/media-selection'
 import { CHANNEL_VISUAL, dayLabel, timeShort } from '@/components/manager/inbox/visual'
 import { DeliveryTicks } from '@/components/manager/inbox/atoms'
 import type { Conversation, Message, PanelChannelType } from '@/lib/types'
 import type { VisitorTyping } from '@/components/manager/inbox/use-inbox-realtime'
-
-/** Max time gap for grouping consecutive media into one album (Telegram sends
- *  album members within a second or two of each other). */
-const ALBUM_TIME_WINDOW_MS = 5000
-
-/**
- * Do two consecutive messages belong to the same Telegram-style album? Only
- * photos and videos group (stickers, кружки, voice, files stay standalone), and
- * only within the same direction and a few seconds of each other — exactly how
- * a batch of photos arrives from / is sent to the provider. Deleted messages
- * never group so their marker stays readable.
- */
-function sameAlbum(a: Message, b: Message): boolean {
-  if (a.deletedAt || b.deletedAt) return false
-  if (a.direction !== b.direction) return false
-  const visual = (m: Message) =>
-    m.mediaType === 'image' || m.mediaType === 'video'
-  if (!visual(a) || !visual(b)) return false
-  const gap = Math.abs(
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  )
-  return gap <= ALBUM_TIME_WINDOW_MS
-}
-
-/**
- * Pre-compute albums for a thread: map each album HEAD id → its members and the
- * index right after the album (so tail-corner rounding can look past the group),
- * and a set of non-head member ids to SKIP in the render loop. Singles never
- * enter the map, so non-media threads pay almost nothing.
- */
-function computeAlbums(thread: Message[]): {
-  heads: Map<string, { items: Message[]; endIndex: number }>
-  skip: Set<string>
-} {
-  const heads = new Map<string, { items: Message[]; endIndex: number }>()
-  const skip = new Set<string>()
-  let i = 0
-  while (i < thread.length) {
-    let j = i + 1
-    while (j < thread.length && sameAlbum(thread[j - 1], thread[j])) j++
-    if (j - i >= 2) {
-      const items = thread.slice(i, j)
-      heads.set(items[0].id, { items, endIndex: j })
-      for (let k = i + 1; k < j; k++) skip.add(thread[k].id)
-    }
-    i = j
-  }
-  return { heads, skip }
-}
+// Album grouping (Telegram-style, ≤10 per grid) lives in lib/media-albums.ts so
+// it is unit-tested and shared with the bulk-selection logic.
+import { computeAlbums } from '@/lib/media-albums'
 
 /** Horizontal drag past this many px triggers a reply on release. */
 const SWIPE_REPLY_THRESHOLD = 56
@@ -290,6 +250,12 @@ export function MessageList({
   // when the thread reference changes).
   const albums = useMemo(() => computeAlbums(thread), [thread])
 
+  // Bulk photo selection (download many / ZIP). Same for manager and curator;
+  // suppressed in the «attach to lead card» picking mode, which already
+  // repurposes bubble clicks.
+  const selection = useMediaSelection(thread, activeId)
+  const selectionEnabled = !onBubbleClick
+
   // Тап по цитате-ответу → прыжок к оригиналу (как в Telegram): скроллим к нему
   // и на пару секунд подсвечиваем кольцом. Контейнер прокрутки уже прокинут
   // сюда (messagesScrollRef), так что это работает и у менеджера, и у куратора
@@ -332,7 +298,9 @@ export function MessageList({
       }}
     >
       <MediaGalleryProvider messages={thread}>
+      <MediaSelectionProvider selection={selection}>
       <div className="mx-auto flex max-w-3xl flex-col gap-1">
+        {selectionEnabled ? <MediaSelectionChip selection={selection} /> : null}
         {/* Cold-thread hydration: transcript is being fetched on first open. */}
         {threadLoading && thread.length === 0 ? (
           <div
@@ -685,7 +653,14 @@ export function MessageList({
             ) : null}
           </div>
         ) : null}
+        {selectionEnabled ? (
+          <MediaSelectionBar
+            selection={selection}
+            contactName={active.contactName}
+          />
+        ) : null}
       </div>
+      </MediaSelectionProvider>
       </MediaGalleryProvider>
     </div>
   )

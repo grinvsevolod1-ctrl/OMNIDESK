@@ -464,11 +464,28 @@ export async function getMessageOwnerForCurator(
   // a curator viewing a TRANSFERRED dialog must keep seeing its media even if the
   // owning manager's channel row was deleted/reconnected — an INNER JOIN on
   // channels would 404 it, which is exactly the "Медиа недоступно" curators hit.
+  //
+  // Ownership is established by EITHER link the transfer leaves behind:
+  //   - conversations.curator_id (migration 151, written by recordTransfer), or
+  //   - a lead card for this conversation held by the curator (lead_cards.
+  //     curator_id — the same rule /api/lead-media authorizes by).
+  // The two are meant to move together, but they are written by different
+  // chokepoints (transfer, re-transfer between curators, return + re-transfer,
+  // outreach); whenever only the card link survived, every photo in the
+  // curator's thread 404'd while the text rendered fine. The card link is the
+  // source of truth for "this curator holds this lead", so honour it here.
   const rows = await query<{ channel_id: string; channel_type: ChannelType }>(
     `SELECT c.channel_id, c.channel_type
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
-      WHERE m.id = $1 AND c.curator_id = $2`,
+      WHERE m.id = $1
+        AND (
+          c.curator_id = $2
+          OR EXISTS (
+            SELECT 1 FROM lead_cards lc
+             WHERE lc.conversation_id = c.id AND lc.curator_id = $2
+          )
+        )`,
     [messageId, curatorId],
   )
   if (rows.length === 0) return null

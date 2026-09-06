@@ -33,6 +33,8 @@ import {
   MediaTray,
   DropOverlay,
   MEDIA_ACCEPT,
+  MAX_STAGED_FILES,
+  type StagedSendProgress,
 } from '@/components/manager/inbox/media-staging'
 import { TelemostIcon } from '@/components/channel-icons'
 import { cn } from '@/lib/utils'
@@ -64,6 +66,16 @@ export interface MessageComposerProps {
   onSend: (text: string) => void
   onSendSticker: (sticker: StickerItem) => void
   onSendMediaFile: (file: File, caption: string) => void | Promise<void>
+  /**
+   * Bulk send: the whole staged tray in as few requests as possible (chunked
+   * server-side batches) with a progress callback. When provided it replaces
+   * the per-file loop, which for 100 photos meant 100 round-trips from a phone.
+   */
+  onSendMediaBatch?: (
+    files: File[],
+    caption: string,
+    onProgress: (progress: StagedSendProgress) => void,
+  ) => Promise<void>
   /** Send a recorded voice note (Telegram only). */
   onSendVoice: (audio: {
     base64: string
@@ -113,6 +125,7 @@ export const MessageComposer = memo(function MessageComposer({
   onSend,
   onSendSticker,
   onSendMediaFile,
+  onSendMediaBatch,
   onSendVoice,
   onVoiceError,
   onScheduleSend,
@@ -148,6 +161,10 @@ export const MessageComposer = memo(function MessageComposer({
   // while the sequential upload loop runs.
   const media = useMediaStaging()
   const [sendingMedia, setSendingMedia] = useState(false)
+  // "12 из 100" while a bulk batch is in flight; null when idle.
+  const [sendProgress, setSendProgress] = useState<StagedSendProgress | null>(
+    null,
+  )
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const sendBtnRef = useRef<HTMLButtonElement | null>(null)
@@ -294,7 +311,10 @@ export const MessageComposer = memo(function MessageComposer({
 
   // Send the staged files as a batch. The textarea holds the single caption for
   // the whole group (Telegram album semantics) — only the first file carries it.
-  // Uploads run sequentially so message order is preserved.
+  // With `onSendMediaBatch` the whole tray goes out in chunked server-side
+  // batches (one request per ~20 files, progress in the tray); the per-file
+  // loop remains as the fallback for composers that have no batch handler.
+  // Either way uploads run sequentially so message order is preserved.
   const sendStagedMedia = useCallback(async () => {
     if (media.count === 0) return
     if (aiLed) {
@@ -303,19 +323,39 @@ export const MessageComposer = memo(function MessageComposer({
     }
     const caption = valueRef.current.trim()
     const staged = media.files
-    media.clear()
     if (persistTimer.current) clearTimeout(persistTimer.current)
     applyValue('')
     if (!editingRef.current) persistRef.current('')
     setSendingMedia(true)
     try {
-      for (let i = 0; i < staged.length; i++) {
-        await onSendMediaFile(staged[i].file, i === 0 ? caption : '')
+      if (onSendMediaBatch) {
+        // Keep the tray visible (with the progress bar) until the batch is
+        // fully sent — the user sees exactly what is going out and how far.
+        setSendProgress({ sent: 0, total: staged.length })
+        await onSendMediaBatch(
+          staged.map((s) => s.file),
+          caption,
+          setSendProgress,
+        )
+        media.clear()
+      } else {
+        media.clear()
+        for (let i = 0; i < staged.length; i++) {
+          await onSendMediaFile(staged[i].file, i === 0 ? caption : '')
+        }
       }
     } finally {
       setSendingMedia(false)
+      setSendProgress(null)
     }
-  }, [media, aiLed, onBlockedInteract, applyValue, onSendMediaFile])
+  }, [
+    media,
+    aiLed,
+    onBlockedInteract,
+    applyValue,
+    onSendMediaFile,
+    onSendMediaBatch,
+  ])
 
   const submit = useCallback(() => {
     if (aiLed) {
@@ -398,8 +438,11 @@ export const MessageComposer = memo(function MessageComposer({
       {/* Staged files awaiting send — thumbnails with per-item remove. */}
       <MediaTray
         files={media.files}
+        preparing={media.preparing}
         onRemove={media.removeFile}
+        onClear={media.clear}
         disabled={sendingMedia}
+        progress={sendProgress}
       />
       {/* Quick replies tray — manager's saved canned answers, one tap to
           insert into the draft. Collapsed by default to keep the composer
@@ -544,10 +587,10 @@ export const MessageComposer = memo(function MessageComposer({
                 variant="ghost"
                 size="icon"
                 className="size-9 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-                disabled={pending || media.isFull}
+                disabled={pending || sendingMedia || media.isFull}
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Прикрепить файлы"
-                title="Прикрепить файлы (фото, видео, документы — до 10 за раз)"
+                title={`Прикрепить файлы (фото, видео, документы — до ${MAX_STAGED_FILES} за раз)`}
               >
                 <Paperclip className="size-5" />
               </Button>

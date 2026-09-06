@@ -24,6 +24,7 @@ import { toast } from 'sonner'
 import type { Conversation, Message, StickerItem } from '@/lib/types'
 import type { ForwardTarget } from '@/components/manager/message-context-menu'
 import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
+import { reportBatchOutcome, sendMediaBatch } from '@/lib/media-batch-client'
 import {
   deleteCuratorMessageAction,
   editCuratorMessageAction,
@@ -475,6 +476,37 @@ export function useCuratorChats({
     [activeId, active],
   )
 
+  // Пакетная отправка: весь трей уходит чанками по ~20 файлов в один запрос
+  // каждый (а не по одному экшену на файл), прогресс — в трее композера.
+  // Скоуп по curator_id проверяет сам роут через кураторские экшены.
+  const handleSendMediaBatch = useCallback(
+    async (
+      files: File[],
+      caption: string,
+      onProgress: (p: { sent: number; total: number }) => void,
+    ) => {
+      if (!activeId || !active) return
+      const channelType = active.channelType
+      if (
+        channelType !== 'telegram' &&
+        channelType !== 'whatsapp' &&
+        channelType !== 'vk'
+      ) {
+        toast.error('Вложения недоступны для этого канала.')
+        return
+      }
+      const outcome = await sendMediaBatch({
+        conversationId: activeId,
+        channel: channelType,
+        files,
+        caption,
+        onProgress,
+      })
+      reportBatchOutcome(outcome)
+    },
+    [activeId, active],
+  )
+
   return {
     activeId,
     setActiveId,
@@ -486,6 +518,7 @@ export function useCuratorChats({
     loadOlder,
     handleSend,
     handleSendMediaFile,
+    handleSendMediaBatch,
     replyTarget,
     setReplyTarget,
     editTarget,

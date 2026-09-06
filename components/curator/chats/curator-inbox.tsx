@@ -174,6 +174,7 @@ export function CuratorInbox({
     loadOlder,
     handleSend,
     handleSendMediaFile,
+    handleSendMediaBatch,
     replyTarget,
     setReplyTarget,
     editTarget,
@@ -393,6 +394,7 @@ export function CuratorInbox({
             onBack={() => setActiveId(null)}
             onSend={handleSend}
             onSendMediaFile={handleSendMediaFile}
+            onSendMediaBatch={handleSendMediaBatch}
             onSendSticker={sendSticker}
             onSendVoice={sendVoice}
             onScheduleSend={scheduleSend}
@@ -444,6 +446,7 @@ function CuratorThread({
   onBack,
   onSend,
   onSendMediaFile,
+  onSendMediaBatch,
   onSendSticker,
   onSendVoice,
   onScheduleSend,
@@ -473,6 +476,11 @@ function CuratorThread({
   onBack: () => void
   onSend: (text: string) => void
   onSendMediaFile: (file: File, caption: string) => void
+  onSendMediaBatch: (
+    files: File[],
+    caption: string,
+    onProgress: (p: { sent: number; total: number }) => void,
+  ) => Promise<void>
   onSendSticker: (sticker: StickerItem) => void
   onSendVoice: (audio: {
     base64: string
@@ -669,6 +677,7 @@ function CuratorThread({
         onSend={onSend}
         onSendSticker={onSendSticker}
         onSendMediaFile={onSendMediaFile}
+        onSendMediaBatch={onSendMediaBatch}
         onSendVoice={onSendVoice}
         onVoiceError={(m) => toast.error(m)}
         onScheduleSend={onScheduleSend}

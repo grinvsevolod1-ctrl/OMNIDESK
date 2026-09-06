@@ -424,6 +424,7 @@ export function useInbox({
     sendVoice,
     scheduleSend,
     handleSendMediaFile,
+    handleSendMediaBatch,
   } = useMessageActions({
     activeId,
     active,
@@ -552,5 +553,6 @@ export function useInbox({
     sendVoice,
     scheduleSend,
     handleSendMediaFile,
+    handleSendMediaBatch,
   }
 }

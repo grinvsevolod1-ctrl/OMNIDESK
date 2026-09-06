@@ -16,6 +16,7 @@ import {
   forwardMessageAction,
 } from '@/app/actions/messages'
 import { sendTelegramMediaAction } from '@/app/actions/account-media'
+import { reportBatchOutcome, sendMediaBatch } from '@/lib/media-batch-client'
 import type { Conversation, Message, StickerItem } from '@/lib/types'
 
 /** Read a File into a bare base64 string (no data: prefix) for job payloads. */
@@ -371,6 +372,34 @@ export function useMessageActions({
     })
   }
 
+  // Bulk send: the whole staged tray in chunked server-side batches. One
+  // request per ~20 files instead of one per file, progress reported to the
+  // composer's tray. Messages arrive back through the SSE stream as usual.
+  async function handleSendMediaBatch(
+    files: File[],
+    caption: string,
+    onProgress: (p: { sent: number; total: number }) => void,
+  ) {
+    if (!activeId) return
+    const channelType = active?.channelType
+    if (
+      channelType !== 'telegram' &&
+      channelType !== 'whatsapp' &&
+      channelType !== 'vk'
+    ) {
+      toast.error('Вложения недоступны для этого канала.')
+      return
+    }
+    const outcome = await sendMediaBatch({
+      conversationId: activeId,
+      channel: channelType,
+      files,
+      caption,
+      onProgress,
+    })
+    reportBatchOutcome(outcome)
+  }
+
   return {
     replyTarget,
     setReplyTarget,
@@ -385,5 +414,6 @@ export function useMessageActions({
     sendVoice,
     scheduleSend,
     handleSendMediaFile,
+    handleSendMediaBatch,
   }
 }

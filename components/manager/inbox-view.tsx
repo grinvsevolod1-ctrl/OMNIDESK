@@ -172,6 +172,7 @@ export function InboxView({
     sendVoice,
     scheduleSend,
     handleSendMediaFile,
+    handleSendMediaBatch,
   } = inbox
 
   // j/k and Alt+arrows walk the filtered list without touching the mouse.
@@ -466,6 +467,7 @@ export function InboxView({
               onSend={handleSend}
               onSendSticker={sendSticker}
               onSendMediaFile={handleSendMediaFile}
+              onSendMediaBatch={handleSendMediaBatch}
               onSendVoice={sendVoice}
               onVoiceError={(message) => toast.error(message)}
               onScheduleSend={scheduleSend}
