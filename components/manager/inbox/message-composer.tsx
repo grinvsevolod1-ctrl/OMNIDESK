@@ -23,9 +23,14 @@ import {
   SendHorizonal,
   BrainCircuit,
   Zap,
+  Smile,
+  Sticker,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { EmojiPicker, StickerPicker } from '@/components/manager/inbox/pickers'
+import {
+  EmojiDock,
+  type DockTab,
+} from '@/components/manager/inbox/emoji-dock'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
 import { ScheduleSendPopover } from '@/components/manager/inbox/schedule-send'
 import {
@@ -166,6 +171,19 @@ export const MessageComposer = memo(function MessageComposer({
   // "Send later" popover (Telegram): opened by long-pressing the send button,
   // anchored to it — there is no separate clock button anymore.
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  // Правый док эмодзи/стикеров (Telegram-style): открывается по клику на
+  // смайлик/стикер СПРАВА (взаимоисключим с карточкой лида — см. emoji-dock).
+  const [dockOpen, setDockOpen] = useState(false)
+  const [dockTab, setDockTab] = useState<DockTab>('emoji')
+  // Клик по кнопке: если док открыт на ЭТОЙ же вкладке — закрыть; иначе
+  // открыть/переключить на неё.
+  const toggleDock = useCallback((next: DockTab) => {
+    setDockOpen((prevOpen) => {
+      const sameTab = dockTab === next
+      setDockTab(next)
+      return !(prevOpen && sameTab)
+    })
+  }, [dockTab])
   // Telegram-style multi-file staging: pick/drop up to 10 files, caption them
   // with the textarea, then send as a batch. `sendingMedia` disables the tray
   // while the sequential upload loop runs.
@@ -529,7 +547,20 @@ export const MessageComposer = memo(function MessageComposer({
             aiLed && 'opacity-60',
           )}
         >
-          <EmojiPicker onPick={handleEmojiPick} />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => toggleDock('emoji')}
+            aria-label="Эмодзи"
+            aria-expanded={dockOpen && dockTab === 'emoji'}
+            className={cn(
+              'size-9 shrink-0 rounded-full text-muted-foreground transition-colors hover:text-foreground',
+              dockOpen && dockTab === 'emoji' && 'text-primary',
+            )}
+          >
+            <Smile className="size-5" />
+          </Button>
           <textarea
             ref={composerRef}
             defaultValue={initialDraft.current}
@@ -577,7 +608,20 @@ export const MessageComposer = memo(function MessageComposer({
             )}
           />
           {isTelegram ? (
-            <StickerPicker channelId={channelId} onSend={onSendSticker} />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => toggleDock('stickers')}
+              aria-label="Стикеры"
+              aria-expanded={dockOpen && dockTab === 'stickers'}
+              className={cn(
+                'size-9 shrink-0 rounded-full text-muted-foreground transition-colors hover:text-foreground',
+                dockOpen && dockTab === 'stickers' && 'text-primary',
+              )}
+            >
+              <Sticker className="size-5" />
+            </Button>
           ) : null}
           {canAttach ? (
             <>
@@ -694,6 +738,22 @@ export const MessageComposer = memo(function MessageComposer({
           />
         ) : null}
       </form>
+
+      {/* Правый док эмодзи/стикеров (fixed) — Telegram-style. Всегда
+          смонтирован ради плавного слайда; координация с карточкой лида —
+          внутри EmojiDock. */}
+      <EmojiDock
+        open={dockOpen}
+        tab={dockTab}
+        onTabChange={setDockTab}
+        onClose={() => setDockOpen(false)}
+        onPick={handleEmojiPick}
+        onSendSticker={(s) => {
+          onSendSticker(s)
+        }}
+        channelId={channelId}
+        stickersEnabled={isTelegram}
+      />
     </div>
   )
 })

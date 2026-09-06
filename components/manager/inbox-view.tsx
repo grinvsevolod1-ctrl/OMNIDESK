@@ -203,15 +203,26 @@ export function InboxView({
   // Открытая карточка лида (fixed-панель 28rem справа): тред получает правый
   // отступ, чтобы карточка НЕ перекрывала контент диалога; при закрытии
   // отступ снимается и раскладка возвращается в исходное состояние.
+  // Правый док (карточка лида ИЛИ панель эмодзи/стикеров) сдвигает тред, чтобы
+  // не перекрывать ленту. Оба сообщают своё состояние независимыми событиями —
+  // так порядок открытия/закрытия не создаёт гонок с общим флагом.
   const [leadCardOpen, setLeadCardOpen] = useState(false)
+  const [emojiDockOpen, setEmojiDockOpen] = useState(false)
   useEffect(() => {
     const onCardOpen = (e: Event) => {
       const detail = (e as CustomEvent<{ open?: boolean }>).detail
       setLeadCardOpen(Boolean(detail?.open))
     }
+    const onDockOpen = (e: Event) => {
+      const detail = (e as CustomEvent<{ open?: boolean }>).detail
+      setEmojiDockOpen(Boolean(detail?.open))
+    }
     window.addEventListener('omnidesk:lead-card-open', onCardOpen)
-    return () =>
+    window.addEventListener('omnidesk:emoji-dock-open', onDockOpen)
+    return () => {
       window.removeEventListener('omnidesk:lead-card-open', onCardOpen)
+      window.removeEventListener('omnidesk:emoji-dock-open', onDockOpen)
+    }
   }, [])
 
   const threadSearch = useThreadSearch({
@@ -328,9 +339,15 @@ export function InboxView({
           // отступ, диалог и бар навигации видны целиком рядом с карточкой.
           // Плавный переход синхронизирован со слайдом самой панели.
           'transition-[padding] duration-300 ease-out',
-          (leadCardOpen || threadSearch.mediaActive) &&
-            'sm:pr-[min(28rem,45vw)]',
-        )}
+        (leadCardOpen || threadSearch.mediaActive) &&
+  'sm:pr-[min(28rem,45vw)]',
+        // Панель эмодзи/стикеров уже (24rem) и взаимоисключима с карточкой —
+        // сдвигаем ровно на её ширину, только если карточка/медиа не открыты.
+        emojiDockOpen &&
+          !leadCardOpen &&
+          !threadSearch.mediaActive &&
+          'sm:pr-[min(24rem,45vw)]',
+  )}
       >
         {active ? (
           <>

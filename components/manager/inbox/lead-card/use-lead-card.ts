@@ -241,7 +241,33 @@ export function useLeadCard(conversationId: string, defaults?: LeadCardDefaults)
     window.dispatchEvent(
       new CustomEvent('omnidesk:lead-card-open', { detail: { open } }),
     )
+    // Взаимоисключимость правых панелей: открытие карточки закрывает панель
+    // эмодзи/стикеров (та слушает это же событие с source !== 'lead').
+    if (open) {
+      window.dispatchEvent(
+        new CustomEvent('omnidesk:right-panel-open', {
+          detail: { source: 'lead' },
+        }),
+      )
+    }
   }, [open])
+
+  // Симметрично: когда открывается другая правая панель (эмодзи/стикеры) —
+  // карточку закрываем (с автосохранением, как по крестику).
+  useEffect(() => {
+    const onOther = (e: Event) => {
+      const detail = (e as CustomEvent<{ source?: string }>).detail
+      if (detail?.source && detail.source !== 'lead') {
+        setOpen((prev) => {
+          if (prev) closeCard()
+          return prev
+        })
+      }
+    }
+    window.addEventListener('omnidesk:right-panel-open', onOther)
+    return () =>
+      window.removeEventListener('omnidesk:right-panel-open', onOther)
+  }, [closeCard])
 
   // Esc closes the card first (capture phase + preventDefault so the
   // inbox-level handler doesn't ALSO close the dialog in the same press);

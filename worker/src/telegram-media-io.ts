@@ -84,9 +84,16 @@ export interface StickerDescriptor {
   mime: string
 }
 
+/** Ограничение выдачи: панель показывает достаточно, без гигантских ответов. */
+const STICKER_LIMIT = 240
+
 /**
- * List stickers available to this account: recent + favourited. Returns a
- * compact descriptor the panel can render and later send back.
+ * List stickers available to this account: favourited + recent + popular.
+ * «Популярные» тянутся из featured-наборов Telegram (covered sets несут
+ * готовые cover-документы) — так панель не пустая, даже если у аккаунта нет
+ * своих стикеров, и при этом мы НЕ устанавливаем паки в аккаунт и не делаем
+ * запрос на каждый набор. Returns a compact descriptor the panel can render
+ * and later send back.
  */
 export async function listStickers(
   client: TelegramClient | null,
@@ -141,7 +148,32 @@ export async function listStickers(
     logger.warn({ err }, 'telegram getRecentStickers failed')
   }
 
-  return out
+  // Наконец — популярные наборы. Featured-ответ несёт covered sets с готовыми
+  // cover-документами (Api.Document), которые можно рендерить и отправлять
+  // как обычные стикеры. Так панель наполняется «популярными паками»
+  // автоматически, без установки наборов в аккаунт и без запроса на каждый.
+  try {
+    const featured = await client.invoke(
+      new Api.messages.GetFeaturedStickers({ hash: returnBigInt(0) }),
+    )
+    const sets =
+      featured instanceof Api.messages.FeaturedStickers ? featured.sets : []
+    for (const set of sets) {
+      if (out.length >= STICKER_LIMIT) break
+      // Covered sets отдают либо один cover, либо массив covers.
+      const covers: Api.TypeDocument[] =
+        set instanceof Api.StickerSetMultiCovered
+          ? set.covers
+          : set instanceof Api.StickerSetCovered
+            ? [set.cover]
+            : []
+      for (const d of covers) pushDoc(d, emojiOf(d))
+    }
+  } catch (err) {
+    logger.warn({ err }, 'telegram getFeaturedStickers failed')
+  }
+
+  return out.slice(0, STICKER_LIMIT)
 }
 
 /** Sniff a sticker payload's real container from its magic bytes. */
