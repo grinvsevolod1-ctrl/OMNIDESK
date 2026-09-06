@@ -97,8 +97,19 @@ export async function submitSupportTicketAction(
     forwarded: f.size <= TELEGRAM_MAX_UPLOAD,
   }))
 
-  const token = (process.env.TELEGRAM_ALERT_BOT_TOKEN ?? '').trim()
-  const chatId = (process.env.TELEGRAM_ALERT_CHAT_ID ?? '').trim()
+  // Reuse the same bot that already sends deploy notifications
+  // (scripts/auto-deploy.mjs). Falls back to the AI-health alert bot if that's
+  // the only one configured on this box.
+  const token = (
+    process.env.DEPLOY_TG_BOT_TOKEN ??
+    process.env.TELEGRAM_ALERT_BOT_TOKEN ??
+    ''
+  ).trim()
+  const chatId = (
+    process.env.DEPLOY_TG_CHAT_ID ??
+    process.env.TELEGRAM_ALERT_CHAT_ID ??
+    ''
+  ).trim()
 
   let delivery: SupportDelivery = 'not_configured'
 
