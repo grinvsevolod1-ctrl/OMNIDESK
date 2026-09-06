@@ -3,16 +3,16 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
   type RefObject,
 } from 'react'
-import { ChevronUp, History, Loader2, Reply, Trash2 } from 'lucide-react'
+import { ChevronUp, History, Loader2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { SwipeToReply } from '@/components/manager/inbox/swipe-to-reply'
+import { usePrependAnchor } from '@/components/manager/inbox/use-prepend-anchor'
 import {
   BasicMessageMenu,
   MessageContextMenu,
@@ -37,117 +37,6 @@ import type { VisitorTyping } from '@/components/manager/inbox/use-inbox-realtim
 // Album grouping (Telegram-style, ≤10 per grid) lives in lib/media-albums.ts so
 // it is unit-tested and shared with the bulk-selection logic.
 import { computeAlbums } from '@/lib/media-albums'
-
-/** Horizontal drag past this many px triggers a reply on release. */
-const SWIPE_REPLY_THRESHOLD = 56
-
-/**
- * Свайп-влево по сообщению → быстрый ответ (как в Telegram/WhatsApp).
- *
- * ОДИН слой: обёртка сама `w-full flex justify-*` (чтобы `max-w-[80%]` бабла
- * считался именно от неё — от полной ширины ряда, а не от промежуточного бокса;
- * это и был баг со съехавшими бабблами и полосой у края) И одновременно несёт
- * саму трансформацию сдвига и touch-обработчики. Отдельного вложенного
- * translateX-слоя больше нет.
- *
- * Только touch и только по горизонтали: пока жест вертикальный, лента
- * скроллится обычным образом (touch-action: pan-y). Величину сдвига дублируем в
- * ref, чтобы onTouchEnd видел актуальное значение без устаревшего замыкания —
- * поэтому свайп срабатывает КАЖДЫЙ раз, а не «один раз и всё».
- */
-function SwipeToReply({
-  enabled,
-  align,
-  onReply,
-  children,
-}: {
-  enabled: boolean
-  /** Сторона выравнивания баббла в ряду (out → вправо, in → влево). */
-  align: 'start' | 'end'
-  onReply: () => void
-  children: ReactNode
-}) {
-  const [dx, setDx] = useState(0)
-  const dxRef = useRef(0)
-  const start = useRef<{ x: number; y: number; active: boolean } | null>(null)
-
-  const set = (v: number) => {
-    dxRef.current = v
-    setDx(v)
-  }
-  const reset = () => {
-    start.current = null
-    set(0)
-  }
-
-  if (!enabled) return <>{children}</>
-
-  return (
-    <div
-      className={cn(
-        'relative flex w-full',
-        align === 'end' ? 'justify-end' : 'justify-start',
-      )}
-      style={{
-        transform: dx ? `translateX(${dx}px)` : undefined,
-        transition: dx === 0 ? 'transform 0.18s ease-out' : 'none',
-        touchAction: 'pan-y',
-      }}
-      onTouchStart={(e) => {
-        const t = e.touches[0]
-        start.current = { x: t.clientX, y: t.clientY, active: false }
-      }}
-      onTouchMove={(e) => {
-        const s = start.current
-        if (!s) return
-        const t = e.touches[0]
-        const dX = t.clientX - s.x
-        const dY = t.clientY - s.y
-        // Направление решаем один раз. Свайп — в ЛЮБУЮ сторону (в Telegram для
-        // ответа тянут вправо), поэтому раньше свайп вправо «не работал» —
-        // обрезался в 0. Теперь ведём баббл по знаку жеста в обе стороны.
-        if (!s.active) {
-          if (Math.abs(dX) > 8 && Math.abs(dX) > Math.abs(dY) * 1.2) {
-            s.active = true
-          } else if (Math.abs(dY) > 8) {
-            start.current = null
-            return
-          } else {
-            return
-          }
-        }
-        set(Math.max(Math.min(dX, 88), -88))
-      }}
-      onTouchEnd={() => {
-        if (
-          start.current?.active &&
-          Math.abs(dxRef.current) >= SWIPE_REPLY_THRESHOLD
-        ) {
-          onReply()
-        }
-        reset()
-      }}
-      onTouchCancel={reset}
-    >
-      {/* Иконка ответа проявляется по мере сдвига на трейлинг-краю (со стороны,
-          противоположной движению пальца). pointer-events-none — не мешает
-          тапам и не вылезает за обёртку. */}
-      <div
-        className={cn(
-          'pointer-events-none absolute inset-y-0 flex items-center',
-          dx > 0 ? 'left-1' : 'right-1',
-        )}
-        style={{ opacity: Math.min(1, Math.abs(dx) / SWIPE_REPLY_THRESHOLD) }}
-        aria-hidden
-      >
-        <span className="rounded-full bg-primary/15 p-1.5 text-primary">
-          <Reply className="size-4" />
-        </span>
-      </div>
-      {children}
-    </div>
-  )
-}
 
 /**
  * The scrollable message feed of the open thread: older-history loader, day
@@ -248,58 +137,8 @@ export function MessageList({
     return () => observer.disconnect()
   }, [canLoadOlder, activeId, messagesScrollRef])
 
-  // Prepend anchoring («Загрузить ранние сообщения» / auto-load at the top):
-  // the row the reader is looking at must stay exactly where it is when older
-  // rows are inserted above it. Anchor = the FIRST rendered row; we remember
-  // its offset from the top of the scroll viewport (refreshed on every commit
-  // and every scroll), and whenever a commit changes which row is first while
-  // the old first row is still in the DOM, we shift scrollTop by however much
-  // that old row moved. Measured from real DOM rects in a layout effect —
-  // synchronous, before paint, so there is no flash of the wrong position and
-  // no dependence on rAF timing. It is also idempotent against the browser's
-  // own scroll anchoring: where Chrome already compensated, the anchor has not
-  // moved and the delta is ~0; where it did not (scrollTop was 0, or Safari,
-  // which has no scroll anchoring), we do the whole shift. A one-frame
-  // re-check catches a late browser adjustment.
-  const anchorRef = useRef<{ id: string; top: number } | null>(null)
-  const measureAnchor = useCallback(() => {
-    const el = messagesScrollRef.current
-    if (!el) return
-    const first = el.querySelector<HTMLElement>('[data-message-id]')
-    if (!first) {
-      anchorRef.current = null
-      return
-    }
-    anchorRef.current = {
-      id: first.dataset.messageId ?? '',
-      top: first.getBoundingClientRect().top - el.getBoundingClientRect().top,
-    }
-  }, [messagesScrollRef])
-  useLayoutEffect(() => {
-    const el = messagesScrollRef.current
-    const prev = anchorRef.current
-    if (el && prev && prev.id) {
-      const first = el.querySelector<HTMLElement>('[data-message-id]')
-      if (first && first.dataset.messageId !== prev.id) {
-        const selector = `[data-message-id="${CSS.escape(prev.id)}"]`
-        const restore = () => {
-          const c = messagesScrollRef.current
-          const anchorEl = c?.querySelector<HTMLElement>(selector)
-          if (!c || !anchorEl) return
-          const delta =
-            anchorEl.getBoundingClientRect().top -
-            c.getBoundingClientRect().top -
-            prev.top
-          if (Math.abs(delta) > 1) c.scrollTop += delta
-        }
-        if (el.querySelector(selector)) {
-          restore()
-          requestAnimationFrame(restore)
-        }
-      }
-    }
-    measureAnchor()
-  }, [thread, measureAnchor, messagesScrollRef])
+  // Keep the reader's row in place when older history is prepended (see hook).
+  const measureAnchor = usePrependAnchor(messagesScrollRef, thread)
   const handleScroll = useCallback(() => {
     measureAnchor()
     onThreadScroll()
@@ -589,7 +428,7 @@ export function MessageList({
                               onClick={() => onShowHistory(m)}
                               title="Показать историю изменений"
                               className={cn(
-                                'mr-0.5 flex items-center gap-0.5 rounded px-0.5 italic underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80',
+                                'touch-hitbox mr-0.5 flex items-center gap-0.5 rounded px-0.5 italic underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80',
                                 isOut
                                   ? 'text-primary-foreground/70'
                                   : 'text-muted-foreground',
@@ -673,7 +512,9 @@ export function MessageList({
                                 canAct && onReact(m, r.fromMe ? '' : r.emoji)
                               }
                               className={cn(
-                                'flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs ring-1 transition-colors',
+                                // touch-hitbox: the visible chip is ~22px tall;
+                                // the invisible tap area is widened to ~44px.
+                                'touch-hitbox flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs ring-1 transition-colors',
                                 r.fromMe
                                   ? 'bg-primary/15 ring-primary/40'
                                   : 'bg-muted ring-border',

@@ -27,9 +27,10 @@ import {
   type InboxView,
 } from '@/components/manager/inbox/filtering'
 import { useReplyReminder } from '@/components/manager/inbox/use-reply-reminder'
-import { useThreadHistory } from '@/components/manager/inbox/use-thread-history'
+import { useThreadHistory } from '@/components/shared/inbox/use-thread-history'
 import { useThreadScroll } from '@/components/manager/inbox/use-thread-scroll'
-import { useMessageActions } from '@/components/manager/inbox/use-message-actions'
+import { useMessageActions } from '@/components/shared/inbox/use-message-actions'
+import { managerThreadAdapter } from '@/components/manager/inbox/manager-thread-adapter'
 import { useConversationActions } from '@/components/manager/inbox/use-conversation-actions'
 import { useTransferMeeting } from '@/components/manager/inbox/use-transfer-meeting'
 import { useInboxDerived } from '@/components/manager/inbox/use-inbox-derived'
@@ -361,6 +362,7 @@ export function useInbox({
   // Lazy thread hydration + on-demand older-history loading (see hook).
   const { threadLoading, loadingOlder, noOlder, handleLoadOlder } =
     useThreadHistory({
+      adapter: managerThreadAdapter,
       activeId,
       localMessages,
       setLocalMessages,
@@ -412,28 +414,21 @@ export function useInbox({
 
   // Everything a manager can do to messages: send / reply / edit / react /
   // delete / forward / copy / stickers / media uploads, with optimistic
-  // updates. Also owns the reply/edit target state.
-  const {
-    replyTarget,
-    setReplyTarget,
-    editTarget,
-    setEditTarget,
-    handleSend,
-    reactTo,
-    deleteMessage,
-    forwardMessage,
-    copyMessageText,
-    sendSticker,
-    sendVoice,
-    scheduleSend,
-    handleSendMediaFile,
-    handleSendMediaBatch,
-  } = useMessageActions({
+  // updates. Also owns the reply/edit target state. Shared with the curator;
+  // the manager-only part is the AI gate: while the AI leads the thread,
+  // manual sends are blocked and the AI button vibrates as the hint.
+  const canSend = useCallback(() => {
+    if (!activeAiLed) return true
+    pulseAiButton()
+    toast.error('ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.')
+    return false
+  }, [activeAiLed, pulseAiButton])
+  const messageActions = useMessageActions({
+    adapter: managerThreadAdapter,
     activeId,
     active,
     currentUser,
-    activeAiLed,
-    pulseAiButton,
+    canSend,
     setLocalMessages,
     startTransition,
   })
@@ -542,20 +537,7 @@ export function useInbox({
     loadingOlder,
     noOlder,
     handleLoadOlder,
-    // message actions
-    replyTarget,
-    setReplyTarget,
-    editTarget,
-    setEditTarget,
-    handleSend,
-    reactTo,
-    deleteMessage,
-    forwardMessage,
-    copyMessageText,
-    sendSticker,
-    sendVoice,
-    scheduleSend,
-    handleSendMediaFile,
-    handleSendMediaBatch,
+    // message actions (shared hook — the whole bag goes to ThreadPane)
+    messageActions,
   }
 }

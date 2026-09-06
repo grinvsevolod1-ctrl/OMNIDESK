@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * Thread history loading, extracted from inbox-view.tsx:
+ * Thread history loading, shared by the manager and curator inboxes:
  *  - lazy hydration for threads outside the SSR preload slice (a missing key
  *    in the map means "transcript not shipped yet"; an empty array means a
  *    genuinely empty thread), and
@@ -9,7 +9,8 @@
  *    MessageList's job — it has the DOM).
  *
  * The messages cache itself stays in the parent (the SSE handler patches it),
- * so the hook receives the state pair instead of owning it.
+ * so the hook receives the state pair instead of owning it. The role plugs in
+ * through `adapter` (which server actions fetch the history).
  */
 
 import {
@@ -21,17 +22,16 @@ import {
   type SetStateAction,
 } from 'react'
 import { toast } from 'sonner'
-import {
-  loadOlderMessagesAction,
-  loadThreadMessagesAction,
-} from '@/app/actions/messages'
 import type { Message } from '@/lib/types'
+import type { ThreadAdapter } from './thread-adapter'
 
 export function useThreadHistory({
+  adapter,
   activeId,
   localMessages,
   setLocalMessages,
 }: {
+  adapter: Pick<ThreadAdapter, 'loadThread' | 'loadOlder'>
   activeId: string | null
   localMessages: Record<string, Message[]>
   setLocalMessages: Dispatch<SetStateAction<Record<string, Message[]>>>
@@ -50,7 +50,8 @@ export function useThreadHistory({
     if (hydratingRef.current === activeId) return
     hydratingRef.current = activeId
     setThreadLoading(true)
-    void loadThreadMessagesAction(activeId)
+    void adapter
+      .loadThread(activeId)
       .then((res) => {
         if (hydratingRef.current !== activeId) return
         setLocalMessages((prev) => {
@@ -74,7 +75,7 @@ export function useThreadHistory({
           setThreadLoading(false)
         }
       })
-  }, [activeId, localMessages, setLocalMessages])
+  }, [adapter, activeId, localMessages, setLocalMessages])
 
   /**
    * Догрузить страницу истории. Возвращает hasMore — есть ли ещё старые
@@ -89,14 +90,13 @@ export function useThreadHistory({
     setLoadingOlder(true)
     try {
       const before = new Date(oldest.createdAt).toISOString()
-      const res = await loadOlderMessagesAction(activeId, before)
+      const res = await adapter.loadOlder(activeId, before)
       if (res.ok && res.messages.length > 0) {
         // Viewport anchoring for the prepend is done by MessageList in a
         // layout effect (synchronously, before paint, from the real DOM
-        // offsets). The old rAF `scrollTop = scrollHeight - prevHeight` here
-        // measured BEFORE the await, ignored the reader's actual scrollTop and
-        // raced the browser's own scroll anchoring — that was the «нажимаешь
-        // загрузка — кидает в начало» bug.
+        // offsets). Do NOT reintroduce `scrollTop = scrollHeight - prevHeight`
+        // in a rAF here: it measured before the await, ignored the reader's
+        // actual scrollTop and raced the browser's own scroll anchoring.
         setLocalMessages((prev) => {
           const existing = prev[activeId] ?? []
           const known = new Set(existing.map((m) => m.id))
@@ -113,7 +113,7 @@ export function useThreadHistory({
     } finally {
       setLoadingOlder(false)
     }
-  }, [activeId, loadingOlder, localMessages, setLocalMessages])
+  }, [adapter, activeId, loadingOlder, localMessages, setLocalMessages])
 
   return { threadLoading, loadingOlder, noOlder, setNoOlder, handleLoadOlder }
 }

@@ -18,14 +18,12 @@ const EditHistoryDialog = dynamic(
 import { cn } from '@/lib/utils'
 import type { Conversation, Message, QuickReply } from '@/lib/types'
 import { DetailsPanel } from '@/components/manager/inbox/atoms'
-import { MessageComposer } from '@/components/manager/inbox/message-composer'
 import { TransferDialog } from '@/components/manager/inbox/transfer-dialog'
 import { ConversationList } from '@/components/manager/inbox/conversation-list'
 import { AiHandoffBanner } from '@/components/manager/inbox/ai-handoff-banner'
 import { ThreadHeader } from '@/components/manager/inbox/thread-header'
 import { useShellHeader } from '@/components/dashboard-shell'
-import { MessageList } from '@/components/manager/inbox/message-list'
-import { ComposerBanners } from '@/components/manager/inbox/composer-banners'
+import { ThreadPane } from '@/components/shared/inbox/thread-pane'
 import { useInbox } from '@/components/manager/inbox/use-inbox'
 import { useInboxShortcuts } from '@/components/manager/inbox/use-inbox-shortcuts'
 import { useThreadSearch } from '@/components/manager/inbox/thread-search'
@@ -159,20 +157,7 @@ export function InboxView({
     loadingOlder,
     noOlder,
     handleLoadOlder,
-    replyTarget,
-    setReplyTarget,
-    editTarget,
-    setEditTarget,
-    handleSend,
-    reactTo,
-    deleteMessage,
-    forwardMessage,
-    copyMessageText,
-    sendSticker,
-    sendVoice,
-    scheduleSend,
-    handleSendMediaFile,
-    handleSendMediaBatch,
+    messageActions,
   } = inbox
 
   // j/k and Alt+arrows walk the filtered list without touching the mouse.
@@ -351,30 +336,24 @@ export function InboxView({
             {/* Бар поиска/медиа-навигации — под шапкой, над сообщениями. */}
             {threadSearch.bar}
 
-            <MessageList
+            {/* Лента + баннеры + композер — общее ядро с куратором
+                (components/shared/inbox/thread-pane). Менеджерское здесь:
+                ИИ-гейт композера, быстрые ответы, Telemost, баннер доработки
+                и read-only при переданном лиде. */}
+            <ThreadPane
               active={active}
               activeId={activeId}
               thread={thread}
               threadLoading={threadLoading}
-              noOlder={noOlder}
               loadingOlder={loadingOlder}
+              noOlder={noOlder}
               onLoadOlder={handleLoadOlder}
               forwardTargets={forwardTargets}
               activeTyping={activeTyping}
               messagesScrollRef={messagesScrollRef}
               onThreadScroll={handleThreadScroll}
-              onReply={(msg) => {
-                setEditTarget(null)
-                setReplyTarget(msg)
-              }}
-              onEdit={(msg) => {
-                setReplyTarget(null)
-                setEditTarget(msg)
-              }}
-              onReact={reactTo}
-              onCopy={copyMessageText}
-              onForward={forwardMessage}
-              onDelete={deleteMessage}
+              actions={messageActions}
+              pending={pending}
               onShowHistory={setHistoryMessage}
               highlightedId={threadSearch.highlightedId}
               onBubbleClick={
@@ -382,115 +361,91 @@ export function InboxView({
                   ? threadSearch.onMessageClick
                   : undefined
               }
-            />
-
-            {/* Лид вернулся от куратора (Игнор/Отказался/Не связался/архив) —
-                менеджер снова ведёт переписку, композер ВКЛючён; если исходный
-                аккаунт в ЧС/офлайн, отправка незаметно уходит с аккаунта для
-                исходящих (см. resolveTelegramDelivery). Кнопка «В trash»
-                убирает лид из «Доработок», когда дожать не удалось; уже
-                убранный (activeTrashed) открывается через «Статусы → Передан»
-                и остаётся доступным для письма — лид у менеджера. */}
-            {activeRework || activeTrashed ? (
-              <div
-                className={cn(
-                  'flex items-center gap-3 border-t px-4 py-2.5',
-                  activeTrashed
-                    ? 'border-border bg-muted/40'
-                    : 'border-amber-500/30 bg-amber-500/10',
-                )}
-              >
-                {activeTrashed ? (
-                  <Trash2 className="size-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Wrench className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                )}
-                <p
-                  className={cn(
-                    'min-w-0 flex-1 text-xs',
-                    activeTrashed
-                      ? 'text-muted-foreground'
-                      : 'text-amber-800 dark:text-amber-200',
-                  )}
-                >
-                  {activeTrashed
-                    ? 'Лид вернулся от куратора и убран в trash · причина:'
-                    : 'Лид вернулся на дожим · причина:'}{' '}
-                  <span className="font-medium">
-                    {active.curatorArchived
-                      ? 'архив'
-                      : leadStatusLabel(active.curatorLeadStatus)}
-                  </span>
-                </p>
-                {activeTrashed ? null : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="shrink-0 gap-1.5 text-amber-700 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300"
-                    onClick={() => trashRework(active.id)}
-                    title="Убрать лид из «Доработок» — дожать не удалось"
-                  >
-                    <Trash2 className="size-4" />
-                    В trash
-                  </Button>
-                )}
-              </div>
-            ) : null}
-
-            <ComposerBanners
-              editTarget={editTarget}
-              replyTarget={replyTarget}
-              onCancelEdit={() => setEditTarget(null)}
-              onCancelReply={() => setReplyTarget(null)}
-            />
-
-            {/* Куратор ведёт лид прямо сейчас (миграция 151): менеджер только
-                читает — композер заменяется баннером, чтобы не было двух
-                отвечающих. Писать снова можно, когда куратор вернёт лид. */}
-            {activeTransferred ? (
-              <div className="border-t border-border bg-muted/40 px-4 py-3 text-center text-sm text-muted-foreground">
-                Лид передан менеджеру по кадрам
-                {active.curatorName ? ` ${active.curatorName}` : ''}. Переписку
-                ведёт он — вам доступно только чтение, пока лид не вернут.
-              </div>
-            ) : (
-            /* Composer — isolated component so typing never re-renders the
-                whole inbox. Keyed by conversation id so each thread gets its own
-                local draft (persisted across switches via draftsRef). */
-            <MessageComposer
-              key={active.id}
-              conversationId={active.id}
-              channelType={active.channelType}
-              channelId={active.channelId}
               getInitialDraft={getDraft}
-              onPersistDraft={(text) => persistDraft(active.id, text)}
-              onSend={handleSend}
-              onSendSticker={sendSticker}
-              onSendMediaFile={handleSendMediaFile}
-              onSendMediaBatch={handleSendMediaBatch}
-              onSendVoice={sendVoice}
-              onVoiceError={(message) => toast.error(message)}
-              onScheduleSend={scheduleSend}
-              aiLed={activeAiLed}
-              onBlockedInteract={() => {
-                pulseAiButton()
-                toast.error(
-                  'ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.',
-                )
-              }}
-              onToggleAi={() => toggleAi(active.id, false)}
-              statusPending={statusPending}
-              pending={pending}
-              quickReplies={quickReplies}
-              telemostEnabled={telemostEnabled}
-              onStartMeeting={startVideoMeeting}
-              meetingPending={meetingPending}
-              replyActive={!!replyTarget || !!editTarget}
-              editing={
-                editTarget ? { id: editTarget.id, body: editTarget.body } : null
+              onPersistDraft={persistDraft}
+              beforeComposer={
+                /* Лид вернулся от куратора (Игнор/Отказался/Не связался/архив)
+                   — менеджер снова ведёт переписку, композер ВКЛючён; если
+                   исходный аккаунт в ЧС/офлайн, отправка незаметно уходит с
+                   аккаунта для исходящих (см. resolveTelegramDelivery). Кнопка
+                   «В trash» убирает лид из «Доработок», когда дожать не
+                   удалось; уже убранный (activeTrashed) открывается через
+                   «Статусы → Передан» и остаётся доступным для письма. */
+                activeRework || activeTrashed ? (
+                  <div
+                    className={cn(
+                      'flex items-center gap-3 border-t px-4 py-2.5',
+                      activeTrashed
+                        ? 'border-border bg-muted/40'
+                        : 'border-amber-500/30 bg-amber-500/10',
+                    )}
+                  >
+                    {activeTrashed ? (
+                      <Trash2 className="size-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <Wrench className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    )}
+                    <p
+                      className={cn(
+                        'min-w-0 flex-1 text-xs',
+                        activeTrashed
+                          ? 'text-muted-foreground'
+                          : 'text-amber-800 dark:text-amber-200',
+                      )}
+                    >
+                      {activeTrashed
+                        ? 'Лид вернулся от куратора и убран в trash · причина:'
+                        : 'Лид вернулся на дожим · причина:'}{' '}
+                      <span className="font-medium">
+                        {active.curatorArchived
+                          ? 'архив'
+                          : leadStatusLabel(active.curatorLeadStatus)}
+                      </span>
+                    </p>
+                    {activeTrashed ? null : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0 gap-1.5 text-amber-700 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300"
+                        onClick={() => trashRework(active.id)}
+                        title="Убрать лид из «Доработок» — дожать не удалось"
+                      >
+                        <Trash2 className="size-4" />
+                        В trash
+                      </Button>
+                    )}
+                  </div>
+                ) : null
               }
+              composerReplacement={
+                /* Куратор ведёт лид прямо сейчас (миграция 151): менеджер
+                   только читает — композер заменяется баннером, чтобы не было
+                   двух отвечающих. Писать снова можно, когда куратор вернёт. */
+                activeTransferred ? (
+                  <div className="border-t border-border bg-muted/40 px-4 py-3 text-center text-sm text-muted-foreground">
+                    Лид передан менеджеру по кадрам
+                    {active.curatorName ? ` ${active.curatorName}` : ''}.
+                    Переписку ведёт он — вам доступно только чтение, пока лид
+                    не вернут.
+                  </div>
+                ) : undefined
+              }
+              composer={{
+                aiLed: activeAiLed,
+                onBlockedInteract: () => {
+                  pulseAiButton()
+                  toast.error(
+                    'ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.',
+                  )
+                },
+                onToggleAi: () => toggleAi(active.id, false),
+                statusPending,
+                quickReplies,
+                telemostEnabled,
+                onStartMeeting: startVideoMeeting,
+                meetingPending,
+              }}
             />
-            )}
           </>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">

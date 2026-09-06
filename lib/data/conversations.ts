@@ -371,6 +371,7 @@ export async function markConversationRead(
  */
 export {
   addMessage,
+  addMessageIdempotent,
   getMessagesSince,
   listMessages,
   listMessagesBefore,

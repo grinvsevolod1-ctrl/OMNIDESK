@@ -250,7 +250,26 @@ export async function addMessage(input: {
    * that's how a manual reply hands the conversation back to a person.
    */
   byAi?: boolean
+  /**
+   * Idempotency key from the composer (migration 163). When the same key is
+   * seen twice for one conversation — a retried server action, a double tap
+   * that beat the disabled state — the second call returns the EXISTING row
+   * with `duplicate: true` instead of inserting again, so the caller can skip
+   * delivery and nothing reaches the contact twice.
+   */
+  clientMessageId?: string
 }): Promise<Message | null> {
+  const result = await addMessageIdempotent(input)
+  return result?.message ?? null
+}
+
+/**
+ * Same as addMessage, but also reports whether the row already existed for
+ * this `clientMessageId`. Send paths use this to skip re-enqueueing delivery.
+ */
+export async function addMessageIdempotent(
+  input: Parameters<typeof addMessage>[0],
+): Promise<{ message: Message; duplicate: boolean } | null> {
   // Run the insert + conversation update atomically so a crash between the two
   // can never leave a persisted message whose conversation preview / ai_paused
   // state was never updated (a visible desync of the list and AI-lead state).
@@ -263,14 +282,20 @@ export async function addMessage(input: {
   const ownerScope = input.curatorId
     ? { col: 'curator_id', id: input.curatorId }
     : { col: 'manager_id', id: input.managerId }
+  const clientMessageId = input.clientMessageId ?? null
 
   return withTransaction(async (db) => {
+    // ON CONFLICT on the partial unique index (conversation_id,
+    // client_message_id) makes a retried send a no-op; the index predicate
+    // keeps rows without a key (inbound, AI, legacy) out of the constraint.
     const rows = await db.query<{ id: string }>(
       `INSERT INTO messages
-         (conversation_id, direction, body, author, media_type, media_mime, media_name, media_ref, reply_to_message_id, status)
-       SELECT c.id, 'out', $2, $3, $4, $5, $6, $7, $8, 'sent'
+         (conversation_id, direction, body, author, media_type, media_mime, media_name, media_ref, reply_to_message_id, status, client_message_id)
+       SELECT c.id, 'out', $2, $3, $4, $5, $6, $7, $8, 'sent', $10
          FROM conversations c
         WHERE c.id = $1 AND c.${ownerScope.col} = $9
+       ON CONFLICT (conversation_id, client_message_id)
+         WHERE client_message_id IS NOT NULL DO NOTHING
        RETURNING id`,
       [
         input.conversationId,
@@ -282,10 +307,22 @@ export async function addMessage(input: {
         input.mediaRef ? JSON.stringify(input.mediaRef) : null,
         input.replyToMessageId ?? null,
         ownerScope.id,
+        clientMessageId,
       ],
     )
-    // No row inserted => the conversation doesn't belong to this owner.
-    if (rows.length === 0) return null
+    if (rows.length === 0) {
+      // Either the conversation is not ours, or the key already exists.
+      // Disambiguate: an existing row with this key is a legitimate replay.
+      if (!clientMessageId) return null
+      const existing = await db.query<MessageRow>(
+        `SELECT ${MESSAGE_SELECT} FROM messages m ${MESSAGE_REPLY_JOIN}
+          WHERE m.conversation_id = $1 AND m.client_message_id = $2`,
+        [input.conversationId, clientMessageId],
+      )
+      return existing[0]
+        ? { message: toMessage(existing[0]), duplicate: true }
+        : null
+    }
 
     // A human outbound message hands the thread back from the AI: pause AI-lead
     // for this conversation (global-lead opt-out) in the same UPDATE. AI-authored
@@ -327,6 +364,6 @@ export async function addMessage(input: {
       `SELECT ${MESSAGE_SELECT} FROM messages m ${MESSAGE_REPLY_JOIN} WHERE m.id = $1`,
       [rows[0].id],
     )
-    return full[0] ? toMessage(full[0]) : null
+    return full[0] ? { message: toMessage(full[0]), duplicate: false } : null
   })
 }

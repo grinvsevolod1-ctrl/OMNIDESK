@@ -53,6 +53,11 @@ const SUPPORTS_FIELD_SIZING =
   typeof CSS.supports === 'function' &&
   CSS.supports('field-sizing', 'content')
 
+// Stable defaults: a fresh `[]` / `() => {}` per render would defeat the
+// composer's memo and churn the hooks' dependency arrays.
+const NO_QUICK_REPLIES: QuickReply[] = []
+function noop() {}
+
 export interface MessageComposerProps {
   conversationId: string
   channelType: ChannelType
@@ -86,17 +91,22 @@ export interface MessageComposerProps {
   onVoiceError: (message: string) => void
   /** Schedule the drafted text for later delivery (Telegram only). */
   onScheduleSend: (text: string, scheduleAtIso: string) => void
-  aiLed: boolean
+  /**
+   * Manager-only features below are OPTIONAL and default to a human-led
+   * thread (no AI gate, no quick replies, no Telemost). Roles that lack them
+   * (the curator) simply omit them instead of passing neutralising no-ops.
+   */
+  aiLed?: boolean
   /** Fired when the manager tries to type/send while the AI leads the thread. */
-  onBlockedInteract: () => void
-  onToggleAi: () => void
-  statusPending: boolean
+  onBlockedInteract?: () => void
+  onToggleAi?: () => void
+  statusPending?: boolean
   pending: boolean
-  quickReplies: QuickReply[]
-  telemostEnabled: boolean
-  onStartMeeting: () => void
-  meetingPending: boolean
-  replyActive: boolean
+  quickReplies?: QuickReply[]
+  telemostEnabled?: boolean
+  onStartMeeting?: () => void
+  meetingPending?: boolean
+  replyActive?: boolean
   /** When set, the composer is editing an existing message: the input is
    *  prefilled with its body and submit calls onSend with the new text (the
    *  parent routes it to the edit action). The unsent draft is stashed and
@@ -129,16 +139,16 @@ export const MessageComposer = memo(function MessageComposer({
   onSendVoice,
   onVoiceError,
   onScheduleSend,
-  aiLed,
-  onBlockedInteract,
-  onToggleAi,
-  statusPending,
+  aiLed = false,
+  onBlockedInteract = noop,
+  onToggleAi = noop,
+  statusPending = false,
   pending,
-  quickReplies,
-  telemostEnabled,
-  onStartMeeting,
-  meetingPending,
-  replyActive,
+  quickReplies = NO_QUICK_REPLIES,
+  telemostEnabled = false,
+  onStartMeeting = noop,
+  meetingPending = false,
+  replyActive = false,
   editing = null,
 }: MessageComposerProps) {
   // Uncontrolled input: the textarea owns its value in the DOM, mirrored here in

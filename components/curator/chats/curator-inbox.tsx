@@ -3,32 +3,26 @@
 /**
  * Раздел «Чаты» куратора: список переданных диалогов + тред + композер.
  * Полноэкранная раскладка (dashboard-shell отдаёт /curator/chats как fullBleed,
- * без полей и внешнего скролла — как менеджерский инбокс). Тред и композер
- * переиспуют РОВНО те же компоненты, что и у менеджера (MessageList +
- * MessageComposer): куратору доступен полный набор действий — ответ, копия,
- * реакции, редактирование своих, удаление, пересылка, стикеры, голосовые и
- * отложенная отправка. Все серверные экшены скоуплены по curator_id (см.
- * app/actions/curator-messages). Состояние — в use-curator-chats, здесь только
- * вёрстка и локальный UI-стейт панелей.
+ * без полей и внешнего скролла — как менеджерский инбокс). Тред целиком —
+ * ОБЩЕЕ ядро с менеджером (`components/shared/inbox/thread-pane` поверх
+ * общих хуков `use-message-actions` / `use-thread-history`): куратору
+ * доступен полный набор действий — ответ, копия, реакции, редактирование
+ * своих, удаление, пересылка, стикеры, голосовые и отложенная отправка.
+ * Роль подключается адаптером `curator-thread-adapter` (curator-scoped
+ * серверные экшены, см. app/actions/curator-messages). Состояние — в
+ * use-curator-chats, здесь только вёрстка списка, шапки и инфо-панели.
  */
 
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { toast } from 'sonner'
 import {
   ArrowLeft,
   ArrowDownUp,
-  CalendarClock,
   Check,
   Info,
   MessageCircle,
-  Pencil,
-  Radio,
-  Reply,
   Search,
-  UserCheck,
-  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -40,16 +34,17 @@ import {
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { useDrafts } from '@/components/manager/inbox/use-drafts'
-import type { Conversation, Message, StickerItem } from '@/lib/types'
-import { ContactAvatar, MetaRows, SourceChip } from '@/components/manager/inbox/atoms'
-import { MessageList } from '@/components/manager/inbox/message-list'
-import { MessageComposer } from '@/components/manager/inbox/message-composer'
+import type { Conversation, Message } from '@/lib/types'
+import { ContactAvatar } from '@/components/manager/inbox/atoms'
 import { useThreadScroll } from '@/components/manager/inbox/use-thread-scroll'
-import { CHANNEL_VISUAL, listStamp } from '@/components/manager/inbox/visual'
+import { CHANNEL_VISUAL } from '@/components/manager/inbox/visual'
 import type { ForwardTarget } from '@/components/manager/message-context-menu'
+import { ThreadPane } from '@/components/shared/inbox/thread-pane'
+import type { useMessageActions } from '@/components/shared/inbox/use-message-actions'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
-import { LeadStatusForm } from '@/components/curator/lead-panel-forms'
 import { CuratorOutreachButton } from '@/components/curator/chats/curator-outreach'
+import { ConversationRow } from '@/components/curator/chats/curator-conversation-row'
+import { CuratorInfoPanel } from '@/components/curator/chats/curator-info-panel'
 import { useCuratorChats } from '@/components/curator/chats/use-curator-chats'
 import { useShellHeader } from '@/components/dashboard-shell'
 import type { PanelChannelType } from '@/lib/types'
@@ -63,84 +58,6 @@ const SORT_LABELS: Record<SortMode, string> = {
   unread: 'Непрочитанные',
   name: 'По имени',
 }
-
-/**
- * Строка списка диалогов. Мемоизирована: раньше все строки перерисовывались на
- * каждый рендер родителя (ввод в поиск, realtime-события, router.refresh) —
- * при сотнях диалогов это и давало «лаги». Теперь строка ре-рендерится только
- * при смене своих пропсов, а onSelect — стабильная ссылка из родителя.
- */
-const ConversationRow = memo(function ConversationRow({
-  conversation: c,
-  isActive,
-  leadStatus,
-  onSelect,
-}: {
-  conversation: Conversation
-  isActive: boolean
-  leadStatus?: CuratorConversationStatus
-  onSelect: (id: string) => void
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={() => onSelect(c.id)}
-        className={cn(
-          'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors',
-          isActive
-            ? 'bg-primary/10 ring-1 ring-primary/30'
-            : 'hover:bg-muted/60',
-        )}
-      >
-        <ContactAvatar
-          name={c.contactName}
-          channel={c.channelType}
-          channelId={c.channelId}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <span
-              className={cn(
-                'truncate text-sm',
-                c.unread > 0 ? 'font-semibold text-foreground' : 'font-medium',
-              )}
-            >
-              {c.contactName}
-            </span>
-            <span className="shrink-0 text-[11px] text-muted-foreground">
-              {listStamp(c.lastMessageAt)}
-            </span>
-          </div>
-          <div className="mt-0.5 flex items-center gap-1.5">
-            <SourceChip conversation={c} size="xs" />
-            <span
-              className={cn(
-                'truncate text-xs',
-                c.unread > 0 ? 'text-foreground/80' : 'text-muted-foreground',
-              )}
-            >
-              {c.lastMessage || '—'}
-            </span>
-          </div>
-          {leadStatus ? (
-            <div className="mt-1">
-              <LeadStatusBadge
-                status={leadStatus.status}
-                className="px-1.5 py-0 text-[10px]"
-              />
-            </div>
-          ) : null}
-        </div>
-        {c.unread > 0 ? (
-          <span className="ml-1 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground tabular-nums">
-            {c.unread > 99 ? '99+' : c.unread}
-          </span>
-        ) : null}
-      </button>
-    </li>
-  )
-})
 
 export function CuratorInbox({
   conversations,
@@ -172,23 +89,8 @@ export function CuratorInbox({
     loadingOlder,
     noOlder,
     loadOlder,
-    handleSend,
-    handleSendMediaFile,
-    handleSendMediaBatch,
-    replyTarget,
-    setReplyTarget,
-    editTarget,
-    setEditTarget,
-    handleReply,
-    handleEdit,
-    handleCopy,
-    reactTo,
-    deleteMessage,
-    forwardMessage,
+    actions,
     forwardTargets,
-    sendSticker,
-    sendVoice,
-    scheduleSend,
     pending,
   } = useCuratorChats({ conversations, messagesByConversation, currentUser })
 
@@ -392,23 +294,8 @@ export function CuratorInbox({
             noOlder={noOlder}
             onLoadOlder={loadOlder}
             onBack={() => setActiveId(null)}
-            onSend={handleSend}
-            onSendMediaFile={handleSendMediaFile}
-            onSendMediaBatch={handleSendMediaBatch}
-            onSendSticker={sendSticker}
-            onSendVoice={sendVoice}
-            onScheduleSend={scheduleSend}
-            onReply={handleReply}
-            onEdit={handleEdit}
-            onReact={reactTo}
-            onDelete={deleteMessage}
-            onForward={forwardMessage}
+            actions={actions}
             forwardTargets={forwardTargets}
-            onCopy={handleCopy}
-            replyTarget={replyTarget}
-            onCancelReply={() => setReplyTarget(null)}
-            editTarget={editTarget}
-            onCancelEdit={() => setEditTarget(null)}
             infoOpen={infoOpen}
             onToggleInfo={() => setInfoOpen((v) => !v)}
             pending={pending}
@@ -444,23 +331,8 @@ function CuratorThread({
   noOlder,
   onLoadOlder,
   onBack,
-  onSend,
-  onSendMediaFile,
-  onSendMediaBatch,
-  onSendSticker,
-  onSendVoice,
-  onScheduleSend,
-  onReply,
-  onEdit,
-  onReact,
-  onDelete,
-  onForward,
+  actions,
   forwardTargets,
-  onCopy,
-  replyTarget,
-  onCancelReply,
-  editTarget,
-  onCancelEdit,
   infoOpen,
   onToggleInfo,
   pending,
@@ -474,31 +346,8 @@ function CuratorThread({
   noOlder: Record<string, boolean>
   onLoadOlder: () => void
   onBack: () => void
-  onSend: (text: string) => void
-  onSendMediaFile: (file: File, caption: string) => void
-  onSendMediaBatch: (
-    files: File[],
-    caption: string,
-    onProgress: (p: { sent: number; total: number }) => void,
-  ) => Promise<void>
-  onSendSticker: (sticker: StickerItem) => void
-  onSendVoice: (audio: {
-    base64: string
-    mime: string
-    durationSec: number
-  }) => void
-  onScheduleSend: (text: string, scheduleAtIso: string) => void
-  onReply: (m: Message) => void
-  onEdit: (m: Message) => void
-  onReact: (m: Message, emoji: string) => void
-  onDelete: (m: Message) => void
-  onForward: (m: Message, toConversationId: string) => void
+  actions: ReturnType<typeof useMessageActions>
   forwardTargets: ForwardTarget[]
-  onCopy: (m: Message) => void
-  replyTarget: Message | null
-  onCancelReply: () => void
-  editTarget: Message | null
-  onCancelEdit: () => void
   infoOpen: boolean
   onToggleInfo: () => void
   pending: boolean
@@ -583,218 +432,29 @@ function CuratorThread({
         ? createPortal(headerNode, shellHeader.slotEl)
         : null}
 
-      {/* Лента — богатый MessageList менеджера в режиме read-only-действий */}
-      {threadLoading && thread.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center bg-muted/20 text-sm text-muted-foreground">
-          Загрузка переписки…
-        </div>
-      ) : thread.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center bg-muted/20 text-sm text-muted-foreground">
-          Сообщений пока нет.
-        </div>
-      ) : (
-        <MessageList
-          active={active}
-          activeId={activeId}
-          thread={thread}
-          threadLoading={threadLoading}
-          noOlder={noOlder}
-          loadingOlder={loadingOlder}
-          onLoadOlder={onLoadOlder}
-          forwardTargets={forwardTargets}
-          activeTyping={null}
-          messagesScrollRef={messagesScrollRef}
-          onThreadScroll={handleThreadScroll}
-          onReply={onReply}
-          onEdit={onEdit}
-          onReact={onReact}
-          onCopy={onCopy}
-          onForward={onForward}
-          onDelete={onDelete}
-          onShowHistory={() => {}}
-          hideDeliveryStatus
-        />
-      )}
-
-      {/* Баннер редактирования — взаимоисключим с цитатой (как у менеджера) */}
-      {editTarget ? (
-        <div className="flex items-center gap-2 border-t border-border bg-muted/40 px-3 py-2 sm:px-4">
-          <Pencil className="size-4 shrink-0 text-primary" />
-          <div className="min-w-0 flex-1 border-l-2 border-primary/60 pl-2">
-            <p className="truncate text-xs font-semibold text-foreground">
-              Редактирование
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              {editTarget.body || '[сообщение]'}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 shrink-0"
-            onClick={onCancelEdit}
-            aria-label="Отменить редактирование"
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
-      ) : replyTarget ? (
-        <div className="flex items-center gap-2 border-t border-border bg-muted/40 px-3 py-2 sm:px-4">
-          <Reply className="size-4 shrink-0 text-primary" />
-          <div className="min-w-0 flex-1 border-l-2 border-primary/60 pl-2">
-            <p className="truncate text-xs font-semibold text-foreground">
-              {replyTarget.author || 'Сообщение'}
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              {replyTarget.body ||
-                (replyTarget.mediaType ? '[вложение]' : '')}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 shrink-0"
-            onClick={onCancelReply}
-            aria-label="Отменить ответ"
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
-      ) : null}
-
-      {/* Композер — ровно тот же, что у менеджера. Менеджерские фичи, которых
-          у куратора нет, нейтрализованы: ИИ всегда выключен (диалог уже передан
-          человеку), быстрых ответов и Telemost нет. Стикеры/голос/отложка/эмодзи
-          работают через кураторские экшены. */}
-      <MessageComposer
-        conversationId={active.id}
-        channelType={active.channelType}
-        channelId={active.channelId}
-        getInitialDraft={(id) => getDraft(id)}
-        onPersistDraft={(t) => persistDraft(active.id, t)}
-        onSend={onSend}
-        onSendSticker={onSendSticker}
-        onSendMediaFile={onSendMediaFile}
-        onSendMediaBatch={onSendMediaBatch}
-        onSendVoice={onSendVoice}
-        onVoiceError={(m) => toast.error(m)}
-        onScheduleSend={onScheduleSend}
-        aiLed={false}
-        onBlockedInteract={() => {}}
-        onToggleAi={() => {}}
-        statusPending={false}
+      {/* Лента + баннеры ответа/правки + композер — общее ядро с менеджером
+          (components/shared/inbox/thread-pane). Менеджерские фичи (ИИ-гейт,
+          быстрые ответы, Telemost) у куратора просто не передаются — дефолты
+          композера описывают диалог, который ведёт человек. Тики доставки
+          скрыты: доставка идёт под владельцем канала, «Не отправлено» вводило
+          бы куратора в заблуждение. */}
+      <ThreadPane
+        active={active}
+        activeId={activeId}
+        thread={thread}
+        threadLoading={threadLoading}
+        loadingOlder={loadingOlder}
+        noOlder={noOlder}
+        onLoadOlder={onLoadOlder}
+        forwardTargets={forwardTargets}
+        messagesScrollRef={messagesScrollRef}
+        onThreadScroll={handleThreadScroll}
+        actions={actions}
         pending={pending}
-        quickReplies={[]}
-        telemostEnabled={false}
-        onStartMeeting={() => {}}
-        meetingPending={false}
-        replyActive={Boolean(replyTarget)}
-        editing={
-          editTarget ? { id: editTarget.id, body: editTarget.body ?? '' } : null
-        }
+        hideDeliveryStatus
+        getInitialDraft={getDraft}
+        onPersistDraft={persistDraft}
       />
     </>
-  )
-}
-
-function CuratorInfoPanel({
-  active,
-  leadStatus,
-  onStatusSaved,
-  onClose,
-}: {
-  active: Conversation
-  leadStatus?: CuratorConversationStatus
-  onStatusSaved: () => void
-  onClose: () => void
-}) {
-  const channelShort =
-    CHANNEL_VISUAL[active.channelType as PanelChannelType]?.short ??
-    active.channelType
-  const rows: { icon: typeof Radio; label: string; value: string }[] = []
-  rows.push({ icon: Radio, label: 'Канал', value: channelShort })
-  if (active.managerName)
-    rows.push({ icon: UserCheck, label: 'Передал', value: active.managerName })
-  if (active.transferredToCuratorAt)
-    rows.push({
-      icon: CalendarClock,
-      label: 'Передан вам',
-      value: listStamp(active.transferredToCuratorAt),
-    })
-
-  return (
-    <aside className="absolute inset-y-0 right-0 z-20 flex w-full max-w-sm flex-col border-l border-border bg-card shadow-xl md:static md:z-auto md:w-80 md:shadow-none lg:w-[22rem]">
-      <header className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Сведения</h2>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          aria-label="Закрыть сведения"
-        >
-          <X className="size-4" />
-        </Button>
-      </header>
-      <div className="scrollbar-thin flex-1 overflow-y-auto p-4">
-        <div className="flex flex-col items-center gap-2 pb-4 text-center">
-          <ContactAvatar
-            name={active.contactName}
-            channel={active.channelType}
-            channelId={active.channelId}
-            size="lg"
-          />
-          <div>
-            <p className="text-sm font-semibold">{active.contactName}</p>
-            {active.contactUsername ? (
-              <p className="text-xs text-muted-foreground">
-                @{active.contactUsername}
-              </p>
-            ) : null}
-          </div>
-          {leadStatus ? (
-            <LeadStatusBadge status={leadStatus.status} />
-          ) : null}
-        </div>
-
-        <dl className="flex flex-col gap-3 border-t border-border pt-4">
-          {rows.map((r, i) => (
-            <div key={i} className="flex items-start gap-2.5 text-xs">
-              <r.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0">
-                <dt className="text-muted-foreground">{r.label}</dt>
-                <dd className="font-medium text-foreground">{r.value}</dd>
-              </div>
-            </div>
-          ))}
-        </dl>
-
-        {/* Кураторский статус лида: свой набор статусов + обязательный
-            комментарий. Тот же action и форма, что и в «Мои лиды» — куратор
-            подтверждает статус, не выходя из переписки. -mx-4 распахивает
-            секцию на всю ширину панели (форма имеет собственные поля px-4). */}
-        {leadStatus ? (
-          <div className="-mx-4 mt-4 border-t border-border">
-            <LeadStatusForm
-              leadCardId={leadStatus.leadCardId}
-              currentStatus={leadStatus.status}
-              onSaved={onStatusSaved}
-              variant="curator"
-            />
-          </div>
-        ) : null}
-
-        {/* Контекст посетителя (лайв-чат сайта) */}
-        {active.meta ? (
-          <div className="mt-4 border-t border-border pt-4">
-            <p className="mb-3 text-xs font-semibold text-muted-foreground">
-              Посетитель сайта
-            </p>
-            <MetaRows meta={active.meta} />
-          </div>
-        ) : null}
-      </div>
-    </aside>
   )
 }

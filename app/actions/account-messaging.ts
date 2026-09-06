@@ -2,8 +2,10 @@
 
 import { revalidatePath } from 'next/cache'
 import { requireManager } from '@/lib/auth'
+import { normalizeClientMessageId } from '@/lib/client-message-id'
 import {
   addMessage,
+  addMessageIdempotent,
   enqueueJob,
   getChannelById,
   getConversation,
@@ -92,18 +94,24 @@ async function resolveTelegramDelivery(
 export async function sendMessageAction(
   conversationId: string,
   body: string,
+  clientMessageId?: string,
 ): Promise<SimpleResult> {
   const session = await requireManager()
   const text = body.trim()
   if (!text) return { ok: false, message: 'Сообщение пустое.' }
 
-  const msg = await addMessage({
+  const inserted = await addMessageIdempotent({
     conversationId,
     managerId: session.sub,
     body: text,
     author: session.name,
+    clientMessageId: normalizeClientMessageId(clientMessageId),
   })
-  if (!msg) return { ok: false, message: 'Диалог не найден.' }
+  if (!inserted) return { ok: false, message: 'Диалог не найден.' }
+  // Replay of an already-persisted send (retried action, double tap): the
+  // first call owns delivery — report success without enqueueing again.
+  if (inserted.duplicate) return { ok: true, message: 'Сообщение отправлено.' }
+  const msg = inserted.message
 
   // Delivery routing by channel:
   //  • Telegram: worker job queue (MTProto session).

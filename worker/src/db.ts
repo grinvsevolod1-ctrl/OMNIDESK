@@ -49,6 +49,12 @@ export const pool = new Pool({
   // API) rather than as a worker that looks alive but never answers.
   connectionTimeoutMillis: env.pgConnectTimeoutMs,
   idleTimeoutMillis: 30_000,
+  // A stuck statement must not pin one of the 10 connections forever — the
+  // ingest path would then serialize behind it. Generous (60 s) because
+  // backfill batches are legitimately heavier than panel queries.
+  statement_timeout: Number(
+    process.env.WORKER_PG_STATEMENT_TIMEOUT_MS || 60_000,
+  ),
 })
 
 pool.on('error', (err) => {

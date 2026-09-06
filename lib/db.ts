@@ -65,12 +65,22 @@ function createPool(): Pool {
   // the pool is exhausted.
   const maxRaw = Number.parseInt(process.env.PGPOOL_MAX || '', 10)
   const max = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 20
+  // Server-side statement_timeout on every panel connection. Without it one
+  // runaway query (a wide analytics window, a lock wait) holds a connection out
+  // of the 20 indefinitely; three of those and the whole panel stalls with
+  // "pool exhausted" while nothing is actually wrong with the database. 30 s is
+  // far above any interactive query and below the media-route deadline (60 s).
+  // Cron processes that legitimately run longer set PG_STATEMENT_TIMEOUT_MS.
+  const stmtRaw = Number.parseInt(process.env.PG_STATEMENT_TIMEOUT_MS || '', 10)
+  const statementTimeoutMs =
+    Number.isFinite(stmtRaw) && stmtRaw > 0 ? stmtRaw : 30_000
   const pool = new Pool({
     connectionString,
     ssl: resolveSslConfig(connectionString),
     max,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
+    statement_timeout: statementTimeoutMs,
   })
   pool.on('error', (err) => {
     console.error('[db] Unexpected PostgreSQL pool error:', err.message)

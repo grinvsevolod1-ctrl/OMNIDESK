@@ -37,8 +37,8 @@ export function ComposerBanners({
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="size-7 shrink-0"
+            size="icon-sm"
+            className="shrink-0"
             onClick={onCancelEdit}
             aria-label="Отменить редактирование"
           >
@@ -62,8 +62,8 @@ export function ComposerBanners({
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="size-7 shrink-0"
+            size="icon-sm"
+            className="shrink-0"
             onClick={onCancelReply}
             aria-label="Отменить ответ"
           >

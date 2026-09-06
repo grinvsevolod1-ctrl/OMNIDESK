@@ -46,10 +46,13 @@ export const viewport: Viewport = {
   // Island / home indicator) and expose the safe-area env() insets that the
   // chat shell and composer pad against. Without this iOS letterboxes the PWA.
   viewportFit: 'cover',
-  // Keep the iOS keyboard from zooming/shoving the layout: lock scale so a tap
-  // on the composer input never triggers Safari's auto-zoom (inputs are ≥16px).
-  maximumScale: 1,
-  userScalable: false,
+  // Pinch-zoom stays ENABLED (WCAG 1.4.4 — low-vision users rely on it, and
+  // iOS ignores user-scalable=no anyway). Safari's focus auto-zoom — the reason
+  // this used to be locked — is prevented at the source: every input/textarea
+  // renders at ≥16px on mobile (`text-base md:text-sm` in components/ui), so
+  // the browser never needs to zoom to make a focused field legible.
+  maximumScale: 5,
+  userScalable: true,
 }
 
 export default function RootLayout({

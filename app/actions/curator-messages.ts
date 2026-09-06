@@ -2,8 +2,10 @@
 
 import { revalidatePath } from 'next/cache'
 import { requireCurator } from '@/lib/auth'
+import { normalizeClientMessageId } from '@/lib/client-message-id'
 import {
   addMessage,
+  addMessageIdempotent,
   editMessageBodyForCurator,
   enqueueJob,
   getMessageDispatchForCurator,
@@ -46,6 +48,7 @@ export async function sendCuratorMessageAction(
   conversationId: string,
   body: string,
   replyToMessageId?: string,
+  clientMessageId?: string,
 ): Promise<SimpleResult> {
   const session = await requireCurator()
   const text = body.trim()
@@ -54,7 +57,7 @@ export async function sendCuratorMessageAction(
   const conv = await getConversationForCurator(conversationId, session.sub)
   if (!conv) return { ok: false, message: 'Диалог не найден.' }
 
-  const msg = await addMessage({
+  const inserted = await addMessageIdempotent({
     conversationId,
     // Владение диалогом остаётся у менеджера; сообщение вставляем под
     // curator-скоупом, но строка принадлежит owner-менеджеру диалога.
@@ -64,8 +67,13 @@ export async function sendCuratorMessageAction(
     author: session.name,
     // Ответ-цитата: воркер Telegram проставит reply_to при доставке.
     replyToMessageId: replyToMessageId || undefined,
+    clientMessageId: normalizeClientMessageId(clientMessageId),
   })
-  if (!msg) return { ok: false, message: 'Диалог не найден.' }
+  if (!inserted) return { ok: false, message: 'Диалог не найден.' }
+  // Повтор уже сохранённой отправки (ретрай экшена, двойной тап): доставку
+  // ставит в очередь первый вызов — здесь просто подтверждаем.
+  if (inserted.duplicate) return { ok: true, message: 'Отправлено.' }
+  const msg = inserted.message
 
   if (conv.channelType === 'whatsapp') {
     const handled = await deliverWhatsappMessage(conversationId, msg.id, text)

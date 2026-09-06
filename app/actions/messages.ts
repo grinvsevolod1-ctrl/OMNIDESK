@@ -2,8 +2,10 @@
 
 import { revalidatePath } from 'next/cache'
 import { requireManager } from '@/lib/auth'
+import { normalizeClientMessageId } from '@/lib/client-message-id'
 import {
   addMessage,
+  addMessageIdempotent,
   editMessageBody,
   enqueueJob,
   getConversation,
@@ -37,6 +39,7 @@ export async function replyMessageAction(
   conversationId: string,
   replyToMessageId: string,
   body: string,
+  clientMessageId?: string,
 ): Promise<SimpleResult> {
   const session = await requireManager()
   const text = body.trim()
@@ -52,14 +55,18 @@ export async function replyMessageAction(
   const target = await getMessageDispatch(replyToMessageId, session.sub)
   if (!target) return { ok: false, message: 'Сообщение не найдено.' }
 
-  const msg = await addMessage({
+  const inserted = await addMessageIdempotent({
     conversationId,
     managerId: session.sub,
     body: text,
     author: session.name,
     replyToMessageId,
+    clientMessageId: normalizeClientMessageId(clientMessageId),
   })
-  if (!msg) return { ok: false, message: 'Не удалось отправить.' }
+  if (!inserted) return { ok: false, message: 'Не удалось отправить.' }
+  // Replay of an already-persisted send — delivery is owned by the first call.
+  if (inserted.duplicate) return { ok: true, message: 'Ответ отправлен.' }
+  const msg = inserted.message
 
   try {
     await enqueueJob({
