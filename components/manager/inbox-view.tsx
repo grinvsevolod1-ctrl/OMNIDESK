@@ -23,6 +23,7 @@ import { ConversationList } from '@/components/manager/inbox/conversation-list'
 import { AiHandoffBanner } from '@/components/manager/inbox/ai-handoff-banner'
 import { ThreadHeader } from '@/components/manager/inbox/thread-header'
 import { useShellHeader } from '@/components/dashboard-shell'
+import { useIsDesktop } from '@/lib/use-media-query'
 import { ThreadPane } from '@/components/shared/inbox/thread-pane'
 import { useInbox } from '@/components/manager/inbox/use-inbox'
 import { useInboxShortcuts } from '@/components/manager/inbox/use-inbox-shortcuts'
@@ -163,15 +164,23 @@ export function InboxView({
   // j/k and Alt+arrows walk the filtered list without touching the mouse.
   useInboxShortcuts({ filtered, activeId, setActiveId })
 
-  // Контекстная шапка открытого диалога живёт в ЕДИНСТВЕННОЙ шапке дашборда:
-  // пока диалог открыт, ThreadHeader рисуется через портал в слот шапки (см.
-  // useShellHeader) — отдельной второй полосы-заголовка под системной шапкой
-  // больше нет. Флаг threadOpen прячет бургер/ролевые кнопки на мобиле.
+  // Контекстная шапка открытого диалога.
+  //   • Мобайл (<md): места на две полосы нет, поэтому ThreadHeader уезжает
+  //     ЧЕРЕЗ ПОРТАЛ в единственную шапку дашборда (см. useShellHeader), а флаг
+  //     threadOpen прячет бургер/ролевые кнопки, отдавая место данным лида.
+  //   • Десктоп (md+): у КАЖДОГО диалога своя шапка прямо над лентой — шапка
+  //     сайта остаётся чистой (профиль/выход), их больше не сливаем. Портал не
+  //     используется, threadOpen не поднимаем.
   const shellHeader = useShellHeader()
+  const isDesktop = useIsDesktop()
   useEffect(() => {
+    if (isDesktop) {
+      shellHeader?.setThreadOpen(false)
+      return
+    }
     shellHeader?.setThreadOpen(Boolean(active))
     return () => shellHeader?.setThreadOpen(false)
-  }, [active, shellHeader])
+  }, [active, shellHeader, isDesktop])
 
   /**
    * Скролл к сообщению по id для поиска/медиа-навигации. true — сообщение
@@ -325,13 +334,22 @@ export function InboxView({
       >
         {active ? (
           <>
-            {/* Шапка диалога уезжает в портал единственной шапки дашборда;
-                пока слот не смонтирован — ничего не рисуем (без второй полосы). */}
-            {shellHeader
-              ? shellHeader.slotEl
-                ? createPortal(threadHeaderNode, shellHeader.slotEl)
-                : null
-              : threadHeaderNode}
+            {/* Десктоп (md+): собственная шапка диалога прямо над лентой —
+                шапка сайта не трогается. Мобайл (<md): портал в шапку сайта,
+                чтобы не было двух полос на узком экране. */}
+            {isDesktop ? (
+              <header className="flex h-14 shrink-0 items-center border-b border-border bg-card px-3 md:px-4">
+                {threadHeaderNode}
+              </header>
+            ) : shellHeader ? (
+              shellHeader.slotEl ? (
+                createPortal(threadHeaderNode, shellHeader.slotEl)
+              ) : null
+            ) : (
+              <header className="flex h-14 shrink-0 items-center border-b border-border bg-card px-3">
+                {threadHeaderNode}
+              </header>
+            )}
 
             {/* Бар поиска/медиа-навигации — под шапкой, над сообщениями. */}
             {threadSearch.bar}
@@ -394,7 +412,7 @@ export function InboxView({
                       )}
                     >
                       {activeTrashed
-                        ? 'Лид вернулся от куратора и убран в trash · причина:'
+                        ? 'Лид вернулся от куратора и у��ран в trash · причина:'
                         : 'Лид вернулся на дожим · причина:'}{' '}
                       <span className="font-medium">
                         {active.curatorArchived

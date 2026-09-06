@@ -386,6 +386,7 @@ function CuratorThread({
         name={active.contactName}
         channel={active.channelType}
         channelId={active.channelId}
+        conversationId={active.id}
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">

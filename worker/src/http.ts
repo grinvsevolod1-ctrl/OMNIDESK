@@ -74,6 +74,42 @@ export function startHttpServer(): void {
       })
     }
 
+    // Contact profile photo (inbox avatar). The panel proxies here after
+    // verifying ownership + checking its own cache; we resolve the seller peer
+    // and download the avatar live. 404 = contact has no photo (cached as a
+    // negative by the panel so we aren't asked again until the TTL lapses).
+    if (url.pathname === '/contact-avatar' && req.method === 'GET') {
+      const channelId = url.searchParams.get('channelId') ?? ''
+      const peer = url.searchParams.get('peer') ?? ''
+      if (!channelId || !peer) {
+        return json(res, 400, { error: 'channelId and peer required' })
+      }
+      const session = registry.get(channelId)
+      if (!session || !(session instanceof TelegramSession)) {
+        return json(res, 503, { error: 'session_offline' })
+      }
+      let avatar: Buffer | null = null
+      try {
+        avatar = await withDeadline(
+          session.contactAvatar(peer),
+          env.mediaTimeoutMs,
+          'contact avatar download',
+        )
+      } catch (err) {
+        if (isDeadlineError(err)) return json(res, 504, { error: 'avatar_timeout' })
+        logger.warn({ err, channelId }, 'contact avatar failed')
+        return json(res, 502, { error: 'avatar_failed' })
+      }
+      if (!avatar) return json(res, 404, { error: 'no_avatar' })
+      res.writeHead(200, {
+        'content-type': 'image/jpeg',
+        'content-length': String(avatar.byteLength),
+        'cache-control': 'private, max-age=86400',
+      })
+      res.end(avatar)
+      return
+    }
+
     // Stream a message's media. The panel proxies the browser request here
     // after verifying ownership. We serve the bytes PERSISTED in Postgres first
     // (so media survives the contact deleting/editing the original); only when

@@ -691,6 +691,17 @@ export class TelegramSession {
     return downloadPersonalAvatar(this.personalClient(), this.resolveTarget, peer)
   }
 
+  /**
+   * Contact profile photo for the seller (inbox) side. Reuses the seller's
+   * durable peer resolver so a stored @username or numeric id downloads the
+   * same avatar the contact shows in Telegram. Pure read; null when the session
+   * is offline or the contact has no photo.
+   */
+  async contactAvatar(peer: string): Promise<Buffer | null> {
+    if (!this.client) return null
+    return downloadPersonalAvatar(this.client, this.resolveTarget, peer)
+  }
+
   /** Live media bytes for one message (personal mode). Pure read. */
   async personalMedia(
     peer: string,

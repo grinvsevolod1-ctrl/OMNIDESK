@@ -113,6 +113,38 @@ export async function fetchStickers(
 }
 
 /**
+ * Fetch a contact's Telegram profile photo bytes for the inbox avatar.
+ * Returns the bytes on success, the string `'none'` when the contact has no
+ * photo (a valid negative result the panel caches), or null when the worker
+ * isn't configured / the session is offline / anything else went wrong.
+ */
+export async function fetchContactAvatar(
+  channelId: string,
+  peer: string,
+): Promise<{ bytes: Buffer; mime: string } | 'none' | null> {
+  if (!isWorkerConfigured) return null
+  try {
+    const res = await fetch(
+      `${WORKER_URL}/contact-avatar?channelId=${encodeURIComponent(
+        channelId,
+      )}&peer=${encodeURIComponent(peer)}`,
+      {
+        headers: { 'x-worker-secret': WORKER_SECRET },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(WORKER_MEDIA_TIMEOUT_MS),
+      },
+    )
+    if (res.status === 404) return 'none'
+    if (!res.ok) return null
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.byteLength === 0) return 'none'
+    return { bytes: buf, mime: res.headers.get('content-type') || 'image/jpeg' }
+  } catch {
+    return null
+  }
+}
+
+/**
  * POST a JSON body to the worker's internal API and return the parsed JSON
  * reply. Null when the worker isn't configured or unreachable; отличать
  * "worker недоступен" от ошибки эндпоинта позволяет поле ok/error в ответе.

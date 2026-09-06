@@ -116,6 +116,7 @@ export function ThreadHeader({
           name={active.contactName}
           channel={active.channelType}
           channelId={active.channelId}
+          conversationId={active.id}
         />
         <div className="flex min-w-0 flex-col gap-0.5">
           <p className="flex items-center gap-2 truncate text-sm font-semibold">

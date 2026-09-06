@@ -54,6 +54,7 @@ export function CuratorInfoPanel({
             name={active.contactName}
             channel={active.channelType}
             channelId={active.channelId}
+            conversationId={active.id}
             size="lg"
           />
           <div>

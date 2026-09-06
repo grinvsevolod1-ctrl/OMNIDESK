@@ -22,7 +22,7 @@ import {
   Tag,
   X,
 } from 'lucide-react'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { ContextMenuRadioItem } from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
@@ -256,17 +256,29 @@ export function ContactAvatar({
   name,
   channel,
   channelId,
+  conversationId,
   size = 'md',
 }: {
   name: string
   channel: ChannelType
   channelId?: string
+  /**
+   * When given (and the channel is Telegram) we load the contact's real profile
+   * photo from `/api/contact-photo`. Radix's Avatar falls back to the coloured
+   * initials automatically if the image 404s (no photo) or fails to load, so
+   * there is never a broken image — just the initials, same as before.
+   */
+  conversationId?: string
   size?: 'md' | 'lg'
 }) {
   const v = channelVisual(channel)
   const Icon = v.icon
   const dim = size === 'lg' ? 'size-11' : 'size-10'
   const accent = channelId ? sourceAccent(channelId) : null
+  const photoSrc =
+    conversationId && channel.startsWith('telegram')
+      ? `/api/contact-photo?conversationId=${encodeURIComponent(conversationId)}`
+      : undefined
   return (
     <div className="relative shrink-0">
       <Avatar
@@ -275,6 +287,9 @@ export function ContactAvatar({
           accent && `ring-2 ring-offset-2 ring-offset-card ${accent.ring}`,
         )}
       >
+        {photoSrc && (
+          <AvatarImage src={photoSrc} alt="" className="object-cover" />
+        )}
         <AvatarFallback className={cn('text-sm font-semibold', avatarTint(name))}>
           {initials(name)}
         </AvatarFallback>
@@ -371,6 +386,7 @@ export function DetailsPanel({
             name={conversation.contactName}
             channel={conversation.channelType}
             channelId={conversation.channelId}
+            conversationId={conversation.id}
             size="lg"
           />
           <div>
