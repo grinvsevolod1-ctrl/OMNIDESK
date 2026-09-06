@@ -10,6 +10,7 @@ import {
   getWhatsappCloudDispatchByConversationId,
   markMessageFailed,
   setMessageProviderId,
+  storeMessageMediaBytes,
 } from '@/lib/data'
 import {
   sendMessage as sendVkMessage,
@@ -268,9 +269,11 @@ export async function sendVkMediaAction(
  * Telegram media send (photo/document + optional caption). Unlike WA/VK, the
  * file is not uploaded to a CDN first — the bytes ride the job payload as
  * base64 and the worker streams them through the personal MTProto session
- * (personalSendFile). Outbound Telegram media has no persisted bytes; the
- * thread renders it via on-demand live download keyed by the backfilled
- * providerMessageId (same path as outbound voice notes).
+ * (personalSendFile). The bytes are ALSO archived into media_blobs at send
+ * time (we already hold them), so the thread renders the bubble from our own
+ * copy immediately — no dependence on the worker's send having completed or on
+ * the Telegram original still existing. Live download stays as a fallback for
+ * legacy rows without a blob.
  *
  * base64-in-jsonb is heavy, so the cap here is deliberately conservative — it
  * comfortably covers photos and everyday documents while keeping job rows sane.
@@ -329,6 +332,18 @@ export async function sendTelegramMediaAction(
     mediaName: asPhoto ? undefined : file.name || undefined,
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
+
+  // Archive before enqueueing: the bubble is already visible and its first
+  // /api/media hit must find our copy, not race the worker (no provider id yet
+  // → 410 → tile stuck on «Медиа недоступно»). Best-effort, never blocks send.
+  await storeMessageMediaBytes(
+    msg.id,
+    Buffer.from(file.base64, 'base64'),
+    mime,
+    file.name || null,
+  ).catch((err) => {
+    console.error('[panel] outbound file archive failed:', err)
+  })
 
   try {
     await enqueueJob({

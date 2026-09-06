@@ -492,6 +492,50 @@ export function MessageMediaAlbum({ items }: { items: Message[] }) {
 }
 
 /** One square cell of a MessageMediaAlbum. */
+/**
+ * Задержки повторных попыток загрузки медиа. Первый запрос к /api/media у
+ * СВЕЖЕГО исходящего сообщения гоняется с воркером: пузырь уже в ленте, а
+ * provider_message_id ещё не записан → воркер отдаёт 410, и без ретрая плитка
+ * навсегда залипала на «Медиа недоступно». Два отложенных повтора с
+ * cache-buster'ом покрывают и эту гонку, и разовые сетевые сбои; после них —
+ * честный fallback.
+ */
+const MEDIA_RETRY_DELAYS_MS = [1500, 4000]
+
+function useRetryingMediaSrc(url: string | undefined) {
+  const [attempt, setAttempt] = useState(0)
+  const [failed, setFailed] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    },
+    [],
+  )
+
+  const onMediaError = useCallback(() => {
+    if (attempt >= MEDIA_RETRY_DELAYS_MS.length) {
+      setFailed(true)
+      return
+    }
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null
+      setAttempt((a) => a + 1)
+    }, MEDIA_RETRY_DELAYS_MS[attempt])
+  }, [attempt])
+
+  // Cache-buster only on retries so the browser doesn't replay the failed
+  // response; `?edit=` URLs already carry a query string — append with `&`.
+  const src =
+    url && attempt > 0
+      ? `${url}${url.includes('?') ? '&' : '?'}r=${attempt}`
+      : url
+
+  return { src, failed, onMediaError }
+}
+
 function AlbumCell({
   message,
   className,
@@ -501,8 +545,8 @@ function AlbumCell({
   className?: string
   onOpen: () => void
 }) {
-  const [failed, setFailed] = useState(false)
   const url = message.mediaUrl
+  const { src, failed, onMediaError } = useRetryingMediaSrc(url)
   const isVideo = effectiveMediaType(message) === 'video'
   if (!url || failed) {
     return (
@@ -528,7 +572,12 @@ function AlbumCell({
     >
       {isVideo ? (
         <>
-          <video src={url} preload="metadata" className="size-full object-cover" />
+          <video
+            src={src}
+            preload="metadata"
+            className="size-full object-cover"
+            onError={onMediaError}
+          />
           <span className="absolute inset-0 flex items-center justify-center">
             <span className="rounded-full bg-black/45 p-2">
               <Play className="size-4 fill-white text-white" />
@@ -540,12 +589,12 @@ function AlbumCell({
         // optimize arbitrary CDN sources); square-cropped to the cell.
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={url || '/placeholder.svg'}
+          src={src || '/placeholder.svg'}
           alt={message.mediaName || 'Вложение'}
           loading="lazy"
           decoding="async"
           className="size-full object-cover"
-          onError={() => setFailed(true)}
+          onError={onMediaError}
         />
       )}
     </button>
@@ -559,11 +608,11 @@ function AlbumCell({
  * saved.
  */
 export function MessageMedia({ message }: { message: Message }) {
-  const [failed, setFailed] = useState(false)
   const [lightbox, setLightbox] = useState(false)
   const [imgLoaded, setImgLoaded] = useState(false)
   const gallery = useMediaGallery()
   const url = message.mediaUrl
+  const { src, failed, onMediaError } = useRetryingMediaSrc(url)
   const type = effectiveMediaType(message)
   // Открытие: если есть общий провайдер треда — листаемая галерея по всему
   // чату; иначе локальный одиночный лайтбокс (см. fallback ниже).
@@ -598,23 +647,23 @@ export function MessageMedia({ message }: { message: Message }) {
     if (mime.includes('tgs') || mime === 'application/gzip') {
       return (
         <TgsSticker
-          url={url}
+          url={src || url}
           alt={message.body || '🎯'}
-          onError={() => setFailed(true)}
+          onError={onMediaError}
         />
       )
     }
     if (mime.startsWith('video/')) {
       return (
         <video
-          src={url}
+          src={src}
           autoPlay
           loop
           muted
           playsInline
           className="size-32 object-contain"
           aria-label={message.body || 'Стикер'}
-          onError={() => setFailed(true)}
+          onError={onMediaError}
         />
       )
     }
@@ -624,11 +673,11 @@ export function MessageMedia({ message }: { message: Message }) {
       // the correct choice here.
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={url || '/placeholder.svg'}
+        src={src || '/placeholder.svg'}
         alt={message.body || 'Стикер'}
         className="size-32 object-contain"
         loading="lazy"
-        onError={() => setFailed(true)}
+        onError={onMediaError}
       />
     )
   }
@@ -650,7 +699,7 @@ export function MessageMedia({ message }: { message: Message }) {
           {/* External chat media of unknown size — see note above; plain img. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={url || '/placeholder.svg'}
+            src={src || '/placeholder.svg'}
             alt={message.body || 'Изображение'}
             className={cn(
               'max-h-80 max-w-full rounded-lg object-contain transition-opacity duration-300',
@@ -659,7 +708,7 @@ export function MessageMedia({ message }: { message: Message }) {
             loading="lazy"
             decoding="async"
             onLoad={() => setImgLoaded(true)}
-            onError={() => setFailed(true)}
+            onError={onMediaError}
           />
         </button>
         {lightbox && !gallery ? (
@@ -680,9 +729,9 @@ export function MessageMedia({ message }: { message: Message }) {
     return (
       <div className="flex flex-col gap-1">
         <VideoNotePlayer
-          src={url}
+          src={src || url}
           size={192}
-          onError={() => setFailed(true)}
+          onError={onMediaError}
         />
         <button
           type="button"
@@ -700,10 +749,10 @@ export function MessageMedia({ message }: { message: Message }) {
     return (
       <div className="flex flex-col gap-1">
         <video
-          src={url}
+          src={src}
           controls
           className="max-h-80 max-w-full rounded-lg"
-          onError={() => setFailed(true)}
+          onError={onMediaError}
         />
         <div className="flex items-center gap-3 text-xs">
           <button
@@ -739,10 +788,10 @@ export function MessageMedia({ message }: { message: Message }) {
     return (
       <div className="flex flex-col gap-1">
         <audio
-          src={url}
+          src={src}
           controls
           className="w-56 max-w-full"
-          onError={() => setFailed(true)}
+          onError={onMediaError}
         />
         <button
           type="button"

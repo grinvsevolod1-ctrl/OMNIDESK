@@ -10,6 +10,7 @@ import {
   getOutreachChannel,
   markConversationRead,
   markMessageFailed,
+  storeMessageMediaBytes,
   trashReworkLead,
 } from '@/lib/data'
 import { writeAudit } from '@/lib/data/audit'
@@ -360,6 +361,18 @@ export async function sendVoiceAction(
     mediaMime: audio.mime || 'audio/ogg',
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
+
+  // Archive the recording we already hold so the player works from our copy
+  // right away instead of racing the worker's live re-download (410 → stuck on
+  // «Медиа недоступно»). Best-effort, never blocks the send.
+  await storeMessageMediaBytes(
+    msg.id,
+    Buffer.from(audio.base64, 'base64'),
+    audio.mime || 'audio/ogg',
+    null,
+  ).catch((err) => {
+    console.error('[panel] outbound voice archive failed:', err)
+  })
 
   try {
     await enqueueJob({

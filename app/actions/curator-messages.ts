@@ -10,6 +10,7 @@ import {
   markMessageDeletedForCurator,
   markMessageFailed,
   setMessageReactionForCurator,
+  storeMessageMediaBytes,
 } from '@/lib/data'
 import {
   getConversationForCurator,
@@ -443,6 +444,18 @@ export async function sendCuratorVoiceAction(
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
 
+  // Keep our own copy of the bytes we already hold: the bubble renders from
+  // the archive immediately instead of racing the worker's live re-download
+  // (no provider id yet → 410 → stuck on «Медиа недоступно»). Best-effort.
+  await storeMessageMediaBytes(
+    msg.id,
+    Buffer.from(audio.base64, 'base64'),
+    audio.mime || 'audio/ogg',
+    null,
+  ).catch((err) => {
+    console.error('[panel] curator voice archive failed:', err)
+  })
+
   try {
     await enqueueJob({
       channelId: conv.channelId,
@@ -508,6 +521,17 @@ export async function sendCuratorTelegramMediaAction(
     mediaName: file.name,
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
+
+  // Same as voice: archive the bytes now so the photo/file shows from our copy
+  // right away and survives whatever happens to the Telegram original.
+  await storeMessageMediaBytes(
+    msg.id,
+    Buffer.from(file.base64, 'base64'),
+    file.mime || 'application/octet-stream',
+    file.name || null,
+  ).catch((err) => {
+    console.error('[panel] curator file archive failed:', err)
+  })
 
   try {
     await enqueueJob({
