@@ -23,7 +23,11 @@ Capacitor живут ТОЛЬКО в этой папке (`native/`) и не п�
   сессией оператора.
 - `lib/capacitor-push.ts` — клиентский мост (через глобал `window.Capacitor`,
   без npm-импортов), смонтирован в `NotificationProvider`; отписка при логауте.
-- `native/` — конфиг оболочки, изолированный `package.json`, офлайн-фолбэк.
+- Бейдж непрочитанных на иконке приложения (iOS): `native-push.ts` шлёт в APNs
+  абсолютное число диалогов с непрочитанными; обнуляется, когда оператор их
+  открывает.
+- `native/` — конфиг оболочки, изолированный `package.json`, офлайн-фолбэк и
+  фирменный `assets/logo.png` (1024×1024) для генерации иконок и сплэшей.
 
 ## Шаг 1. Переменные окружения на сервере (VPS)
 
@@ -73,6 +77,7 @@ export CAP_APP_NAME="Omnidesk"
 
 npm run add:ios       # создаёт native/ios   (нужен macOS)
 npm run add:android   # создаёт native/android
+npm run assets        # иконки + сплэши из assets/logo.png под обе платформы
 npm run sync
 ```
 
@@ -110,6 +115,11 @@ npm run sync
 
 ## Иконки и сплэш
 
-Положите `native/assets/icon.png` (1024×1024) и `native/assets/splash.png`
-(2732×2732) и прогоните `npx @capacitor/assets generate` — сгенерирует все
-размеры под обе платформы.
+Уже лежит фирменный `native/assets/logo.png` (1024×1024, треугольник на тёмном
+фоне). `npm run assets` (Easy Mode `@capacitor/assets`) генерирует из него все
+размеры иконок и сплэш-экраны под iOS и Android, заливая фон фирменным `#0a0a0a`
+(в т.ч. для тёмной темы). Запускать **после** `add:ios`/`add:android` и до/вместе
+с `sync`.
+
+Хотите свой логотип — замените `native/assets/logo.png` (по желанию добавьте
+`logo-dark.png` для тёмной темы) и снова выполните `npm run assets`.

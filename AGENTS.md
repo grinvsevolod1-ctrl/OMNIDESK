@@ -267,7 +267,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    сохраняется — чат-диалог с markdown-рендером (заголовки/таблицы/списки,
    свой мини-рендерер без зависимостей и без innerHTML) + копирование
    (`components/admin/secret-sites/report-dialog.tsx`).
-6. **Личн��е Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
+6. **Личные Telegram-аккаунты владельца** (вкладка «Telegram» god-панели,
    миграция 135) — каналы `type='telegram_personal'` в `channels`, живут
    на воркере (`worker/src/personal.ts`, teleproto). Все admin-видимые выборки
    каналов ОБЯЗАНЫ исключать их фильтром `type <> 'telegram_personal'`
@@ -322,7 +322,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
    `use-auto-import.ts`, пока открыта вкладка: creating → requesting_code
    (request-code у GMT) → waiting_code (креды из GET /purchases/:id) →
    submitting_code → submitting_password (2FA, если нужен) → finalizing
-   (п��ллинг session_status до 'online'), переиспользуя personal*-actions
+   (поллинг session_status до 'online'), переиспользуя personal*-actions
    вкладки Telegram. Всё идемпотентно: канал дедуплится по номеру (E.164),
    креды перечитываются из GET (повторный request-code = conflict, не
    фатально). Single-покупка стартует импорт автоматически; на любой
@@ -854,7 +854,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
     исключение — «кликабельные» не-кнопки (li и т.п.): им `cursor-pointer`.
 - **Поллинг в UI** — только через `lib/hooks/use-shared-poll.ts`.
 - **Воркараунд GramJS:** `client.catchUp()` в библиотеке `telegram` — пустая
-  заглушка; восстановление пропущенных сообщений сд��лано своим dialog sync с
+  заглушка; восстановление пропущенных сообщений сделано своим dialog sync с
   per-chat watermarks (миграция 105). При обновлении зависимости проверь,
   не реализовали ли `catchUp()`.
 - **Только личные чаты в инбоксе:** группы/супергруппы/каналы TG отсекаются

@@ -133,6 +133,25 @@ async function pruneDeadTokens(tokens: string[]): Promise<number> {
   }
 }
 
+/**
+ * Absolute number of chats with unread messages owned by this operator — the
+ * value iOS paints on the app icon. APNs badges are absolute (not additive), so
+ * we send the true current count with every push; it self-corrects and, once
+ * the operator opens the chats and `unread` zeroes out, the next push clears it.
+ * Best-effort: on any error we send no badge rather than a wrong one.
+ */
+async function countUnreadForBadge(managerId: string): Promise<number | null> {
+  try {
+    const rows = await query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM conversations WHERE manager_id = $1 AND unread > 0',
+      [managerId],
+    )
+    return rows[0]?.n ?? 0
+  } catch {
+    return null
+  }
+}
+
 /* ------------------------------ base64url -------------------------------- */
 
 function b64url(input: Buffer | string): string {
@@ -178,6 +197,7 @@ function sendApns(
   jwt: string,
   token: string,
   payload: PushPayload,
+  badge: number | null,
 ): Promise<SendResult> {
   return new Promise((resolve) => {
     const body = JSON.stringify({
@@ -185,6 +205,8 @@ function sendApns(
         alert: { title: payload.title, body: payload.body },
         sound: 'default',
         'thread-id': payload.tag ?? 'omnidesk',
+        // Absolute unread-chat count on the app icon (omitted when unknown).
+        ...(badge !== null ? { badge } : {}),
       },
       url: payload.url,
       conversationId: payload.conversationId,
@@ -223,6 +245,7 @@ function sendApns(
 async function sendApnsBatch(
   tokens: string[],
   payload: PushPayload,
+  badge: number | null,
 ): Promise<{ sent: number; dead: string[] }> {
   if (tokens.length === 0) return { sent: 0, dead: [] }
   const jwt = getApnsJwt()
@@ -243,7 +266,7 @@ async function sendApnsBatch(
   try {
     const results = await Promise.all(
       tokens.map((t) =>
-        sendApns(session, jwt, t, payload).then((r) => ({ token: t, r })),
+        sendApns(session, jwt, t, payload, badge).then((r) => ({ token: t, r })),
       ),
     )
     for (const { token, r } of results) {
@@ -396,9 +419,15 @@ export async function sendNativePushToManager(
     .filter((r) => r.platform === 'android')
     .map((r) => r.token)
 
+  // Only pay for the badge query when we actually have an iOS device to badge.
+  const badge =
+    isApnsConfigured() && iosTokens.length > 0
+      ? await countUnreadForBadge(managerId)
+      : null
+
   const [apnsRes, fcmRes] = await Promise.all([
     isApnsConfigured()
-      ? sendApnsBatch(iosTokens, payload)
+      ? sendApnsBatch(iosTokens, payload, badge)
       : Promise.resolve({ sent: 0, dead: [] as string[] }),
     isFcmConfigured()
       ? sendFcmBatch(androidTokens, payload)
