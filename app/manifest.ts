@@ -11,6 +11,11 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: 'Omnidesk',
     description:
       'Self-hosted панель для Telegram, WhatsApp и онлайн-чатов сайтов.',
+    // UI language + text direction. Play Store / PWABuilder read these to label
+    // the generated store listing correctly.
+    lang: 'ru',
+    dir: 'ltr',
+    categories: ['business', 'productivity'],
     // Stable identity so the OS treats every launch as the same installed app.
     id: '/app/inbox',
     start_url: '/app/inbox',
@@ -38,6 +43,35 @@ export default function manifest(): MetadataRoute.Manifest {
         sizes: '512x512',
         type: 'image/png',
         purpose: 'any',
+      },
+      // Maskable variant: the mark sits in the central safe zone with full-bleed
+      // background, so Android's adaptive-icon mask (circle/squircle/rounded)
+      // never clips it. Without a maskable icon Android draws our square icon
+      // inside a white plate — the #1 reason installed PWAs look broken.
+      {
+        src: '/app-icon-maskable-512.png',
+        sizes: '512x512',
+        type: 'image/png',
+        purpose: 'maskable',
+      },
+    ],
+    // Screenshots power the richer install UI (Chrome/Edge desktop dialog) and
+    // are REQUIRED by Google Play when wrapping the PWA via PWABuilder/Bubblewrap.
+    // `wide` -> desktop listing, narrow (no form_factor) -> phone listing.
+    screenshots: [
+      {
+        src: '/screenshots/desktop-login.png',
+        sizes: '1920x1280',
+        type: 'image/png',
+        form_factor: 'wide',
+        label: 'Omnidesk на компьютере',
+      },
+      {
+        src: '/screenshots/mobile-login.png',
+        sizes: '1080x1920',
+        type: 'image/png',
+        form_factor: 'narrow',
+        label: 'Omnidesk на телефоне',
       },
     ],
   }
