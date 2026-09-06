@@ -134,6 +134,41 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   добавлены ради этого). `?diag=1` теперь дополнительно отдаёт `probes`
   (живое время чтения архива и health воркера, каждое ограничено 5 с) и
   `timeouts` — по ним видно, КАКОЙ хоп висит.
+  **Владение медиа у куратора** (`getMessageOwnerForCurator`): диалог считается
+  «его», если `conversations.curator_id = куратор` ИЛИ у куратора есть
+  лид-карточка этого диалога (`lead_cards.conversation_id = c.id AND
+  lead_cards.curator_id = куратор`) — то же правило, что у `/api/lead-media`.
+  Две ссылки пишутся разными chokepoint'ами и могут разойтись; карточка —
+  источник истины «этот куратор ведёт этот лид», поэтому одной её достаточно
+  для фото. Списки диалогов по-прежнему скоупятся ТОЛЬКО по `curator_id`.
+  **Массовые фото (50–100+ за раз), менеджер и куратор одинаково:**
+  - Загрузка: трей композера (`useMediaStaging`) берёт до `MAX_BATCH_FILES`
+    (300, `lib/media-batch.ts`), сжимает фото с параллелизмом 3 и показывает
+    «Подготовка N из M»; отправка идёт через `onSendMediaBatch` →
+    `sendMediaBatch` (`lib/media-batch-client.ts`) → `POST /api/chat-media/batch`
+    чанками по `MAX_FILES_PER_REQUEST` (20) файлов на запрос, прогресс «Отправка
+    N из M» в трее. Роут читает роль из сессии и гоняет СУЩЕСТВУЮЩИЕ per-file
+    экшены (`sendTelegramMediaAction` / `sendCurator*MediaAction` / WA / VK) —
+    вся валидация, архив-при-отправке и enqueue остаются в них; base64 для
+    Telegram делает сервер, телефон грузит сырые байты один раз. Подпись —
+    только у первого файла (альбомная семантика). Per-file `onSendMediaFile`
+    остаётся fallback'ом для композеров без batch-обработчика.
+  - Альбомы в ленте режутся по `MAX_ALBUM_SIZE` (10) — `lib/media-albums.ts`
+    (`computeAlbums`, покрыто `lib/media-albums.test.ts`); 100 фото = 10 сеток.
+  - Выгрузка: чип «Выбрать фото» в ленте (`MediaSelectionChip`, только если
+    ≥2 фото/видео) включает режим выбора — плитки (`MessageMedia`, `AlbumCell`)
+    через `useTileSelection` переключают чекбокс вместо открытия лайтбокса;
+    липкая панель `MediaSelectionBar` внизу ленты: «Выбрать все», «Скачать»,
+    «ZIP». Всё в `components/manager/inbox/media-selection.tsx`, встроено в
+    `MessageList` (выключается в режиме `onBubbleClick` — прикрепление к
+    карточке). Скачивание двухфазное: `prepareFiles` (fetch `/api/media/{id}`
+    с параллелизмом 4 и прогрессом, отказ одного файла не валит остальные) →
+    на телефоне (`isMobileLike && canShareFiles`) ВТОРОЙ тап «Сохранить N в
+    галерею» вызывает `navigator.share({files})` синхронно в жесте (Safari
+    теряет активацию через await) → на десктопе — anchor-скачивания по одному
+    с паузой 180 мс. ZIP — клиентский `fflate` (`packZip`, level 0 — фото уже
+    сжаты), имена `001-photo-<id8>.jpg` в порядке треда (`bulkFilenames`,
+    `lib/media-download.ts`, тест `lib/media-download.test.ts`).
   **Исходящие медиа (фото/файлы/голосовые из композера менеджера и куратора)
   архивируются в `media_blobs` В МОМЕНТ ОТПРАВКИ** (`storeMessageMediaBytes`
   до `enqueueJob` во всех четырёх экшенах) — пузырь отдаётся из нашей копии,
