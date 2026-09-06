@@ -1,4 +1,9 @@
-import type { AutoSpend, SiteCampaign } from '@/lib/god-sites'
+import type {
+  AutoSpend,
+  SiteCampaign,
+  SitePeriod,
+  SiteState,
+} from '@/lib/god-sites'
 import { autoDayFraction, dayCurveFraction } from '@/lib/god-sites-sim'
 
 /**
@@ -88,4 +93,26 @@ export function previewDayFraction(auto: AutoSpend | undefined): number {
   return auto?.profile
     ? dayCurveFraction(new Date(), tz, auto.profile, auto.smoothness ?? 0.6)
     : autoDayFraction(new Date(), tz)
+}
+
+/** Drop every period override belonging to a campaign (used on delete). */
+export function dropOverridesFor(
+  s: SiteState,
+  campaignId: string,
+): SiteState {
+  if (!s.periodOverrides) return s
+  const po: NonNullable<SiteState['periodOverrides']> = {}
+  for (const [period, byId] of Object.entries(s.periodOverrides)) {
+    if (!byId) continue
+    const rest = Object.fromEntries(
+      Object.entries(byId).filter(([cid]) => cid !== campaignId),
+    )
+    if (Object.keys(rest).length > 0) po[period as SitePeriod] = rest
+  }
+  return {
+    ...s,
+    ...(Object.keys(po).length > 0
+      ? { periodOverrides: po }
+      : { periodOverrides: undefined }),
+  }
 }
