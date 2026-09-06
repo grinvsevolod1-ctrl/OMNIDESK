@@ -85,7 +85,21 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   `channel_jobs_action_check` с `send_file`: constraint отставал от кода с
   миграции 103, и КАЖДАЯ отправка фото/файла в Telegram из композера падала на
   INSERT джоба → `markMessageFailed`, в Telegram ничего не уходило — это и было
-  «Медиа недоступно»).
+  «Медиа недоступно»; 161 — **один «передан»**: менеджерский статус лида
+  `transferred` («Передан») = факт передачи куратору, пишется chokepoint'ом
+  `recordTransfer` (и `linkConversationToCurator` / аутричем куратора) вместе
+  с `curator_id`; `handoff` переименован в «В работе». Оба статуса СИСТЕМНЫЕ
+  (`SYSTEM_LEAD_STATUSES` в `lib/types/leads.ts`): не предлагаются в пикерах,
+  `setLeadStatusAction` их отклоняет, а у диалога с куратором статус вообще
+  заблокирован (`setConversationStatus` → `'locked'`). В инбоксе менеджера НЕТ
+  отдельного чипа «Переданные» — переданные диалоги показывает статус «Передан»
+  в фильтре «Статусы», ВСЕ: и те, чью карточку куратор архивировал, и те, что
+  менеджер убрал в trash (`filtering.ts`, `revealTransferred`). Писать можно
+  только когда куратор вернул лид (`canManagerWrite`: bucket ≠ 'transferred'
+  — rework и trash пишут, «у куратора» — чтение). Закреплено тестом
+  `lib/manager-inbox-transferred.test.ts`. Словари подписей хранятся полным
+  снимком в `app_settings` — миграция переименовывает `handoff` там же, если
+  админ не менял подпись сам).
   **Правило трёх списков `channel_jobs.action`:** `JobAction`
   (`lib/types/jobs.ts`), `switch (job.action)` воркера и CHECK-constraint в
   последней миграции обязаны совпадать. Новое действие = новая миграция,
@@ -478,7 +492,7 @@ components/manager/      UI менеджера
                          пользователя: жест вверх (wheel/touch) мгновенно
                          снимает прилипание, программные скроллы флагуются и
                          не меняют intent, re-stick только у самого низа
-                         (<40px) с мёртвой зоной 40–120px. НЕ возвращай
+                         (<40px) с мёртвой зоной 40–120px. НЕ возв��ащай
                          position-only логику — она даёт цикл «утаскивает
                          вниз при скролле вверх» (тот же паттерн в
                          god-messenger/use-god-scroll.ts);
@@ -648,7 +662,7 @@ lib/
                          (НАЗВАНИЕ кампании, ''=весь аккаунт),impact} — если
                          список пуст, ключ НЕ отдаётся и страница считает
                          рекомендации сама (text-алиас description принимается
-                         на входе). last_seen_at
+                         на в��оде). last_seen_at
                          троттлится (touch не чаще раза в 30с). ВНИМАНИЕ:
                          шапка-комментарий scripts/132_god_sites.sql описывает
                          СТАРЫЙ контракт с мутациями от страницы — он
@@ -837,7 +851,7 @@ pnpm check              # всё сразу — ДОЛЖЕН быть зелён
     рядом. Эталоны: `components/shared/twofa-settings.tsx` + `twofa-settings/`,
     `components/manager/inbox-view.tsx` + `inbox/`.
   - **Крупный модуль server actions** → сразу барель: `foo.ts` только
-    реэкспортирует из `foo-<домен>.ts`, общие хелперы — в `foo-shared.ts`
+    реэкспортиру��т из `foo-<домен>.ts`, общие хелперы — в `foo-shared.ts`
     (НЕ `'use server'`). Эталоны: `app/actions/auth.ts` (login/twofa/shared),
     `app/actions/admin-accounts.ts`, `app/actions/finance.ts`.
   - **Данные/типы** → по доменам в `lib/data/*`, `lib/types/*` с барелем.

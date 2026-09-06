@@ -23,7 +23,7 @@ import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
 import {
   filterAndSortConversations,
   managerBucket,
-  type ManagerBucket,
+  type InboxView,
 } from '@/components/manager/inbox/filtering'
 import { useReplyReminder } from '@/components/manager/inbox/use-reply-reminder'
 import { useThreadHistory } from '@/components/manager/inbox/use-thread-history'
@@ -125,13 +125,11 @@ export function useInbox({
   // Whether to reveal muted/silenced threads in the list (hidden by default).
   const [showMuted, setShowMuted] = useState(false)
 
-  // Which inbox segment is shown. 'active' (default) hides threads a curator is
-  // actively working; 'transferred' shows only those («Переданные»). 'rework'
-  // («Доработки») is wired in Этап 4.
-  // Only the three user-selectable segments; 'archived' (trashed) is never a
-  // view — those threads are hidden everywhere.
-  const [viewBucket, setViewBucket] =
-    useState<Exclude<ManagerBucket, 'archived'>>('active')
+  // Which inbox view is shown. 'active' (default) hides threads handed to a
+  // curator unless «Передан» is picked in the status filter; 'rework'
+  // («Доработки») narrows to leads the curator gave back. There is no separate
+  // «Переданные» view — the «Передан» status is the one and only way in.
+  const [viewBucket, setViewBucket] = useState<InboxView>('active')
 
   // List filtering + sorting state (search, Set filters, sort mode).
   const {
@@ -175,7 +173,6 @@ export function useInbox({
     sources,
     awaitingReply,
     mutedCount,
-    transferredCount,
     reworkCount,
     unreadTotal,
     forwardTargets,
@@ -236,18 +233,15 @@ export function useInbox({
     ],
   )
 
-  // If the open segment empties out (curator finished / manager trashed the
-  // last one), fall back to the active view so the manager isn't left staring
-  // at an empty list with no visible way back.
+  // If «Доработки» empties out (manager trashed the last one), fall back to
+  // the active view so the manager isn't left staring at an empty list with
+  // no visible way back.
   useEffect(() => {
-    if (
-      (viewBucket === 'transferred' && transferredCount === 0) ||
-      (viewBucket === 'rework' && reworkCount === 0)
-    ) {
+    if (viewBucket === 'rework' && reworkCount === 0) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setViewBucket('active')
     }
-  }, [viewBucket, transferredCount, reworkCount])
+  }, [viewBucket, reworkCount])
 
   // When the channel-type filter changes, drop any selected sources that no
   // longer belong to a visible type, so stale selections can't hide everything.
@@ -317,15 +311,18 @@ export function useInbox({
     return aiMasterEnabled && !active.aiPaused
   }, [active, aiOverrides, aiMasterEnabled])
 
-  // СегмеÐ½т открытого диалога.
+  // Сегмент открытого диалога (см. managerBucket).
   //  • 'transferred' — куратор ведёт его прямо сейчас: у менеджера только
   //    чтение (композер блокируется, AI-переключатель скрыт).
-  //  • 'rework' — куратор потерял лид, он вернулся на дожим: композер ВКЛючён,
-  //    сверху баннер + кнопка «В trash». AI-переключатель всё равно скрыт
-  //    (curator_id стоит, ИИ по гейту молчит).
+  //  • 'rework' — куратор вернул лид (Игнор/Отказался/Не связался/архив):
+  //    композер ВКЛючён, сверху баннер + кнопка «В trash».
+  //  • 'archived' — вернувшийся лид менеджер убрал в trash: из списков ушёл,
+  //    но писать по-прежнему можно — лид у менеджера. Баннер без кнопки.
+  //  AI-переключатель во всех трёх скрыт (curator_id стоит, ИИ по гейту молчит).
   const activeBucket = active ? managerBucket(active) : 'active'
   const activeTransferred = activeBucket === 'transferred'
   const activeRework = activeBucket === 'rework'
+  const activeTrashed = activeBucket === 'archived'
 
   // Убрать вернувшийся на дожим лид «в trash»: закрываем тред и обновляем список.
   const trashRework = useCallback(
@@ -488,10 +485,9 @@ export function useInbox({
     // muted toggle
     showMuted,
     setShowMuted,
-    // segment view (Active / Transferred / Rework)
+    // list view (Active / Rework)
     viewBucket,
     setViewBucket,
-    transferredCount,
     reworkCount,
     trashRework,
     // filters
@@ -530,6 +526,7 @@ export function useInbox({
     activeAiLed,
     activeTransferred,
     activeRework,
+    activeTrashed,
     activeTyping,
     activePresence,
     availableTypes,

@@ -180,7 +180,7 @@ async function sourceStatsAnswer(
     metrics: [
       { label: 'Написали', value: String(d.funnel.people) },
       {
-        label: 'Передан человеку',
+        label: 'Взяли в работу',
         value: String(d.funnel.handoff),
         sub:
           d.funnel.people > 0
@@ -294,7 +294,7 @@ async function leadsAnswer(ctx: HandlerContext): Promise<OverviewAnswer> {
     title: 'Воронка лидов по источникам',
     periodLabel: ctx.period.label,
     table: {
-      columns: ['Источник', 'Написали', 'Передан человеку', 'Ликвид', 'Передано'],
+      columns: ['Источник', 'Написали', 'Взяли в работу', 'Ликвид', 'Передано'],
       rows,
     },
   }

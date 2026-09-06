@@ -42,9 +42,9 @@ export async function listConversations(
   >(
     // lead_cards has a UNIQUE partial index on conversation_id (migration 112),
     // so the join yields at most one card. lead_status/lead_archived/lead_trashed
-    // let the manager inbox split transferred threads into «у куратора в работе»
-    // (hidden), «Доработки» (returned for follow-up) and trashed (gone). See
-    // managerBucket().
+    // tell the manager inbox whether a transferred thread is still with the
+    // curator (read-only) or came back («Доработки» / trashed — writable). All
+    // of them are listed under «Статусы → Передан». See managerBucket().
     `SELECT ${conversationColumns('c')}, ch.name AS channel_name,
             cur.name AS curator_name,
             lc.status AS lead_status,
@@ -202,11 +202,17 @@ export async function findOrCreateCuratorOutreachConversation(input: {
     if (existing[0].curator_id && existing[0].curator_id !== input.curatorId) {
       return { id: existing[0].id, foreign: true }
     }
-    // Claim an as-yet-unassigned thread for this curator (idempotent).
+    // Claim an as-yet-unassigned thread for this curator (idempotent). The
+    // manager-side status becomes «Передан» — a thread with a curator on it is
+    // transferred by definition (migration 161), whichever path linked it.
     if (!existing[0].curator_id) {
       await query(
         `UPDATE conversations
-            SET curator_id = $2, transferred_to_curator_at = now()
+            SET curator_id = $2,
+                transferred_to_curator_at = now(),
+                status = 'transferred',
+                status_detail = NULL,
+                status_updated_at = now()
           WHERE id = $1 AND curator_id IS NULL`,
         [existing[0].id, input.curatorId],
       )
@@ -216,9 +222,11 @@ export async function findOrCreateCuratorOutreachConversation(input: {
   const created = await query<{ id: string }>(
     `INSERT INTO conversations
        (channel_id, manager_id, curator_id, transferred_to_curator_at,
+        status, status_updated_at,
         channel_type, contact_name, contact_handle,
         last_message, last_message_at, unread)
-     VALUES ($1, $2, $3, now(), 'telegram', $4, $5, '', now(), 0)
+     VALUES ($1, $2, $3, now(), 'transferred', now(),
+             'telegram', $4, $5, '', now(), 0)
      RETURNING id`,
     [
       input.channelId,
@@ -391,33 +399,45 @@ export {
   setMessageReactionForCurator,
 } from './message-admin'
 
+export type SetConversationStatusResult = 'updated' | 'not_found' | 'locked'
+
 /**
  * Pin or clear a lead's manual status. Pass null to clear the manual override
  * and fall back to the auto-derived status. Scoped to the owning manager.
- * Returns true when a row was updated.
+ *
+ * A thread handed to a curator (curator_id set) is 'locked': its status is
+ * «Передан» by the fact of transfer (migration 161) and must not be
+ * overwritten or reset by hand, otherwise the «Статусы → Передан» filter, the
+ * curator badge and the funnel would drift apart. The row is left untouched
+ * and the caller gets 'locked' to explain why.
  */
 export async function setConversationStatus(
   conversationId: string,
   managerId: string,
   status: LeadStatus | null,
   detail: NotLiquidReason | null = null,
-): Promise<boolean> {
+): Promise<SetConversationStatusResult> {
   // The reason sub-status only applies to «Не ликвид»; ignore it otherwise so
   // we never violate the conversations_status_detail_check constraint.
   const effectiveDetail = status === 'not_liquid' ? detail : null
   // $3/$4 are cast to ::text explicitly. Without the cast, Postgres cannot infer
   // the parameter's type when the value is NULL (it only appears in SET / CASE
   // WHEN ... IS NULL), which throws "could not determine data type of parameter".
-  const rows = await query<{ id: string }>(
+  const rows = await query<{ id: string; locked: boolean }>(
     `UPDATE conversations
-        SET status = $3::text,
-            status_detail = $4::text,
-            status_updated_at = CASE WHEN $3::text IS NULL THEN NULL ELSE now() END
+        SET status = CASE WHEN curator_id IS NULL THEN $3::text ELSE status END,
+            status_detail = CASE
+              WHEN curator_id IS NULL THEN $4::text ELSE status_detail END,
+            status_updated_at = CASE
+              WHEN curator_id IS NOT NULL THEN status_updated_at
+              WHEN $3::text IS NULL THEN NULL
+              ELSE now() END
       WHERE id = $1 AND manager_id = $2
-      RETURNING id`,
+      RETURNING id, (curator_id IS NOT NULL) AS locked`,
     [conversationId, managerId, status, effectiveDetail],
   )
-  return rows.length > 0
+  if (rows.length === 0) return 'not_found'
+  return rows[0].locked ? 'locked' : 'updated'
 }
 
 /**

@@ -20,7 +20,7 @@ export const CONV_STATUS_LABEL: Record<string, string> = {
   liquid: 'Ликвид',
   not_liquid: 'Не ликвид',
   unsubscribed: 'Отписка',
-  handoff: 'Передан человеку',
+  handoff: 'В работе',
   transferred: 'Передан',
 }
 

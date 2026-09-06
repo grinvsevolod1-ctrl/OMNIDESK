@@ -147,16 +147,10 @@ export function useInboxDerived({
     [conversations, isMuted],
   )
 
-  // Threads a curator is actively working (hidden from the default list) —
-  // drives the «Переданные» segment chip.
-  const transferredCount = useMemo(
-    () =>
-      conversations.filter((c) => managerBucket(c) === 'transferred').length,
-    [conversations],
-  )
-
   // Leads the curator gave up on that returned to the manager for a follow-up
   // push — drives the «Доработки» segment chip + its reminder highlight.
+  // (Threads still with the curator have no chip of their own: they are the
+  // «Передан» entry of statusCounts above.)
   const reworkCount = useMemo(
     () => conversations.filter((c) => managerBucket(c) === 'rework').length,
     [conversations],
@@ -190,7 +184,6 @@ export function useInboxDerived({
     sources,
     awaitingReply,
     mutedCount,
-    transferredCount,
     reworkCount,
     unreadTotal,
     forwardTargets,

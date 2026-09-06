@@ -241,7 +241,7 @@ export function SourceDetail({
             href={drillHref}
           />
           <FunnelStep
-            label="Передан человеку"
+            label="Взяли в работу"
             value={data.funnel.handoff}
             conversion={pct(data.funnel.handoff, data.funnel.people)}
           />

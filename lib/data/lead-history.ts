@@ -215,11 +215,19 @@ export async function recordTransfer(
     // переназначение админом). Диалог остаётся во владении менеджера; у куратора
     // появляется параллельная ссылка curator_id, ИИ менеджера ставится на паузу.
     // Лиды без диалога (conversation_id IS NULL) просто не затрагиваются.
+    //
+    // Здесь же выставляется менеджерский статус лида «Передан» (миграция 161):
+    // это единственный «передан» в продукте — статус, бейдж куратора и счётчик
+    // «Передано» в воронке читают один и тот же факт. Вручную статус не
+    // выставляется (setLeadStatusAction отклоняет системные статусы).
     await exec.query(
       `UPDATE conversations c
           SET curator_id = $2,
               transferred_to_curator_at = now(),
-              ai_paused = true
+              ai_paused = true,
+              status = 'transferred',
+              status_detail = NULL,
+              status_updated_at = now()
          FROM lead_cards lc
         WHERE lc.id = $1
           AND lc.conversation_id = c.id`,

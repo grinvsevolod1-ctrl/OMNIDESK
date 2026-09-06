@@ -29,8 +29,9 @@ const SNAPSHOT = {
   leadStatuses: {
     unsubscribed: { label: 'Отписок', description: 'Всего написавших людей' },
     handoff: {
-      label: 'Передан человеку',
-      description: 'ИИ передал диалог менеджеру или менеджер вступил сам',
+      label: 'В работе',
+      description:
+        'ИИ передал диалог менеджеру или менеджер вступил сам. Ставится автоматически',
     },
     liquid: {
       label: 'Ликвид',
@@ -39,7 +40,8 @@ const SNAPSHOT = {
     not_liquid: { label: 'Не ликвид', description: 'Не подходящая аудитория' },
     transferred: {
       label: 'Передан',
-      description: 'Подошёл, прошёл и передан дальше',
+      description:
+        'Передан менеджеру по кадрам. Ставится автоматически при передаче лида',
     },
   },
   notLiquidReasons: {

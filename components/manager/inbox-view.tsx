@@ -115,7 +115,6 @@ export function InboxView({
     setShowMuted,
     viewBucket,
     setViewBucket,
-    transferredCount,
     reworkCount,
     trashRework,
     search,
@@ -149,6 +148,7 @@ export function InboxView({
     activeAiLed,
     activeTransferred,
     activeRework,
+    activeTrashed,
     activeTyping,
     activePresence,
     availableTypes,
@@ -243,6 +243,7 @@ export function InboxView({
       activeAiLed={activeAiLed}
       transferred={activeTransferred}
       rework={activeRework}
+      trashed={activeTrashed}
       curatorName={active.curatorName}
       aiButtonPulse={aiButtonPulse}
       statusPending={statusPending}
@@ -303,7 +304,6 @@ export function InboxView({
         mutedCount={mutedCount}
         showMuted={showMuted}
         setShowMuted={setShowMuted}
-        transferredCount={transferredCount}
         reworkCount={reworkCount}
         viewBucket={viewBucket}
         setViewBucket={setViewBucket}
@@ -383,32 +383,56 @@ export function InboxView({
               }
             />
 
-            {/* «Доработки»: куратор потерял лид (Игнор/Отказался/Не связался/
-                архив) — он вернулся менеджеру на дожим. Композер ВКЛючён; если
-                исходный аккаунт в ЧС/офлайн, отправка незаметно уходит с
-                аккаунта для исходящих (см. resolveTelegramDelivery). Кнопка
-                «В trash» убирает лид из раздела, когда дожать не удалось. */}
-            {activeRework ? (
-              <div className="flex items-center gap-3 border-t border-amber-500/30 bg-amber-500/10 px-4 py-2.5">
-                <Wrench className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                <p className="min-w-0 flex-1 text-xs text-amber-800 dark:text-amber-200">
-                  Лид вернулся на дожим · причина:{' '}
+            {/* Лид вернулся от куратора (Игнор/Отказался/Не связался/архив) —
+                менеджер снова ведёт переписку, композер ВКЛючён; если исходный
+                аккаунт в ЧС/офлайн, отправка незаметно уходит с аккаунта для
+                исходящих (см. resolveTelegramDelivery). Кнопка «В trash»
+                убирает лид из «Доработок», когда дожать не удалось; уже
+                убранный (activeTrashed) открывается через «Статусы → Передан»
+                и остаётся доступным для письма — лид у менеджера. */}
+            {activeRework || activeTrashed ? (
+              <div
+                className={cn(
+                  'flex items-center gap-3 border-t px-4 py-2.5',
+                  activeTrashed
+                    ? 'border-border bg-muted/40'
+                    : 'border-amber-500/30 bg-amber-500/10',
+                )}
+              >
+                {activeTrashed ? (
+                  <Trash2 className="size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <Wrench className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                )}
+                <p
+                  className={cn(
+                    'min-w-0 flex-1 text-xs',
+                    activeTrashed
+                      ? 'text-muted-foreground'
+                      : 'text-amber-800 dark:text-amber-200',
+                  )}
+                >
+                  {activeTrashed
+                    ? 'Лид вернулся от куратора и убран в trash · причина:'
+                    : 'Лид вернулся на дожим · причина:'}{' '}
                   <span className="font-medium">
                     {active.curatorArchived
                       ? 'архив'
                       : leadStatusLabel(active.curatorLeadStatus)}
                   </span>
                 </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 gap-1.5 text-amber-700 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300"
-                  onClick={() => trashRework(active.id)}
-                  title="Убрать лид из «Доработок» — дожать не удалось"
-                >
-                  <Trash2 className="size-4" />
-                  В trash
-                </Button>
+                {activeTrashed ? null : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 gap-1.5 text-amber-700 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300"
+                    onClick={() => trashRework(active.id)}
+                    title="Убрать лид из «Доработок» — дожать не удалось"
+                  >
+                    <Trash2 className="size-4" />
+                    В trash
+                  </Button>
+                )}
               </div>
             ) : null}
 
@@ -419,13 +443,14 @@ export function InboxView({
               onCancelReply={() => setReplyTarget(null)}
             />
 
-            {/* Лид передан куратору (миграция 151): менеджер только читает —
-                композер заменяется баннером, чтобы не было двух отвечающих. */}
+            {/* Куратор ведёт лид прямо сейчас (миграция 151): менеджер только
+                читает — композер заменяется баннером, чтобы не было двух
+                отвечающих. Писать снова можно, когда куратор вернёт лид. */}
             {activeTransferred ? (
               <div className="border-t border-border bg-muted/40 px-4 py-3 text-center text-sm text-muted-foreground">
-                Лид передан куратору
+                Лид передан менеджеру по кадрам
                 {active.curatorName ? ` ${active.curatorName}` : ''}. Переписку
-                ведёт куратор — вам доступно только чтение.
+                ведёт он — вам доступно только чтение, пока лид не вернут.
               </div>
             ) : (
             /* Composer — isolated component so typing never re-renders the

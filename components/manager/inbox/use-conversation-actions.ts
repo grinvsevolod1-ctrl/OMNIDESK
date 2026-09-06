@@ -136,6 +136,16 @@ export function useConversationActions({
   // `optionValue` is either 'auto', a plain status, or 'not_liquid:<reason>'.
   const changeStatus = useCallback(
     (conversationId: string, optionValue: string) => {
+      // A thread with a curator on it carries «Передан» by the fact of transfer
+      // (migration 161) — nothing to pick. The pickers already hide themselves
+      // for such threads; this guard covers keyboard/stale-UI paths so we never
+      // even round-trip a request the server would reject as 'locked'.
+      if (conversations.find((c) => c.id === conversationId)?.transferred) {
+        toast.error(
+          'Лид передан менеджеру по кадрам — статус «Передан» меняется только фактом передачи.',
+        )
+        return
+      }
       let status: LeadStatus | 'auto' = 'auto'
       let reason: NotLiquidReason | null = null
       if (optionValue !== 'auto') {
@@ -185,7 +195,7 @@ export function useConversationActions({
         if (status === 'auto') router.refresh()
       })
     },
-    [router],
+    [router, conversations],
   )
 
   // Mark a thread as "no reply needed" (or restore it). Optimistically stamps

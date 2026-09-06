@@ -27,6 +27,7 @@ import {
   PresenceBadge,
   SourceChip,
   StatusChip,
+  StatusLockedNote,
   StatusRadioItems,
 } from '@/components/manager/inbox/atoms'
 import { LeadCardPanel } from '@/components/manager/inbox/lead-card-panel'
@@ -44,6 +45,7 @@ export function ThreadHeader({
   activeAiLed,
   transferred = false,
   rework = false,
+  trashed = false,
   curatorName,
   aiButtonPulse,
   statusPending,
@@ -61,10 +63,12 @@ export function ThreadHeader({
   active: Conversation
   activePresence: PresenceState | null
   activeAiLed: boolean
-  /** Лид передан куратору (миграция 151): у менеджера — только чтение. */
+  /** Куратор ведёт лид прямо сейчас (миграция 151): у менеджера — только чтение. */
   transferred?: boolean
   /** Лид вернулся на дожим («Доработки»): композер включён, но ИИ молчит. */
   rework?: boolean
+  /** Вернувшийся лид менеджер убрал в trash: писать можно, ИИ молчит. */
+  trashed?: boolean
   /** Имя куратора для бейджа, когда transferred. */
   curatorName?: string
   aiButtonPulse: boolean
@@ -127,7 +131,11 @@ export function ThreadHeader({
               </span>
             ) : null}
             {activePresence ? <PresenceBadge state={activePresence} /> : null}
-            {rework ? (
+            {trashed ? (
+              <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] font-medium text-muted-foreground">
+                В trash
+              </span>
+            ) : rework ? (
               <span className="shrink-0 rounded bg-amber-500/20 px-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
                 На дожиме
               </span>
@@ -144,9 +152,10 @@ export function ThreadHeader({
       </button>
 
       <div className="flex items-center gap-1.5">
-        {/* Диалог привязан к куратору (в работе или на дожиме) — ИИ менеджера
-            по гейту curator_id молчит, переключать его нельзя, кнопку скрываем. */}
-        {transferred || rework ? null : (
+        {/* Диалог привязан к куратору (в работе, на дожиме или в trash) — ИИ
+            менеджера по гейту curator_id молчит, переключать его нельзя,
+            кнопку скрываем. */}
+        {transferred || rework || trashed ? null : (
           <Button
             variant={activeAiLed ? 'default' : 'ghost'}
             size="sm"
@@ -219,22 +228,26 @@ export function ThreadHeader({
           />
           <DropdownMenuContent align="end" className="w-52">
             <DropdownMenuLabel>Статус лида</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={activeStatusValue}
-              onValueChange={(v) => onChangeStatus(v ?? 'auto')}
-            >
-              <StatusRadioItems
-                Item={
-                  DropdownMenuRadioItem as unknown as typeof ContextMenuRadioItem
-                }
-              />
-            </DropdownMenuRadioGroup>
+            {active.transferred ? (
+              <StatusLockedNote curatorName={curatorName} />
+            ) : (
+              <DropdownMenuRadioGroup
+                value={activeStatusValue}
+                onValueChange={(v) => onChangeStatus(v ?? 'auto')}
+              >
+                <StatusRadioItems
+                  Item={
+                    DropdownMenuRadioItem as unknown as typeof ContextMenuRadioItem
+                  }
+                />
+              </DropdownMenuRadioGroup>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onOpenDetails}>
               <Info className="size-4" />
               Данные и источник
             </DropdownMenuItem>
-            {hasTransferTargets && !transferred && !rework ? (
+            {hasTransferTargets && !active.transferred ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onOpenTransfer}>

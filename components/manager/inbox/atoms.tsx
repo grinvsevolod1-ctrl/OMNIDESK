@@ -405,6 +405,12 @@ export function DetailsPanel({
               />
             )}
           </div>
+          {conversation.transferred ? (
+            <StatusLockedNote
+              curatorName={conversation.curatorName}
+              className="max-w-none px-0 py-0"
+            />
+          ) : (
           <div className="grid grid-cols-2 gap-1.5">
             <button
               type="button"
@@ -451,6 +457,7 @@ export function DetailsPanel({
               )
             })}
           </div>
+          )}
         </div>
 
         {conversation.meta ? (
@@ -473,6 +480,34 @@ export function DetailsPanel({
 /* -------------------------------------------------------------------------- */
 /*  Lead-status menu helpers (shared by context menu + header dropdown)       */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Replaces the status picker for a thread handed to a curator: «Передан» is
+ * the fact of transfer (migration 161), not a choice, so there is nothing to
+ * pick. Shared by the row context menu, the thread dropdown and the details
+ * panel so all three explain the lock the same way.
+ */
+export function StatusLockedNote({
+  curatorName,
+  className,
+}: {
+  curatorName?: string
+  className?: string
+}) {
+  const statusMeta = useLeadStatusMeta()
+  return (
+    <p
+      className={cn(
+        'max-w-56 px-2 py-1.5 text-xs leading-relaxed text-muted-foreground',
+        className,
+      )}
+    >
+      Статус «{statusMeta.transferred.label}»: лид передан{' '}
+      {curatorName ? curatorName : 'менеджеру по кадрам'}. Он меняется только
+      фактом передачи, вручную не выбирается.
+    </p>
+  )
+}
 
 export function StatusRadioItems({ Item }: { Item: typeof ContextMenuRadioItem }) {
   const LEAD_STATUS_OPTIONS = useLeadStatusOptions()

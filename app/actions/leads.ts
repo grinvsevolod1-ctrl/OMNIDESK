@@ -12,6 +12,7 @@ import {
   setConversationStatus,
 } from '@/lib/data'
 import {
+  isSystemLeadStatus,
   LEAD_STATUS_META,
   NOT_LIQUID_REASON_META,
   type Conversation,
@@ -63,6 +64,10 @@ export async function getLeadTranscriptAction(
  * fall back to the default («Отписок»). For «Не ликвид» an optional reason
  * sub-status (geo / under18 / na / trash) is stored alongside. Scoped to the
  * owning manager.
+ *
+ * System statuses («В работе», «Передан») are never accepted by hand, and a
+ * thread that is with a curator keeps «Передан» no matter what is sent — see
+ * setConversationStatus for the 'locked' rule.
  */
 export async function setLeadStatusAction(
   conversationId: string,
@@ -75,18 +80,31 @@ export async function setLeadStatusAction(
   if (next !== null && !(next in LEAD_STATUS_META)) {
     return { ok: false, message: 'Неизвестный статус.' }
   }
+  if (isSystemLeadStatus(next)) {
+    return {
+      ok: false,
+      message: `Статус «${LEAD_STATUS_META[next].label}» ставится системой и вручную не выбирается.`,
+    }
+  }
   const detail =
     next === 'not_liquid' && reason && reason in NOT_LIQUID_REASON_META
       ? reason
       : null
 
-  const ok = await setConversationStatus(
+  const result = await setConversationStatus(
     conversationId,
     session.sub,
     next,
     detail,
   )
-  if (!ok) return { ok: false, message: 'Диалог не найден.' }
+  if (result === 'not_found') return { ok: false, message: 'Диалог не найден.' }
+  if (result === 'locked') {
+    return {
+      ok: false,
+      message:
+        'Лид передан менеджеру по кадрам — статус «Передан» меняется только фактом передачи.',
+    }
+  }
 
   // Lead status drives getLeadAnalytics / getResourceLeadCounts rollups; drop
   // the analytics cache so the dashboard reflects this change immediately

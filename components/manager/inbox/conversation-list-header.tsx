@@ -1,14 +1,7 @@
 'use client'
 
 import { Fragment } from 'react'
-import {
-  ArrowLeftRight,
-  BellOff,
-  Search,
-  SlidersHorizontal,
-  Wrench,
-  X,
-} from 'lucide-react'
+import { BellOff, Search, SlidersHorizontal, Wrench, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -38,6 +31,7 @@ import {
   type SortMode,
 } from './visual'
 import { SyncBadge } from './atoms'
+import type { InboxView } from './filtering'
 import { NewTelegramChatButton } from './new-telegram-chat'
 
 /**
@@ -70,7 +64,6 @@ export function ConversationListHeader({
   mutedCount,
   showMuted,
   setShowMuted,
-  transferredCount,
   reworkCount,
   viewBucket,
   setViewBucket,
@@ -101,13 +94,11 @@ export function ConversationListHeader({
   mutedCount: number
   showMuted: boolean
   setShowMuted: (updater: (v: boolean) => boolean) => void
-  /** Кол-во диалогов, которые куратор ведёт прямо сейчас (для чипа «Переданные»). */
-  transferredCount: number
   /** Кол-во вернувшихся на дожим лидов (для чипа «Доработки» + подсветки). */
   reworkCount: number
-  /** Текущий сегмент инбокса. */
-  viewBucket: 'active' | 'transferred' | 'rework'
-  setViewBucket: (b: 'active' | 'transferred' | 'rework') => void
+  /** Текущий вид инбокса. */
+  viewBucket: InboxView
+  setViewBucket: (b: InboxView) => void
   hasActiveFilters: boolean
   clearFilters: () => void
   /** Открыть диалог по id — для кнопки «Написать в ТГ» после отправки. */
@@ -301,6 +292,11 @@ export function ConversationListHeader({
                   checked={statusFilter.has(s)}
                   onCheckedChange={() => toggleStatus(s)}
                   closeOnClick={false}
+                  title={
+                    s === 'transferred'
+                      ? 'Показать диалоги, переданные менеджеру по кадрам — включая архив и trash. Писать можно только в возвращённые.'
+                      : undefined
+                  }
                 >
                   <span className="flex flex-1 items-center gap-2">
                     <span
@@ -339,36 +335,9 @@ export function ConversationListHeader({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* «Переданные»: диалоги, которые куратор ведёт прямо сейчас. По
-            умолчанию они скрыты из активного списка — этот чип открывает их
-            отдельным сегментом. Показываем, пока есть такие диалоги или пока
-            сегмент открыт (чтобы был путь обратно). */}
-        {transferredCount > 0 || viewBucket === 'transferred' ? (
-          <button
-            type="button"
-            aria-pressed={viewBucket === 'transferred'}
-            onClick={() =>
-              setViewBucket(
-                viewBucket === 'transferred' ? 'active' : 'transferred',
-              )
-            }
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
-              viewBucket === 'transferred'
-                ? 'bg-primary/15 text-primary'
-                : 'text-muted-foreground hover:bg-muted',
-            )}
-            title={
-              viewBucket === 'transferred'
-                ? 'Вернуться к активным диалогам'
-                : 'Показать диалоги, которые ведёт куратор'
-            }
-          >
-            <ArrowLeftRight className="size-3" />
-            Переданные
-            <span className="text-[10px] opacity-60">{transferredCount}</span>
-          </button>
-        ) : null}
+        {/* Отдельного чипа «Переданные» НЕТ намеренно: переданные куратору
+            диалоги открывает статус «Передан» в меню «Статусы» выше — это
+            единственный «передан» в продукте (миграция 161). */}
 
         {/* «Доработки»: лиды, которые куратор потерял (Игнор/Отказался/Не
             связался/архив) — вернулись менеджеру на дожим. Пока есть незакрытые,

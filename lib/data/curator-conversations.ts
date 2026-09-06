@@ -68,10 +68,12 @@ const BATCH_PRELOAD_LIMIT = 30
 
 /**
  * Привязать диалог к куратору (передача лида). Ставит curator_id, отметку
- * времени и ПАУЗИТ ИИ (страховка для UI-баннеров; основной гейт — curator_id
- * IS NULL в isConversationAiLed). Идемпотентно перезаписывает при повторной
- * передаче между кураторами. UNSCOPED — вызывается из уже авторизованных путей
- * передачи (менеджер/захват из пула/head), которые сами проверяют права.
+ * времени, менеджерский статус «Передан» (миграция 161 — тот же набор полей,
+ * что пишет recordTransfer) и ПАУЗИТ ИИ (страховка для UI-баннеров; основной
+ * гейт — curator_id IS NULL в isConversationAiLed). Идемпотентно
+ * перезаписывает при повторной передаче между кураторами. UNSCOPED —
+ * вызывается из уже авторизованных путей передачи (менеджер/захват из
+ * пула/head), которые сами проверяют права.
  */
 export async function linkConversationToCurator(
   conversationId: string,
@@ -81,7 +83,10 @@ export async function linkConversationToCurator(
     `UPDATE conversations
         SET curator_id = $2,
             transferred_to_curator_at = now(),
-            ai_paused = true
+            ai_paused = true,
+            status = 'transferred',
+            status_detail = NULL,
+            status_updated_at = now()
       WHERE id = $1`,
     [conversationId, curatorId],
   )
@@ -89,7 +94,9 @@ export async function linkConversationToCurator(
 
 /**
  * Отвязать диалог от куратора (например, лид вернулся в пул). Снимает ссылку и
- * отметку времени; ИИ НЕ размораживаем автоматически — это решение менеджера.
+ * отметку времени; статус «Передан» сбрасывается в «авто» (он существует
+ * только как факт передачи), ИИ НЕ размораживаем автоматически — это решение
+ * менеджера.
  */
 export async function unlinkConversationFromCurator(
   conversationId: string,
@@ -97,7 +104,10 @@ export async function unlinkConversationFromCurator(
   await query(
     `UPDATE conversations
         SET curator_id = NULL,
-            transferred_to_curator_at = NULL
+            transferred_to_curator_at = NULL,
+            status = CASE WHEN status = 'transferred' THEN NULL ELSE status END,
+            status_updated_at = CASE
+              WHEN status = 'transferred' THEN NULL ELSE status_updated_at END
       WHERE id = $1`,
     [conversationId],
   )
@@ -192,7 +202,7 @@ export async function listMessagesForConversationsCurator(
   return byId
 }
 
-/** Догрузка более старой истории (пагинация вверх), скоуп куратора. */
+/** Подгрузка более старой истории (пагинация вверх), скоуп куратора. */
 export async function listMessagesBeforeForCurator(
   conversationId: string,
   curatorId: string,

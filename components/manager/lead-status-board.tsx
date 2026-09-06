@@ -380,11 +380,23 @@ function LeadBoardDialog({
                   </div>
                 </div>
 
-                {/* Status editor */}
+                {/* Status editor. A thread with a curator on it is «Передан» by
+                    the fact of transfer (migration 161) — the buttons stay
+                    visible for context but are locked. */}
                 <div className="border-b border-border bg-card/60 px-4 py-3">
                   <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                     Статус лида
                   </p>
+                  {activeConversation?.transferred ? (
+                    <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+                      Лид передан менеджеру по кадрам
+                      {activeConversation.curatorName
+                        ? ` ${activeConversation.curatorName}`
+                        : ''}
+                      . Статус «{LEAD_STATUS_META.transferred.label}» меняется
+                      только фактом передачи.
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap gap-1.5">
                     {statusOptions.map((opt) => {
                       const active = currentValue === opt.value
@@ -392,7 +404,11 @@ function LeadBoardDialog({
                         <button
                           key={opt.value}
                           type="button"
-                          disabled={pending || !selectedId}
+                          disabled={
+                            pending ||
+                            !selectedId ||
+                            Boolean(activeConversation?.transferred)
+                          }
                           onClick={() =>
                             selectedId && changeStatus(selectedId, opt.value)
                           }

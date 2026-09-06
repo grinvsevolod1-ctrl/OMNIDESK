@@ -38,9 +38,11 @@ import {
   Highlight,
   PresenceDot,
   SourceChip,
+  StatusLockedNote,
   StatusRadioItems,
 } from './atoms'
 import { ConversationListHeader } from './conversation-list-header'
+import { canManagerWrite, type InboxView } from './filtering'
 import type { VisitorPresence, VisitorTyping } from './use-inbox-realtime'
 
 /**
@@ -79,7 +81,6 @@ export function ConversationList({
   mutedCount,
   showMuted,
   setShowMuted,
-  transferredCount,
   reworkCount,
   viewBucket,
   setViewBucket,
@@ -133,10 +134,9 @@ export function ConversationList({
   mutedCount: number
   showMuted: boolean
   setShowMuted: (updater: (v: boolean) => boolean) => void
-  transferredCount: number
   reworkCount: number
-  viewBucket: 'active' | 'transferred' | 'rework'
-  setViewBucket: (b: 'active' | 'transferred' | 'rework') => void
+  viewBucket: InboxView
+  setViewBucket: (b: InboxView) => void
   hasActiveFilters: boolean
   clearFilters: () => void
   isMuted: (c: Conversation) => boolean
@@ -183,7 +183,6 @@ export function ConversationList({
         mutedCount={mutedCount}
         showMuted={showMuted}
         setShowMuted={setShowMuted}
-        transferredCount={transferredCount}
         reworkCount={reworkCount}
         viewBucket={viewBucket}
         setViewBucket={setViewBucket}
@@ -301,9 +300,18 @@ export function ConversationList({
                         LEAD_STATUS_VISUAL[c.status].dot,
                       )}
                     />
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="truncate text-[10px] text-muted-foreground">
                       {LEAD_STATUS_META[c.status].label}
                       {!c.statusManual ? ' · авто' : ''}
+                      {/* Переданный лид: кому и можно ли писать. Чтение — пока
+                          куратор ведёт; вернулся — менеджер снова пишет. */}
+                      {c.transferred
+                        ? canManagerWrite(c)
+                          ? ' · вернулся'
+                          : c.curatorName
+                            ? ` · ${c.curatorName} · чтение`
+                            : ' · чтение'
+                        : ''}
                     </span>
                     <SourceChip
                       conversation={c}
@@ -331,16 +339,20 @@ export function ConversationList({
                     Статус лида
                   </ContextMenuSubTrigger>
                   <ContextMenuSubContent>
-                    <ContextMenuRadioGroup
-                      value={
-                        c.statusManual
-                          ? leadStatusOptionValue(c.status, c.statusDetail)
-                          : 'auto'
-                      }
-                      onValueChange={(v) => changeStatus(c.id, v ?? 'auto')}
-                    >
-                      <StatusRadioItems Item={ContextMenuRadioItem} />
-                    </ContextMenuRadioGroup>
+                    {c.transferred ? (
+                      <StatusLockedNote curatorName={c.curatorName} />
+                    ) : (
+                      <ContextMenuRadioGroup
+                        value={
+                          c.statusManual
+                            ? leadStatusOptionValue(c.status, c.statusDetail)
+                            : 'auto'
+                        }
+                        onValueChange={(v) => changeStatus(c.id, v ?? 'auto')}
+                      >
+                        <StatusRadioItems Item={ContextMenuRadioItem} />
+                      </ContextMenuRadioGroup>
+                    )}
                   </ContextMenuSubContent>
                 </ContextMenuSub>
                 <ContextMenuSeparator />
@@ -367,7 +379,7 @@ export function ConversationList({
                     Заглушить контакт
                   </ContextMenuItem>
                 )}
-                {transferTargets.length > 0 ? (
+                {transferTargets.length > 0 && !c.transferred ? (
                   <>
                     <ContextMenuSeparator />
                     <ContextMenuItem onClick={() => openTransfer(c.id)}>

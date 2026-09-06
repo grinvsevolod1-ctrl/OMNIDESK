@@ -25,13 +25,19 @@ import { sourceLabel, type SortMode } from '@/components/manager/inbox/visual'
  *
  *   'active'      — not transferred (curator_id NULL). Normal thread the
  *                   manager (or AI) leads.
- *   'transferred' — handed to a curator who is actively working it. Hidden from
- *                   the manager's default list; visible under «Переданные».
+ *   'transferred' — handed to a curator who is actively working it. The
+ *                   manager may only READ it.
  *   'rework'      — the curator gave up on it (Игнор/Отказался/Не связался) or
- *                   archived it, so it returns to the manager for a follow-up
- *                   push. Surfaced under «Доработки» with the composer enabled.
- *   'archived'    — the manager also gave up and sent it «в trash». Terminal:
- *                   hidden from every manager segment.
+ *                   archived it, so it came BACK to the manager for a follow-up
+ *                   push. Composer enabled; also surfaced under «Доработки».
+ *   'archived'    — came back and the manager sent it «в trash». Leaves the
+ *                   default list and «Доработки», but stays writable: the lead
+ *                   was returned, trash is just list hygiene.
+ *
+ * Every non-'active' bucket carries the system status «Передан» (migration
+ * 161), so the «Статусы → Передан» filter is the single place that reveals all
+ * of them — archived, trashed or not. Whether the manager can write is decided
+ * here: only 'transferred' is read-only (see canManagerWrite).
  *
  * Single source of truth shared by the list filter, the counters and the open
  * thread, so all three always agree.
@@ -45,6 +51,23 @@ export function managerBucket(c: Conversation): ManagerBucket {
   return 'transferred'
 }
 
+/**
+ * May the manager write into this thread? Only while the curator is actively
+ * working it the answer is no — once the lead came back (rework or trashed)
+ * the manager is the one who talks to the client again.
+ */
+export function canManagerWrite(c: Conversation): boolean {
+  return managerBucket(c) !== 'transferred'
+}
+
+/**
+ * The two list views a manager can switch between. 'active' is the default
+ * inbox; 'rework' («Доработки») narrows it to leads the curator gave back.
+ * There is deliberately NO 'transferred' view — that is what the «Передан»
+ * status filter is for.
+ */
+export type InboxView = 'active' | 'rework'
+
 export interface FilterSortParams {
   conversations: Conversation[]
   search: string
@@ -57,11 +80,11 @@ export interface FilterSortParams {
   isMuted: (c: Conversation) => boolean
   showMuted: boolean
   /**
-   * Which segment the manager is viewing. 'active' is the default inbox and
-   * hides threads a curator is actively working ('transferred'); 'transferred'
-   * shows only those. 'rework' («Доработки») is wired in Этап 4.
+   * Which view the manager is in. 'active' (default) shows threads the manager
+   * leads and hides everything handed to a curator unless the «Передан» status
+   * is picked in the status filter; 'rework' shows only «Доработки».
    */
-  viewBucket: ManagerBucket
+  viewBucket: InboxView
   activeId: string | null
   localMessages: Record<string, Message[]>
 }
@@ -82,14 +105,22 @@ export function filterAndSortConversations({
   localMessages,
 }: FilterSortParams): Conversation[] {
   const q = search.trim().toLowerCase()
+  // Picking «Передан» in the status filter is THE way to see transferred
+  // threads — all of them, whatever the curator or the manager did with the
+  // lead card afterwards (archive, trash). Without it the default view stays
+  // focused on threads the manager actually leads.
+  const revealTransferred = statusFilter.has('transferred')
   const list = conversations.filter((c) => {
-    // Segment gate. Trashed leads ('archived') are terminal — gone from every
-    // segment, even when open, so trashing one makes it vanish immediately.
+    // View gate. The open thread is exempt so it never vanishes mid-read
+    // (e.g. the curator picks it up while the manager has it open).
     const bucket = managerBucket(c)
-    if (bucket === 'archived') return false
-    // The open thread is exempt from the segment match so it never vanishes
-    // mid-read (e.g. the curator picks it up while the manager has it open).
-    if (c.id !== activeId && bucket !== viewBucket) return false
+    if (c.id !== activeId) {
+      if (viewBucket === 'rework') {
+        if (bucket !== 'rework') return false
+      } else if (bucket !== 'active' && !revealTransferred) {
+        return false
+      }
+    }
     // Muted contacts are hidden by default; reveal them via the toggle. The
     // currently-open thread always stays visible so it never vanishes mid-chat.
     if (isMuted(c) && !showMuted && c.id !== activeId) return false

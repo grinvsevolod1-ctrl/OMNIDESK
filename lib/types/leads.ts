@@ -2,15 +2,23 @@
  * Lead lifecycle status. A "lead" is a conversation/contact that wrote in.
  * Business model:
  *   - 'unsubscribed' (Отписок): default — everyone who ever wrote in.
- *   - 'handoff' (Передан человеку): the AI handed the dialogue to a human, or a
- *     manager stepped into it. Set automatically at the moment of takeover; from
- *     here a manager manually classifies the lead.
+ *   - 'handoff' (В работе): the AI handed the dialogue to a human, or a manager
+ *     stepped into it. SYSTEM-ONLY — set automatically at the moment of
+ *     takeover; from here a manager manually classifies the lead.
  *   - 'liquid' (Ликвид): on-target audience matching our parameters.
  *   - 'not_liquid' (Не ликвид): off-target; a reason is stored in statusDetail.
- *   - 'transferred' (Передан): qualified and passed further down the process.
- * When no status is pinned the lead defaults to 'unsubscribed'. The «Ликвид» /
- * «Не ликвид» / «Передан» classifications are set by a manager by hand — the AI
- * never auto-assigns them; the most it does is move a lead to «Передан человеку».
+ *   - 'transferred' (Передан): the lead was handed to a curator (менеджер по
+ *     кадрам). SYSTEM-ONLY — written by the single transfer chokepoint
+ *     (`recordTransfer`) together with `conversations.curator_id`, so the
+ *     status, the «Передан …» badge and the funnel «Передано» counters can never
+ *     disagree. It is the ONE «передан» in the product: the inbox has no
+ *     separate «Переданные» segment — picking this status in the «Статусы»
+ *     filter is how a manager sees transferred threads (including ones whose
+ *     lead card the curator archived or the manager trashed). Whether the
+ *     manager may WRITE into such a thread is a separate question answered by
+ *     managerBucket(): only after the curator gave the lead back.
+ * When no status is pinned the lead defaults to 'unsubscribed'. Only «Ликвид»
+ * and «Не ликвид» are set by a manager by hand.
  */
 export type LeadStatus =
   | 'unsubscribed'
@@ -27,6 +35,27 @@ export const LEAD_STATUS_ORDER: LeadStatus[] = [
   'transferred',
 ]
 
+/**
+ * Statuses the system assigns on its own. They are shown everywhere (chips,
+ * filters, funnel) but never offered in manual pickers, and the server rejects
+ * an attempt to pin them by hand — the same rule curators have for «NEW».
+ */
+export const SYSTEM_LEAD_STATUSES = ['handoff', 'transferred'] as const
+
+export type SystemLeadStatus = (typeof SYSTEM_LEAD_STATUSES)[number]
+
+export function isSystemLeadStatus(
+  value: string | null | undefined,
+): value is SystemLeadStatus {
+  return !!value && (SYSTEM_LEAD_STATUSES as readonly string[]).includes(value)
+}
+
+/** Statuses a manager may pick by hand, in display order. */
+export const SELECTABLE_LEAD_STATUSES: Exclude<LeadStatus, SystemLeadStatus>[] =
+  LEAD_STATUS_ORDER.filter(
+    (s): s is Exclude<LeadStatus, SystemLeadStatus> => !isSystemLeadStatus(s),
+  )
+
 export const LEAD_STATUS_META: Record<
   LeadStatus,
   { label: string; description: string }
@@ -36,8 +65,9 @@ export const LEAD_STATUS_META: Record<
     description: 'Всего написавших людей',
   },
   handoff: {
-    label: 'Передан человеку',
-    description: 'ИИ передал диалог менеджеру или менеджер вступил сам',
+    label: 'В работе',
+    description:
+      'ИИ передал диалог менеджеру или менеджер вступил сам. Ставится автоматически',
   },
   liquid: {
     label: 'Ликвид',
@@ -49,7 +79,8 @@ export const LEAD_STATUS_META: Record<
   },
   transferred: {
     label: 'Передан',
-    description: 'Подошёл, прошёл и передан дальше',
+    description:
+      'Передан менеджеру по кадрам. Ставится автоматически при передаче лида',
   },
 }
 
@@ -81,6 +112,7 @@ export const NOT_LIQUID_REASON_META: Record<
  * reason sub-statuses (Гео / -18 / NA / TRASH) so they appear as standalone
  * choices in pickers, while the other statuses stay as-is. `value` is a stable
  * string key for radio groups; `status`/`reason` are what to persist.
+ * System statuses («В работе», «Передан») are deliberately absent.
  */
 export interface LeadStatusOption {
   value: string
@@ -90,7 +122,7 @@ export interface LeadStatusOption {
 }
 
 export const LEAD_STATUS_OPTIONS: LeadStatusOption[] =
-  LEAD_STATUS_ORDER.flatMap<LeadStatusOption>((s) =>
+  SELECTABLE_LEAD_STATUSES.flatMap<LeadStatusOption>((s) =>
     s === 'not_liquid'
       ? NOT_LIQUID_REASON_ORDER.map((r) => ({
           value: `not_liquid:${r}`,

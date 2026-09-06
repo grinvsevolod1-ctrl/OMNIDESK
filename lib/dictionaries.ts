@@ -16,9 +16,9 @@
  */
 import {
   LEAD_STATUS_META,
-  LEAD_STATUS_ORDER,
   NOT_LIQUID_REASON_META,
   NOT_LIQUID_REASON_ORDER,
+  SELECTABLE_LEAD_STATUSES,
   type LeadStatus,
   type LeadStatusOption,
   type NotLiquidReason,
@@ -195,10 +195,11 @@ export function resolveDictionaries(raw: unknown): Dictionaries {
 /**
  * Build the selectable lead-status options («Не ликвид» expands into its four
  * reason sub-statuses) from RESOLVED dictionaries. Mirrors the historical
- * LEAD_STATUS_OPTIONS constant but with editable labels.
+ * LEAD_STATUS_OPTIONS constant but with editable labels. System statuses
+ * («В работе», «Передан») are excluded — they are assigned by the system only.
  */
 export function buildLeadStatusOptions(dict: Dictionaries): LeadStatusOption[] {
-  return LEAD_STATUS_ORDER.flatMap<LeadStatusOption>((s) =>
+  return SELECTABLE_LEAD_STATUSES.flatMap<LeadStatusOption>((s) =>
     s === 'not_liquid'
       ? NOT_LIQUID_REASON_ORDER.map((r) => ({
           value: `not_liquid:${r}`,
