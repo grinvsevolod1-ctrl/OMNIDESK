@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
 import { UpdateWatcher } from '@/components/update-watcher'
 import { PwaReinstallNotice } from '@/components/pwa-reinstall-notice'
+import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
 import { ErrorReporter } from '@/components/error-reporter'
 import { RUNTIME_BUILD_ID } from '@/lib/build-id'
 import './globals.css'
@@ -86,6 +87,7 @@ export default function RootLayout({
         <Toaster />
         <UpdateWatcher />
         <PwaReinstallNotice />
+        <PwaInstallPrompt />
         <ErrorReporter />
       </body>
     </html>
