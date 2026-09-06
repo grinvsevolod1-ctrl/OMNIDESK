@@ -279,9 +279,8 @@ export function HeadLeadsView({
   // Стабильный колбэк для мемоизированных строк.
   const openLead = useCallback((id: string) => setSelectedId(id), [])
 
-  const source = tab === 'archive' ? (archived ?? []) : leads
-
   const filtered = useMemo(() => {
+    const source = tab === 'archive' ? (archived ?? []) : leads
     const q = search.trim().toLowerCase()
     let out = source
     if (memberFilter) {
@@ -309,7 +308,7 @@ export function HeadLeadsView({
     return [...out].sort((a, b) =>
       sort === 'newest' ? key(b) - key(a) : key(a) - key(b),
     )
-  }, [source, tab, memberFilter, statusFilter, search, sort])
+  }, [leads, archived, tab, memberFilter, statusFilter, search, sort])
   const shown = filtered.slice(0, visible)
 
   const selectedLead = useMemo(

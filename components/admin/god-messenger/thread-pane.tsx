@@ -137,7 +137,6 @@ interface ThreadPaneProps {
   startRecording: () => void
   finishRecording: (cancel: boolean) => void
   media: MediaStaging
-  sendStagedFiles: () => void
 }
 
 export function ThreadPane({
@@ -181,7 +180,6 @@ export function ThreadPane({
   startRecording,
   finishRecording,
   media,
-  sendStagedFiles,
 }: ThreadPaneProps) {
   const showThread = selectedId !== null
 
@@ -451,6 +449,11 @@ export function ThreadPane({
                   />
                   <textarea
                     ref={composerRef}
+                    // Uncontrolled composer by design (see use-god-composer): the
+                    // draft lives in valueRef so typing never re-renders. Reading
+                    // it here only seeds the initial value at mount — safe, since
+                    // defaultValue is not read again on later renders.
+                    // eslint-disable-next-line react-hooks/refs
                     defaultValue={valueRef.current}
                     onChange={(e) => {
                       // Mirrors the DOM value into valueRef and flips hasDraft only

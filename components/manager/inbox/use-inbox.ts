@@ -317,7 +317,7 @@ export function useInbox({
     return aiMasterEnabled && !active.aiPaused
   }, [active, aiOverrides, aiMasterEnabled])
 
-  // Сегмент открытого диалога.
+  // СегмеÐ½т открытого диалога.
   //  • 'transferred' — куратор ведёт его прямо сейчас: у менеджера только
   //    чтение (композер блокируется, AI-переключатель скрыт).
   //  • 'rework' — куратор потерял лид, он вернулся на дожим: композер ВКЛючён,
@@ -326,8 +326,6 @@ export function useInbox({
   const activeBucket = active ? managerBucket(active) : 'active'
   const activeTransferred = activeBucket === 'transferred'
   const activeRework = activeBucket === 'rework'
-  // Переключатель ИИ скрываем для ЛЮБОГО переданного диалога (и работа, и дожим).
-  const activeCuratorLinked = Boolean(active?.transferred)
 
   // Убрать вернувшийся на дожим лид «в trash»: закрываем тред и обновляем список.
   const trashRework = useCallback(

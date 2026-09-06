@@ -59,6 +59,10 @@ export function PwaReinstallNotice() {
       // Приватный режим без localStorage — покажем окно (в худшем случае ещё
       // раз при следующем запуске, что не критично для разового анонса).
     }
+    // Browser-only, mount-once check: standalone-mode and localStorage aren't
+    // available during SSR, so this must run in an effect. The single extra
+    // render on mount is intentional and unavoidable here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (acked !== NOTICE_VERSION) setOpen(true)
   }, [])
 

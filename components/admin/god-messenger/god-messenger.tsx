@@ -185,7 +185,6 @@ export function GodMessenger({
           startRecording={composer.startRecording}
           finishRecording={composer.finishRecording}
           media={composer.media}
-          sendStagedFiles={composer.sendStagedFiles}
         />
       </div>
 

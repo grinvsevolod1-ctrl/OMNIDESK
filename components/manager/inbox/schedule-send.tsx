@@ -13,7 +13,7 @@
  * `PopoverContent` wrapper does not expose the `anchor` prop we need.
  */
 
-import { useEffect, useState, type RefObject } from 'react'
+import { useState, type RefObject } from 'react'
 import { Popover as PopoverPrimitive } from '@base-ui/react/popover'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -70,11 +70,15 @@ export function ScheduleSendPopover({
   /** Called with the chosen moment as an ISO string; the parent sends. */
   onSchedule: (iso: string) => void
 }) {
-  // Manual picker value; seeded to +1h whenever the popover opens.
+  // Manual picker value; reseeded to +1h each time the popover transitions to
+  // open. Done during render (React's "adjust state on prop change" pattern)
+  // instead of an effect, so opening doesn't trigger an extra cascading render.
   const [value, setValue] = useState('')
-  useEffect(() => {
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open !== wasOpen) {
+    setWasOpen(open)
     if (open) setValue(toLocalInputValue(presetToDate(60)))
-  }, [open])
+  }
 
   function confirm(date: Date) {
     if (isTooSoon(date)) return

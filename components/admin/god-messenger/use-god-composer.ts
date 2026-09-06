@@ -557,8 +557,12 @@ export function useGodComposer({
   ])
 
   // Keep the refs read by `sendMessage` pointing at the live tray + sender.
-  mediaRef.current = { count: media.count }
-  sendStagedRef.current = sendStagedFiles
+  // Written in an effect (not during render) so the React Compiler can't read
+  // stale values, and so render stays side-effect free.
+  useEffect(() => {
+    mediaRef.current = { count: media.count }
+    sendStagedRef.current = sendStagedFiles
+  }, [media.count, sendStagedFiles])
 
   /* ----- voice notes ----- */
   const stopRecordTimer = () => {
@@ -649,6 +653,5 @@ export function useGodComposer({
     startRecording,
     finishRecording,
     media,
-    sendStagedFiles,
   }
 }
