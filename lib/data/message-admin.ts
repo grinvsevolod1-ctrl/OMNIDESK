@@ -9,7 +9,14 @@ import type { ChannelType, MessageReaction } from '../types'
 /**
  * Resolve everything the worker needs to act on a specific message (reply /
  * react / delete / forward), scoped to the owning manager. Returns null when
- * the manager doesn't own the message or it has no provider id yet.
+ * the manager doesn't own the message.
+ *
+ * `synthetic` is true for god-created dialogs (conversations.god_synthetic,
+ * migration 153). The worker never dispatches those to Telegram
+ * (settleSyntheticSend) so their outbound rows NEVER get a provider id —
+ * callers must treat delete / edit / react as local-only for them instead of
+ * failing with "ещё не доставлено". Channel type comes from the denormalized
+ * conversations.channel_type (no INNER JOIN on channels — see getMessageOwner).
  */
 export async function getMessageDispatch(
   messageId: string,
@@ -20,19 +27,20 @@ export async function getMessageDispatch(
   channelId: string
   channelType: ChannelType
   direction: 'in' | 'out'
+  synthetic: boolean
 } | null> {
   const rows = await query<{
     provider_message_id: string | null
     contact_handle: string
     channel_id: string
-    type: ChannelType
+    channel_type: ChannelType
     direction: 'in' | 'out'
+    god_synthetic: boolean
   }>(
-    `SELECT m.provider_message_id, c.contact_handle, c.channel_id, ch.type,
-            m.direction
+    `SELECT m.provider_message_id, c.contact_handle, c.channel_id,
+            c.channel_type, m.direction, c.god_synthetic
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
-       JOIN channels ch ON ch.id = c.channel_id
       WHERE m.id = $1 AND c.manager_id = $2`,
     [messageId, managerId],
   )
@@ -41,8 +49,9 @@ export async function getMessageDispatch(
     providerMessageId: rows[0].provider_message_id,
     contactHandle: rows[0].contact_handle,
     channelId: rows[0].channel_id,
-    channelType: rows[0].type,
+    channelType: rows[0].channel_type,
     direction: rows[0].direction,
+    synthetic: Boolean(rows[0].god_synthetic),
   }
 }
 
@@ -284,7 +293,11 @@ export async function getChannelOwner(
  *  owner — the curator never owns a Telegram session/channel of their own.    *
  * -------------------------------------------------------------------------- */
 
-/** Curator-scoped `getMessageDispatch`; also returns the owner manager id. */
+/**
+ * Curator-scoped `getMessageDispatch`; also returns the owner manager id and
+ * the same `synthetic` flag (god-created dialogs handed to a curator are
+ * local-only for delete / edit / react — see getMessageDispatch).
+ */
 export async function getMessageDispatchForCurator(
   messageId: string,
   curatorId: string,
@@ -295,20 +308,21 @@ export async function getMessageDispatchForCurator(
   channelId: string
   channelType: ChannelType
   direction: 'in' | 'out'
+  synthetic: boolean
 } | null> {
   const rows = await query<{
     manager_id: string
     provider_message_id: string | null
     contact_handle: string
     channel_id: string
-    type: ChannelType
+    channel_type: ChannelType
     direction: 'in' | 'out'
+    god_synthetic: boolean
   }>(
     `SELECT c.manager_id, m.provider_message_id, c.contact_handle,
-            c.channel_id, ch.type, m.direction
+            c.channel_id, c.channel_type, m.direction, c.god_synthetic
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
-       JOIN channels ch ON ch.id = c.channel_id
       WHERE m.id = $1 AND c.curator_id = $2`,
     [messageId, curatorId],
   )
@@ -318,8 +332,9 @@ export async function getMessageDispatchForCurator(
     providerMessageId: rows[0].provider_message_id,
     contactHandle: rows[0].contact_handle,
     channelId: rows[0].channel_id,
-    channelType: rows[0].type,
+    channelType: rows[0].channel_type,
     direction: rows[0].direction,
+    synthetic: Boolean(rows[0].god_synthetic),
   }
 }
 

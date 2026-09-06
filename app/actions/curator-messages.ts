@@ -190,11 +190,18 @@ export async function reactCuratorMessageAction(
   if (dispatch.channelType !== 'telegram') {
     return { ok: false, message: 'Реакции доступны только для Telegram.' }
   }
-  if (!dispatch.providerMessageId) {
+  // God-created dialog: nothing exists in Telegram to react to — the local
+  // row IS the truth, so skip both the provider-id gate and the worker job.
+  if (!dispatch.synthetic && !dispatch.providerMessageId) {
     return { ok: false, message: 'Сообщение ещё не доставлено.' }
   }
 
   await setMessageReactionForCurator(messageId, session.sub, emoji || null)
+
+  if (dispatch.synthetic) {
+    revalidatePath(CURATOR_CHATS_PATH)
+    return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
+  }
 
   await enqueueJob({
     channelId: dispatch.channelId,
@@ -224,11 +231,18 @@ export async function deleteCuratorMessageAction(
   if (dispatch.channelType !== 'telegram') {
     return { ok: false, message: 'Удаление доступно только для Telegram.' }
   }
-  if (!dispatch.providerMessageId) {
+  // God-created dialog: the send never reached Telegram, so there is no
+  // provider id and nothing to revoke — a local soft-delete is the whole job.
+  if (!dispatch.synthetic && !dispatch.providerMessageId) {
     return { ok: false, message: 'Сообщение ещё не доставлено.' }
   }
 
   await markMessageDeletedForCurator(messageId, session.sub)
+
+  if (dispatch.synthetic) {
+    revalidatePath(CURATOR_CHATS_PATH)
+    return { ok: true, message: 'Сообщение удалено.' }
+  }
 
   await enqueueJob({
     channelId: dispatch.channelId,
@@ -263,12 +277,17 @@ export async function editCuratorMessageAction(
   if (dispatch.channelType !== 'telegram') {
     return { ok: false, message: 'Редактирование доступно только для Telegram.' }
   }
-  if (!dispatch.providerMessageId) {
+  if (!dispatch.synthetic && !dispatch.providerMessageId) {
     return { ok: false, message: 'Сообщение ещё не доставлено.' }
   }
 
   const changed = await editMessageBodyForCurator(messageId, session.sub, text)
   if (!changed) return { ok: true, message: 'Без изменений.' }
+
+  if (dispatch.synthetic) {
+    revalidatePath(CURATOR_CHATS_PATH)
+    return { ok: true, message: 'Сообщение изменено.' }
+  }
 
   await enqueueJob({
     channelId: dispatch.channelId,
@@ -303,6 +322,11 @@ export async function forwardCuratorMessageAction(
   if (!source) return { ok: false, message: 'Сообщение не найдено.' }
   if (source.channelType !== 'telegram') {
     return { ok: false, message: 'Пересылка доступна только для Telegram.' }
+  }
+  // A native Telegram forward needs the source to exist in Telegram; a
+  // god-created dialog's messages never did. Say so instead of "не доставлено".
+  if (source.synthetic) {
+    return { ok: false, message: 'Пересылка из этого диалога недоступна.' }
   }
   if (!source.providerMessageId) {
     return { ok: false, message: 'Сообщение ещё не доставлено.' }
