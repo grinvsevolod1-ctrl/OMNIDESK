@@ -7,6 +7,7 @@ import { getManagerById } from '@/lib/data'
 const nav: NavItem[] = [
   { href: '/head', label: 'Обзор', icon: 'overview' },
   { href: '/head/team', label: 'Моя команда', icon: 'managers' },
+  { href: '/head/buyers', label: 'Мои байеры', icon: 'managers' },
   { href: '/head/settings', label: 'Настройки', icon: 'settings' },
 ]
 

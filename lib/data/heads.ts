@@ -305,6 +305,45 @@ export async function setHeadManagers(
  *     (team_id команды руководителя, curator_id IS NULL).
  * Все ветки исключают архив. Сортировка — по времени передачи/создания.
  */
+/* ------------------------------ Buyers ------------------------------ */
+
+export type HeadBuyer = Manager
+
+/** Байеры руководителя — входят в его команду(ы) через managers.team_id. */
+export async function listBuyersOfHead(headId: string): Promise<HeadBuyer[]> {
+  return query<Manager>(
+    `SELECT ${managerColumns('m')}
+       FROM managers m
+      WHERE m.role = 'buyer'
+        AND m.team_id IN ${HEAD_TEAMS}
+      ORDER BY m.name`,
+    [headId],
+  )
+}
+
+/** Id байеров руководителя (для скоупа финансовых запросов). */
+export async function listBuyerIdsOfHead(headId: string): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM managers
+      WHERE role = 'buyer' AND team_id IN ${HEAD_TEAMS}`,
+    [headId],
+  )
+  return rows.map((r) => r.id)
+}
+
+/** true, если байер входит в команду(ы) руководителя. */
+export async function isBuyerOfHead(
+  headId: string,
+  buyerId: string,
+): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM managers
+      WHERE id = $2 AND role = 'buyer' AND team_id IN ${HEAD_TEAMS} LIMIT 1`,
+    [headId, buyerId],
+  )
+  return rows.length > 0
+}
+
 export async function listLeadCardsForHead(
   headId: string,
 ): Promise<LeadCard[]> {

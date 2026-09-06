@@ -9,21 +9,26 @@
  */
 
 import { memo, useCallback, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   FileSpreadsheet,
-  Radio,
   ListFilter,
   Moon,
+  Plus,
   Search,
   Sun,
   User,
+  Wallet,
   X,
 } from 'lucide-react'
 import { listBuyerLeadsAction, type BuyerSourceOverview } from '@/app/actions/buyer'
 import { exportBuyerLeadsExcelAction } from '@/app/actions/leads-export'
 import { useXlsxExport } from '@/components/shared/use-xlsx-export'
+import { AddSourceModal } from '@/components/buyer/add-source-modal'
+import { PlatformLogo } from '@/components/buyer/platform-logo'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { EmptyState, PageHeader } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
@@ -43,6 +48,8 @@ import {
   LEAD_STATUS_LABELS,
   LEAD_STATUS_TONE,
 } from '@/lib/lead-status'
+import { platformOrCustom } from '@/lib/traffic-source-catalog'
+import { formatMoney } from '@/lib/money'
 import { formatMskDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
@@ -55,7 +62,11 @@ function fmtMinutes(m: number): string {
   return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
 }
 
-/** Карточка источника: имя, окно дня, счётчики сегодня (день/долёты) и всего. */
+/**
+ * Карточка источника: логотип площадки, имя, баланс, окно дня и счётчики
+ * сегодня. Вся карточка — ссылка на детальный учёт; отдельный чип-фильтр
+ * фильтрует список лидов, не переходя на страницу.
+ */
 function SourceCard({
   source,
   active,
@@ -65,24 +76,31 @@ function SourceCard({
   active: boolean
   onToggle: () => void
 }) {
+  const platform = platformOrCustom(source.platformKey)
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={active}
+    <div
       className={cn(
-        'flex flex-col gap-2 rounded-xl border p-4 text-left transition-colors',
+        'group relative flex flex-col gap-2 rounded-xl border p-4 transition-colors',
         active
           ? 'border-primary bg-primary/10'
           : 'border-border bg-card hover:bg-muted/30',
       )}
     >
+      <Link
+        href={`/buyer/sources/${source.id}`}
+        className="absolute inset-0 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={`Открыть учёт: ${source.name}`}
+      />
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
-          <Radio className="size-4 shrink-0 text-muted-foreground" />
+          <PlatformLogo platform={platform} size={32} rounded="rounded-lg" />
           <span className="truncate text-sm font-semibold">{source.name}</span>
         </span>
-        {!source.isActive ? (
+        {source.finance.pendingCount > 0 ? (
+          <Badge className="relative z-10 border-transparent bg-warning/15 text-warning">
+            {source.finance.pendingCount} ждут
+          </Badge>
+        ) : !source.isActive ? (
           <Badge
             variant="outline"
             className="border-transparent bg-muted text-muted-foreground"
@@ -91,6 +109,20 @@ function SourceCard({
           </Badge>
         ) : null}
       </div>
+
+      <div className="flex items-center gap-1.5 text-sm">
+        <Wallet className="size-3.5 text-muted-foreground" />
+        <span
+          className={cn(
+            'font-semibold tabular-nums',
+            source.finance.balance >= 0 ? 'text-success' : 'text-destructive',
+          )}
+        >
+          {formatMoney(source.finance.balance, source.finance.currency)}
+        </span>
+        <span className="text-xs text-muted-foreground">баланс</span>
+      </div>
+
       <p className="text-xs text-muted-foreground">
         День {fmtMinutes(source.dayStart)}–{fmtMinutes(source.dayEnd)} · долёты{' '}
         {fmtMinutes(source.dayEnd)}–{fmtMinutes(source.dayStart)}
@@ -108,14 +140,16 @@ function SourceCard({
             {source.stats.todayNight}
           </span>
         </span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          всего{' '}
-          <span className="font-medium tabular-nums text-foreground">
-            {source.stats.total}
-          </span>
-        </span>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={active}
+          className="relative z-10 ml-auto rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {active ? 'Сбросить фильтр' : 'Фильтр лидов'}
+        </button>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -176,8 +210,10 @@ export function BuyerOverview({
   initialSources: BuyerSourceOverview[]
   initialLeads: LeadCard[]
 }) {
+  const router = useRouter()
   const [sources] = useState(initialSources)
   const [leads, setLeads] = useState(initialLeads)
+  const [addOpen, setAddOpen] = useState(false)
 
   const [sourceFilter, setSourceFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -222,16 +258,33 @@ export function BuyerOverview({
 
   return (
     <div className="flex w-full flex-col gap-5">
-      <PageHeader
-        title="Мои источники"
-        description="Источники трафика, закреплённые за вами: статистика «день/долёты» и все лиды. Только просмотр."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader
+          title="Мои источники"
+          description="Ваши источники трафика: бюджеты, баланс, дневной учёт и все лиды."
+        />
+        <Button onClick={() => setAddOpen(true)} className="shrink-0">
+          <Plus className="size-4" />
+          Добавить источник
+        </Button>
+      </div>
 
-      {/* Источники: клик по карточке фильтрует список лидов */}
+      {/* Источники: карточка ведёт в учёт, чип фильтрует лиды */}
       {sources.length === 0 ? (
-        <div className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          За вами пока не закреплены источники — обратитесь к администратору.
-        </div>
+        <button
+          type="button"
+          onClick={() => setAddOpen(true)}
+          className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border bg-muted/30 px-4 py-10 text-center transition-colors hover:bg-muted/50"
+        >
+          <span className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <Plus className="size-6" />
+          </span>
+          <span className="text-sm font-medium">Добавьте первый источник</span>
+          <span className="max-w-sm text-xs text-muted-foreground">
+            Выберите площадку из каталога, настройте учёт и ведите бюджет, траты
+            и метрики в одном месте.
+          </span>
+        </button>
       ) : (
         <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
           {sources.map((s) => (
@@ -246,6 +299,12 @@ export function BuyerOverview({
           ))}
         </div>
       )}
+
+      <AddSourceModal
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onCreated={() => router.refresh()}
+      />
 
       {/* Фильтры лидов */}
       <div className="flex flex-wrap items-center gap-2">

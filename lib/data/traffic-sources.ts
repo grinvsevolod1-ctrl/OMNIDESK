@@ -30,6 +30,14 @@ export interface TrafficSource {
   name: string
   buyerId: string | null
   buyerName: string | null
+  /** Ключ платформы из каталога ('yandex_direct' | 'custom' | ...). */
+  platformKey: string
+  /** Базовая валюта учёта источника (в ней показывается баланс). */
+  currency: string
+  /** Логин / номер кабинета / ссылка на кабинет площадки. */
+  externalAccount: string
+  /** Байер завершил первичную настройку источника (мастер каталога). */
+  setupCompleted: boolean
   /** Минуты от полуночи МСК, [0, 1440). Окно дня — [dayStart, dayEnd). */
   dayStart: number
   dayEnd: number
@@ -47,6 +55,10 @@ interface TrafficSourceRow {
   name: string
   buyer_id: string | null
   buyer_name: string | null
+  platform_key: string
+  currency: string
+  external_account: string
+  setup_completed: boolean
   day_start: number
   day_end: number
   notes: string | null
@@ -62,6 +74,10 @@ function toTrafficSource(row: TrafficSourceRow): TrafficSource {
     name: row.name,
     buyerId: row.buyer_id,
     buyerName: row.buyer_name,
+    platformKey: row.platform_key,
+    currency: row.currency,
+    externalAccount: row.external_account,
+    setupCompleted: row.setup_completed,
     dayStart: row.day_start,
     dayEnd: row.day_end,
     notes: row.notes,
@@ -74,6 +90,7 @@ function toTrafficSource(row: TrafficSourceRow): TrafficSource {
 
 const SOURCE_SELECT = `
   ts.id, ts.name, ts.buyer_id, b.name AS buyer_name,
+  ts.platform_key, ts.currency, ts.external_account, ts.setup_completed,
   ts.day_start, ts.day_end, ts.notes, ts.is_active, ts.created_at,
   (SELECT COUNT(*)::int FROM managers m
     WHERE m.traffic_source_id = ts.id AND m.role = 'manager') AS manager_count,
@@ -133,6 +150,17 @@ export async function getTrafficSourceById(
   return rows[0] ? toTrafficSource(rows[0]) : null
 }
 
+/** Id байера-владельца источника (для скоуп-гейтов финансов). */
+export async function getBuyerIdForSource(
+  sourceId: string,
+): Promise<string | null> {
+  const rows = await query<{ buyer_id: string | null }>(
+    `SELECT buyer_id FROM traffic_sources WHERE id = $1 LIMIT 1`,
+    [sourceId],
+  )
+  return rows[0]?.buyer_id ?? null
+}
+
 /**
  * Валидация окна дня [dayStart, dayEnd) в минутах МСК. Ночные окна через
  * полночь (start > end) не поддерживаем сознательно — «день» всегда внутри
@@ -175,6 +203,106 @@ export async function createTrafficSource(input: {
   const created = await getTrafficSourceById(id)
   if (!created) throw new Error('Source create failed')
   return created
+}
+
+/**
+ * Создание источника САМИМ байером из каталога (раздел /buyer). В отличие от
+ * админского createTrafficSource, владелец фиксируется на текущего байера,
+ * заполняются поля платформы/валюты/кабинета и сразу помечается setup_completed.
+ * Единый путь создания источника в новой модели (single source of truth).
+ */
+export async function createTrafficSourceForBuyer(input: {
+  buyerId: string
+  name: string
+  platformKey: string
+  currency: string
+  externalAccount?: string
+  notes?: string | null
+  config?: Record<string, unknown>
+  dayStart?: number
+  dayEnd?: number
+}): Promise<TrafficSource> {
+  const name = input.name.trim()
+  if (!name) throw new Error('Укажите название источника.')
+  const platformKey = input.platformKey.trim() || 'custom'
+  const currency = input.currency.trim().toUpperCase() || 'RUB'
+  const dayStart = input.dayStart ?? 540
+  const dayEnd = input.dayEnd ?? 1080
+  validateWindow(dayStart, dayEnd)
+  const id = randomUUID()
+  await query(
+    `INSERT INTO traffic_sources
+       (id, name, buyer_id, platform_key, currency, external_account,
+        config, setup_completed, day_start, day_end, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, true, $8, $9, $10)`,
+    [
+      id,
+      name,
+      input.buyerId,
+      platformKey,
+      currency,
+      input.externalAccount?.trim() || '',
+      JSON.stringify(input.config ?? {}),
+      dayStart,
+      dayEnd,
+      input.notes?.trim() || null,
+    ],
+  )
+  const created = await getTrafficSourceById(id)
+  if (!created) throw new Error('Source create failed')
+  return created
+}
+
+/**
+ * Обновление настроек источника байером (название, кабинет, окно дня, заметки).
+ * Валюту/платформу после создания не меняем — от них зависят проведённые
+ * депозиты и траты (изменение исказило бы историю баланса).
+ */
+export async function updateTrafficSourceByBuyer(input: {
+  id: string
+  buyerId: string
+  name: string
+  externalAccount?: string
+  dayStart: number
+  dayEnd: number
+  notes?: string | null
+}): Promise<TrafficSource> {
+  const name = input.name.trim()
+  if (!name) throw new Error('Укажите название источника.')
+  validateWindow(input.dayStart, input.dayEnd)
+  const res = await query<{ id: string }>(
+    `UPDATE traffic_sources
+        SET name = $3, external_account = $4, day_start = $5, day_end = $6,
+            notes = $7, updated_at = now()
+      WHERE id = $1 AND buyer_id = $2
+      RETURNING id`,
+    [
+      input.id,
+      input.buyerId,
+      name,
+      input.externalAccount?.trim() || '',
+      input.dayStart,
+      input.dayEnd,
+      input.notes?.trim() || null,
+    ],
+  )
+  if (res.length === 0) {
+    throw new Error('Источник не найден или принадлежит другому байеру.')
+  }
+  const updated = await getTrafficSourceById(input.id)
+  if (!updated) throw new Error('Источник не найден.')
+  return updated
+}
+
+/** Владелец-байер источника (для скоуп-гейтов server actions). */
+export async function getSourceOwnerId(
+  sourceId: string,
+): Promise<string | null> {
+  const rows = await query<{ buyer_id: string | null }>(
+    `SELECT buyer_id FROM traffic_sources WHERE id = $1 LIMIT 1`,
+    [sourceId],
+  )
+  return rows[0]?.buyer_id ?? null
 }
 
 export async function updateTrafficSource(input: {

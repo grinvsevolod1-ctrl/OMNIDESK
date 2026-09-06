@@ -1,21 +1,38 @@
 'use client'
 
 /**
- * Админ-таблица медиабайеров: их источники трафика (чипами, ведут на
- * /admin/sources) и общие действия аккаунта (блокировка, сброс пароля,
- * удаление — ManagerActions).
+ * Байер-центричный экран админа/руководителя: список медиабайеров с финансовыми
+ * итогами (баланс, потрачено, лиды, источники). Клик по байеру открывает полную
+ * отчётность (BuyerReport) с возможностью внести депозит. Общие действия
+ * аккаунта (блокировка/сброс/удаление) остаются в строке через ManagerActions.
  */
-import Link from 'next/link'
-import { Megaphone, Radio } from 'lucide-react'
+import { useCallback, useState, useTransition } from 'react'
+import { ChevronRight, Loader2, Megaphone, Wallet } from 'lucide-react'
+import { toast } from 'sonner'
+import { getBuyerReportAction } from '@/app/actions/source-finance'
+import { BuyerReport } from '@/components/admin/buyers/buyer-report'
 import { ManagerActions } from '@/components/admin/manager-actions'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import { formatMskDate as formatDate } from '@/lib/time'
+import { formatMoney } from '@/lib/money'
 import type { Manager } from '@/lib/types'
 
-export interface BuyerRow extends Manager {
-  sources: { id: string; name: string; isActive: boolean }[]
+export interface BuyerTotals {
+  balance: number
+  confirmedDeposits: number
+  pendingDeposits: number
+  totalSpend: number
+  leads: number
+  pendingCount: number
+  sourcesCount: number
 }
+
+export interface BuyerWithTotals {
+  buyer: Manager
+  totals: BuyerTotals
+}
+
+type Report = Awaited<ReturnType<typeof getBuyerReportAction>>
 
 function StatusPill({ status }: { status: Manager['status'] }) {
   return (
@@ -39,118 +56,109 @@ function StatusPill({ status }: { status: Manager['status'] }) {
   )
 }
 
-function SourceChips({
-  sources,
-}: {
-  sources: BuyerRow['sources']
-}) {
-  if (sources.length === 0) {
-    return (
-      <span className="text-xs text-muted-foreground">
-        Нет источников —{' '}
-        <Link href="/admin/sources" className="underline underline-offset-2">
-          назначить
-        </Link>
-      </span>
-    )
+export function BuyersTable({ buyers }: { buyers: BuyerWithTotals[] }) {
+  const [report, setReport] = useState<Report | null>(null)
+  const [loadingId, setLoadingId] = useState<string | null>(null)
+  const [, startTransition] = useTransition()
+
+  const openReport = useCallback((buyerId: string) => {
+    setLoadingId(buyerId)
+    startTransition(async () => {
+      try {
+        setReport(await getBuyerReportAction(buyerId))
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Не удалось открыть отчёт.')
+      } finally {
+        setLoadingId(null)
+      }
+    })
+  }, [])
+
+  if (report) {
+    return <BuyerReport initial={report} onBack={() => setReport(null)} />
   }
+
   return (
-    <div className="flex max-w-md flex-wrap items-center gap-1.5">
-      {sources.map((s) => (
-        <Badge
-          key={s.id}
-          variant="outline"
-          className={
-            s.isActive
-              ? 'gap-1.5 border-transparent bg-muted text-foreground'
-              : 'gap-1.5 border-transparent bg-muted text-muted-foreground line-through'
-          }
-          title={s.isActive ? s.name : `${s.name} · выключен`}
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {buyers.map(({ buyer, totals }) => (
+        <Card
+          key={buyer.id}
+          className="group flex flex-col gap-3 p-4 transition-colors hover:border-foreground/20"
         >
-          <Radio className="size-3" />
-          {s.name}
-        </Badge>
+          <div className="flex items-start justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => openReport(buyer.id)}
+              className="flex min-w-0 flex-1 items-center gap-3 text-left"
+            >
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <Megaphone className="size-5" />
+              </span>
+              <span className="min-w-0">
+                <span className="flex items-center gap-1 font-medium">
+                  <span className="truncate">{buyer.name}</span>
+                  {loadingId === buyer.id ? (
+                    <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  )}
+                </span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {buyer.email}
+                </span>
+              </span>
+            </button>
+            <ManagerActions manager={buyer} />
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg bg-muted/40 px-2 py-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Баланс
+              </p>
+              <p
+                className={
+                  totals.balance >= 0
+                    ? 'text-sm font-semibold tabular-nums text-success'
+                    : 'text-sm font-semibold tabular-nums text-destructive'
+                }
+              >
+                {formatMoney(totals.balance, 'RUB')}
+              </p>
+            </div>
+            <div className="rounded-lg bg-muted/40 px-2 py-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Потрачено
+              </p>
+              <p className="text-sm font-semibold tabular-nums">
+                {formatMoney(totals.totalSpend, 'RUB')}
+              </p>
+            </div>
+            <div className="rounded-lg bg-muted/40 px-2 py-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Лиды
+              </p>
+              <p className="text-sm font-semibold tabular-nums">
+                {totals.leads}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <StatusPill status={buyer.status} />
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Wallet className="size-3.5" />
+              {totals.sourcesCount} источник(ов)
+            </span>
+          </div>
+
+          {totals.pendingCount > 0 ? (
+            <span className="rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1 text-center text-xs font-medium text-warning">
+              {totals.pendingCount} депозит(ов) ждут решения байера
+            </span>
+          ) : null}
+        </Card>
       ))}
     </div>
-  )
-}
-
-export function BuyersTable({ buyers }: { buyers: BuyerRow[] }) {
-  return (
-    <>
-      <Card className="hidden overflow-hidden lg:block">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <th className="px-5 py-3 font-medium">Имя</th>
-              <th className="px-5 py-3 font-medium">Источники</th>
-              <th className="px-5 py-3 font-medium">Статус</th>
-              <th className="px-5 py-3 font-medium">Создан</th>
-              <th className="px-5 py-3 font-medium text-right">Действия</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {buyers.map((b) => (
-              <tr key={b.id} className="hover:bg-muted/30">
-                <td className="px-5 py-3">
-                  <div className="flex items-center gap-2 font-medium">
-                    <Megaphone className="size-4 text-muted-foreground" />
-                    {b.name}
-                  </div>
-                  <div className="text-xs text-muted-foreground">{b.email}</div>
-                  {b.username ? (
-                    <div className="mt-0.5 font-mono text-xs text-muted-foreground">
-                      @{b.username}
-                    </div>
-                  ) : null}
-                </td>
-                <td className="px-5 py-3">
-                  <SourceChips sources={b.sources} />
-                </td>
-                <td className="px-5 py-3">
-                  <StatusPill status={b.status} />
-                </td>
-                <td className="px-5 py-3 text-xs text-muted-foreground">
-                  {formatDate(b.createdAt)}
-                </td>
-                <td className="px-5 py-3 text-right">
-                  <ManagerActions manager={b} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-
-      <div className="flex flex-col gap-3 lg:hidden">
-        {buyers.map((b) => (
-          <Card key={b.id} className="p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate font-medium">{b.name}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {b.email}
-                </p>
-              </div>
-              <ManagerActions manager={b} />
-            </div>
-            <div className="mt-3 flex flex-col gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <StatusPill status={b.status} />
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Источники
-                </span>
-                <SourceChips sources={b.sources} />
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {formatDate(b.createdAt)}
-              </span>
-            </div>
-          </Card>
-        ))}
-      </div>
-    </>
   )
 }
