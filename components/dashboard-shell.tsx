@@ -25,6 +25,7 @@ import type { SimpleResult } from '@/app/actions/account-shared'
 import { unregisterNativePush } from '@/lib/capacitor-push'
 import { unsubscribePushThisDevice } from '@/lib/push-client'
 import { AvatarPickerDialog } from '@/components/shared/avatar-picker'
+import { SupportDialog } from '@/components/shared/support-dialog'
 import { BrandMark } from '@/components/brand'
 import { NavLinks } from '@/components/dashboard-nav'
 import { Button } from '@/components/ui/button'
@@ -405,6 +406,7 @@ export function DashboardShell({
                   {headerSlot}
                 </div>
               ) : null}
+              <SupportDialog />
               <div className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm">
                 {settingsHref ? (
                   <Link
