@@ -44,6 +44,11 @@ export const pool = new Pool({
   // backfilling channels serialize on the pool and slow every ingest write.
   max: Number(process.env.WORKER_PG_POOL_MAX || 10),
   ssl: resolveSslConfig(env.databaseUrl),
+  // Fail fast when every connection is busy instead of queueing forever — a
+  // hung query then surfaces as an error in the logs (and a 5xx on the media
+  // API) rather than as a worker that looks alive but never answers.
+  connectionTimeoutMillis: env.pgConnectTimeoutMs,
+  idleTimeoutMillis: 30_000,
 })
 
 pool.on('error', (err) => {

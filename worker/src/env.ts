@@ -37,6 +37,11 @@ function optional(name: string, fallback = ''): string {
   return process.env[name] ?? fallback
 }
 
+function positiveMs(name: string, fallback: number): number {
+  const raw = Number(process.env[name])
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback
+}
+
 export const env = {
   databaseUrl: required('DATABASE_URL'),
   encryptionKey: required('ENCRYPTION_KEY'),
@@ -52,6 +57,20 @@ export const env = {
   appVersion: optional('TELEGRAM_APP_VERSION', '1.0.0'),
   logLevel: optional('LOG_LEVEL', 'info'),
   nodeEnv: optional('NODE_ENV', 'production'),
+  /**
+   * Ceiling for one live media download from Telegram served over the internal
+   * HTTP API (/media, /personal/media, /sticker-thumb). A stuck MTProto session
+   * otherwise keeps the panel's request — and the browser tile behind it —
+   * pending forever. Kept below the panel's WORKER_MEDIA_TIMEOUT_MS so the
+   * worker answers with a clean 504 first.
+   */
+  mediaTimeoutMs: positiveMs('WORKER_MEDIA_DOWNLOAD_TIMEOUT_MS', 40_000),
+  /**
+   * How long a query may wait for a free pool connection before failing. pg's
+   * default is "forever": an exhausted pool then silently freezes every job
+   * and every media request instead of surfacing an error we can log/retry.
+   */
+  pgConnectTimeoutMs: positiveMs('WORKER_PG_CONNECT_TIMEOUT_MS', 15_000),
   /**
    * Verbose login/auth diagnostics (phone shape, sendCode params, delivery
    * branch, timings). Toggle via existing config: explicit AUTH_DEBUG=1, or

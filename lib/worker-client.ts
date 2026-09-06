@@ -7,11 +7,28 @@
  */
 
 import type { StickerItem } from './types'
+import { envMs } from './with-deadline'
 
 const WORKER_URL = process.env.WORKER_URL || 'http://127.0.0.1:4000'
 const WORKER_SECRET = process.env.WORKER_SECRET || ''
 
 export const isWorkerConfigured = Boolean(process.env.WORKER_SECRET)
+
+/**
+ * Every hop to the worker is bounded. The worker is a local process, so a
+ * healthy reply is milliseconds; anything that takes longer than these means
+ * the worker is wedged (stuck MTProto session, exhausted pool, unhandled
+ * error that never ended the response) and the caller must fail instead of
+ * pinning a browser request forever.
+ *
+ *  - WORKER_TIMEOUT_MS        JSON calls (health, stickers, qr, proxy check)
+ *  - WORKER_POST_TIMEOUT_MS   personal sends: uploads to Telegram take longer
+ *  - WORKER_MEDIA_TIMEOUT_MS  media/thumbnails: time until the worker sends
+ *                             HEADERS (it buffers the whole download first)
+ */
+const WORKER_TIMEOUT_MS = envMs('WORKER_TIMEOUT_MS', 15_000)
+const WORKER_POST_TIMEOUT_MS = envMs('WORKER_POST_TIMEOUT_MS', 90_000)
+export const WORKER_MEDIA_TIMEOUT_MS = envMs('WORKER_MEDIA_TIMEOUT_MS', 45_000)
 
 async function call<T>(path: string): Promise<T | null> {
   if (!isWorkerConfigured) return null
@@ -19,6 +36,7 @@ async function call<T>(path: string): Promise<T | null> {
     const res = await fetch(`${WORKER_URL}${path}`, {
       headers: { 'x-worker-secret': WORKER_SECRET },
       cache: 'no-store',
+      signal: AbortSignal.timeout(WORKER_TIMEOUT_MS),
     })
     if (!res.ok) return null
     return (await res.json()) as T
@@ -113,6 +131,7 @@ export async function postJsonToWorker<T>(
       },
       body: JSON.stringify(body),
       cache: 'no-store',
+      signal: AbortSignal.timeout(WORKER_POST_TIMEOUT_MS),
     })
     return (await res.json()) as T
   } catch {
@@ -123,16 +142,38 @@ export async function postJsonToWorker<T>(
 /**
  * Proxy a raw binary GET to the worker (media bytes, sticker thumbnails) and
  * return the raw Response so the panel route can stream it straight to the
- * browser. Returns null when the worker isn't configured.
+ * browser. Returns null when the worker isn't configured or unreachable.
+ *
+ * Bounded on HEADER arrival only: the timer is armed until the worker answers
+ * and cleared the moment the Response resolves, so a large body still streams
+ * to completion at whatever speed the client pulls it. When the worker never
+ * answers we synthesize a 504 so the media route can hand the browser a real
+ * error (which the tile turns into a retry) instead of a request that hangs
+ * until the socket dies — the "loads forever" symptom.
  */
 export async function streamFromWorker(path: string): Promise<Response | null> {
   if (!isWorkerConfigured) return null
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), WORKER_MEDIA_TIMEOUT_MS)
   try {
     return await fetch(`${WORKER_URL}${path}`, {
       headers: { 'x-worker-secret': WORKER_SECRET },
       cache: 'no-store',
+      signal: controller.signal,
     })
-  } catch {
+  } catch (err) {
+    if (controller.signal.aborted) {
+      console.error(
+        `[worker-client] ${path} produced no headers within ${WORKER_MEDIA_TIMEOUT_MS}ms`,
+      )
+      return new Response('Worker timeout', {
+        status: 504,
+        headers: { 'cache-control': 'no-store' },
+      })
+    }
+    console.error('[worker-client] stream failed:', err)
     return null
+  } finally {
+    clearTimeout(timer)
   }
 }

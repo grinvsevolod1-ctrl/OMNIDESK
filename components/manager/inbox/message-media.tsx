@@ -543,19 +543,37 @@ function writeMediaRetry(url: string, entry: MediaRetryEntry) {
   mediaRetryLedger.set(url, entry)
 }
 
+/**
+ * Сколько плитка ждёт ПЕРВОГО ответа по медиа, прежде чем считать загрузку
+ * зависшей. Симптом «вечно грузится»: сервер не отвечает вовсе (воркер завис,
+ * пул БД исчерпан), браузер не получает ни байта — ни onLoad, ни onError не
+ * срабатывают, и шиммер висит навсегда. Watchdog превращает такое зависание
+ * в обычную ошибку → ретрай с cache-buster'ом → честный fallback.
+ * Чуть больше серверного дедлайна (60 с), чтобы не обгонять его 504.
+ */
+const MEDIA_STALL_MS = 70_000
+
 function useRetryingMediaSrc(url: string | undefined) {
   const [entry, setEntry] = useState<MediaRetryEntry>(() => readMediaRetry(url))
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stallRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const settledRef = useRef(false)
 
   useEffect(
     () => () => {
       if (timerRef.current) clearTimeout(timerRef.current)
+      if (stallRef.current) clearTimeout(stallRef.current)
     },
     [],
   )
 
   const onMediaError = useCallback(() => {
     if (!url) return
+    settledRef.current = true
+    if (stallRef.current) {
+      clearTimeout(stallRef.current)
+      stallRef.current = null
+    }
     const current = readMediaRetry(url)
     if (current.failed) {
       setEntry(current)
@@ -579,6 +597,33 @@ function useRetryingMediaSrc(url: string | undefined) {
     }, MEDIA_RETRY_DELAYS_MS[current.attempt])
   }, [url])
 
+  /** Element reported first bytes / metadata / full load — cancel the watchdog. */
+  const onMediaSettled = useCallback(() => {
+    settledRef.current = true
+    if (stallRef.current) {
+      clearTimeout(stallRef.current)
+      stallRef.current = null
+    }
+  }, [])
+
+  // (Re)arm the stall watchdog for every distinct src attempt. Cleared as soon
+  // as the element signals progress (load / loadedmetadata / error).
+  useEffect(() => {
+    if (!url || entry.failed) return
+    settledRef.current = false
+    if (stallRef.current) clearTimeout(stallRef.current)
+    stallRef.current = setTimeout(() => {
+      stallRef.current = null
+      if (!settledRef.current) onMediaError()
+    }, MEDIA_STALL_MS)
+    return () => {
+      if (stallRef.current) {
+        clearTimeout(stallRef.current)
+        stallRef.current = null
+      }
+    }
+  }, [url, entry.attempt, entry.failed, onMediaError])
+
   // Cache-buster only on retries so the browser doesn't replay the failed
   // response; `?edit=` URLs already carry a query string — append with `&`.
   const src =
@@ -586,7 +631,7 @@ function useRetryingMediaSrc(url: string | undefined) {
       ? `${url}${url.includes('?') ? '&' : '?'}r=${entry.attempt}`
       : url
 
-  return { src, failed: entry.failed, onMediaError }
+  return { src, failed: entry.failed, onMediaError, onMediaSettled }
 }
 
 function AlbumCell({
@@ -599,7 +644,8 @@ function AlbumCell({
   onOpen: () => void
 }) {
   const url = message.mediaUrl
-  const { src, failed, onMediaError } = useRetryingMediaSrc(url)
+  const { src, failed, onMediaError, onMediaSettled } =
+    useRetryingMediaSrc(url)
   const isVideo = effectiveMediaType(message) === 'video'
   if (!url || failed) {
     return (
@@ -629,6 +675,7 @@ function AlbumCell({
             src={src}
             preload="metadata"
             className="size-full object-cover"
+            onLoadedMetadata={onMediaSettled}
             onError={onMediaError}
           />
           <span className="absolute inset-0 flex items-center justify-center">
@@ -647,6 +694,7 @@ function AlbumCell({
           loading="lazy"
           decoding="async"
           className="size-full object-cover"
+          onLoad={onMediaSettled}
           onError={onMediaError}
         />
       )}
@@ -665,7 +713,8 @@ export function MessageMedia({ message }: { message: Message }) {
   const [imgLoaded, setImgLoaded] = useState(false)
   const gallery = useMediaGallery()
   const url = message.mediaUrl
-  const { src, failed, onMediaError } = useRetryingMediaSrc(url)
+  const { src, failed, onMediaError, onMediaSettled } =
+    useRetryingMediaSrc(url)
   const type = effectiveMediaType(message)
   // Открытие: если есть общий провайдер треда — листаемая галерея по всему
   // чату; иначе локальный одиночный лайтбокс (см. fallback ниже).
@@ -702,6 +751,7 @@ export function MessageMedia({ message }: { message: Message }) {
         <TgsSticker
           url={src || url}
           alt={message.body || '🎯'}
+          onLoad={onMediaSettled}
           onError={onMediaError}
         />
       )
@@ -716,6 +766,7 @@ export function MessageMedia({ message }: { message: Message }) {
           playsInline
           className="size-32 object-contain"
           aria-label={message.body || 'Стикер'}
+          onLoadedMetadata={onMediaSettled}
           onError={onMediaError}
         />
       )
@@ -730,6 +781,7 @@ export function MessageMedia({ message }: { message: Message }) {
         alt={message.body || 'Стикер'}
         className="size-32 object-contain"
         loading="lazy"
+        onLoad={onMediaSettled}
         onError={onMediaError}
       />
     )
@@ -760,7 +812,10 @@ export function MessageMedia({ message }: { message: Message }) {
             )}
             loading="lazy"
             decoding="async"
-            onLoad={() => setImgLoaded(true)}
+            onLoad={() => {
+              onMediaSettled()
+              setImgLoaded(true)
+            }}
             onError={onMediaError}
           />
         </button>
@@ -784,6 +839,7 @@ export function MessageMedia({ message }: { message: Message }) {
         <VideoNotePlayer
           src={src || url}
           size={192}
+          onLoadedMetadata={onMediaSettled}
           onError={onMediaError}
         />
         <button
@@ -805,6 +861,7 @@ export function MessageMedia({ message }: { message: Message }) {
           src={src}
           controls
           className="max-h-80 max-w-full rounded-lg"
+          onLoadedMetadata={onMediaSettled}
           onError={onMediaError}
         />
         <div className="flex items-center gap-3 text-xs">
@@ -844,6 +901,7 @@ export function MessageMedia({ message }: { message: Message }) {
           src={src}
           controls
           className="w-56 max-w-full"
+          onLoadedMetadata={onMediaSettled}
           onError={onMediaError}
         />
         <button

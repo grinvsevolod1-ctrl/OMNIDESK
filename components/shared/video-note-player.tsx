@@ -32,6 +32,7 @@ export function VideoNotePlayer({
   className,
   autoPlay = false,
   onError,
+  onLoadedMetadata,
 }: {
   src: string
   /** Диаметр кружка в px. */
@@ -40,6 +41,8 @@ export function VideoNotePlayer({
   /** Автозапуск (используется в лайтбоксе/просмотре перед удалением). */
   autoPlay?: boolean
   onError?: () => void
+  /** Метаданные пришли — родитель снимает свой watchdog зависшей загрузки. */
+  onLoadedMetadata?: () => void
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const rafRef = useRef<number>(0)
@@ -110,6 +113,7 @@ export function VideoNotePlayer({
         preload="metadata"
         className="pointer-events-none size-full rounded-full object-cover"
         onLoadedMetadata={(e) => {
+          onLoadedMetadata?.()
           const v = e.currentTarget
           if (Number.isFinite(v.duration)) {
             setDuration(v.duration)

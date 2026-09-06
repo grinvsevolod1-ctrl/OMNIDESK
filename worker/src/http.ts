@@ -6,6 +6,7 @@ import { registry } from './registry.js'
 import { TelegramSession } from './telegram.js'
 import { probeProxy } from './proxy.js'
 import * as repo from './repo.js'
+import { isDeadlineError, withDeadline } from '../../lib/with-deadline.js'
 
 /**
  * Tiny internal HTTP API consumed only by the panel (same host, protected by a
@@ -13,7 +14,35 @@ import * as repo from './repo.js'
  * and exposes a health check. All stateful commands go through the job queue.
  */
 export function startHttpServer(): void {
-  const server = createServer(async (req, res) => {
+  const server = createServer((req, res) => {
+    // Every branch below used to run without a common catch: an exception
+    // outside the few local try blocks (a pool that never hands out a
+    // connection, an object-store read that throws, a bad URL) rejected the
+    // async handler, was logged as unhandledRejection — and the response was
+    // NEVER ended. The panel's proxied fetch then sat on a socket with no
+    // headers and the tile in the browser spun forever. Always answer.
+    void handle(req, res).catch((err) => {
+      logger.error({ err, url: req.url }, 'worker http handler failed')
+      if (!res.headersSent) {
+        json(res, 500, {
+          error: err instanceof Error ? err.message : 'internal_error',
+        })
+      } else {
+        res.destroy()
+      }
+    })
+  })
+
+  // Cap the time a request may sit with no response at all: whatever slips
+  // past the per-download deadlines below still gets a 503 from Node instead
+  // of an open socket for the lifetime of the process.
+  server.requestTimeout = env.mediaTimeoutMs + 20_000
+  server.headersTimeout = 30_000
+
+  async function handle(
+    req: import('node:http').IncomingMessage,
+    res: import('node:http').ServerResponse,
+  ): Promise<void> {
     const url = new URL(req.url ?? '/', `http://localhost:${env.workerPort}`)
 
     // Health is unauthenticated for pm2/uptime checks.
@@ -105,14 +134,22 @@ export function startHttpServer(): void {
       }
       let media: { buffer: Buffer; mime: string | null; name: string | null } | null
       try {
-        media = await (
-          session as {
-            downloadMedia: (
-              ref: unknown,
-            ) => Promise<{ buffer: Buffer; mime: string | null; name: string | null } | null>
-          }
-        ).downloadMedia(downloadRef)
+        media = await withDeadline(
+          (
+            session as {
+              downloadMedia: (
+                ref: unknown,
+              ) => Promise<{ buffer: Buffer; mime: string | null; name: string | null } | null>
+            }
+          ).downloadMedia(downloadRef),
+          env.mediaTimeoutMs,
+          'telegram media download',
+        )
       } catch (err) {
+        if (isDeadlineError(err)) {
+          logger.warn({ messageId, ms: err.ms }, 'media download timed out')
+          return json(res, 504, { error: 'media_timeout' })
+        }
         logger.warn({ err, messageId }, 'media download failed')
         return json(res, 410, { error: 'media_unavailable' })
       }
@@ -251,7 +288,20 @@ export function startHttpServer(): void {
           if (!peer || !messageId) {
             return json(res, 400, { error: 'peer and messageId required' })
           }
-          const media = await session.personalMedia(peer, messageId)
+          let media: Awaited<ReturnType<typeof session.personalMedia>>
+          try {
+            media = await withDeadline(
+              session.personalMedia(peer, messageId),
+              env.mediaTimeoutMs,
+              'personal media download',
+            )
+          } catch (err) {
+            if (isDeadlineError(err)) {
+              logger.warn({ peer, messageId, ms: err.ms }, 'personal media timed out')
+              return json(res, 504, { error: 'media_timeout' })
+            }
+            throw err
+          }
           if (!media) return json(res, 410, { error: 'media_unavailable' })
           const headers: Record<string, string> = {
             'content-type': media.mime,
@@ -421,7 +471,7 @@ export function startHttpServer(): void {
     }
 
     return json(res, 404, { error: 'not_found' })
-  })
+  }
 
   server.listen(env.workerPort, '127.0.0.1', () => {
     logger.info(`Worker HTTP API on http://127.0.0.1:${env.workerPort}`)

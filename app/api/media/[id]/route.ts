@@ -18,10 +18,31 @@ import {
 import { proxiedFetch } from '@/lib/proxy-agent'
 import { assertPublicHttpUrl } from '@/lib/ssrf-guard'
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp-cloud'
-import { isWorkerConfigured, streamFromWorker } from '@/lib/worker-client'
+import { envMs, isDeadlineError, withDeadline } from '@/lib/with-deadline'
+import {
+  WORKER_MEDIA_TIMEOUT_MS,
+  isWorkerConfigured,
+  streamFromWorker,
+  workerHealth,
+} from '@/lib/worker-client'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+/**
+ * Hard ceiling on the time this route may spend BEFORE it starts answering
+ * (ownership lookup, archive read, job-payload restore, worker round-trip).
+ * Sits above the worker hop's own timeout so that one reports first; this one
+ * catches everything else that can wedge — a Postgres lock queue, an object
+ * store that never answers, an exhausted pool. Body streaming is not bounded.
+ */
+const MEDIA_ROUTE_DEADLINE_MS = Math.max(
+  envMs('MEDIA_ROUTE_DEADLINE_MS', 60_000),
+  WORKER_MEDIA_TIMEOUT_MS + 5_000,
+)
+
+/** Deadline for each individual `?diag=1` probe. */
+const DIAG_PROBE_MS = 5_000
 
 /**
  * Stream a message's media to the browser.
@@ -38,12 +59,71 @@ export async function GET(
   // Any thrown error here (DB hiccup, provider fetch reject, disk read) used to
   // surface as a raw framework 500 in the browser console. Convert it into a
   // handled 502 and log the real cause so a broken image never spams 500s.
+  // A request that produces NO answer at all is turned into a 504 by the
+  // deadline: the tile then retries / falls back instead of shimmering forever.
   try {
-    return await handleMediaGet(request, ctx)
+    return await withDeadline(
+      handleMediaGet(request, ctx),
+      MEDIA_ROUTE_DEADLINE_MS,
+      'media route',
+    )
   } catch (err) {
+    if (isDeadlineError(err)) {
+      console.error('[v0][media] no answer before deadline:', err.message)
+      return unavailable(504)
+    }
     console.error('[v0][media] stream failed:', err)
-    return new Response('Media unavailable', { status: 502 })
+    return unavailable(502)
   }
+}
+
+/** Error reply the browser must never cache — the next attempt may succeed. */
+function unavailable(status: number): Response {
+  return new Response('Media unavailable', {
+    status,
+    headers: { 'cache-control': 'no-store' },
+  })
+}
+
+/**
+ * Active probes for `?diag=1`: how long the two hops that can wedge actually
+ * take right now, each bounded so the diagnostics themselves never hang. A
+ * slow/timed-out `archive` means the blob tier (disk / S3) is the problem, a
+ * slow/timed-out `worker` means the worker process is.
+ */
+async function probeMediaPath(messageId: string): Promise<{
+  archive: { ok: boolean; ms: number; bytes: number | null; error: string | null }
+  worker: { configured: boolean; ok: boolean; ms: number }
+}> {
+  const t0 = Date.now()
+  const archive = await withDeadline(
+    getStoredMediaBytes(messageId),
+    DIAG_PROBE_MS,
+    'archive read',
+  ).then(
+    (stored) => ({
+      ok: true,
+      ms: Date.now() - t0,
+      bytes: stored ? stored.bytes.byteLength : null,
+      error: null,
+    }),
+    (err: unknown) => ({
+      ok: false,
+      ms: Date.now() - t0,
+      bytes: null,
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  )
+
+  const t1 = Date.now()
+  const worker = isWorkerConfigured
+    ? await withDeadline(workerHealth(), DIAG_PROBE_MS, 'worker health').then(
+        (ok) => ({ configured: true, ok, ms: Date.now() - t1 }),
+        () => ({ configured: true, ok: false, ms: Date.now() - t1 }),
+      )
+    : { configured: false, ok: false, ms: 0 }
+
+  return { archive, worker }
 }
 
 async function handleMediaGet(
@@ -84,9 +164,21 @@ async function handleMediaGet(
   // synthetic — as metadata only, so the cause can be read off in the browser
   // instead of correlating worker logs.
   if (search.get('diag') === '1') {
-    return Response.json(await getMediaDiagnostics(id), {
-      headers: { 'cache-control': 'no-store' },
-    })
+    const [diagnostics, probes] = await Promise.all([
+      getMediaDiagnostics(id),
+      probeMediaPath(id),
+    ])
+    return Response.json(
+      {
+        ...diagnostics,
+        probes,
+        timeouts: {
+          workerMediaMs: WORKER_MEDIA_TIMEOUT_MS,
+          routeDeadlineMs: MEDIA_ROUTE_DEADLINE_MS,
+        },
+      },
+      { headers: { 'cache-control': 'no-store' } },
+    )
   }
 
   // Historical (pre-edit) version of the media, addressed by edit id. Ownership
@@ -94,7 +186,7 @@ async function handleMediaGet(
   const editId = search.get('edit')
   if (editId) {
     const hist = await getStoredEditMediaBytes(editId)
-    if (!hist) return new Response('Media unavailable', { status: 410 })
+    if (!hist) return unavailable(410)
     return bytesResponse(hist.bytes, hist.mime, true)
   }
 
@@ -121,16 +213,14 @@ async function handleMediaGet(
   // them through. (Telegram/MAX media still go via the worker below.)
   if (owner.channelType === 'whatsapp') {
     const desc = await getWhatsappMediaDescriptor(id)
-    if (!desc) return new Response('Media unavailable', { status: 404 })
+    if (!desc) return unavailable(404)
     const info = await getMediaUrl(desc.waMediaId, desc.token)
     if (!info.ok) {
-      return new Response('Media unavailable', { status: info.status || 502 })
+      return unavailable(info.status || 502)
     }
     const upstream = await downloadMedia(info.data.url, desc.token)
     if (!upstream || !upstream.ok || !upstream.body) {
-      return new Response('Media unavailable', {
-        status: upstream?.status || 502,
-      })
+      return unavailable(upstream?.status || 502)
     }
     const mime =
       upstream.headers.get('content-type') ||
@@ -149,7 +239,7 @@ async function handleMediaGet(
   // issues) and the raw url is never exposed to the client.
   if (owner.channelType === 'vk') {
     const desc = await getUrlMediaDescriptor(id)
-    if (!desc) return new Response('Media unavailable', { status: 404 })
+    if (!desc) return unavailable(404)
     // Defence-in-depth: the url comes from VK API responses (not the user), but
     // refuse to fetch anything that isn't a public http(s) address so a stray
     // value can't be used to probe internal services (loopback, worker port,
@@ -157,7 +247,7 @@ async function handleMediaGet(
     try {
       assertPublicHttpUrl(desc.url)
     } catch {
-      return new Response('Media unavailable', { status: 400 })
+      return unavailable(400)
     }
     let upstream: Response
     try {
@@ -167,10 +257,10 @@ async function handleMediaGet(
         desc.proxy,
       )
     } catch {
-      return new Response('Media unavailable', { status: 502 })
+      return unavailable(502)
     }
     if (!upstream.ok || !upstream.body) {
-      return new Response('Media unavailable', { status: upstream.status || 502 })
+      return unavailable(upstream.status || 502)
     }
     const mime =
       upstream.headers.get('content-type') ||
@@ -193,16 +283,14 @@ async function handleMediaGet(
   // already served above via getStoredMediaBytes.)
   if (owner.channelType === 'telegram_personal') {
     const desc = await getPersonalMediaDescriptor(id)
-    if (!desc) return new Response('Media unavailable', { status: 404 })
+    if (!desc) return unavailable(404)
     const personal = await streamFromWorker(
       `/personal/media?channelId=${encodeURIComponent(desc.channelId)}` +
         `&peer=${encodeURIComponent(desc.peer)}` +
         `&messageId=${encodeURIComponent(desc.providerMessageId)}`,
     )
     if (!personal || !personal.ok || !personal.body) {
-      return new Response('Media unavailable', {
-        status: personal?.status || 502,
-      })
+      return unavailable(personal?.status || 502)
     }
     // Archive a bounded copy while streaming: personal/synthetic media is read
     // LIVE from Telegram and is NOT persisted at ingest, so a later re-fetch can
@@ -219,10 +307,10 @@ async function handleMediaGet(
     `/media?messageId=${encodeURIComponent(id)}`,
   )
   if (!upstream) {
-    return new Response('Media unavailable', { status: 502 })
+    return unavailable(502)
   }
   if (!upstream.ok || !upstream.body) {
-    return new Response('Media unavailable', { status: upstream.status || 502 })
+    return unavailable(upstream.status || 502)
   }
 
   // Same self-healing archive as above: once the worker re-downloads the bytes
@@ -271,7 +359,7 @@ function serveAndArchive(
   name: string | null,
 ): Response {
   const body = upstream.body
-  if (!body) return new Response('Media unavailable', { status: 502 })
+  if (!body) return unavailable(502)
 
   const headers = new Headers()
   headers.set('content-type', mime)

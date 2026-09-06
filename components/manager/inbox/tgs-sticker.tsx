@@ -17,9 +17,11 @@ interface TgsStickerProps {
   alt: string
   /** Notify the parent that decoding failed so it can render its fallback. */
   onError: () => void
+  /** Bytes arrived — lets the parent cancel its stalled-load watchdog. */
+  onLoad?: () => void
 }
 
-export function TgsSticker({ url, alt, onError }: TgsStickerProps) {
+export function TgsSticker({ url, alt, onError, onLoad }: TgsStickerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [ready, setReady] = useState(false)
 
@@ -31,6 +33,7 @@ export function TgsSticker({ url, alt, onError }: TgsStickerProps) {
       try {
         const res = await fetch(url)
         if (!res.ok || !res.body) throw new Error(`status ${res.status}`)
+        if (!cancelled) onLoad?.()
         // TGS = gzip-compressed Lottie JSON. DecompressionStream is available
         // in every modern browser, so no gunzip dependency is needed.
         const stream = res.body.pipeThrough(new DecompressionStream('gzip'))
@@ -59,7 +62,7 @@ export function TgsSticker({ url, alt, onError }: TgsStickerProps) {
       cancelled = true
       anim?.destroy()
     }
-  }, [url, onError])
+  }, [url, onError, onLoad])
 
   return (
     <div className="relative size-32" role="img" aria-label={alt}>

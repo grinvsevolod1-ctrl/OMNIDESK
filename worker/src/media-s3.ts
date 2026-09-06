@@ -57,6 +57,16 @@ export function isS3Locator(filePath: string): boolean {
   return filePath.startsWith(S3_PREFIX)
 }
 
+/**
+ * The SDK's default handler has NO socket timeout: an object store that
+ * accepts the TCP connection but never answers pins the media request (and
+ * the browser tile behind it) forever. Bound both connect and response.
+ */
+const S3_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.MEDIA_S3_TIMEOUT_MS)
+  return Number.isFinite(raw) && raw > 0 ? raw : 20_000
+})()
+
 let client: S3Client | null = null
 function getClient(): S3Client {
   if (!client) {
@@ -68,6 +78,15 @@ function getClient(): S3Client {
         accessKeyId: config.accessKey,
         secretAccessKey: config.secretKey,
       },
+      // Plain options are accepted here (constructed into NodeHttpHandler by
+      // the SDK) — no extra @smithy dependency needed.
+      requestHandler: {
+        connectionTimeout: 5_000,
+        requestTimeout: S3_TIMEOUT_MS,
+        throwOnRequestTimeout: true,
+        socketTimeout: S3_TIMEOUT_MS,
+      },
+      maxAttempts: 2,
     })
   }
   return client
