@@ -58,7 +58,7 @@ export async function prepareFiles(
         }
       } catch (err) {
         if (signal?.aborted) return
-        console.error('[v0] bulk media fetch failed:', m.id, err)
+        console.error('media-download: bulk fetch failed:', m.id, err)
         failed.push(m)
       } finally {
         done++
@@ -117,7 +117,7 @@ export async function shareFiles(files: File[], title: string): Promise<boolean>
   } catch (err) {
     // AbortError = user closed the sheet; not an error worth surfacing.
     if (err instanceof DOMException && err.name === 'AbortError') return false
-    console.error('[v0] share failed:', err)
+    console.error('media-download: share failed:', err)
     return false
   }
 }

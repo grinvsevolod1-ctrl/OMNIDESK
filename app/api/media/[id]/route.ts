@@ -69,10 +69,10 @@ export async function GET(
     )
   } catch (err) {
     if (isDeadlineError(err)) {
-      console.error('[v0][media] no answer before deadline:', err.message)
+      console.error('media route: no answer before deadline:', err.message)
       return unavailable(504)
     }
-    console.error('[v0][media] stream failed:', err)
+    console.error('media route: stream failed:', err)
     return unavailable(502)
   }
 }

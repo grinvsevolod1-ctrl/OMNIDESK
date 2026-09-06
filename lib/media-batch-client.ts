@@ -95,7 +95,7 @@ export async function sendMediaBatch({
     try {
       resp = await fetch('/api/chat-media/batch', { method: 'POST', body: fd })
     } catch (err) {
-      console.error('[v0] media batch transport failed:', err)
+      console.error('media-batch: transport failed:', err)
       failed += total - sent
       return {
         sent,

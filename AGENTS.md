@@ -40,7 +40,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `160`
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `163`
   (140 — статус «Не связался», 141 — роль head, 142 — правка комментариев:
   только автором в МСК-день создания, прошлый текст — в
   `lead_card_comment_revisions`, бейдж «изменён» виден всем; 143 —
@@ -99,7 +99,21 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   — rework и trash пишут, «у куратора» — чтение). Закреплено тестом
   `lib/manager-inbox-transferred.test.ts`. Словари подписей хранятся полным
   снимком в `app_settings` — миграция переименовывает `handoff` там же, если
-  админ не менял подпись сам).
+  админ не менял подпись сам); 162 — бэкофилл `conversations.curator_id` из
+  `lead_cards.curator_id` (лиды, переданные до миграции 151, не попадали в
+  «Чаты» куратора и ИИ по ним не молчал — теперь две ссылки сведены к одному
+  факту); 163 — **идемпотентная отправка**: `messages.client_message_id`
+  (UUID) + частичный уникальный индекс `(conversation_id, client_message_id)`.
+  Композер генерирует id на каждую попытку (`lib/client-message-id.ts`),
+  все send-экшены (текст/медиа/голос/стикер, менеджер и куратор) прокидывают
+  его в `addMessage`, который вставляет через `ON CONFLICT DO NOTHING` и при
+  дубле возвращает СУЩЕСТВУЮЩУЮ строку без второго enqueue. У входящих, ИИ и
+  старых строк колонка NULL. Ретрай server action / двойной тап больше не
+  дублируют сообщение клиенту).
+  **Пул панели (`lib/db.ts`):** каждое соединение получает
+  `statement_timeout` (`PG_STATEMENT_TIMEOUT_MS`, по умолчанию 30 с) — один
+  зависший запрос раньше держал соединение из 20 бесконечно; крон-процессы с
+  честно долгими запросами поднимают лимит через env.
   **Правило трёх списков `channel_jobs.action`:** `JobAction`
   (`lib/types/jobs.ts`), `switch (job.action)` воркера и CHECK-constraint в
   последней миграции обязаны совпадать. Новое действие = новая миграция,
@@ -540,8 +554,34 @@ components/curator/      UI менеджера по кадрам
 components/buyer/        UI медиабайера: buyer-overview.tsx — карточки
                          источников (клик = фильтр), единый поиск, статусы,
                          сортировка, Excel-экспорт; всё read-only
+components/shared/inbox/ ОБЩЕЕ ядро инбокса менеджера и куратора (единый
+                         код, роль подключается адаптером):
+                         thread-adapter.ts — интерфейс `ThreadAdapter`
+                         (loadThread/loadOlder/send*/edit/react/delete/
+                         forward…); реализации —
+                         manager/inbox/manager-thread-adapter.ts и
+                         curator/chats/curator-thread-adapter.ts (curator-scoped
+                         экшены из app/actions/curator-messages.ts);
+                         use-message-actions.ts — все действия над сообщениями
+                         с оптимистикой (общий для обеих ролей; менеджерский
+                         AI-гейт — через колбэк `canSend`);
+                         use-thread-history.ts — холодная гидратация треда +
+                         «Загрузить ранние»; thread-pane.tsx — правая панель
+                         (шапка + лента + композер). Новая фича треда =
+                         сюда, НЕ в дубли по ролям.
 components/manager/      UI менеджера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
+                         use-inbox-realtime.ts — ОДНА подписка на /api/stream:
+                         message 'update' патчится в кэш точечно; message
+                         'insert' в ОТКРЫТОМ треде — сразу `adapter.loadThread`
+                         + `mergeFreshSlice` (пузырь появляется за один
+                         запрос); всё остальное (список, unread, порядок) —
+                         дебаунс 1.2 с в один `router.refresh()`, отложенный
+                         пока вкладка скрыта. SSR-предзагрузка тредов —
+                         `INBOX_PRELOAD_THREADS` = 15 (app/app/inbox/page.tsx):
+                         этот payload уезжает на каждый refresh, не раздувай;
+                         use-prepend-anchor.ts — якорение при prepend
+                         (вынесено из message-list);
                          use-inbox-shortcuts.ts (j/k, Alt+стрелки),
                          use-thread-scroll.ts — автоскролл треда по НАМЕРЕНИЮ
                          пользователя: жест вверх (wheel/touch) мгновенно

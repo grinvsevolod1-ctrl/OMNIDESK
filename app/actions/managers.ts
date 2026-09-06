@@ -218,7 +218,7 @@ export async function createCuratorAction(
     }
     // Аккаунт уже создан (managers.city заполнен) — не роняем экшен digest'ом,
     // а честно сообщаем, что мульти-город не сохранился и почему.
-    console.error('[v0] createCurator setCuratorCities failed:', err)
+    console.error('managers: createCurator setCuratorCities failed:', err)
     revalidatePath('/admin/managers')
     revalidatePath('/admin')
     return {
@@ -341,7 +341,7 @@ export async function updateCuratorCityAction(
     // Любая другая ошибка БД (права, констрейнты, обрыв соединения): раньше
     // здесь был `throw err`, и админ получал безликое digest-падение страницы.
     // Возвращаем реальный текст — этот экшен доступен только админу.
-    console.error('[v0] updateCuratorCityAction failed:', err)
+    console.error('managers: updateCuratorCityAction failed:', err)
     return {
       ok: false,
       message: `Не удалось сохранить города: ${err instanceof Error ? err.message : 'ошибка базы данных'}`,
@@ -392,7 +392,7 @@ export async function updateMyCitiesAction(
           'На сервере не применены миграции БД (таблицы городов ещё нет). Обратитесь к администратору.',
       }
     }
-    console.error('[v0] updateMyCitiesAction failed:', err)
+    console.error('managers: updateMyCitiesAction failed:', err)
     return {
       ok: false,
       message: `Не удалось сохранить города: ${err instanceof Error ? err.message : 'ошибка базы данных'}`,
@@ -448,7 +448,7 @@ export async function updateMyTelegramContactAction(
   try {
     await setCuratorTelegramContact(session.sub, normalized)
   } catch (err) {
-    console.error('[v0] updateMyTelegramContactAction failed:', err)
+    console.error('managers: updateMyTelegramContactAction failed:', err)
     return {
       ok: false,
       message: `Не удалось сохранить контакт: ${err instanceof Error ? err.message : 'ошибка базы данных'}`,

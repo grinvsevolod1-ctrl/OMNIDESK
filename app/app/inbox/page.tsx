@@ -17,10 +17,13 @@ import type { Message } from '@/lib/types'
 
 /**
  * How many top-of-list threads get their transcript in the SSR payload.
- * Covers a full screen of the list plus healthy overscroll; everything
- * below lazy-loads on first open.
+ * One screen of the list; everything below lazy-loads on first open
+ * (loadThreadMessagesAction, ~1 round-trip). This payload is re-shipped on
+ * EVERY realtime-triggered router.refresh(), so it is the single biggest
+ * lever on refresh cost: 40 threads × 30 messages serialized several times a
+ * minute was most of the inbox's network traffic.
  */
-const INBOX_PRELOAD_THREADS = 40
+const INBOX_PRELOAD_THREADS = 15
 
 /**
  * Minimum time an account must stay degraded before the manager sees the

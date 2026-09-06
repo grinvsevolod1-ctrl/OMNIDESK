@@ -103,7 +103,7 @@ export function AvatarPickerDialog({
       try {
         dataUrl = await fileToSquareDataUrl(file)
       } catch (err) {
-        console.error('[v0] avatar processing failed:', err)
+        console.error('avatar-picker: processing failed:', err)
         toast.error('Не удалось обработать изображение.')
         return
       }

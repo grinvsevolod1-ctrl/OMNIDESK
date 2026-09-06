@@ -165,6 +165,8 @@ export function useInbox({
   const { syncState, typingByConv, presenceByConv } = useInboxRealtime({
     router,
     setLocalMessages,
+    activeId,
+    loadThread: managerThreadAdapter.loadThread,
   })
 
   // Counters, sources, awaiting-reply map, forward targets, handoffs.

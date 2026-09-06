@@ -110,13 +110,13 @@ export function CreateAccountCard({
                   setProxyId('')
                 }}
                 disabled={pending || Boolean(tgChannelId)}
-                className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
+                className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-lg border px-2 py-2.5 text-sm font-medium transition-colors sm:flex-row sm:gap-2 sm:px-3 ${
                   active
                     ? 'border-foreground bg-secondary text-secondary-foreground'
                     : 'border-border text-muted-foreground hover:bg-muted/50'
                 }`}
               >
-                <Icon className="size-4" />
+                <Icon className="size-4 shrink-0" />
                 {t.label}
               </button>
             )

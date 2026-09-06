@@ -51,7 +51,12 @@ export function useCuratorChats({
     setLocalMessages((prev) => mergeFreshSlices(prev, messagesByConversation))
   }, [messagesByConversation])
 
-  const { syncState } = useInboxRealtime({ router, setLocalMessages })
+  const { syncState } = useInboxRealtime({
+    router,
+    setLocalMessages,
+    activeId,
+    loadThread: curatorThreadAdapter.loadThread,
+  })
 
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,

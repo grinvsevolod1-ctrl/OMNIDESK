@@ -12,11 +12,21 @@
  * of subscription wiring inline.
  */
 
-import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import type { useRouter } from 'next/navigation'
 import type { Message } from '@/lib/types'
 import type { PresenceState } from '@/components/manager/inbox/visual'
 import { notifyNewInboundMessage } from '@/lib/local-notify'
+import { mergeFreshSlice } from '@/lib/merge-thread-slice'
+
+/** Debounce for the whole-tree router.refresh() that syncs the list. */
+const REFRESH_DEBOUNCE_MS = 1_200
 
 /**
  * Shape of a parsed `/api/stream` SSE payload we care about on the client.
@@ -75,10 +85,31 @@ const PRESENCE_TTL_MS = 60_000
 export function useInboxRealtime({
   router,
   setLocalMessages,
+  activeId = null,
+  loadThread,
 }: {
   router: ReturnType<typeof useRouter>
   setLocalMessages: Dispatch<SetStateAction<Record<string, Message[]>>>
+  /**
+   * The open thread. A new message landing HERE is fetched and merged into the
+   * local cache directly (one small query) so it appears at once, instead of
+   * waiting for the debounced whole-tree refresh — which stays responsible for
+   * the conversation list (preview, unread, ordering).
+   */
+  activeId?: string | null
+  /** Role-scoped loader for the open thread's latest slice (adapter.loadThread). */
+  loadThread?: (
+    conversationId: string,
+  ) => Promise<{ ok: boolean; messages: Message[] }>
 }) {
+  // Read through a ref inside the long-lived subscription so switching threads
+  // does not tear down and recreate the EventSource.
+  const activeIdRef = useRef(activeId)
+  const loadThreadRef = useRef(loadThread)
+  useEffect(() => {
+    activeIdRef.current = activeId
+    loadThreadRef.current = loadThread
+  }, [activeId, loadThread])
   const [syncState, setSyncState] = useState<'connecting' | 'live' | 'offline'>(
     'connecting',
   )
@@ -114,10 +145,13 @@ export function useInboxRealtime({
         return
       }
       if (refreshTimer) return
+      // The open thread is already patched in place (see the insert handler),
+      // so this refetch only needs to catch up the LIST — a longer window
+      // coalesces a whole burst of worker events into one server pass.
       refreshTimer = setTimeout(() => {
         refreshTimer = null
         router.refresh()
-      }, 400)
+      }, REFRESH_DEBOUNCE_MS)
     }
     const handleVisibility = () => {
       if (typeof document !== 'undefined' && document.hidden) return
@@ -220,6 +254,31 @@ export function useInboxRealtime({
         !data.replay
       ) {
         notifyNewInboundMessage()
+      }
+      // New message in the OPEN thread: fetch just that thread's latest slice
+      // and merge it (keeps any deep history the reader scrolled to). The
+      // bubble appears in ~one query instead of after the whole-tree refetch.
+      if (
+        data &&
+        data.type === 'message' &&
+        data.event === 'insert' &&
+        data.conversationId &&
+        data.conversationId === activeIdRef.current &&
+        loadThreadRef.current
+      ) {
+        const convId = data.conversationId
+        void loadThreadRef
+          .current(convId)
+          .then((res) => {
+            if (!res.ok) return
+            setLocalMessages((prev) => ({
+              ...prev,
+              [convId]: mergeFreshSlice(prev[convId], res.messages),
+            }))
+          })
+          .catch(() => {
+            // The debounced refresh below is the fallback.
+          })
       }
       // Everything else (new inbound message, conversation/channel changes):
       // pull fresh server data (debounced to avoid a refresh storm).
