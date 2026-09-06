@@ -40,7 +40,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
-  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `159`
+  ORM). Миграции — обычные `.sql` в `scripts/`, сейчас до `160`
   (140 — статус «Не связался», 141 — роль head, 142 — правка комментариев:
   только автором в МСК-день создания, прошлый текст — в
   `lead_card_comment_revisions`, бейдж «изменён» виден всем; 143 —
@@ -81,7 +81,16 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   лид-карточек, бэкофилл аватарок; 157 — `device_push_tokens`: токены APNs/FCM
   для нативной Capacitor-оболочки (см. «Нативная оболочка» ниже); 158 —
   бэкофилл исходящих медиа из payload'ов `channel_jobs`; 159 — частичный индекс
-  `channel_jobs ((payload->>'messageId'))` под ленивое восстановление).
+  `channel_jobs ((payload->>'messageId'))` под ленивое восстановление; 160 —
+  `channel_jobs_action_check` с `send_file`: constraint отставал от кода с
+  миграции 103, и КАЖДАЯ отправка фото/файла в Telegram из композера падала на
+  INSERT джоба → `markMessageFailed`, в Telegram ничего не уходило — это и было
+  «Медиа недоступно»).
+  **Правило трёх списков `channel_jobs.action`:** `JobAction`
+  (`lib/types/jobs.ts`), `switch (job.action)` воркера и CHECK-constraint в
+  последней миграции обязаны совпадать. Новое действие = новая миграция,
+  переустанавливающая `channel_jobs_action_check` (образец — 160). Закреплено
+  тестом `lib/data/jobs-action-check.test.ts`, который парсит все три источника.
   **Ленивое восстановление:** `/api/media/{id}` для исходящего без блоба сначала
   пробует `restoreMediaFromJobPayload` (байты из payload джоба send_file/
   send_voice, живут 7 дней) и только потом идёт в воркер — не зависит от

@@ -220,6 +220,8 @@ export async function getMediaDiagnostics(
 ): Promise<Record<string, unknown>> {
   const rows = await query<{
     direction: 'in' | 'out'
+    status: string | null
+    error_reason: string | null
     media_type: string | null
     media_mime: string | null
     created_at: string | Date
@@ -228,14 +230,17 @@ export async function getMediaDiagnostics(
     has_contact_handle: boolean
     god_synthetic: boolean | null
     channel_type: string
-    blob_on_disk: boolean | null
-    blob_inline: boolean | null
+    has_blob_link: boolean
+    blob_on_disk: boolean
+    blob_inline: boolean
   }>(
-    `SELECT m.direction, m.media_type, m.media_mime, m.created_at,
+    `SELECT m.direction, m.status, m.error_reason,
+            m.media_type, m.media_mime, m.created_at,
             (m.provider_message_id IS NOT NULL) AS has_provider_id,
             (m.media_ref IS NOT NULL) AS has_media_ref,
             (COALESCE(c.contact_handle, '') <> '') AS has_contact_handle,
             c.god_synthetic, c.channel_type,
+            (m.media_blob_id IS NOT NULL) AS has_blob_link,
             (b.file_path IS NOT NULL) AS blob_on_disk,
             (b.bytes IS NOT NULL) AS blob_inline
        FROM messages m
@@ -274,22 +279,33 @@ export async function getMediaDiagnostics(
       }
     : null
 
+  // `IS NOT NULL` never yields SQL NULL, so "no blob row at all" has to be
+  // told apart from "blob row without bytes" via the explicit link flag.
   const blob = m.blob_on_disk
     ? 'disk'
     : m.blob_inline
       ? 'inline'
-      : m.blob_on_disk === null && m.blob_inline === null
-        ? 'none'
-        : 'empty'
+      : m.has_blob_link
+        ? 'empty'
+        : 'none'
   const synthetic = Boolean(m.god_synthetic)
+  const failed = m.direction === 'out' && m.status === 'failed'
+  const enqueueFailed = failed && /очередь/i.test(m.error_reason ?? '')
 
   let verdict: string
-  if (blob === 'disk' || blob === 'inline') {
+  if (enqueueFailed) {
     verdict =
-      'Байты заархивированы — должны отдаваться из архива. Если всё равно 410, файл на диске недоступен (MEDIA_STORE_DIR).'
+      'Отправка упала ещё в панели: INSERT в channel_jobs отвергнут (обычно CHECK-constraint channel_jobs_action_check без этого action — см. миграцию 160). В Telegram сообщение НЕ уходило, provider id и джоба нет именно поэтому. Переотправьте файл после миграции.'
+  } else if (blob === 'disk' || blob === 'inline') {
+    verdict = failed
+      ? 'Байты заархивированы и отдаются из архива, но отправка помечена failed — в Telegram сообщение не дошло (см. errorReason). Переотправьте.'
+      : 'Байты заархивированы — должны отдаваться из архива. Если всё равно 410, файл на диске недоступен (MEDIA_STORE_DIR).'
   } else if (job?.hasBytes) {
     verdict =
       'Байты есть в payload джоба — восстановятся при следующем запросе медиа (lazy restore).'
+  } else if (failed) {
+    verdict =
+      'Отправка помечена failed (см. errorReason) — в Telegram сообщение не дошло, байт у нас нет. Переотправьте файл.'
   } else if (m.direction === 'out' && synthetic) {
     verdict =
       'God-синтетический диалог: в Telegram ничего не отправлялось, provider id нет, джоб уже вычищен (7 дней) — восстановить нечем.'
@@ -309,6 +325,8 @@ export async function getMediaDiagnostics(
     found: true,
     channelType: m.channel_type,
     direction: m.direction,
+    status: m.status,
+    errorReason: m.error_reason,
     mediaType: m.media_type,
     mediaMime: m.media_mime,
     createdAt: new Date(m.created_at).toISOString(),
