@@ -18,6 +18,7 @@ import {
   type ReactNode,
 } from 'react'
 import { ChevronLeft, Loader2, LogOut, Menu, PanelLeft, X } from 'lucide-react'
+import { initials } from '@/lib/initials'
 import { logoutAction } from '@/app/actions/auth'
 import { updateMyAvatarAction } from '@/app/actions/account'
 import type { SimpleResult } from '@/app/actions/account-shared'
@@ -70,16 +71,6 @@ interface DashboardShellProps {
 }
 
 const COLLAPSE_KEY = 'omnidesk:sidebar-collapsed'
-
-function initials(name: string): string {
-  return name
-    .split(' ')
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
-}
 
 export function DashboardShell({
   nav,

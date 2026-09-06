@@ -5,6 +5,7 @@
  */
 
 import type { ShellSection } from '@/lib/admin-console/intents'
+import { APP_TIME_ZONE, mskDayKey } from '@/lib/time'
 
 /** localStorage key: date when the admin muted proactive insights. */
 export const INSIGHTS_MUTED_KEY = 'od-os:insights-muted'
@@ -40,17 +41,18 @@ export function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null
   )
 }
 
-/** «сегодня, 14:05» / «3 мар., 09:12» for the history list. */
+/** «сегодня, 14:05» / «3 мар., 09:12» for the history list (MSK). */
 export function formatArchiveDate(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
   const time = d.toLocaleTimeString('ru-RU', {
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: APP_TIME_ZONE,
   })
-  return d.toDateString() === new Date().toDateString()
+  return mskDayKey(d) === mskDayKey(new Date())
     ? `сегодня, ${time}`
-    : `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`
+    : `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: APP_TIME_ZONE })}, ${time}`
 }
 
 /** Natural-language prompt for a dock section click. */

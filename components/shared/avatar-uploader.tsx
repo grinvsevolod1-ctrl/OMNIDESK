@@ -15,16 +15,7 @@ import type { SimpleResult } from '@/app/actions/account-shared'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { AvatarPickerDialog } from '@/components/shared/avatar-picker'
-
-function initials(name: string): string {
-  return name
-    .split(' ')
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
-}
+import { initials } from '@/lib/initials'
 
 export function AvatarUploader({
   name,

@@ -17,6 +17,7 @@ import {
   updateLivechatPoolAction,
 } from '@/app/actions/livechat'
 import { WidgetEditor } from '@/components/admin/widget-editor'
+import { initials } from '@/lib/initials'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -62,16 +63,6 @@ function WidgetStatus({ status }: { status: LivechatAdminChannel['status'] }) {
       {connected ? 'Активен' : 'Не интегрирован'}
     </span>
   )
-}
-
-function initials(name: string): string {
-  return name
-    .split(' ')
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
 }
 
 /**

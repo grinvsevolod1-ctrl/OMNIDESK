@@ -1,5 +1,6 @@
 import 'server-only'
-import { createHash, timingSafeEqual } from 'crypto'
+import { createHash } from 'crypto'
+import { safeEqual } from '@/lib/safe-equal'
 import { jwtVerify, SignJWT } from 'jose'
 import { cookies } from 'next/headers'
 import { requireAdmin } from './auth'
@@ -35,16 +36,6 @@ const SECRET_PANEL_PASSWORD = process.env.SECRET_PANEL_PASSWORD || ''
 /** True when the owner has configured a secret passcode for the panel. */
 export function isGodPasscodeConfigured(): boolean {
   return SECRET_PANEL_PASSWORD.length > 0
-}
-
-/**
- * Constant-time comparison. Both sides are SHA-256 hashed first so
- * `timingSafeEqual` always gets equal-length buffers and no length leaks.
- */
-function safeEqual(a: string, b: string): boolean {
-  const ha = createHash('sha256').update(a).digest()
-  const hb = createHash('sha256').update(b).digest()
-  return timingSafeEqual(ha, hb)
 }
 
 export function verifyGodPasscode(passcode: string): boolean {

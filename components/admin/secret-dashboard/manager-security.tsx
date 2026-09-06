@@ -38,6 +38,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { formatMskDateTime } from '@/lib/time'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import type { Manager } from '@/lib/types'
@@ -161,7 +162,7 @@ export function ManagerTwofa({ manager }: { manager: Manager }) {
                 </p>
                 {info.enabledAt ? (
                   <p className="text-xs text-muted-foreground">
-                    Включена: {new Date(info.enabledAt).toLocaleString('ru-RU')}
+                    Включена: {formatMskDateTime(info.enabledAt)}
                   </p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
