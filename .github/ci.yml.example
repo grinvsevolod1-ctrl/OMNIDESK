@@ -10,8 +10,10 @@
 # (or just copy its contents into a new `.github/workflows/ci.yml` via the
 # GitHub web UI, which has the required permission).
 #
-# Two jobs:
+# Three jobs:
 #   • unit        — mirrors `pnpm check` (lint + typecheck app/worker + unit tests)
+#   • migrations  — applies the WHOLE migration chain onto an empty database and
+#                   asserts 0 pending (catches constraint drift like migration 164)
 #   • integration — runs tests/integration against a real Postgres (pgvector),
 #                   the only place those DB-backed regression tests execute.
 
@@ -58,6 +60,42 @@ jobs:
 
       - name: Unit tests
         run: pnpm test
+
+  # Fresh-schema gate: applies the ENTIRE migration chain onto an empty database
+  # and asserts zero pending. A running-DB `migrate up` never re-runs already
+  # applied files, so a constraint conflict introduced by a new migration (like
+  # migration 164's livechat-orphan CHECK) only surfaces on a clean install —
+  # exactly what this reproduces on every PR.
+  migrations:
+    name: Fresh migrations (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: omnidesk
+          POSTGRES_PASSWORD: omnidesk
+          POSTGRES_DB: omnidesk_migrations
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U omnidesk -d omnidesk_migrations"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://omnidesk:omnidesk@localhost:5432/omnidesk_migrations
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify fresh migration chain (0 pending)
+        run: pnpm db:verify-fresh
 
   # Integration gate: runs the tests/integration suite against a real Postgres.
   # These are skipped locally without DATABASE_URL, so CI is the only place they
