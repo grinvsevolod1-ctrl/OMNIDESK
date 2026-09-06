@@ -183,16 +183,20 @@ export async function getMessageOwner(
   messageId: string,
   managerId: string,
 ): Promise<{ channelId: string; channelType: ChannelType } | null> {
-  const rows = await query<{ channel_id: string; type: ChannelType }>(
-    `SELECT ch.id AS channel_id, ch.type
+  // Read the channel id + type from the DENORMALIZED columns on conversations
+  // (channel_id / channel_type) instead of INNER JOINing `channels`. A join to
+  // channels silently drops the row — and 404s the media — whenever the channel
+  // was deleted or reconnected under a new id, even though the conversation and
+  // its archived media are perfectly intact.
+  const rows = await query<{ channel_id: string; channel_type: ChannelType }>(
+    `SELECT c.channel_id, c.channel_type
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
-       JOIN channels ch ON ch.id = c.channel_id
       WHERE m.id = $1 AND c.manager_id = $2`,
     [messageId, managerId],
   )
   if (rows.length === 0) return null
-  return { channelId: rows[0].channel_id, channelType: rows[0].type }
+  return { channelId: rows[0].channel_id, channelType: rows[0].channel_type }
 }
 
 /**
@@ -204,16 +208,18 @@ export async function getMessageOwner(
 export async function getMessageOwnerAdmin(
   messageId: string,
 ): Promise<{ channelId: string; channelType: ChannelType } | null> {
-  const rows = await query<{ channel_id: string; type: ChannelType }>(
-    `SELECT ch.id AS channel_id, ch.type
+  // Denormalized channel_id / channel_type on conversations (see getMessageOwner):
+  // never INNER JOIN channels here, or a god-synthetic dialog whose channel row
+  // was removed/reconnected would 404 all its archived media in the god console.
+  const rows = await query<{ channel_id: string; channel_type: ChannelType }>(
+    `SELECT c.channel_id, c.channel_type
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
-       JOIN channels ch ON ch.id = c.channel_id
       WHERE m.id = $1`,
     [messageId],
   )
   if (rows.length === 0) return null
-  return { channelId: rows[0].channel_id, channelType: rows[0].type }
+  return { channelId: rows[0].channel_id, channelType: rows[0].channel_type }
 }
 
 /**
@@ -405,16 +411,19 @@ export async function getMessageOwnerForCurator(
   messageId: string,
   curatorId: string,
 ): Promise<{ channelId: string; channelType: ChannelType } | null> {
-  const rows = await query<{ channel_id: string; type: ChannelType }>(
-    `SELECT ch.id AS channel_id, ch.type
+  // Denormalized channel_id / channel_type on conversations (see getMessageOwner):
+  // a curator viewing a TRANSFERRED dialog must keep seeing its media even if the
+  // owning manager's channel row was deleted/reconnected — an INNER JOIN on
+  // channels would 404 it, which is exactly the "Медиа недоступно" curators hit.
+  const rows = await query<{ channel_id: string; channel_type: ChannelType }>(
+    `SELECT c.channel_id, c.channel_type
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
-       JOIN channels ch ON ch.id = c.channel_id
       WHERE m.id = $1 AND c.curator_id = $2`,
     [messageId, curatorId],
   )
   if (rows.length === 0) return null
-  return { channelId: rows[0].channel_id, channelType: rows[0].type }
+  return { channelId: rows[0].channel_id, channelType: rows[0].channel_type }
 }
 
 /**
