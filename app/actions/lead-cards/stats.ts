@@ -17,6 +17,7 @@ import {
 import { addVacancy, listVacancies } from '@/lib/data/vacancies'
 import {
   getLeadCardStats,
+  listArchivedLeadsForManager,
   listLeadCardsForManager,
   type ManagerLeadFilterStatus,
 } from '@/lib/data/lead-stats'
@@ -164,4 +165,15 @@ export async function getLeadCardStatsAdminAction(filter: {
 export async function getCuratorDisciplineAction() {
   await requireAdmin()
   return getCuratorDiscipline()
+}
+
+/**
+ * Manager: ЕГО лиды, которые перевели в архив (куратор/админ). Для read-only
+ * вкладки «Архив» в инбоксе менеджера — лид остаётся закреплён за менеджером,
+ * поэтому он видит, что с ним стало, даже после архивации.
+ */
+export async function listMyArchivedManagerLeadsAction() {
+  const session = await getSession()
+  if (!session || session.role !== 'manager') throw new Error('Forbidden')
+  return listArchivedLeadsForManager(session.sub)
 }

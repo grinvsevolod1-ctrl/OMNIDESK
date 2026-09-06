@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState, useTransition } from 'react'
-import { SearchX } from 'lucide-react'
+import { SearchX, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
 import {
@@ -10,6 +10,8 @@ import {
   setLeadArchivedAction,
 } from '@/app/actions/lead-cards'
 import { ArchiveLeadDialog } from '@/components/curator/archive-lead-dialog'
+import { HeadDeleteLeadDialog } from '@/components/head/head-delete-lead-dialog'
+import { Button } from '@/components/ui/button'
 import { LeadComments } from '@/components/curator/lead-detail/lead-comments'
 import { LeadDetailFields } from '@/components/curator/lead-detail/lead-fields'
 import { LeadHistory } from '@/components/curator/lead-detail/lead-history'
@@ -64,6 +66,8 @@ export function LeadDetailPanel({
   const [pending, startTransition] = useTransition()
   // Диалог «Перенос в архив»: причина + обязательный комментарий.
   const [archiveOpen, setArchiveOpen] = useState(false)
+  // Диалог удаления лида руководителем (с опцией «удалить и у менеджера»).
+  const [headDeleteOpen, setHeadDeleteOpen] = useState(false)
 
   // Держим последний открытый id, чтобы контент оставался видимым во время
   // анимации закрытия (leadId уже null, панель ещё уезжает).
@@ -246,6 +250,28 @@ export function LeadDetailPanel({
             </PanelSection>
           ) : null}
 
+          {/* Удаление лида руководителем (право «редактирование»): мягкое
+              удаление в корзину админа, с опцией стереть и диалог у менеджера. */}
+          {variant === 'head' && headCanEdit ? (
+            <PanelSection className="space-y-2">
+              <p className="text-sm font-semibold">Удаление</p>
+              <p className="text-xs text-muted-foreground">
+                Лид уйдёт в корзину администратора. Можно дополнительно стереть
+                переписку у менеджера.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pending}
+                onClick={() => setHeadDeleteOpen(true)}
+                className="text-destructive hover:text-destructive"
+              >
+                <Trash2 className="size-3.5" />
+                Удалить лид
+              </Button>
+            </PanelSection>
+          ) : null}
+
           {/* Форма статуса — отдельный memo-компонент с собственным
               состоянием: ввод комментария не перерисовывает панель.
               В readOnly-режиме статус менять нельзя. */}
@@ -282,6 +308,19 @@ export function LeadDetailPanel({
               void mutate()
             }}
           />
+
+          {variant === 'head' && headCanEdit ? (
+            <HeadDeleteLeadDialog
+              leadCardId={card.id}
+              leadName={card.fullName}
+              open={headDeleteOpen}
+              onOpenChange={setHeadDeleteOpen}
+              onDeleted={() => {
+                onUpdated()
+                onClose()
+              }}
+            />
+          ) : null}
         </div>
       )}
     </SlideOver>

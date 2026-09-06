@@ -289,15 +289,45 @@ export async function listArchivedLeadsAdmin(
 }
 
 /**
- * НЕОБРАТИМОЕ удаление лида: физически стирает карточку и все связанные
- * записи (комментарии, история, передачи, вложения — через ON DELETE CASCADE).
- * Работает НЕЗАВИСИМО от состояния (активный / в корзине / архив / «глюченный»
- * лид со сломанными полями) — по id, без guard'ов, поэтому им можно снести
- * то, что не удаляется обычным мягким удалением. Возврат: был ли удалён.
+ * НЕОБРАТИМОЕ и ПОЛНОЕ удаление лида: физически стирает карточку и все связанные
+ * записи (комментарии, история, передачи, вложения — через ON DELETE CASCADE)
+ * И связанный диалог со всеми сообщениями/медиа. После этого от лида не остаётся
+ * НИКАКОГО следа — ни в карточках, ни в переписке. Порядок в транзакции: сперва
+ * читаем conversation_id (удаление карточки обнулит ссылку), удаляем карточку,
+ * затем сам диалог (каскад стирает messages + message_media). Работает
+ * НЕЗАВИСИМО от состояния лида — по id, без guard'ов, поэтому им можно снести и
+ * «глюченный» лид, который не удаляется обычным мягким удалением. Возврат: был
+ * ли удалён.
  */
 export async function hardDeleteLeadCard(leadCardId: string): Promise<boolean> {
+  return withTransaction(async (tx) => {
+    const rows = await tx.query<{ conversation_id: string | null }>(
+      `DELETE FROM lead_cards WHERE id = $1 RETURNING conversation_id`,
+      [leadCardId],
+    )
+    if (rows.length === 0) return false
+    const conversationId = rows[0].conversation_id
+    if (conversationId) {
+      await tx.query(`DELETE FROM conversations WHERE id = $1`, [conversationId])
+    }
+    return true
+  })
+}
+
+/**
+ * Удаление ТОЛЬКО диалога лида (сценарий «удалить у менеджера»): стирает
+ * conversations + все сообщения/медиа (ON DELETE CASCADE), но карточку
+ * сохраняет — FK lead_cards.conversation_id имеет ON DELETE SET NULL, поэтому
+ * лид остаётся (в корзине админа), а переписка исчезает из инбокса менеджера.
+ * Возврат: был ли удалён диалог.
+ */
+export async function purgeLeadConversation(
+  leadCardId: string,
+): Promise<boolean> {
   const rows = await query<{ id: string }>(
-    `DELETE FROM lead_cards WHERE id = $1 RETURNING id`,
+    `DELETE FROM conversations
+      WHERE id = (SELECT conversation_id FROM lead_cards WHERE id = $1)
+      RETURNING id`,
     [leadCardId],
   )
   return rows.length > 0

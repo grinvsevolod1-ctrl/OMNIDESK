@@ -91,6 +91,7 @@ export {
   listDeletedLeads,
   parseLeadSearch,
   purgeDeletedLeads,
+  purgeLeadConversation,
   restoreLeadCard,
   softDeleteLeadCard,
   updateLeadCardField,

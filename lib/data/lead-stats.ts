@@ -229,7 +229,11 @@ export async function listLeadCardsForManager(
   const from = safeDayKey(filter.from)
   const to = safeDayKey(filter.to)
 
-  const conds: string[] = ['lc.manager_id = $1']
+  // deleted_at IS NULL: мягко удалённые лиды (в корзине админа / удалённые
+  // руководителем) не показываются менеджеру в активном списке. Архив
+  // (archived_at) намеренно НЕ исключаем — статус «Передан» и другие лиды
+  // остаются видны; отдельная вкладка «Архив» использует свой запрос.
+  const conds: string[] = ['lc.manager_id = $1', 'lc.deleted_at IS NULL']
   const params: unknown[] = [managerId]
 
   // «Передан» filters by the transfer day; everything else by creation day.
@@ -301,4 +305,48 @@ export async function listLeadCardsForManager(
     })),
     total: Number(totalRows[0]?.n ?? 0),
   }
+}
+
+/**
+ * Manager: ЕГО лиды, которые кто-то перевёл в архив (archived_at IS NOT NULL),
+ * ещё не удалённые. Для вкладки «Архив» в инбоксе менеджера — read-only список,
+ * свежие сверху по дате архивации. Тот же тип, что у активного списка, чтобы
+ * переиспользовать строку ManagerLeadRow и детальную панель.
+ */
+export async function listArchivedLeadsForManager(
+  managerId: string,
+  limit = 200,
+): Promise<ManagerLeadListItem[]> {
+  const rows = await query<
+    LeadCardRow & {
+      curator_comment_count: string
+      last_curator_comment_at: string | Date | null
+    }
+  >(
+    `SELECT ${CARD_SELECT},
+            COALESCE(cc.n, 0)::int AS curator_comment_count,
+            cc.last_at              AS last_curator_comment_at
+       FROM lead_cards lc
+       LEFT JOIN managers m ON m.id = lc.manager_id
+       LEFT JOIN managers c ON c.id = lc.curator_id
+       LEFT JOIN LATERAL (
+         SELECT count(*) AS n, max(k.created_at) AS last_at
+           FROM lead_card_comments k
+          WHERE k.lead_card_id = lc.id
+            AND k.author_id IS DISTINCT FROM lc.manager_id
+       ) cc ON true
+      WHERE lc.manager_id = $1
+        AND lc.archived_at IS NOT NULL
+        AND lc.deleted_at IS NULL
+      ORDER BY lc.archived_at DESC, lc.id DESC
+      LIMIT $2`,
+    [managerId, Math.min(Math.max(limit, 1), 500)],
+  )
+  return rows.map((r) => ({
+    ...toLeadCard(r),
+    curatorCommentCount: Number(r.curator_comment_count ?? 0),
+    lastCuratorCommentAt: r.last_curator_comment_at
+      ? new Date(r.last_curator_comment_at).toISOString()
+      : null,
+  }))
 }

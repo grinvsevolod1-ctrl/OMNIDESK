@@ -9,6 +9,7 @@ import {
   useTransition,
 } from 'react'
 import {
+  Archive,
   ArrowRightLeft,
   CalendarDays,
   FileSpreadsheet,
@@ -20,6 +21,7 @@ import {
 import { toast } from 'sonner'
 import {
   getMyLeadCardStatsAction,
+  listMyArchivedManagerLeadsAction,
   listMyLeadCardsAction,
 } from '@/app/actions/lead-cards'
 import { exportManagerLeadsExcelAction } from '@/app/actions/leads-export'
@@ -89,6 +91,20 @@ export function ManagerLeadsView({
   const [stats, setStats] = useState(initialStats)
   const [pending, startTransition] = useTransition()
   const { exporting, runExport } = useXlsxExport()
+
+  // Вкладка «Архив»: ЕГО лиды, которые куратор/админ перевели в архив. Лид
+  // остаётся закреплён за менеджером, поэтому read-only список — чтобы он
+  // видел, что с ними стало. Грузится лениво при первом открытии вкладки.
+  const [tab, setTab] = useState<'active' | 'archive'>('active')
+  const [archived, setArchived] = useState<ManagerLeadListItem[] | null>(null)
+  const [archiveLoading, setArchiveLoading] = useState(false)
+  const loadArchive = useCallback(() => {
+    setArchiveLoading(true)
+    listMyArchivedManagerLeadsAction()
+      .then(setArchived)
+      .catch(() => toast.error('Не удалось загрузить архив'))
+      .finally(() => setArchiveLoading(false))
+  }, [])
 
   // Realtime: подсветка лидов, появившихся при фоновом пуллинге.
   const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set())
@@ -214,8 +230,63 @@ export function ManagerLeadsView({
     { key: 'range', label: 'Период' },
   ]
 
+  const selectTab = useCallback(
+    (next: 'active' | 'archive') => {
+      setTab(next)
+      if (next === 'archive' && archived === null) loadArchive()
+    },
+    [archived, loadArchive],
+  )
+
   return (
     <div className="flex flex-col gap-6">
+      {/* Вкладки «Активные / Архив». Архив — read-only список ЕГО лидов,
+          которые куратор/админ перевели в архив. */}
+      <div className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-1">
+        <button
+          type="button"
+          onClick={() => selectTab('active')}
+          className={cn(
+            'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+            tab === 'active'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <Users className="size-4 shrink-0" />
+          Активные
+        </button>
+        <button
+          type="button"
+          onClick={() => selectTab('archive')}
+          className={cn(
+            'inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+            tab === 'archive'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <Archive className="size-4 shrink-0" />
+          Архив
+          {archived && archived.length > 0 ? (
+            <Badge
+              variant="outline"
+              className="ml-0.5 border-transparent bg-muted-foreground/15 px-1.5 text-xs font-semibold"
+            >
+              {archived.length}
+            </Badge>
+          ) : null}
+        </button>
+      </div>
+
+      {tab === 'archive' ? (
+        <ArchiveTab
+          leads={archived}
+          loading={archiveLoading}
+          onOpen={openLead}
+        />
+      ) : (
+      <>
       {/* Единый переключатель периода (общий PeriodFilter) + статус + экспорт
           в одном ряду: фильтр статуса и кнопка Excel уходят в слот trailing. */}
       <PeriodFilter
@@ -399,6 +470,8 @@ export function ManagerLeadsView({
           </Button>
         </div>
       ) : null}
+      </>
+      )}
 
       {/* Всегда смонтирована (transform-only анимация), открывается мгновенно
           с данными из строки списка. */}
@@ -414,6 +487,56 @@ export function ManagerLeadsView({
         }}
       />
 
+    </div>
+  )
+}
+
+/**
+ * Read-only список ЕГО лидов, переведённых в архив (куратором/админом).
+ * Открытие карточки работает как в активной вкладке — через onOpen.
+ */
+function ArchiveTab({
+  leads,
+  loading,
+  onOpen,
+}: {
+  leads: ManagerLeadListItem[] | null
+  loading: boolean
+  onOpen: (id: string) => void
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Archive className="size-4 shrink-0" />
+        <span>
+          Лиды, переведённые в архив. Список только для просмотра — статусы и
+          архивацию меняет менеджер по кадрам или администратор.
+        </span>
+      </div>
+      <Card className="overflow-hidden">
+        {loading && leads === null ? (
+          <p className="flex items-center justify-center gap-2 px-5 py-10 text-center text-sm text-muted-foreground">
+            <Loader2 className="size-4 shrink-0 animate-spin" />
+            Загрузка архива…
+          </p>
+        ) : !leads || leads.length === 0 ? (
+          <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+            В архиве пока нет ваших лидов
+          </p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {leads.map((lead) => (
+              <ManagerLeadRow
+                key={lead.id}
+                lead={lead}
+                isFresh={false}
+                showTransferredDate={false}
+                onOpen={onOpen}
+              />
+            ))}
+          </ul>
+        )}
+      </Card>
     </div>
   )
 }

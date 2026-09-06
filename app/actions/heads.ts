@@ -22,11 +22,14 @@ import {
 import {
   adminSetLeadStatus,
   getLeadCardById,
+  purgeLeadConversation,
+  softDeleteLeadCard,
   transferLeadToCurator,
 } from '@/lib/data/lead-cards'
 import { isLeadStatus, STATUS_COMMENT_MIN_LEN, type LeadStatus } from '@/lib/lead-status'
 import {
   assertHeadCanEdit,
+  canAccessLeadCardAsync,
   notifyCuratorOfTransfer,
   type LeadCardActionResult,
 } from './lead-cards/shared'
@@ -124,6 +127,56 @@ export async function headTransferLeadAction(input: {
     return {
       ok: false,
       message: err instanceof Error ? err.message : 'Ошибка передачи',
+    }
+  }
+}
+
+/**
+ * Head (право «редактирование»): удаление лида своей группы (куратора ИЛИ
+ * менеджера).
+ *
+ * База — мягкое удаление карточки: лид уходит в КОРЗИНУ АДМИНА (админ может
+ * восстановить или стереть навсегда) и пропадает из активных списков
+ * руководителя, кураторов и менеджера. Опция alsoDeleteForManager
+ * ДОПОЛНИТЕЛЬНО физически стирает ДИАЛОГ лида и все сообщения из системы —
+ * у менеджера в инбоксе он исчезает совсем; сама карточка при этом остаётся
+ * в корзине админа (lead_cards.conversation_id → NULL по ON DELETE SET NULL).
+ */
+export async function headDeleteLeadAction(input: {
+  leadCardId: string
+  reason: string
+  alsoDeleteForManager?: boolean
+}): Promise<LeadCardActionResult> {
+  const session = await requireHead()
+  const reason = input.reason.replace(/\s+/g, ' ').trim()
+  if (reason.length < 3) {
+    return { ok: false, message: 'Укажите причину удаления (минимум 3 символа).' }
+  }
+  try {
+    await assertHeadCanEdit(session.sub)
+    const card = await getLeadCardById(input.leadCardId)
+    if (!card || !(await canAccessLeadCardAsync(session, card))) {
+      return { ok: false, message: 'Лид не найден или не входит в вашу группу.' }
+    }
+    await softDeleteLeadCard({
+      leadCardId: input.leadCardId,
+      reason,
+      deletedById: session.sub,
+      deletedByName: `${session.name ?? 'Руководитель'} (руководитель)`,
+    })
+    if (input.alsoDeleteForManager) {
+      await purgeLeadConversation(input.leadCardId)
+    }
+    return {
+      ok: true,
+      message: input.alsoDeleteForManager
+        ? 'Лид удалён, диалог у менеджера стёрт. Карточка сохранена в корзине администратора.'
+        : 'Лид удалён и перемещён в корзину администратора.',
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'Ошибка удаления',
     }
   }
 }

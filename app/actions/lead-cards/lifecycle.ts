@@ -20,10 +20,7 @@ import {
   leadStatusLabel,
   STATUS_COMMENT_MIN_LEN,
 } from '@/lib/lead-status'
-import {
-  assertCuratorNotLocked,
-  type LeadCardActionResult,
-} from './shared'
+import { type LeadCardActionResult } from './shared'
 
 /** Curator: archived leads of the current curator. */
 export async function listMyArchivedLeadsAction() {
@@ -45,10 +42,11 @@ export async function setLeadArchivedAction(input: {
     return { ok: false, message: 'Нет доступа' }
   }
   try {
-    if (session.role === 'curator') {
-      // Archiving is workspace maintenance — the daily gate still applies.
-      await assertCuratorNotLocked(session.sub)
-    }
+    // Архив — операция ВЫШЕ статусов: перенос в архив (как и возврат) сам по
+    // себе является финальным решением по лиду и убирает его из счётчика
+    // «ждут статуса». Поэтому дневной дисциплинарный гейт здесь НЕ применяется —
+    // иначе получался замкнутый круг: чтобы заархивировать один лид, куратору
+    // пришлось бы сперва проставить статусы всем остальным.
     await setLeadArchived({
       leadCardId: input.leadCardId,
       // Админ действует без проверки владельца; имя — снапшотом в журнал.
