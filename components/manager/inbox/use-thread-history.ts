@@ -5,7 +5,8 @@
  *  - lazy hydration for threads outside the SSR preload slice (a missing key
  *    in the map means "transcript not shipped yet"; an empty array means a
  *    genuinely empty thread), and
- *  - on-demand "load older messages" with scroll-position preservation.
+ *  - on-demand "load older messages" (viewport anchoring for the prepend is
+ *    MessageList's job — it has the DOM).
  *
  * The messages cache itself stays in the parent (the SSE handler patches it),
  * so the hook receives the state pair instead of owning it.
@@ -17,7 +18,6 @@ import {
   useRef,
   useState,
   type Dispatch,
-  type RefObject,
   type SetStateAction,
 } from 'react'
 import { toast } from 'sonner'
@@ -31,12 +31,10 @@ export function useThreadHistory({
   activeId,
   localMessages,
   setLocalMessages,
-  messagesScrollRef,
 }: {
   activeId: string | null
   localMessages: Record<string, Message[]>
   setLocalMessages: Dispatch<SetStateAction<Record<string, Message[]>>>
-  messagesScrollRef: RefObject<HTMLDivElement | null>
 }) {
   // "Load older messages" state. Threads hydrate with only the most-recent
   // slice (see MESSAGE_HISTORY_LIMIT server-side); `noOlder` marks threads
@@ -89,24 +87,22 @@ export function useThreadHistory({
     const oldest = current[0]
     if (!oldest) return false
     setLoadingOlder(true)
-    const container = messagesScrollRef.current
-    const prevHeight = container?.scrollHeight ?? 0
     try {
       const before = new Date(oldest.createdAt).toISOString()
       const res = await loadOlderMessagesAction(activeId, before)
       if (res.ok && res.messages.length > 0) {
+        // Viewport anchoring for the prepend is done by MessageList in a
+        // layout effect (synchronously, before paint, from the real DOM
+        // offsets). The old rAF `scrollTop = scrollHeight - prevHeight` here
+        // measured BEFORE the await, ignored the reader's actual scrollTop and
+        // raced the browser's own scroll anchoring — that was the «нажимаешь
+        // загрузка — кидает в начало» bug.
         setLocalMessages((prev) => {
           const existing = prev[activeId] ?? []
           const known = new Set(existing.map((m) => m.id))
           const older = res.messages.filter((m) => !known.has(m.id))
           if (older.length === 0) return prev
           return { ...prev, [activeId]: [...older, ...existing] }
-        })
-        // Keep the viewport anchored to the same message after older ones are
-        // prepended above it (otherwise the list would jump to the top).
-        requestAnimationFrame(() => {
-          const c = messagesScrollRef.current
-          if (c) c.scrollTop = c.scrollHeight - prevHeight
         })
       }
       if (!res.hasMore) setNoOlder((p) => ({ ...p, [activeId]: true }))
@@ -117,13 +113,7 @@ export function useThreadHistory({
     } finally {
       setLoadingOlder(false)
     }
-  }, [
-    activeId,
-    loadingOlder,
-    localMessages,
-    messagesScrollRef,
-    setLocalMessages,
-  ])
+  }, [activeId, loadingOlder, localMessages, setLocalMessages])
 
   return { threadLoading, loadingOlder, noOlder, setNoOlder, handleLoadOlder }
 }

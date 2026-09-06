@@ -1,7 +1,9 @@
 'use client'
 
 import {
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -246,6 +248,63 @@ export function MessageList({
     return () => observer.disconnect()
   }, [canLoadOlder, activeId, messagesScrollRef])
 
+  // Prepend anchoring («Загрузить ранние сообщения» / auto-load at the top):
+  // the row the reader is looking at must stay exactly where it is when older
+  // rows are inserted above it. Anchor = the FIRST rendered row; we remember
+  // its offset from the top of the scroll viewport (refreshed on every commit
+  // and every scroll), and whenever a commit changes which row is first while
+  // the old first row is still in the DOM, we shift scrollTop by however much
+  // that old row moved. Measured from real DOM rects in a layout effect —
+  // synchronous, before paint, so there is no flash of the wrong position and
+  // no dependence on rAF timing. It is also idempotent against the browser's
+  // own scroll anchoring: where Chrome already compensated, the anchor has not
+  // moved and the delta is ~0; where it did not (scrollTop was 0, or Safari,
+  // which has no scroll anchoring), we do the whole shift. A one-frame
+  // re-check catches a late browser adjustment.
+  const anchorRef = useRef<{ id: string; top: number } | null>(null)
+  const measureAnchor = useCallback(() => {
+    const el = messagesScrollRef.current
+    if (!el) return
+    const first = el.querySelector<HTMLElement>('[data-message-id]')
+    if (!first) {
+      anchorRef.current = null
+      return
+    }
+    anchorRef.current = {
+      id: first.dataset.messageId ?? '',
+      top: first.getBoundingClientRect().top - el.getBoundingClientRect().top,
+    }
+  }, [messagesScrollRef])
+  useLayoutEffect(() => {
+    const el = messagesScrollRef.current
+    const prev = anchorRef.current
+    if (el && prev && prev.id) {
+      const first = el.querySelector<HTMLElement>('[data-message-id]')
+      if (first && first.dataset.messageId !== prev.id) {
+        const selector = `[data-message-id="${CSS.escape(prev.id)}"]`
+        const restore = () => {
+          const c = messagesScrollRef.current
+          const anchorEl = c?.querySelector<HTMLElement>(selector)
+          if (!c || !anchorEl) return
+          const delta =
+            anchorEl.getBoundingClientRect().top -
+            c.getBoundingClientRect().top -
+            prev.top
+          if (Math.abs(delta) > 1) c.scrollTop += delta
+        }
+        if (el.querySelector(selector)) {
+          restore()
+          requestAnimationFrame(restore)
+        }
+      }
+    }
+    measureAnchor()
+  }, [thread, measureAnchor, messagesScrollRef])
+  const handleScroll = useCallback(() => {
+    measureAnchor()
+    onThreadScroll()
+  }, [measureAnchor, onThreadScroll])
+
   // Group consecutive photos/videos into Telegram-style albums (recomputed only
   // when the thread reference changes).
   const albums = useMemo(() => computeAlbums(thread), [thread])
@@ -289,7 +348,7 @@ export function MessageList({
   return (
     <div
       ref={messagesScrollRef}
-      onScroll={onThreadScroll}
+      onScroll={handleScroll}
       className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-muted/20 px-3 py-4 sm:px-6"
       style={{
         backgroundImage:

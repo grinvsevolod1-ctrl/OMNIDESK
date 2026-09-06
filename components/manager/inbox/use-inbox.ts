@@ -17,6 +17,7 @@ import { acknowledgeAiHandoffAction } from '@/app/actions/messages'
 import { toast } from 'sonner'
 import { leadStatusOptionValue } from '@/lib/types'
 import type { ChannelType, Conversation, Message } from '@/lib/types'
+import { mergeFreshSlices } from '@/lib/merge-thread-slice'
 import { useInboxFilters } from '@/components/manager/inbox/use-inbox-filters'
 import { useDrafts } from '@/components/manager/inbox/use-drafts'
 import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
@@ -358,22 +359,24 @@ export function useInbox({
   })
 
   // Lazy thread hydration + on-demand older-history loading (see hook).
-  const { threadLoading, loadingOlder, noOlder, setNoOlder, handleLoadOlder } =
+  const { threadLoading, loadingOlder, noOlder, handleLoadOlder } =
     useThreadHistory({
       activeId,
       localMessages,
       setLocalMessages,
-      messagesScrollRef,
     })
 
-  // Fresh props replace the local message cache wholesale. They carry only the
-  // most-recent slice again, so any previously loaded older history is gone —
-  // reset the "nothing older" flags so the load-older control reappears.
+  // Fresh props carry only the most-recent slice of each preloaded thread.
+  // MERGE them over the cache instead of replacing it: older history the
+  // manager scrolled through stays put, threads the server did not re-ship
+  // stay hydrated. (Replacing wholesale shrank the open thread from 300 to 30
+  // messages on every realtime tick anywhere in the inbox and dumped the
+  // reader at the top — see lib/merge-thread-slice.ts.) `noOlder` stays valid
+  // for the same reason: the history it describes is still there.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLocalMessages(messagesByConversation)
-    setNoOlder({})
-  }, [messagesByConversation, setNoOlder])
+    setLocalMessages((prev) => mergeFreshSlices(prev, messagesByConversation))
+  }, [messagesByConversation])
 
   // Live "visitor is typing" state for the open thread (auto-expired by sweep).
   const activeTyping =

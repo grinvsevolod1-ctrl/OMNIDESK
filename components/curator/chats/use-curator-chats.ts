@@ -25,6 +25,7 @@ import type { Conversation, Message, StickerItem } from '@/lib/types'
 import type { ForwardTarget } from '@/components/manager/message-context-menu'
 import { useInboxRealtime } from '@/components/manager/inbox/use-inbox-realtime'
 import { reportBatchOutcome, sendMediaBatch } from '@/lib/media-batch-client'
+import { mergeFreshSlices } from '@/lib/merge-thread-slice'
 import {
   deleteCuratorMessageAction,
   editCuratorMessageAction,
@@ -71,17 +72,13 @@ export function useCuratorChats({
 
   // Держим локальный кэш в синхроне с новыми SSR-данными (router.refresh).
   // Тот же паттерн «производное от пропсов», что и в useInbox менеджера —
-  // синхронный setState здесь осознан (см. use-inbox.ts).
+  // синхронный setState здесь осознан (см. use-inbox.ts). СЛИЯНИЕ, не замена:
+  // свежий срез — это только последние ~30 сообщений, а куратор мог долистать
+  // историю на сотни назад; замена целиком сбрасывала его в начало треда на
+  // каждом realtime-тике (см. lib/merge-thread-slice.ts).
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLocalMessages((prev) => {
-      const next = { ...prev }
-      for (const [id, msgs] of Object.entries(messagesByConversation)) {
-        // Свежие серверные данные заменяют локальные, кроме tmp-оптимистичных.
-        next[id] = msgs
-      }
-      return next
-    })
+    setLocalMessages((prev) => mergeFreshSlices(prev, messagesByConversation))
   }, [messagesByConversation])
 
   const { syncState } = useInboxRealtime({ router, setLocalMessages })
@@ -134,10 +131,16 @@ export function useCuratorChats({
     startTransition(async () => {
       const res = await loadOlderCuratorMessagesAction(id, oldest.createdAt)
       if (res.ok) {
-        setLocalMessages((prev) => ({
-          ...prev,
-          [id]: [...res.messages, ...(prev[id] ?? [])],
-        }))
+        // Scroll anchoring for the prepend lives in MessageList (shared with
+        // the manager): the message the curator was reading stays in place.
+        setLocalMessages((prev) => {
+          const existing = prev[id] ?? []
+          const known = new Set(existing.map((m) => m.id))
+          const older = res.messages.filter((m) => !known.has(m.id))
+          return older.length === 0
+            ? prev
+            : { ...prev, [id]: [...older, ...existing] }
+        })
         if (!res.hasMore) setNoOlder((p) => ({ ...p, [id]: true }))
       }
       setLoadingOlder(false)
