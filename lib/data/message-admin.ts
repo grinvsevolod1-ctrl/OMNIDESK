@@ -223,6 +223,40 @@ export async function getMessageOwnerAdmin(
 }
 
 /**
+ * Descriptor the panel needs to stream a PERSONAL Telegram message's media live
+ * from the worker (`/personal/media?channelId=&peer=&messageId=`). Personal
+ * dialogs (type='telegram_personal', god messenger / synthetic / outreach) are
+ * read straight from Telegram and their INBOUND media is never persisted, so
+ * `/api/media` can't serve them from the archive nor via the generic `/media`
+ * bot pipeline — it must hit the personal endpoint instead. Admin-wide (no
+ * manager scoping): the media route establishes ownership via getMessageOwner*
+ * before calling this. Returns null when the provider message id or peer is
+ * missing (nothing to fetch live).
+ */
+export async function getPersonalMediaDescriptor(
+  messageId: string,
+): Promise<{ channelId: string; peer: string; providerMessageId: string } | null> {
+  const rows = await query<{
+    channel_id: string
+    contact_handle: string
+    provider_message_id: string | null
+  }>(
+    `SELECT c.channel_id, c.contact_handle, m.provider_message_id
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.id = $1`,
+    [messageId],
+  )
+  const r = rows[0]
+  if (!r || !r.provider_message_id || !r.contact_handle) return null
+  return {
+    channelId: r.channel_id,
+    peer: r.contact_handle,
+    providerMessageId: r.provider_message_id,
+  }
+}
+
+/**
  * Resolve a channel id + type owned by the manager. Used by the sticker proxy
  * routes and sendStickerAction to authorize worker calls.
  */

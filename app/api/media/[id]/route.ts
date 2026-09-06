@@ -5,6 +5,7 @@ import {
   getMessageOwner,
   getMessageOwnerAdmin,
   getMessageOwnerForCurator,
+  getPersonalMediaDescriptor,
   getStoredEditMediaBytes,
   getStoredMediaBytes,
   getUrlMediaDescriptor,
@@ -158,6 +159,34 @@ async function handleMediaGet(
 
   if (!isWorkerConfigured) {
     return new Response('Worker not configured', { status: 503 })
+  }
+
+  // Personal Telegram dialogs (god messenger / synthetic / outreach, transferred
+  // to curators) are read LIVE from Telegram and their inbound media is never
+  // persisted — so the generic `/media` bot pipeline can't find it and returns
+  // 410. Stream it from the worker's personal endpoint instead, exactly like the
+  // god messenger's own personal-media route does. (Archived/god-sent bytes are
+  // already served above via getStoredMediaBytes.)
+  if (owner.channelType === 'telegram_personal') {
+    const desc = await getPersonalMediaDescriptor(id)
+    if (!desc) return new Response('Media unavailable', { status: 404 })
+    const personal = await streamFromWorker(
+      `/personal/media?channelId=${encodeURIComponent(desc.channelId)}` +
+        `&peer=${encodeURIComponent(desc.peer)}` +
+        `&messageId=${encodeURIComponent(desc.providerMessageId)}`,
+    )
+    if (!personal || !personal.ok || !personal.body) {
+      return new Response('Media unavailable', {
+        status: personal?.status || 502,
+      })
+    }
+    const headers = new Headers()
+    for (const h of ['content-type', 'content-length', 'content-disposition']) {
+      const v = personal.headers.get(h)
+      if (v) headers.set(h, v)
+    }
+    headers.set('cache-control', 'private, max-age=86400')
+    return new Response(personal.body, { status: 200, headers })
   }
 
   const upstream = await streamFromWorker(

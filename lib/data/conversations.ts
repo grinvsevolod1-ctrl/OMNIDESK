@@ -384,6 +384,7 @@ export {
   getMessageOwner,
   getMessageOwnerAdmin,
   getMessageOwnerForCurator,
+  getPersonalMediaDescriptor,
   markMessageDeleted,
   markMessageDeletedForCurator,
   setMessageReaction,
