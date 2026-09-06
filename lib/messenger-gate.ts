@@ -1,5 +1,5 @@
 import 'server-only'
-import { createHash, timingSafeEqual } from 'crypto'
+import { safeEqual } from '@/lib/safe-equal'
 import { jwtVerify, SignJWT } from 'jose'
 import { cookies } from 'next/headers'
 import { getAuthSecret } from './session'
@@ -26,16 +26,6 @@ const MESSENGER_PASSWORD = process.env.MESSENGER_PASSWORD || ''
 /** True when the messenger passcode is configured on the server. */
 export function isMessengerPasswordConfigured(): boolean {
   return MESSENGER_PASSWORD.length > 0
-}
-
-/**
- * Constant-time comparison. Both sides are SHA-256 hashed first so
- * `timingSafeEqual` always gets equal-length buffers and no length leaks.
- */
-function safeEqual(a: string, b: string): boolean {
-  const ha = createHash('sha256').update(a).digest()
-  const hb = createHash('sha256').update(b).digest()
-  return timingSafeEqual(ha, hb)
 }
 
 export function verifyMessengerPasscode(passcode: string): boolean {

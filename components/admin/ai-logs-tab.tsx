@@ -18,6 +18,7 @@ import {
   type AiDiagnostics,
 } from '@/app/actions/ai-assist'
 import type { AiLogLevel, AiLogRow } from '@/lib/data/ai-log'
+import { APP_TIME_ZONE } from '@/lib/time'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -79,6 +80,7 @@ function formatTime(iso: string): string {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
+      timeZone: APP_TIME_ZONE,
     })
   } catch {
     return ''

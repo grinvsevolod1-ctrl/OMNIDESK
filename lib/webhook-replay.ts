@@ -28,6 +28,7 @@ import {
 } from './data/max'
 import { runLivechatAutopilot } from './autopilot/runtime'
 import { log } from './server-log'
+import type { MediaType } from './types/messages'
 
 /**
  * Replay a single dead-letter. Throws on failure so the caller records the
@@ -62,8 +63,7 @@ async function replayOne(row: DeadLetterRecord): Promise<void> {
       contactHandle,
       body,
       preview: payload.preview,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mediaType: (payload.mediaType ?? null) as any,
+      mediaType: (payload.mediaType ?? null) as MediaType | null,
       mediaMime: (payload.mediaMime ?? null) as string | null,
       mediaName: (payload.mediaName ?? null) as string | null,
       mediaRef: (payload.mediaRef ?? null) as Record<string, unknown> | null,

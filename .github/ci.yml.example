@@ -1,0 +1,104 @@
+# OMNIDESK CI pipeline.
+#
+# NOTE: v0's GitHub App cannot push files into `.github/workflows/` (it lacks the
+# `workflows` permission), so this pipeline ships here as `.example`. To ACTIVATE
+# it, move this file to `.github/workflows/ci.yml` on the default branch:
+#
+#     git mv .github/ci.yml.example .github/workflows/ci.yml
+#     git commit -m "ci: activate CI pipeline" && git push
+#
+# (or just copy its contents into a new `.github/workflows/ci.yml` via the
+# GitHub web UI, which has the required permission).
+#
+# Two jobs:
+#   • unit        — mirrors `pnpm check` (lint + typecheck app/worker + unit tests)
+#   • integration — runs tests/integration against a real Postgres (pgvector),
+#                   the only place those DB-backed regression tests execute.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref so a rapid push series doesn't queue up.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast, dependency-free gate: lint + types (app & worker) + unit tests.
+  # Mirrors `pnpm check` so local and CI verdicts match exactly.
+  unit:
+    name: Lint, types & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck (app)
+        run: pnpm typecheck
+
+      - name: Typecheck (worker)
+        run: pnpm typecheck:worker
+
+      - name: Unit tests
+        run: pnpm test
+
+  # Integration gate: runs the tests/integration suite against a real Postgres.
+  # These are skipped locally without DATABASE_URL, so CI is the only place they
+  # actually execute — the schema-drift and constraint regressions they catch
+  # (e.g. migration 164's livechat orphan fix) would otherwise slip through.
+  integration:
+    name: Integration tests (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # pgvector image = stock Postgres 15 + the `vector` extension the
+        # migrations require, alongside contrib (pg_trgm, pgcrypto).
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: omnidesk
+          POSTGRES_PASSWORD: omnidesk
+          POSTGRES_DB: omnidesk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U omnidesk -d omnidesk_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://omnidesk:omnidesk@localhost:5432/omnidesk_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      - name: Integration tests
+        run: pnpm test:integration

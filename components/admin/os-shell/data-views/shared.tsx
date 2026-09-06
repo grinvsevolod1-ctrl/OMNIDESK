@@ -7,6 +7,8 @@
  * across the whole feed.
  */
 
+import { APP_TIME_ZONE, mskDayKey } from '@/lib/time'
+
 /** Human channel names — raw enum keys must never reach the admin's eyes. */
 export const CHANNEL_LABEL: Record<string, string> = {
   telegram: 'Telegram',
@@ -21,19 +23,19 @@ export function pct(v: number | null): string {
   return typeof v === 'number' && Number.isFinite(v) ? `${Math.round(v)}%` : '—'
 }
 
-/** Compact relative/absolute timestamp for feed tables. */
+/** Compact relative/absolute timestamp for feed tables (MSK). */
 export function formatWhen(iso: string): string {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  const now = new Date()
-  const sameDay = d.toDateString() === now.toDateString()
+  const sameDay = mskDayKey(d) === mskDayKey(new Date())
   const time = d.toLocaleTimeString('ru-RU', {
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: APP_TIME_ZONE,
   })
   if (sameDay) return time
-  return `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`
+  return `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: APP_TIME_ZONE })}, ${time}`
 }
 
 export function asArray<T>(v: unknown): T[] {

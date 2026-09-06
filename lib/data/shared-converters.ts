@@ -28,7 +28,13 @@ import {
 
 export function toManager(r: ManagerRow): Manager {
   const role: AccountRole =
-    r.role === 'curator' ? 'curator' : r.role === 'head' ? 'head' : 'manager'
+    r.role === 'curator'
+      ? 'curator'
+      : r.role === 'head'
+        ? 'head'
+        : r.role === 'buyer'
+          ? 'buyer'
+          : 'manager'
   return {
     id: r.id,
     name: r.name,

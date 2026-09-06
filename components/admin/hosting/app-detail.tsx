@@ -24,6 +24,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { APP_TIME_ZONE } from '@/lib/time'
 import type {
   HostingApp,
   HostingDeployment,
@@ -269,6 +270,7 @@ export function AppDetail({
                       month: '2-digit',
                       hour: '2-digit',
                       minute: '2-digit',
+                      timeZone: APP_TIME_ZONE,
                     })}
                   </span>
                 </button>

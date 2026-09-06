@@ -172,15 +172,7 @@ export type SortMode = 'recent' | 'oldest' | 'unread' | 'status'
 /*  Small helpers                                                             */
 /* -------------------------------------------------------------------------- */
 
-export function initials(name: string): string {
-  return name
-    .split(' ')
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
-}
+export { initials } from '@/lib/initials'
 
 /** Stable colour index for an avatar based on the contact name. */
 export function avatarTint(name: string): string {

@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import { createHash, timingSafeEqual } from 'crypto'
+import { safeEqual } from '@/lib/safe-equal'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { isAdminSessionCurrent } from './admin-session'
@@ -55,17 +55,6 @@ const ADMIN_USERNAME = (
 )
   .trim()
   .toLowerCase()
-
-/**
- * Constant-time string comparison that does not leak length via early return.
- * Both sides are SHA-256 hashed first so `timingSafeEqual` always receives
- * equal-length buffers regardless of input length.
- */
-function safeEqual(a: string, b: string): boolean {
-  const ha = createHash('sha256').update(a).digest()
-  const hb = createHash('sha256').update(b).digest()
-  return timingSafeEqual(ha, hb)
-}
 
 export async function verifyAdminCredentials(
   identifier: string,

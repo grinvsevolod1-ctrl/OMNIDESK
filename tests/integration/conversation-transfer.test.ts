@@ -30,9 +30,9 @@ describe.skipIf(!HAS_DB)('conversation transfer', () => {
 
   async function makeConversation(): Promise<string> {
     const rows = await query<{ id: string }>(
-      `INSERT INTO conversations (channel_id, manager_id, client_name, status)
-       VALUES ($1, $2, 'Transfer Test Client', 'active') RETURNING id`,
-      [channelId, ownerId],
+      `INSERT INTO conversations (channel_id, manager_id, channel_type, contact_handle, contact_name, status)
+       VALUES ($1, $2, 'livechat', $3, 'Transfer Test Client', 'liquid') RETURNING id`,
+      [channelId, ownerId, `visitor-${suffix}-${Math.random().toString(36).slice(2)}`],
     )
     return rows[0].id
   }
