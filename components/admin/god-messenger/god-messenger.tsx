@@ -12,6 +12,7 @@ import { useSearchParams } from 'next/navigation'
 
 import { toast } from 'sonner'
 import { secretSetContactBlockedAction } from '@/app/actions/admin-secret/conversation-edits'
+import { secretReassignConversationManagerAction } from '@/app/actions/admin-secret/conversations'
 import type { Channel, Manager } from '@/lib/types'
 import { NewChatDialog } from './new-chat-dialog'
 import { ChatListPane } from './chat-list-pane'
@@ -117,6 +118,29 @@ export function GodMessenger({
     })
   }, [blocked, thread])
 
+  const [reassignPending, startReassign] = useTransition()
+  const reassignManager = useCallback(
+    (managerId: string) => {
+      const id = thread.selectedId
+      if (!id) return
+      startReassign(async () => {
+        const res = await secretReassignConversationManagerAction({
+          conversationId: id,
+          managerId,
+        })
+        if (res.ok) {
+          toast.success(res.message)
+          // Refresh the open thread + list so the new owner shows immediately.
+          thread.loadThreadRef.current(id)
+          thread.loadList({ silent: true })
+        } else {
+          toast.error(res.message)
+        }
+      })
+    },
+    [thread],
+  )
+
   const showThread = thread.selectedId !== null
 
   const replyLabel = composer.replyTo
@@ -150,6 +174,9 @@ export function GodMessenger({
           visibleCount={visibleCount}
           onShowMore={() => setVisibleCount((c) => c + MESSAGES_WINDOW)}
           managerNameOf={managerNameOf}
+          managers={managers}
+          onReassignManager={reassignManager}
+          reassignPending={reassignPending}
           selectThread={thread.selectThread}
           retryLoad={() => {
             if (thread.selectedId) thread.loadThreadRef.current(thread.selectedId)

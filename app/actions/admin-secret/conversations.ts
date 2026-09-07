@@ -10,6 +10,7 @@ import {
 import {
   MEDIA_MAX_STORE_BYTES,
 } from '@/lib/data/media-archive'
+import { applyLunchSubstitution } from '@/lib/data'
 import { saveMediaFile } from '@/lib/media-store'
 import {
   assertConsoleOrMessenger,
@@ -77,6 +78,12 @@ export async function secretCreateConversationAction(input: {
       message: 'У канала нет владельца — назначьте менеджера перед созданием диалога',
     }
 
+  // Route around lunch exactly like a real inbound: the operator addresses the
+  // thread to a manager (by picking their channel), but if that manager is on
+  // lunch it must go to an available substitute instead — never to the manager
+  // who stepped out. Falls back to the channel owner when nobody else is free.
+  const effectiveManagerId = await applyLunchSubstitution(channel[0].manager_id)
+
   const id = randomUUID()
   const firstMessage = input.message?.trim() ?? ''
 
@@ -96,7 +103,7 @@ export async function secretCreateConversationAction(input: {
         id,
         channel[0].id,
         channel[0].type,
-        channel[0].manager_id,
+        effectiveManagerId,
         contactName,
         contactHandle,
         firstMessage,
@@ -120,6 +127,37 @@ export async function secretCreateConversationAction(input: {
   })
 
   return { ok: true, message: `Диалог с «${contactName}» создан`, id }
+}
+
+/**
+ * Reassign an existing conversation to a specific manager, straight from the
+ * messenger thread header ("у кого сейчас этот чат"). Unlike creation, this is
+ * a DELIBERATE manual hand-off, so it does NOT apply lunch substitution — the
+ * operator gets exactly the manager they picked. Only real managers (role =
+ * 'manager') are valid owners, preserving inbox isolation. No revalidatePath:
+ * the messenger is SSE-driven and a route refresh would remount the open thread.
+ */
+export async function secretReassignConversationManagerAction(input: {
+  conversationId: string
+  managerId: string
+}): Promise<ActionResult> {
+  await assertConsoleOrMessenger()
+  if (!input.conversationId || !input.managerId)
+    return { ok: false, message: 'Выберите диалог и менеджера' }
+
+  const mgr = await query<{ id: string; name: string }>(
+    "SELECT id, name FROM managers WHERE id = $1 AND role = 'manager' LIMIT 1",
+    [input.managerId],
+  )
+  if (!mgr[0]) return { ok: false, message: 'Менеджер не найден' }
+
+  const updated = await query<{ id: string }>(
+    'UPDATE conversations SET manager_id = $2 WHERE id = $1 RETURNING id',
+    [input.conversationId, input.managerId],
+  )
+  if (!updated[0]) return { ok: false, message: 'Диалог не найден' }
+
+  return { ok: true, message: `Диалог передан: ${mgr[0].name}` }
 }
 
 export interface SendMessageResult extends ActionResult {

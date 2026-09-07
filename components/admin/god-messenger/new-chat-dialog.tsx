@@ -66,7 +66,11 @@ export function NewChatDialog({
   )
   const eligibleManagers = useMemo(() => {
     const owners = new Set(ownedChannels.map((c) => c.managerId))
-    return managers.filter((m) => owners.has(m.id))
+    // Only real, active managers can own an inbox — curators/heads/buyers share
+    // the managers table but must never be offered as a conversation owner.
+    return managers.filter(
+      (m) => m.role === 'manager' && m.status === 'active' && owners.has(m.id),
+    )
   }, [ownedChannels, managers])
 
   const [managerId, setManagerId] = useState('')

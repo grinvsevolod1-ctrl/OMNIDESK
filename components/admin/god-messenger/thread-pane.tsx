@@ -30,8 +30,15 @@ import {
 import type { ConversationWithManager } from '@/app/actions/admin-secret'
 import { ContactAvatar, SourceChip } from '@/components/manager/inbox/atoms'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import type { Message } from '@/lib/types'
+import type { Manager, Message } from '@/lib/types'
 import { isComposing } from './utils'
 import {
   DropOverlay,
@@ -100,6 +107,10 @@ interface ThreadPaneProps {
   visibleCount: number
   onShowMore: () => void
   managerNameOf: (id: string | null) => string
+  /* Reassign the open thread's owner ("у кого сейчас этот чат") from the header. */
+  managers: Manager[]
+  onReassignManager: (managerId: string) => void
+  reassignPending: boolean
   selectThread: (id: string | null) => void
   retryLoad: () => void
   /* Block toggle: simulates the contact blocking our manager. When blocked,
@@ -147,6 +158,9 @@ export function ThreadPane({
   visibleCount,
   onShowMore,
   managerNameOf,
+  managers,
+  onReassignManager,
+  reassignPending,
   selectThread,
   retryLoad,
   blocked,
@@ -288,9 +302,32 @@ export function ThreadPane({
               </p>
               <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
                 <SourceChip conversation={conversation} size="xs" />
-                <span className="truncate text-xs text-muted-foreground">
-                  Менеджер: {managerNameOf(conversation.managerId)}
-                </span>
+                <Select
+                  value={conversation.managerId ?? ''}
+                  onValueChange={(v) => {
+                    if (v && v !== conversation.managerId) onReassignManager(v)
+                  }}
+                  disabled={reassignPending}
+                >
+                  <SelectTrigger
+                    className="h-6 min-w-0 max-w-[60vw] gap-1 border-none bg-transparent px-1 py-0 text-xs text-muted-foreground shadow-none hover:text-foreground focus:ring-0 focus:ring-offset-0 [&>span]:truncate"
+                    aria-label="Кому адресован этот чат"
+                    title="Кому адресован этот чат"
+                  >
+                    <span className="shrink-0">Менеджер:</span>
+                    <SelectValue placeholder={managerNameOf(conversation.managerId)} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {managers
+                      .filter((m) => m.role === 'manager' && m.status === 'active')
+                      .map((m) => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.name}
+                          {m.onLunch ? ' · на обеде' : ''}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <button
