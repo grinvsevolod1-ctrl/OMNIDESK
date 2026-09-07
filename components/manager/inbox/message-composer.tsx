@@ -32,6 +32,7 @@ import {
   type DockTab,
 } from '@/components/manager/inbox/emoji-dock'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
+import { useStickerPreload } from '@/components/manager/inbox/use-sticker-preload'
 import { ScheduleSendPopover } from '@/components/manager/inbox/schedule-send'
 import {
   useMediaStaging,
@@ -184,6 +185,12 @@ export const MessageComposer = memo(function MessageComposer({
       return !(prevOpen && sameTab)
     })
   }, [dockTab])
+  // Прогрев палитры стикеров и их превью на idle сразу при открытии диалога —
+  // к моменту клика по вкладке «Стикеры» список уже в кэше SWR, а картинки в
+  // HTTP-кэше браузера, поэтому панель открывается мгновенно, без спиннера и
+  // подгрузки превью по одному. Только Telegram (у остальных каналов стикеров
+  // нет).
+  useStickerPreload(channelId, channelType === 'telegram')
   // Telegram-style multi-file staging: pick/drop up to 10 files, caption them
   // with the textarea, then send as a batch. `sendingMedia` disables the tray
   // while the sequential upload loop runs.

@@ -202,6 +202,35 @@ export function EmojiPanel({ onPick }: { onPick: (emoji: string) => void }) {
 /* ----------------------------- Sticker panel ------------------------------ */
 
 /**
+ * SWR key + fetcher for an account's sticker palette. Extracted so the composer
+ * can PREFETCH the palette (via SWR `preload`) the moment a conversation opens —
+ * by the time the user taps the sticker tab the list is already in cache and the
+ * panel renders instantly instead of showing a spinner. `dedupingInterval`
+ * shares one request between the prefetch and the panel's own `useSWR`.
+ */
+export function stickersKey(channelId: string): string {
+  return `/api/stickers?channelId=${encodeURIComponent(channelId)}`
+}
+
+export function stickersFetcher(url: string): Promise<StickerItem[]> {
+  return fetch(url)
+    .then((r) => (r.ok ? r.json() : { stickers: [] }))
+    .then((data: { stickers: StickerItem[] }) => data.stickers ?? [])
+    .catch(() => [] as StickerItem[])
+}
+
+/** Same-origin URL of a sticker's static preview (webp/png) for a channel. */
+export function stickerThumbUrl(channelId: string, s: StickerItem): string {
+  const qs = new URLSearchParams({
+    channelId,
+    id: s.id,
+    accessHash: s.accessHash,
+    fileReference: s.fileReference,
+  })
+  return `/api/stickers/thumb?${qs.toString()}`
+}
+
+/**
  * Панель стикеров (Telegram). Лениво тянет палитру аккаунта из `/api/stickers`
  * (избранное + недавние + популярные паки — см. воркер), кэширует через SWR,
  * шлёт выбранный стикер по клику. Панель НЕ закрывается после отправки —
@@ -215,23 +244,13 @@ export function StickerPanel({
   onSend: (sticker: StickerItem) => void
 }) {
   const { data: stickers, isLoading: loading } = useSWR(
-    `/api/stickers?channelId=${encodeURIComponent(channelId)}`,
-    (url: string) =>
-      fetch(url)
-        .then((r) => (r.ok ? r.json() : { stickers: [] }))
-        .then((data: { stickers: StickerItem[] }) => data.stickers ?? [])
-        .catch(() => [] as StickerItem[]),
+    stickersKey(channelId),
+    stickersFetcher,
     { revalidateOnFocus: false, dedupingInterval: 60_000 },
   )
 
   function thumbUrl(s: StickerItem): string {
-    const qs = new URLSearchParams({
-      channelId,
-      id: s.id,
-      accessHash: s.accessHash,
-      fileReference: s.fileReference,
-    })
-    return `/api/stickers/thumb?${qs.toString()}`
+    return stickerThumbUrl(channelId, s)
   }
 
   if (loading) {
