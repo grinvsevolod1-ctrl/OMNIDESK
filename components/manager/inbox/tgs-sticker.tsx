@@ -21,7 +21,7 @@
  *    stickers so only the ones you can actually see burn CPU.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 
 interface TgsStickerProps {
   /** Same-origin URL streaming the raw .tgs bytes (e.g. /api/media/{id}). */
@@ -98,7 +98,7 @@ async function loadAnimationData(url: string): Promise<unknown> {
   }
 }
 
-export function TgsSticker({ url, alt, onError, onLoad }: TgsStickerProps) {
+function TgsStickerImpl({ url, alt, onError, onLoad }: TgsStickerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [ready, setReady] = useState(false)
 
@@ -170,3 +170,11 @@ export function TgsSticker({ url, alt, onError, onLoad }: TgsStickerProps) {
     </div>
   )
 }
+
+/**
+ * Memoized: the message list re-renders on every "typing…" tick, reply-jump
+ * highlight and selection toggle. Without memo each pass would tear down and
+ * rebuild every sticker's Lottie player. Props (url + stable callbacks from
+ * useRetryingMediaSrc) only change when the sticker itself does.
+ */
+export const TgsSticker = memo(TgsStickerImpl)

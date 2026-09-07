@@ -8,7 +8,7 @@
  * use-retrying-media-src.ts; this file only composes them.
  */
 
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { Download, ExternalLink, FileText, Info, Play } from 'lucide-react'
 import { TgsSticker } from '@/components/manager/inbox/tgs-sticker'
 import {
@@ -58,7 +58,7 @@ export function isMediaPlaceholder(body: string): boolean {
  * cell is a square crop that opens the SAME fullscreen lightbox used for single
  * media (so download / open-in-tab / safe-area insets all come for free).
  */
-export function MessageMediaAlbum({ items }: { items: Message[] }) {
+function MessageMediaAlbumImpl({ items }: { items: Message[] }) {
   const gallery = useMediaGallery()
   // Fallback gallery over just this album if no provider is present (defensive —
   // in the inbox MediaGalleryProvider always wraps the thread).
@@ -98,6 +98,14 @@ export function MessageMediaAlbum({ items }: { items: Message[] }) {
     </>
   )
 }
+
+/**
+ * Memoized: the thread re-renders on every "typing…" tick / reply-jump
+ * highlight / selection toggle. The album's `items` slice keeps a stable
+ * reference across those passes (thread array unchanged), so memo skips the
+ * whole grid re-render.
+ */
+export const MessageMediaAlbum = memo(MessageMediaAlbumImpl)
 
 /** One square cell of a MessageMediaAlbum. */
 function AlbumCell({
@@ -187,7 +195,7 @@ function AlbumCell({
  * Images and videos are clickable to open a fullscreen viewer where they can be
  * saved.
  */
-export function MessageMedia({ message }: { message: Message }) {
+function MessageMediaImpl({ message }: { message: Message }) {
   const [lightbox, setLightbox] = useState(false)
   const [imgLoaded, setImgLoaded] = useState(false)
   const gallery = useMediaGallery()
@@ -442,3 +450,11 @@ export function MessageMedia({ message }: { message: Message }) {
     </button>
   )
 }
+
+/**
+ * Memoized: the message list re-renders on every "typing…" tick, reply-jump
+ * highlight and selection toggle. The `message` object keeps a stable
+ * reference across those passes (the thread array is unchanged), so memo skips
+ * re-rendering the media tile — the expensive part being sticker/video/img.
+ */
+export const MessageMedia = memo(MessageMediaImpl)
