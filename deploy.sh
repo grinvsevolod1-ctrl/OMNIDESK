@@ -152,6 +152,19 @@ git reset --hard "origin/$BRANCH"
 pnpm install --frozen-lockfile
 (cd worker && pnpm install --frozen-lockfile)
 
+# 3b. Type-check the WORKER before we touch any running process. The worker is
+#     NOT compiled — PM2 runs it straight from TypeScript via tsx
+#     (ecosystem.config.js: interpreter=worker/node_modules/.bin/tsx,
+#     script=worker/src/index.ts), so `pnpm build` never sees its code and a
+#     type/compile error in worker/src/** would only blow up at RUNTIME, right
+#     after step 6 restarts omnidesk-worker: tsx throws on load, PM2 restart-
+#     loops it, and every live Telegram (MTProto) session drops. Running the
+#     worker's own `tsc --noEmit` here turns that into a normal pre-restart
+#     build failure — the old worker keeps serving and the deploy is retried,
+#     exactly like a panel build error. Fast (no emit) and idempotent.
+echo "🧩 Type-checking the worker (tsx runs it uncompiled) ..."
+(cd worker && pnpm run typecheck)
+
 # 4. Apply pending migrations idempotently. migrate.mjs tracks applied files in
 #    the schema_migrations table (with checksums) and takes an advisory lock, so
 #    re-running a deploy never re-applies or double-applies anything. We load the
