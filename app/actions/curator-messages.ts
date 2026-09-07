@@ -21,6 +21,7 @@ import {
   markCuratorConversationRead,
 } from '@/lib/data/curator-conversations'
 import type { StickerItem } from '@/lib/types'
+import { fetchStickerThumb } from '@/lib/worker-client'
 import { deliverMaxMessage } from '@/lib/max-dispatch'
 import { deliverVkMessage, markVkConversationRead } from '@/lib/vk-dispatch'
 import {
@@ -413,6 +414,9 @@ export async function sendCuratorStickerAction(
     return { ok: false, message: 'Стикеры доступны только для Telegram.' }
   }
 
+  // Mirror the manager path: store the raster preview's mime (image/webp), not
+  // the original container, and archive the worker's static thumbnail below so
+  // the bubble renders the real sticker image instead of the bare emoji.
   const msg = await addMessage({
     conversationId,
     managerId: conv.managerId,
@@ -420,9 +424,16 @@ export async function sendCuratorStickerAction(
     body: sticker.emoji || '[Стикер]',
     author: session.name,
     mediaType: 'sticker',
-    mediaMime: sticker.mime || 'image/webp',
+    mediaMime: 'image/webp',
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
+
+  const thumb = await fetchStickerThumb(conv.channelId, sticker).catch(() => null)
+  if (thumb) {
+    await storeMessageMediaBytes(msg.id, thumb.bytes, thumb.mime, null).catch(
+      () => {},
+    )
+  }
 
   await enqueueJob({
     channelId: conv.channelId,
@@ -617,7 +628,7 @@ export async function sendCuratorScheduledMessageAction(
   }
 
   const conv = await getConversationForCurator(conversationId, session.sub)
-  if (!conv) return { ok: false, message: 'Диалог не найден.' }
+  if (!conv) return { ok: false, message: 'Диалог н�� найден.' }
   if (conv.channelType !== 'telegram') {
     return {
       ok: false,

@@ -183,6 +183,40 @@ export async function postJsonToWorker<T>(
  * error (which the tile turns into a retry) instead of a request that hangs
  * until the socket dies — the "loads forever" symptom.
  */
+/**
+ * Fetch a sticker's static raster preview (webp/png) from the worker so an
+ * OUTGOING sticker can be archived at send time (see the send actions). Without
+ * this, our own optimistic sticker row has no blob and no provider id, so
+ * `/api/media/{id}` can serve nothing and the bubble degrades to the bare emoji
+ * — the "I sent a sticker but see a smiley" bug. Returns the bytes + mime, or
+ * null when the worker isn't configured / offline / the sticker can't be read.
+ */
+export async function fetchStickerThumb(
+  channelId: string,
+  sticker: { id: string; accessHash: string; fileReference: string },
+): Promise<{ bytes: Buffer; mime: string } | null> {
+  if (!isWorkerConfigured) return null
+  try {
+    const qs = new URLSearchParams({
+      channelId,
+      id: sticker.id,
+      accessHash: sticker.accessHash,
+      fileReference: sticker.fileReference,
+    })
+    const res = await fetch(`${WORKER_URL}/sticker-thumb?${qs.toString()}`, {
+      headers: { 'x-worker-secret': WORKER_SECRET },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(WORKER_MEDIA_TIMEOUT_MS),
+    })
+    if (!res.ok) return null
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.byteLength === 0) return null
+    return { bytes: buf, mime: res.headers.get('content-type') || 'image/webp' }
+  } catch {
+    return null
+  }
+}
+
 export async function streamFromWorker(path: string): Promise<Response | null> {
   if (!isWorkerConfigured) return null
   const controller = new AbortController()

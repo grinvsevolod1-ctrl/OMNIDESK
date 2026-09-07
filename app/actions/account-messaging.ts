@@ -25,6 +25,7 @@ import {
   markWhatsappConversationRead,
 } from '@/lib/whatsapp-dispatch'
 import type { StickerItem } from '@/lib/types'
+import { fetchStickerThumb } from '@/lib/worker-client'
 import type { SimpleResult } from './account-shared'
 
 /**
@@ -430,15 +431,31 @@ export async function sendStickerAction(
 
   // Record the outgoing sticker so it appears immediately in the thread. The
   // body carries the emoji (or a placeholder) for previews / accessibility.
+  // The stored mime is the raster preview's (image/webp), NOT the original
+  // sticker container (tgs/webm): we archive the worker's static thumbnail
+  // below, and the bubble must render it as a plain <img>, not try to inflate
+  // a Lottie/webm from webp bytes.
   const msg = await addMessage({
     conversationId,
     managerId: session.sub,
     body: sticker.emoji || '[Стикер]',
     author: session.name,
     mediaType: 'sticker',
-    mediaMime: sticker.mime || 'image/webp',
+    mediaMime: 'image/webp',
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
+
+  // Archive the sticker's static preview at send time so the bubble shows the
+  // actual sticker image instead of degrading to the bare emoji. Our own
+  // outgoing row has no provider id yet, so `/api/media/{id}` can only serve
+  // what we persist here. Best-effort: if the worker is offline the bubble
+  // simply falls back to the emoji (previous behaviour).
+  const thumb = await fetchStickerThumb(conv.channelId, sticker).catch(() => null)
+  if (thumb) {
+    await storeMessageMediaBytes(msg.id, thumb.bytes, thumb.mime, null).catch(
+      () => {},
+    )
+  }
 
   await enqueueJob({
     channelId: conv.channelId,
