@@ -23,48 +23,92 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { TYPE_LABEL } from './utils'
-import { ScenarioPicker } from './scenario-picker'
-import type { Channel } from '@/lib/types'
+import type { Channel, Manager } from '@/lib/types'
+
+/** `datetime-local` value (local tz) for "now" — the default backdate. */
+function nowLocalValue(): string {
+  const d = new Date()
+  d.setSeconds(0, 0)
+  const off = d.getTimezoneOffset()
+  return new Date(d.getTime() - off * 60_000).toISOString().slice(0, 16)
+}
 
 /**
- * Create a new conversation "as the client". Only channels that have an owning
- * manager are selectable — the god-console action rejects owner-less channels.
- * On success the parent selects the freshly created thread.
+ * Create a new conversation "as the client".
+ *
+ * The operator explicitly picks (1) the manager the thread is addressed to,
+ * (2) one of THAT manager's channels, and (3) the time the client "wrote"
+ * (defaults to now, may be backdated). Isolation is preserved because the
+ * backing action assigns the conversation to the channel's owner, and we only
+ * ever offer channels owned by the selected manager — so `manager_id` always
+ * equals the chosen manager and the thread lands in exactly their inbox/chats.
  */
 export function NewChatDialog({
   open,
   onOpenChange,
   channels,
+  managers,
   onCreated,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   channels: Channel[]
+  managers: Manager[]
   /** Called with the created conversation id so the parent can open it. */
   onCreated: (id?: string) => void
 }) {
+  // Only channels with an owning manager are eligible (the action rejects
+  // owner-less channels), so managers without any owned channel can't be chosen.
   const ownedChannels = useMemo(
     () => channels.filter((c) => c.managerId),
     [channels],
   )
+  const eligibleManagers = useMemo(() => {
+    const owners = new Set(ownedChannels.map((c) => c.managerId))
+    return managers.filter((m) => owners.has(m.id))
+  }, [ownedChannels, managers])
+
+  const [managerId, setManagerId] = useState('')
   const [channelId, setChannelId] = useState('')
   const [contactName, setContactName] = useState('')
   const [contactHandle, setContactHandle] = useState('')
   const [message, setMessage] = useState('')
+  const [createdAt, setCreatedAt] = useState(nowLocalValue)
   const [pending, startTransition] = useTransition()
 
+  // Channels for the currently selected manager (drives the channel picker).
+  const managerChannels = useMemo(
+    () => ownedChannels.filter((c) => c.managerId === managerId),
+    [ownedChannels, managerId],
+  )
+
   const reset = () => {
+    setManagerId('')
     setChannelId('')
     setContactName('')
     setContactHandle('')
     setMessage('')
+    setCreatedAt(nowLocalValue())
+  }
+
+  const onManagerChange = (v: string | null) => {
+    setManagerId(v ?? '')
+    setChannelId('') // channel list depends on the manager — clear stale pick
   }
 
   const submit = () => {
+    if (!managerId) {
+      toast.error('Выберите менеджера')
+      return
+    }
     if (!channelId || !contactName.trim() || !contactHandle.trim()) {
       toast.error('Заполните канал, имя и хэндл')
+      return
+    }
+    const when = new Date(createdAt)
+    if (Number.isNaN(when.getTime())) {
+      toast.error('Некорректное время создания диалога')
       return
     }
     startTransition(async () => {
@@ -73,6 +117,7 @@ export function NewChatDialog({
         contactName: contactName.trim(),
         contactHandle: contactHandle.trim(),
         message: message.trim() || undefined,
+        createdAt: when.toISOString(),
       })
       if (res.ok) {
         toast.success(res.message)
@@ -90,38 +135,56 @@ export function NewChatDialog({
         <DialogHeader>
           <DialogTitle>Новый диалог</DialogTitle>
           <DialogDescription>
-            Создайте переписку от имени клиента. Сообщение придёт менеджеру канала
-            как настоящее входящее.
+            Создайте переписку от имени клиента. Сообщение появится в чатах
+            выбранного менеджера как настоящее входящее — можно указать время
+            обращения задним числом.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="manual">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="manual">{'Вручную'}</TabsTrigger>
-            <TabsTrigger value="scenarios">{'Сценарии'}</TabsTrigger>
-          </TabsList>
-
-          {/* -------- Tab 2: 1000 generated candidate scenarios -------- */}
-          <TabsContent value="scenarios" className="mt-3">
-            <ScenarioPicker channels={channels} onCreated={onCreated} />
-          </TabsContent>
-
-          {/* ------------------- Tab 1: manual form -------------------- */}
-          <TabsContent value="manual" className="mt-3">
         <div className="grid gap-3">
           <div className="grid gap-1.5">
-            <Label className="text-xs text-muted-foreground">Канал</Label>
-            <Select value={channelId} onValueChange={(v) => setChannelId(v ?? '')}>
+            <Label className="text-xs text-muted-foreground">Менеджер</Label>
+            <Select value={managerId} onValueChange={onManagerChange}>
               <SelectTrigger>
-                <SelectValue placeholder="Выберите канал" />
+                <SelectValue placeholder="Кому адресован диалог" />
               </SelectTrigger>
               <SelectContent>
-                {ownedChannels.length === 0 ? (
+                {eligibleManagers.length === 0 ? (
                   <SelectItem value="none" disabled>
-                    Нет каналов с менеджером
+                    Нет менеджеров с каналами
                   </SelectItem>
                 ) : (
-                  ownedChannels.map((c) => (
+                  eligibleManagers.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label className="text-xs text-muted-foreground">Канал</Label>
+            <Select
+              value={channelId}
+              onValueChange={(v) => setChannelId(v ?? '')}
+              disabled={!managerId}
+            >
+              <SelectTrigger>
+                <SelectValue
+                  placeholder={
+                    managerId ? 'Выберите канал' : 'Сначала выберите менеджера'
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {managerChannels.length === 0 ? (
+                  <SelectItem value="none" disabled>
+                    У менеджера нет каналов
+                  </SelectItem>
+                ) : (
+                  managerChannels.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {(TYPE_LABEL[c.type] ?? c.type) + ' · ' + c.name}
                     </SelectItem>
@@ -152,6 +215,22 @@ export function NewChatDialog({
 
           <div className="grid gap-1.5">
             <Label className="text-xs text-muted-foreground">
+              Время обращения
+            </Label>
+            <Input
+              type="datetime-local"
+              value={createdAt}
+              max={nowLocalValue()}
+              onChange={(e) => setCreatedAt(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Когда клиент «написал». По умолчанию — сейчас, можно задать задним
+              числом.
+            </p>
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label className="text-xs text-muted-foreground">
               Первое сообщение (необязательно)
             </Label>
             <Textarea
@@ -172,8 +251,6 @@ export function NewChatDialog({
             Создать
           </Button>
         </DialogFooter>
-          </TabsContent>
-        </Tabs>
       </DialogContent>
     </Dialog>
   )

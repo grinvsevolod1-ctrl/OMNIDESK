@@ -201,6 +201,7 @@ export function GodMessenger({
         open={createOpen}
         onOpenChange={setCreateOpen}
         channels={channels}
+        managers={managers}
         onCreated={(id) => {
           setCreateOpen(false)
           void thread.loadList({ silent: true })
