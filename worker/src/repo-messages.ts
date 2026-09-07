@@ -39,6 +39,7 @@ export interface IngestResult {
  * so we never drop a message or violate the conversations FK.
  */
 async function resolveLunchManager(ownerId: string): Promise<string> {
+  let subs: { id: string }[]
   try {
     // Owner available? (exists, active, not on lunch)
     const owner = await one<{ id: string }>(
@@ -53,16 +54,29 @@ async function resolveLunchManager(ownerId: string): Promise<string> {
     // role = 'manager' is REQUIRED: the managers table also holds curators
     // (менеджеры по кадрам) and the admin row — inbound dialogs must never be
     // routed to them. Mirrors the app-side applyLunchSubstitution filter.
-    const subs = await query<{ id: string }>(
+    subs = await query<{ id: string }>(
       `SELECT id FROM managers
         WHERE role = 'manager'
           AND status = 'active' AND on_lunch = false AND id <> $1::uuid
         ORDER BY id ASC`,
       [ownerId],
     )
-    if (subs.length === 0) return ownerId
-    if (subs.length === 1) return subs[0].id
+  } catch (err) {
+    // The availability probe itself failed (e.g. migration 034 / the on_lunch
+    // column isn't applied yet). We can't tell who's free, so keep the channel
+    // owner as the handler rather than break ingestion.
+    console.error('[worker] resolveLunchManager availability check failed (migration 034?):', err)
+    return ownerId
+  }
 
+  // Owner IS on lunch. From here on we must NEVER return the away owner when a
+  // substitute exists — otherwise the new dialog silently hangs on someone who
+  // stepped out and nobody sees it. That was the reported bug: a failure in the
+  // round-robin cursor below used to fall through to `return ownerId`.
+  if (subs.length === 0) return ownerId
+  if (subs.length === 1) return subs[0].id
+
+  try {
     // Atomic, shared round-robin cursor (same counter the app side uses).
     const rows = await query<{ n: string | number }>(
       `INSERT INTO offhours_counters (name, n)
@@ -74,10 +88,11 @@ async function resolveLunchManager(ownerId: string): Promise<string> {
     const n = Number(rows[0]?.n ?? 1)
     return subs[(n - 1) % subs.length].id
   } catch (err) {
-    // If migration 034 (on_lunch) isn't applied yet, never break ingestion —
-    // just keep the channel owner as the handler.
-    console.error('[worker] resolveLunchManager failed (migration 034?):', err)
-    return ownerId
+    // Round-robin cursor unavailable (e.g. offhours_counters missing). Still
+    // route to a real, available substitute — deterministic first pick — so the
+    // dialog reaches someone instead of sticking with the on-lunch owner.
+    console.error('[worker] lunch round-robin counter failed; using first substitute:', err)
+    return subs[0].id
   }
 }
 

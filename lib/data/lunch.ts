@@ -189,8 +189,18 @@ export async function applyLunchSubstitution(
     if (subs.length === 0) return ownerId // nobody free — owner keeps it
     if (subs.length === 1) return subs[0].id
 
-    const idx = await nextRoundRobinIndex(LUNCH_RR_COUNTER)
-    return subs[idx % subs.length].id
+    // Owner is on lunch AND substitutes exist: we must reach one of them. A
+    // failure in the round-robin cursor (e.g. offhours_counters missing) must
+    // NOT fall through to the on-lunch owner — that left new dialogs hanging on
+    // a manager who stepped out, unseen by anyone (the reported bug). Fall back
+    // to a deterministic first substitute instead.
+    try {
+      const idx = await nextRoundRobinIndex(LUNCH_RR_COUNTER)
+      return subs[idx % subs.length].id
+    } catch (rrErr) {
+      console.error('lunch round-robin counter failed; using first substitute:', rrErr)
+      return subs[0].id
+    }
   } catch (err) {
     // If the on_lunch column isn't there yet (migration 034 not applied), keep
     // the owner so inbound routing never breaks.
