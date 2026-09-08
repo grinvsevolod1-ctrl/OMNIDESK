@@ -1,19 +1,13 @@
-import {
-  listBuyerLeadsAction,
-  listBuyerSourcesAction,
-} from '@/app/actions/buyer'
+import { listBuyerSourcesAction } from '@/app/actions/buyer'
 import { BuyerOverview } from '@/components/buyer/buyer-overview'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * Раздел медиабайера: обзор своих источников (статистика день/«долёты»)
- * и все лиды этих источников с единым поиском и фильтрами. Read-only.
+ * Раздел медиабайера, вкладка «Обзор»: карточки своих источников со
+ * статистикой день/«долёты». Лиды — в отдельной вкладке «Лиды». Read-only.
  */
 export default async function BuyerPage() {
-  const [sources, leads] = await Promise.all([
-    listBuyerSourcesAction(),
-    listBuyerLeadsAction(),
-  ])
-  return <BuyerOverview initialSources={sources} initialLeads={leads} />
+  const sources = await listBuyerSourcesAction()
+  return <BuyerOverview initialSources={sources} />
 }

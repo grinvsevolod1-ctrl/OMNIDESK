@@ -5,7 +5,11 @@ import { requireBuyer } from '@/lib/auth'
 import { getManagerById } from '@/lib/data'
 import { ImpersonationBanner } from '@/components/shared/impersonation-banner'
 
-const nav: NavItem[] = [{ href: '/buyer', label: 'Обзор', icon: 'overview' }]
+const nav: NavItem[] = [
+  { href: '/buyer', label: 'Обзор', icon: 'overview' },
+  { href: '/buyer/leads', label: 'Лиды', icon: 'leads' },
+  { href: '/buyer/settings', label: 'Настройки', icon: 'settings' },
+]
 
 export default async function BuyerLayout({
   children,
