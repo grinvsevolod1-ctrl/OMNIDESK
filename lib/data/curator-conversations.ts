@@ -126,6 +126,11 @@ export async function listConversationsForCurator(
        LEFT JOIN channels ch ON ch.id = c.channel_id
        LEFT JOIN managers m ON m.id = c.manager_id
       WHERE c.curator_id = $1
+        -- Мягко удалённый лид (корзина админа) прячет диалог и у куратора.
+        AND NOT EXISTS (
+          SELECT 1 FROM lead_cards lc
+           WHERE lc.conversation_id = c.id AND lc.deleted_at IS NOT NULL
+        )
       ORDER BY c.last_message_at DESC
       LIMIT $2`,
     [curatorId, CURATOR_CONVERSATION_LIMIT],

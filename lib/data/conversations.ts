@@ -55,6 +55,9 @@ export async function listConversations(
        LEFT JOIN managers cur ON cur.id = c.curator_id
        LEFT JOIN lead_cards lc ON lc.conversation_id = c.id
       WHERE c.manager_id = $1
+        -- Мягко удалённый лид (корзина админа) прячет и связанный диалог из
+        -- инбокса менеджера. Восстановление из корзины возвращает его назад.
+        AND (lc.id IS NULL OR lc.deleted_at IS NULL)
       ORDER BY c.last_message_at DESC
       LIMIT $2`,
     [managerId, CONVERSATION_LIST_LIMIT],

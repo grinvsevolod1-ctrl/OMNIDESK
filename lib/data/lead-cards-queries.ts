@@ -127,6 +127,7 @@ export async function listLeadCardsForCurator(
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
       WHERE lc.archived_at IS NULL
+        AND lc.deleted_at IS NULL
         AND (
           (lc.curator_id = $1 AND lc.transferred_at IS NOT NULL)
           OR (
@@ -155,6 +156,7 @@ export async function listArchivedLeadsForCurator(
       WHERE lc.curator_id = $1
         AND lc.transferred_at IS NOT NULL
         AND lc.archived_at IS NOT NULL
+        AND lc.deleted_at IS NULL
       ORDER BY lc.archived_at DESC
       LIMIT $2`,
     [curatorId, Math.max(1, Math.min(500, limit))],

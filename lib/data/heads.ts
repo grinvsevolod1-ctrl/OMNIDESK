@@ -353,6 +353,7 @@ export async function listLeadCardsForHead(
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
       WHERE lc.archived_at IS NULL
+        AND lc.deleted_at IS NULL
         AND (
           (lc.curator_id IN (
               SELECT id FROM managers
@@ -388,6 +389,7 @@ export async function listArchivedLeadsForHead(
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
       WHERE lc.archived_at IS NOT NULL
+        AND lc.deleted_at IS NULL
         AND (
           (lc.curator_id IN (
               SELECT id FROM managers
