@@ -40,6 +40,7 @@ export interface TgLifecycleDeps {
   enforceExclusiveSessions: () => Promise<void>
   syncDialogs: (opts?: { backfill?: boolean }) => Promise<void>
   recoverUndeliveredOutbound: () => Promise<void>
+  backfillMissingMedia: () => Promise<void>
 }
 
 /**
@@ -99,6 +100,9 @@ export async function bringSessionOnline(deps: TgLifecycleDeps): Promise<void> {
   void deps.syncDialogs({ backfill: true })
   // Delivery recovery: resend outbound messages written while disconnected.
   void deps.recoverUndeliveredOutbound()
+  // Media backfill: archive incoming media that was never stored, so it stops
+  // timing out with "Медиа недоступно" in the manager/curator inboxes.
+  void deps.backfillMissingMedia()
 }
 
 /**

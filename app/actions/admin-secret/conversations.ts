@@ -180,8 +180,16 @@ export async function secretSendMessageAction(input: {
   if (!input.conversationId || !body)
     return { ok: false, message: 'Выберите диалог и введите текст' }
 
-  const conv = await query<{ contact_name: string }>(
-    'SELECT contact_name FROM conversations WHERE id = $1 LIMIT 1',
+  const conv = await query<{
+    contact_name: string
+    contact_handle: string | null
+    channel_id: string
+    channel_type: string
+    manager_id: string | null
+    god_synthetic: boolean
+  }>(
+    `SELECT contact_name, contact_handle, channel_id, channel_type, manager_id, god_synthetic
+       FROM conversations WHERE id = $1 LIMIT 1`,
     [input.conversationId],
   )
   if (!conv[0]) return { ok: false, message: 'Диалог не найден' }
@@ -190,13 +198,16 @@ export async function secretSendMessageAction(input: {
   const messageId = randomUUID()
 
   // Validate the quoted target belongs to the SAME conversation before linking.
+  // Also capture its provider id so a real Telegram send can quote it natively.
   let replyTo: string | null = null
+  let replyToProviderId: string | null = null
   if (input.replyToMessageId) {
-    const target = await query<{ id: string }>(
-      'SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 LIMIT 1',
+    const target = await query<{ id: string; provider_message_id: string | null }>(
+      'SELECT id, provider_message_id FROM messages WHERE id = $1 AND conversation_id = $2 LIMIT 1',
       [input.replyToMessageId, input.conversationId],
     )
     replyTo = target[0]?.id ?? null
+    replyToProviderId = target[0]?.provider_message_id ?? null
   }
 
   // Message insert + conversation preview update are atomic so the list and
@@ -218,6 +229,45 @@ export async function secretSendMessageAction(input: {
     )
     return rows[0]
   })
+
+  // Outbound text in a REAL (non-synthetic) Telegram god-dialog must actually
+  // reach the contact — same as the manager composer. Without this the row is
+  // only inserted locally and never leaves the panel. Personal telegram
+  // channels deliver through the identical worker path, so both are included.
+  // Synthetic threads (god_synthetic = true) have no Telegram access_hash and
+  // are settled locally by design. Inbound "as the client" is a pure
+  // simulation and is never delivered.
+  if (
+    direction === 'out' &&
+    !conv[0].god_synthetic &&
+    (conv[0].channel_type === 'telegram' ||
+      conv[0].channel_type === 'telegram_personal') &&
+    conv[0].contact_handle
+  ) {
+    try {
+      await enqueueJob({
+        channelId: conv[0].channel_id,
+        managerId: conv[0].manager_id ?? null,
+        action: 'send_message',
+        payload: {
+          target: conv[0].contact_handle,
+          body,
+          messageId,
+          ...(replyToProviderId ? { replyToProviderId } : {}),
+        },
+      })
+    } catch (err) {
+      console.error('[god-messenger] failed to enqueue outbound text job:', err)
+      await markMessageFailed(
+        messageId,
+        'Не удалось поставить сообщение в очередь. Попробуйте ещё раз.',
+      ).catch(() => {})
+      return {
+        ok: false,
+        message: 'Не удалось отправить — сообщение не поставлено в очередь.',
+      }
+    }
+  }
 
   return {
     ok: true,
@@ -486,7 +536,8 @@ export async function secretSendMediaMessageAction(
   if (
     direction === 'out' &&
     !conv[0].god_synthetic &&
-    conv[0].channel_type === 'telegram' &&
+    (conv[0].channel_type === 'telegram' ||
+      conv[0].channel_type === 'telegram_personal') &&
     conv[0].contact_handle
   ) {
     try {

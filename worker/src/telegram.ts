@@ -20,6 +20,7 @@ import { TelegramHealthMonitor } from './telegram-health.js'
 import { TelegramPhoneLogin } from './telegram-phone-login.js'
 import { TelegramQrLogin } from './telegram-qr-login.js'
 import { recoverUndeliveredOutbound } from './telegram-recovery.js'
+import { backfillMissingMedia } from './telegram-media-backfill.js'
 import type { TgSessionCtx } from './telegram-session-ctx.js'
 import { runKickSweep } from './telegram-exclusive.js'
 import { syncDialogs } from './telegram-history.js'
@@ -428,6 +429,7 @@ export class TelegramSession {
       enforceExclusiveSessions: () => this.enforceExclusiveSessions(),
       syncDialogs: (opts) => this.syncDialogs(opts),
       recoverUndeliveredOutbound: () => this.recoverUndeliveredOutbound(),
+      backfillMissingMedia: () => this.backfillMissingMedia(),
     }
   }
 
@@ -481,6 +483,15 @@ export class TelegramSession {
       getClient: () => this.client,
       resolveTarget: (target) => this.resolveTarget(target),
       sendMessage: (target, body) => this.sendMessage(target, body),
+    })
+  }
+
+  /** Post-reconnect media backfill (see telegram-media-backfill.ts). */
+  private async backfillMissingMedia(): Promise<void> {
+    return backfillMissingMedia({
+      channelId: this.channelId,
+      getClient: () => this.client,
+      resolveTarget: (target) => this.resolveTarget(target),
     })
   }
 

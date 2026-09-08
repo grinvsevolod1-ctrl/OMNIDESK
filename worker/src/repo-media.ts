@@ -12,6 +12,47 @@ import {
  */
 
 /**
+ * Inbound messages on a channel that carry media but were never archived
+ * (media_type set, media_blob_id NULL). Each one currently forces a live
+ * re-download from Telegram on every view, which is exactly what times out and
+ * shows "Медиа недоступно". The post-reconnect backfill sweep re-downloads and
+ * archives these so they serve instantly from our own copy afterwards.
+ *
+ * Only rows with a provider ref (peer + msgId) are eligible — without it the
+ * media cannot be re-fetched. Newest first, small batch to stay flood-safe.
+ */
+export async function listInboundMediaNeedingBytes(
+  channelId: string,
+  limit = 40,
+): Promise<Array<{ id: string; peer: string; msgId: string }>> {
+  const rows = await query<{
+    id: string
+    media_ref: { peer?: string; msgId?: string } | null
+  }>(
+    `SELECT m.id, m.media_ref
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.channel_id = $1
+        AND m.direction = 'in'
+        AND m.media_type IS NOT NULL
+        AND m.media_blob_id IS NULL
+        AND m.deleted_at IS NULL
+        AND m.media_ref IS NOT NULL
+        AND m.created_at > now() - interval '30 days'
+      ORDER BY m.created_at DESC
+      LIMIT $2`,
+    [channelId, limit],
+  )
+  const out: Array<{ id: string; peer: string; msgId: string }> = []
+  for (const r of rows) {
+    const peer = r.media_ref?.peer
+    const msgId = r.media_ref?.msgId
+    if (peer && msgId) out.push({ id: r.id, peer, msgId: String(msgId) })
+  }
+  return out
+}
+
+/**
  * Resolve everything needed to re-download a message's media: which channel /
  * session owns it, the media kind/mime/name and the provider `ref` JSON. Used
  * by the worker's GET /media endpoint.
