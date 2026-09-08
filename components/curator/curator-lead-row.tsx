@@ -217,6 +217,21 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
     <CityInlineEditor lead={lead} onSaved={onRefresh} />
   )
 
+  // Дата передачи/архива для карточки — с явной подписью, чтобы её не путали
+  // со временем присвоения статуса, которое стоит рядом с бейджем.
+  const cardDate = isArchived
+    ? (lead.archivedAt ?? lead.transferredAt ?? null)
+    : (lead.transferredAt ?? null)
+  const cardDateLabel = isArchived ? 'В архиве' : isPool ? 'В пуле' : 'Передан'
+  const cardDateMeta = cardDate ? (
+    <span className="ml-auto inline-flex items-center gap-1 whitespace-nowrap text-[11px] leading-none text-muted-foreground">
+      <span className="opacity-70">{cardDateLabel}</span>
+      <time dateTime={cardDate} className="tabular-nums">
+        {formatDateTime(cardDate)}
+      </time>
+    </span>
+  ) : null
+
   if (view === 'grid') {
     return (
       <li
@@ -245,15 +260,9 @@ export const CuratorLeadRow = memo(function CuratorLeadRow({
           {cityNode}
           {telegramLink}
         </div>
-        <div className="mt-auto flex flex-wrap items-center gap-1.5">
+        <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1">
           {isPool ? poolBadge : statusEditor}
-          <span className="ml-auto text-xs text-muted-foreground">
-            {isArchived && lead.archivedAt
-              ? formatDateTime(lead.archivedAt)
-              : lead.transferredAt
-                ? formatDateTime(lead.transferredAt)
-                : ''}
-          </span>
+          {cardDateMeta}
         </div>
       </li>
     )

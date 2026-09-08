@@ -76,19 +76,34 @@ export function LeadStatusBadge({
   }
   if (needsUpdate) {
     return (
-      <div className={cn('flex flex-wrap items-center gap-1.5', className)}>
+      <div className={cn('flex flex-wrap items-center gap-x-2 gap-y-1', className)}>
         <Badge
           variant="outline"
-          className="border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400"
+          className="border-transparent bg-amber-500/15 font-medium text-amber-700 dark:text-amber-400"
         >
           Нужно обновить
         </Badge>
-        {previousStatus ? (
-          <span className="text-[11px] text-muted-foreground">
-            вчера: {leadStatusLabel(previousStatus)}
+        {previousStatus || at ? (
+          // «вчера: …» и время присвоения — единый тихий кластер с точкой-
+          // разделителем; каждый фрагмент не переносится посередине.
+          <span className="inline-flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
+            {previousStatus ? (
+              <span className="whitespace-nowrap">
+                вчера: {leadStatusLabel(previousStatus)}
+              </span>
+            ) : null}
+            {previousStatus && at ? (
+              <span aria-hidden className="opacity-40">
+                ·
+              </span>
+            ) : null}
+            {at ? (
+              <time dateTime={at} className="whitespace-nowrap tabular-nums">
+                {formatMskDateTime(at)}
+              </time>
+            ) : null}
           </span>
         ) : null}
-        {at ? <StatusAssignedAt at={at} /> : null}
       </div>
     )
   }

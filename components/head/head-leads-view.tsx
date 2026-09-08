@@ -84,12 +84,14 @@ const HeadLeadRow = memo(function HeadLeadRow({
       <span className="truncate">{lead.managerName ?? '—'}</span>
     </>
   )
-  const date =
+  const dateValue =
     isArchived && lead.archivedAt
-      ? formatMskDateTime(lead.archivedAt)
+      ? lead.archivedAt
       : lead.transferredAt
-        ? formatMskDateTime(lead.transferredAt)
-        : '—'
+        ? lead.transferredAt
+        : null
+  const dateLabel = isArchived ? 'В архиве' : 'Передан'
+  const date = dateValue ? formatMskDateTime(dateValue) : '—'
 
   if (view === 'grid') {
     return (
@@ -124,8 +126,17 @@ const HeadLeadRow = memo(function HeadLeadRow({
             </>
           ) : null}
         </div>
-        <span className="mt-auto text-xs tabular-nums text-muted-foreground">
-          {date}
+        <span className="mt-auto inline-flex items-center gap-1 text-[11px] leading-none text-muted-foreground">
+          {dateValue ? (
+            <>
+              <span className="opacity-70">{dateLabel}</span>
+              <time dateTime={dateValue} className="tabular-nums">
+                {date}
+              </time>
+            </>
+          ) : (
+            <span className="tabular-nums">—</span>
+          )}
         </span>
       </li>
     )
