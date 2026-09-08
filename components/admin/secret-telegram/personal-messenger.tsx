@@ -29,34 +29,46 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
 import { usePersonalMessenger } from './use-personal-messenger'
-import { DialogAvatar, dayLabel } from './messenger-shared'
+import { usePooledDialogs } from './use-pooled-dialogs'
+import { DialogAvatar, accountHue, dayLabel } from './messenger-shared'
 import { DialogList } from './dialog-list'
 import { MessageBubble } from './message-bubble'
-import type {
-  PersonalAccountItem,
-  PersonalMessage,
+import {
+  personalDeleteDialogAction,
+  type PersonalMessage,
+  type PooledAccount,
+  type PooledDialog,
 } from '@/app/actions/admin-secret/telegram-personal'
 
-/* ------------------------------ Мессенджер ------------------------------ */
+/* ------------------------- Общий пул мессенджера ------------------------ */
 
+/**
+ * Единый мессенджер общего пула: диалоги ВСЕХ личных Telegram-аккаунтов в
+ * одном списке (usePooledDialogs), помеченные аккаунтом-владельцем. Слева —
+ * рельса-фильтр аккаунтов + поиск по всему пулу; выбранный чат открывается
+ * через свой аккаунт (usePersonalMessenger — движок треда одного канала).
+ * Шапка треда всегда показывает, ЧЕРЕЗ КАКОЙ профиль ведётся переписка.
+ */
 export function PersonalMessenger({
-  channelId,
-  accountName,
   accounts,
   unread,
-  onSwitchAccount,
+  initialFilter,
   onBack,
 }: {
-  channelId: string
-  accountName: string
-  /** Все личные аккаунты — для свитчера в шапке списка диалогов. */
-  accounts: PersonalAccountItem[]
-  /** id аккаунта -> непрочитанных всего (бейджи в свитчере). */
+  /** Все личные аккаунты — для рельсы-фильтра и контекста. */
+  accounts: PooledAccount[]
+  /** id аккаунта -> непрочитанных всего (бейджи в рельсе). */
   unread: Record<string, number>
-  onSwitchAccount: (account: PersonalAccountItem) => void
+  /** Начальный фильтр: 'all' или id аккаунта (клик по карточке). */
+  initialFilter: string
   onBack: () => void
 }) {
-  const m = usePersonalMessenger(channelId)
+  const pool = usePooledDialogs()
+  const [filter, setFilter] = useState(initialFilter)
+  const [selected, setSelected] = useState<{
+    accountId: string
+    peerId: string
+  } | null>(null)
   const [search, setSearch] = useState('')
   const [draft, setDraft] = useState('')
   const [replyTo, setReplyTo] = useState<PersonalMessage | null>(null)
@@ -69,6 +81,17 @@ export function PersonalMessenger({
     previewUrl: string | null
   } | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Движок треда одного канала. Список диалогов этого хука не используем —
+  // список берём из общего пула; но send/edit/delete/history этого канала
+  // работают через него (скоуп по выбранному аккаунту).
+  const activeChannelId = selected?.accountId ?? null
+  const m = usePersonalMessenger(activeChannelId)
+
+  const activeAccount = useMemo<PooledAccount | null>(
+    () => accounts.find((a) => a.id === selected?.accountId) ?? null,
+    [accounts, selected?.accountId],
+  )
 
   /* ---- Скролл по намерению (тот же паттерн, что use-thread-scroll) ---- */
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -86,7 +109,6 @@ export function PersonalMessenger({
     }, 350)
   }, [])
 
-  // Пользовательский жест вверх мгновенно снимает прилипание.
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -119,7 +141,6 @@ export function PersonalMessenger({
     }
   }, [m.peer])
 
-  // Новые сообщения: скроллим вниз только если прилипание активно.
   const lastIdRef = useRef<string | null>(null)
   useEffect(() => {
     const last = m.messages[m.messages.length - 1]?.id ?? null
@@ -129,7 +150,6 @@ export function PersonalMessenger({
     }
   }, [m.messages, m.threadLoading, scrollToBottom])
 
-  // Открытие треда: всегда вниз.
   useEffect(() => {
     if (!m.threadLoading && m.peer) {
       stickRef.current = true
@@ -137,22 +157,68 @@ export function PersonalMessenger({
     }
   }, [m.threadLoading, m.peer, scrollToBottom])
 
-  /* ------------------------------ Отправка ----------------------------- */
+  /* ------------------------------ Выбор чата --------------------------- */
 
-  const activeDialog = useMemo(
-    () => m.dialogs.find((d) => d.peerId === m.peer) ?? null,
-    [m.dialogs, m.peer],
+  const activeDialog = useMemo<PooledDialog | null>(
+    () =>
+      pool.dialogs.find(
+        (d) =>
+          d.accountId === selected?.accountId && d.peerId === selected?.peerId,
+      ) ?? null,
+    [pool.dialogs, selected],
   )
 
   const filteredDialogs = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return m.dialogs
-    return m.dialogs.filter(
-      (d) =>
+    return pool.dialogs.filter((d) => {
+      if (filter !== 'all' && d.accountId !== filter) return false
+      if (!q) return true
+      return (
         d.title.toLowerCase().includes(q) ||
-        (d.username ?? '').toLowerCase().includes(q),
-    )
-  }, [m.dialogs, search])
+        (d.username ?? '').toLowerCase().includes(q) ||
+        d.accountName.toLowerCase().includes(q)
+      )
+    })
+  }, [pool.dialogs, filter, search])
+
+  const selectDialog = useCallback(
+    (d: PooledDialog) => {
+      setSelected({ accountId: d.accountId, peerId: d.peerId })
+      m.setPeer(d.peerId)
+      pool.markRead(d.accountId, d.peerId)
+      setReplyTo(null)
+      setEditing(null)
+      setPendingFile((prev) => {
+        if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl)
+        return null
+      })
+      setDraft('')
+    },
+    [m, pool],
+  )
+
+  const closeThread = useCallback(() => {
+    m.setPeer(null)
+    setSelected(null)
+  }, [m])
+
+  const handleDeleteDialog = useCallback(
+    async (accountId: string, peerId: string, revoke: boolean) => {
+      const res = await personalDeleteDialogAction(accountId, peerId, revoke)
+      if (!res.ok) {
+        toast.error(res.message)
+        return
+      }
+      pool.removeDialog(accountId, peerId)
+      if (selected?.accountId === accountId && selected?.peerId === peerId) {
+        closeThread()
+      }
+      toast.success('Диалог удалён')
+    },
+    [pool, selected, closeThread],
+  )
+
+  /* ------------------------------ Отправка ----------------------------- */
 
   const handleSend = useCallback(async () => {
     const text = draft.trim()
@@ -195,7 +261,6 @@ export function PersonalMessenger({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key !== 'Enter' || e.shiftKey) return
-      // CJK IME: Enter подтверждает композицию, не отправляем.
       if (e.nativeEvent.isComposing || e.keyCode === 229) return
       e.preventDefault()
       void handleSend()
@@ -218,7 +283,6 @@ export function PersonalMessenger({
       e.target.value = ''
       if (!file) return
       if (file.size > 15 * 1024 * 1024) {
-        // Лимит server action; крупные файлы — с телефона.
         alert('Файл больше 15 МБ — отправьте его с телефона.')
         return
       }
@@ -284,32 +348,44 @@ export function PersonalMessenger({
     [m.messages],
   )
 
+  const threadChannelId = selected?.accountId ?? ''
+
   /* -------------------------------- Рендер ------------------------------ */
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden rounded-xl border border-border bg-card">
-      {/* Список диалогов */}
+      {/* Список диалогов общего пула */}
       <DialogList
-        channelId={channelId}
-        accountName={accountName}
         accounts={accounts}
         unread={unread}
-        onSwitchAccount={onSwitchAccount}
-        onBack={onBack}
+        filter={filter}
+        onFilterChange={(v) => {
+          setFilter(v)
+          setSearch('')
+        }}
         search={search}
         onSearchChange={setSearch}
         dialogs={filteredDialogs}
-        loading={m.dialogsLoading}
-        error={m.dialogsError}
-        activePeer={m.peer}
-        onSelectPeer={m.setPeer}
-        onDeleteDialog={(peerId, revoke) => void m.deleteDialog(peerId, revoke)}
-        peerOpen={Boolean(m.peer)}
+        loading={pool.loading}
+        error={pool.error}
+        selectedAccountId={selected?.accountId ?? null}
+        selectedPeerId={selected?.peerId ?? null}
+        onSelect={selectDialog}
+        onDeleteDialog={(accountId, peerId, revoke) =>
+          void handleDeleteDialog(accountId, peerId, revoke)
+        }
+        onBack={onBack}
+        peerOpen={Boolean(selected)}
       />
 
       {/* Тред */}
-      <section className={cn('flex min-w-0 flex-1 flex-col', !m.peer && 'hidden md:flex')}>
-        {!m.peer || !activeDialog ? (
+      <section
+        className={cn(
+          'flex min-w-0 flex-1 flex-col',
+          !selected && 'hidden md:flex',
+        )}
+      >
+        {!selected || !activeDialog ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-muted/40 px-6 text-center">
             <span className="flex size-16 items-center justify-center rounded-full bg-background shadow-sm ring-1 ring-border/60">
               <MessagesSquare className="size-7 text-muted-foreground" />
@@ -320,20 +396,26 @@ export function PersonalMessenger({
           </div>
         ) : (
           <>
-            {/* Шапка треда */}
+            {/* Шапка треда — с контекстом профиля */}
             <div className="flex items-center gap-3 border-b border-border bg-card px-4 py-2.5">
               <Button
                 variant="ghost"
                 size="icon"
                 className="size-8 md:hidden"
-                onClick={() => m.setPeer(null)}
+                onClick={closeThread}
                 aria-label="Назад к диалогам"
               >
                 <ArrowLeft className="size-4" />
               </Button>
-              <DialogAvatar channelId={channelId} dialog={activeDialog} size="sm" />
+              <DialogAvatar
+                channelId={threadChannelId}
+                dialog={activeDialog}
+                size="sm"
+              />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">{activeDialog.title}</p>
+                <p className="truncate text-sm font-semibold">
+                  {activeDialog.title}
+                </p>
                 <p className="truncate text-xs text-muted-foreground">
                   {activeDialog.username
                     ? `@${activeDialog.username}`
@@ -344,6 +426,19 @@ export function PersonalMessenger({
                         : 'Канал'}
                 </p>
               </div>
+              {/* Через какой профиль ведётся переписка */}
+              <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-1">
+                <span
+                  className={cn(
+                    'size-2 rounded-full',
+                    accountHue(activeDialog.accountId),
+                  )}
+                  aria-hidden
+                />
+                <span className="max-w-32 truncate text-xs font-medium text-muted-foreground">
+                  {activeAccount?.name ?? activeDialog.accountName}
+                </span>
+              </span>
             </div>
 
             {/* Сообщения */}
@@ -383,9 +478,6 @@ export function PersonalMessenger({
                       </div>
                       <div className="flex flex-col">
                         {group.items.map((msg, j) => {
-                          // Серия — подряд идущие сообщения одного автора в
-                          // пределах ~5 минут: прижимаем плотно, «хвост» рисуем
-                          // только у последнего пузыря серии.
                           const prev = group.items[j - 1]
                           const next = group.items[j + 1]
                           const sameAsPrev =
@@ -401,7 +493,7 @@ export function PersonalMessenger({
                               key={msg.id}
                               msg={msg}
                               reply={repliedTo(msg.replyToId)}
-                              channelId={channelId}
+                              channelId={threadChannelId}
                               peerId={activeDialog.peerId}
                               tight={sameAsPrev}
                               showTail={!sameAsNext}
@@ -463,7 +555,7 @@ export function PersonalMessenger({
                       {pendingFile.previewUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          src={pendingFile.previewUrl || "/placeholder.svg"}
+                          src={pendingFile.previewUrl || '/placeholder.svg'}
                           alt=""
                           className="size-8 shrink-0 rounded object-cover"
                         />

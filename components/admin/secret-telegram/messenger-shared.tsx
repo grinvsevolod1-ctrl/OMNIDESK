@@ -71,6 +71,15 @@ export function avatarHue(peerId: string): string {
   return AVATAR_HUES[Math.abs(h) % AVATAR_HUES.length]
 }
 
+/**
+ * Устойчивый цвет аккаунта-владельца для маркировки строк общего пула — один
+ * и тот же аккаунт всегда одного цвета в рельсе, тегах и шапке треда, чтобы
+ * взгляд мгновенно связывал чат с профилем.
+ */
+export function accountHue(accountId: string): string {
+  return avatarHue(`acct:${accountId}`)
+}
+
 /* ------------------------------- Аватар --------------------------------- */
 
 export function DialogAvatar({

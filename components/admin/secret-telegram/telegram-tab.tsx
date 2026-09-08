@@ -23,7 +23,9 @@ export function SecretTelegramTab() {
   const [accounts, setAccounts] = useState<PersonalAccountItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [openAccount, setOpenAccount] = useState<PersonalAccountItem | null>(null)
+  // Открытый мессенджер общего пула: null = закрыт, иначе фильтр ('all' или
+  // id аккаунта — стартовый выбор при входе).
+  const [messengerFilter, setMessengerFilter] = useState<string | null>(null)
   // id аккаунта -> непрочитанных всего (живой фан-аут на worker).
   const [unread, setUnread] = useState<Record<string, number>>({})
 
@@ -37,12 +39,11 @@ export function SecretTelegramTab() {
       const rows = await personalListAccountsAction()
       if (seqRef.current !== seq) return
       setAccounts(rows)
-      // Если открытый аккаунт удалили/отключили в другом месте — закрываем чат.
-      setOpenAccount((cur) => {
-        if (!cur) return cur
-        const fresh = rows.find((a) => a.id === cur.id)
-        return fresh && fresh.sessionStatus === 'online' ? fresh : null
-      })
+      // Пул сам переживает уход отдельных аккаунтов в offline — если в сети не
+      // осталось никого, закрываем мессенджер.
+      if (rows.every((a) => a.sessionStatus !== 'online')) {
+        setMessengerFilter(null)
+      }
     } catch {
       /* фоновая ошибка — оставляем то, что на экране; следующий тик доедет */
     } finally {
@@ -99,17 +100,20 @@ export function SecretTelegramTab() {
     )
   }
 
-  if (openAccount) {
+  if (messengerFilter !== null) {
+    const pooledAccounts = accounts.map((a) => ({
+      id: a.id,
+      name: a.name,
+      online: a.sessionStatus === 'online',
+    }))
     return (
       <div className="h-[calc(100dvh-14rem)] min-h-[24rem] md:h-[calc(100dvh-11.5rem)]">
         <PersonalMessenger
-          key={openAccount.id}
-          channelId={openAccount.id}
-          accountName={openAccount.name}
-          accounts={accounts}
+          key={messengerFilter}
+          accounts={pooledAccounts}
           unread={unread}
-          onSwitchAccount={(a) => setOpenAccount(a)}
-          onBack={() => setOpenAccount(null)}
+          initialFilter={messengerFilter}
+          onBack={() => setMessengerFilter(null)}
         />
       </div>
     )
@@ -119,7 +123,8 @@ export function SecretTelegramTab() {
     <AccountsList
       accounts={accounts}
       unread={unread}
-      onOpen={(a) => setOpenAccount(a)}
+      onOpen={(a) => setMessengerFilter(a.id)}
+      onOpenPool={() => setMessengerFilter('all')}
       onRefresh={() => void refresh()}
       refreshing={refreshing}
     />

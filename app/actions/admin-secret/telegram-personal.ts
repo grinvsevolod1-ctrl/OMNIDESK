@@ -253,7 +253,7 @@ export async function personalResendCodeAction(
       attemptId: globalThis.crypto.randomUUID(),
     },
   })
-  return { ok: true, message: 'Запрашиваем новый код входа…', channelId }
+  return { ok: true, message: 'Запра��иваем новый код входа…', channelId }
 }
 
 export async function personalSubmitCodeAction(
@@ -446,6 +446,67 @@ export async function personalDialogsAction(
   )
   if (!data) return { ok: false, dialogs: [], error: 'Сессия недоступна' }
   return { ok: true, dialogs: data.dialogs ?? [] }
+}
+
+/** Диалог, аннотированный аккаунтом-владельцем — строка общего пула. */
+export interface PooledDialog extends PersonalDialog {
+  accountId: string
+  accountName: string
+}
+
+export interface PooledAccount {
+  id: string
+  name: string
+  online: boolean
+}
+
+/**
+ * Общий пул: диалоги ВСЕХ online личных аккаунтов в одном списке, каждый
+ * помечен аккаунтом-владельцем. Живой фан-аут на worker (как
+ * personalUnreadSummaryAction), в БД ничего не пишется. Отсортировано по
+ * времени последнего сообщения — новые сверху, независимо от аккаунта.
+ */
+export async function personalAllDialogsAction(): Promise<{
+  ok: boolean
+  dialogs: PooledDialog[]
+  accounts: PooledAccount[]
+}> {
+  await requireGod()
+  const rows = await query<{
+    id: string
+    name: string
+    session_status: SessionStatus
+  }>(
+    `SELECT id, name, session_status
+       FROM channels
+      WHERE type = 'telegram_personal'
+      ORDER BY created_at DESC`,
+  )
+  const online = rows.filter((r) => r.session_status === 'online')
+  const chunks = await Promise.all(
+    online.map(async (r) => {
+      const data = await postJsonToWorkerSafeGet<{ dialogs: PersonalDialog[] }>(
+        `/personal/dialogs?channelId=${encodeURIComponent(r.id)}`,
+      )
+      return (data?.dialogs ?? []).map<PooledDialog>((d) => ({
+        ...d,
+        accountId: r.id,
+        accountName: r.name,
+      }))
+    }),
+  )
+  const dialogs = chunks
+    .flat()
+    .sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0))
+  return {
+    ok: true,
+    dialogs,
+    accounts: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      online: r.session_status === 'online',
+    })),
+  }
 }
 
 /** Живая страница истории одного диалога (beforeId — пагинация назад). */

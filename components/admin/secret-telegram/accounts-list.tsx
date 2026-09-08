@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Flame,
+  Layers,
   Loader2,
   MessageCircle,
   MoreVertical,
@@ -71,6 +72,7 @@ export function AccountsList({
   accounts,
   unread,
   onOpen,
+  onOpenPool,
   onRefresh,
   refreshing,
 }: {
@@ -78,6 +80,8 @@ export function AccountsList({
   /** id аккаунта -> непрочитанных всего (бейдж на карточке). */
   unread: Record<string, number>
   onOpen: (account: PersonalAccountItem) => void
+  /** Открыть общий пул — чаты всех аккаунтов в одном списке. */
+  onOpenPool: () => void
   onRefresh: () => void
   refreshing: boolean
 }) {
@@ -148,6 +152,12 @@ export function AccountsList({
           >
             <RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />
           </Button>
+          {online > 0 && (
+            <Button variant="secondary" onClick={onOpenPool}>
+              <Layers className="size-4" />
+              Все чаты
+            </Button>
+          )}
           <Button onClick={() => setConnectOpen(true)}>
             <Plus className="size-4" />
             Подключить
@@ -192,7 +202,7 @@ export function AccountsList({
               title="Аккаунты в сети автоматически поддерживаются активными: периодически появляются онлайн и читают ленту. Ничего не рассылается."
             >
               <Flame className="size-3.5 text-amber-500" />
-              Автопрогрев включён
+              Автопрогрев вк��ючён
             </span>
           </div>
 
