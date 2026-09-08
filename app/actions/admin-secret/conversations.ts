@@ -476,8 +476,7 @@ export async function secretSendMediaMessageAction(
   const messageId = randomUUID()
   const body = caption || mediaBodyLabel(mediaType, file.name)
 
-  // Bytes go to S3 / the local VPS filesystem (see lib/media-store.ts); bytea
-  // only as a fallback when every tier fails, so uploads keep working either way.
+  // Bytes go to S3 / the local VPS filesystem (see lib/media-store.ts).
   let uploadFilePath: string | null = null
   try {
     uploadFilePath = await saveMediaFile(bytes, mime)
@@ -485,13 +484,32 @@ export async function secretSendMediaMessageAction(
     uploadFilePath = null
   }
 
+  // The god messenger ALWAYS keeps a bytea copy in Postgres — not only as a
+  // last-resort fallback. Unlike a real Telegram dialog, a synthetic god thread
+  // has no provider message id and no delivery job to restore from, so if the
+  // file_path locator ever becomes unreadable (S3 unset here → the file lands on
+  // the panel's local disk, whose cwd differs between the panel and the worker
+  // and is wiped on every deploy/restart) the bytes would be gone forever and
+  // the bubble would show «Медиа недоступно». Storing the bytea alongside the
+  // locator makes /api/media (resolveBlobBytes) fall back to the DB copy and the
+  // photo always renders, whatever happens to the on-disk file. The size cap
+  // mirrors the archive tier so a huge file still relies on the locator only.
+  const inlineBytes =
+    bytes.byteLength > 0 && bytes.byteLength <= MEDIA_MAX_STORE_BYTES
+      ? bytes
+      : null
+
   const created = await withTransaction(async (db) => {
     const blob = await db.query<{ id: string }>(
       `INSERT INTO media_blobs (bytes, mime, name, byte_size, file_path)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
       [
-        uploadFilePath ? null : bytes,
+        // Keep the DB copy even when the file also went to disk/S3, so a lost
+        // locator never orphans a synthetic dialog's media.
+        uploadFilePath && bytes.byteLength > MEDIA_MAX_STORE_BYTES
+          ? null
+          : inlineBytes,
         mime,
         file.name || null,
         bytes.byteLength,
