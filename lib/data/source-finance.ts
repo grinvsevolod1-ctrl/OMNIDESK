@@ -413,55 +413,116 @@ export const SOURCE_CURRENCIES: FinanceCurrency[] = ['RUB', 'USD', 'EUR', 'USDT'
 
 /* ----------------------- Агрегаты по байеру ----------------------- */
 
-export interface BuyerFinanceTotals {
-  /** Σ балансов всех источников байера (в RUB-эквиваленте по base валютам). */
+/** Финансовые итоги в рамках ОДНОЙ базовой валюты источников. */
+export interface CurrencyTotals {
+  currency: string
+  /** Баланс = confirmedDeposits − totalSpend. */
   balance: number
   confirmedDeposits: number
   pendingDeposits: number
   totalSpend: number
+}
+
+export interface BuyerFinanceTotals {
+  /**
+   * Итоги, разбитые по базовой валюте источников. Суммы из РАЗНЫХ валют не
+   * складываются в одно число (это и порождало баг «2000 ₽ vs 2000 $») —
+   * каждая валюта показывается отдельной строкой. Пусто, если источников нет.
+   * Отсортировано по объёму подтверждённых депозитов (крупнейшая валюта первой).
+   */
+  byCurrency: CurrencyTotals[]
+  /** Валютно-независимые счётчики. */
   leads: number
   pendingCount: number
   sourcesCount: number
 }
 
 /**
- * Итоги по байеру across всех его источников. Суммы складываются в числовом
- * виде (валюты источников могут отличаться — для сводки это допустимо, точные
- * значения показываются на детальной странице каждого источника в его валюте).
+ * Итоги по байеру across всех его источников, сгруппированные по валюте. Депозиты
+ * и траты хранятся уже в базовой валюте своего источника, поэтому агрегируем
+ * по traffic_sources.currency — ничего не смешивая между валютами.
  */
 export async function getBuyerFinanceTotals(
   buyerId: string,
 ): Promise<BuyerFinanceTotals> {
-  const [dep] = await query<{
+  const depRows = await query<{
+    currency: string
     confirmed: string | number
     pending: string | number
     pending_count: string | number
   }>(
-    `SELECT
-        COALESCE(SUM(amount) FILTER (WHERE status = 'confirmed'), 0) AS confirmed,
-        COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0) AS pending,
-        COUNT(*) FILTER (WHERE status = 'pending') AS pending_count
-       FROM source_deposits WHERE buyer_id = $1`,
+    `SELECT ts.currency,
+        COALESCE(SUM(d.amount) FILTER (WHERE d.status = 'confirmed'), 0) AS confirmed,
+        COALESCE(SUM(d.amount) FILTER (WHERE d.status = 'pending'), 0) AS pending,
+        COUNT(*) FILTER (WHERE d.status = 'pending') AS pending_count
+       FROM source_deposits d
+       JOIN traffic_sources ts ON ts.id = d.source_id
+      WHERE d.buyer_id = $1
+      GROUP BY ts.currency`,
     [buyerId],
   )
-  const [sp] = await query<{ spend: string | number; leads: string | number }>(
-    `SELECT COALESCE(SUM(spend), 0) AS spend, COALESCE(SUM(leads), 0) AS leads
-       FROM source_spend_daily WHERE buyer_id = $1`,
+  const spendRows = await query<{
+    currency: string
+    spend: string | number
+    leads: string | number
+  }>(
+    `SELECT ts.currency,
+        COALESCE(SUM(s.spend), 0) AS spend,
+        COALESCE(SUM(s.leads), 0) AS leads
+       FROM source_spend_daily s
+       JOIN traffic_sources ts ON ts.id = s.source_id
+      WHERE s.buyer_id = $1
+      GROUP BY ts.currency`,
     [buyerId],
   )
-  const [cnt] = await query<{ n: string | number }>(
-    `SELECT COUNT(*) AS n FROM traffic_sources WHERE buyer_id = $1`,
+  const srcRows = await query<{ currency: string; n: string | number }>(
+    `SELECT currency, COUNT(*) AS n
+       FROM traffic_sources WHERE buyer_id = $1 GROUP BY currency`,
     [buyerId],
   )
-  const confirmedDeposits = num(dep?.confirmed ?? 0)
-  const totalSpend = num(sp?.spend ?? 0)
+
+  const map = new Map<string, CurrencyTotals>()
+  const ensure = (currency: string): CurrencyTotals => {
+    let e = map.get(currency)
+    if (!e) {
+      e = {
+        currency,
+        balance: 0,
+        confirmedDeposits: 0,
+        pendingDeposits: 0,
+        totalSpend: 0,
+      }
+      map.set(currency, e)
+    }
+    return e
+  }
+  // Валюты источников без движений всё равно показываем (баланс 0).
+  for (const r of srcRows) ensure(r.currency)
+  for (const r of depRows) {
+    const e = ensure(r.currency)
+    e.confirmedDeposits = num(r.confirmed)
+    e.pendingDeposits = num(r.pending)
+  }
+  for (const r of spendRows) {
+    const e = ensure(r.currency)
+    e.totalSpend = num(r.spend)
+  }
+
+  const byCurrency = [...map.values()]
+    .map((e) => ({
+      ...e,
+      balance: Math.round((e.confirmedDeposits - e.totalSpend) * 100) / 100,
+    }))
+    .sort(
+      (a, b) =>
+        b.confirmedDeposits - a.confirmedDeposits ||
+        a.currency.localeCompare(b.currency),
+    )
+
   return {
-    balance: Math.round((confirmedDeposits - totalSpend) * 100) / 100,
-    confirmedDeposits,
-    pendingDeposits: num(dep?.pending ?? 0),
-    totalSpend,
-    leads: Number(sp?.leads ?? 0),
-    pendingCount: Number(dep?.pending_count ?? 0),
-    sourcesCount: Number(cnt?.n ?? 0),
+    byCurrency,
+    leads: spendRows.reduce((s, r) => s + Number(r.leads), 0),
+    pendingCount: depRows.reduce((s, r) => s + Number(r.pending_count), 0),
+    sourcesCount: srcRows.reduce((s, r) => s + Number(r.n), 0),
   }
 }

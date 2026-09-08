@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { platformOrCustom } from '@/lib/traffic-source-catalog'
 import { formatMoney, formatPercent } from '@/lib/money'
+import { MoneyStack } from '@/components/money'
 import { cn } from '@/lib/utils'
 
 type Report = Awaited<ReturnType<typeof getBuyerReportAction>>
@@ -37,6 +38,9 @@ export function BuyerReport({
 
   const buyer = report.buyer
   const t = report.totals
+  const pendingByCurrency = t.byCurrency
+    .filter((c) => c.pendingDeposits > 0)
+    .map((c) => ({ currency: c.currency, amount: c.pendingDeposits }))
 
   const refresh = useCallback(() => {
     if (!buyer) return
@@ -72,30 +76,48 @@ export function BuyerReport({
         ) : null}
       </div>
 
-      {/* Итоги по байеру */}
+      {/* Итоги по байеру — разбивка по валютам источников */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <TotalTile
-          icon={Wallet}
-          label="Общий баланс"
-          value={formatMoney(t.balance, 'RUB')}
-          tone={t.balance >= 0 ? 'positive' : 'negative'}
-        />
-        <TotalTile
-          icon={Coins}
-          label="Подтверждено"
-          value={formatMoney(t.confirmedDeposits, 'RUB')}
-          hint={
-            t.pendingDeposits > 0
-              ? `+${formatMoney(t.pendingDeposits, 'RUB')} ждут`
-              : undefined
-          }
-        />
-        <TotalTile
-          icon={TrendingDown}
-          label="Потрачено"
-          value={formatMoney(t.totalSpend, 'RUB')}
-        />
-        <TotalTile icon={Target} label="Лиды" value={String(t.leads)} />
+        <TotalTile icon={Wallet} label="Общий баланс">
+          <MoneyStack
+            items={t.byCurrency.map((c) => ({
+              currency: c.currency,
+              amount: c.balance,
+            }))}
+            signedTone
+            className="text-xl font-semibold"
+          />
+        </TotalTile>
+        <TotalTile icon={Coins} label="Подтверждено">
+          <MoneyStack
+            items={t.byCurrency.map((c) => ({
+              currency: c.currency,
+              amount: c.confirmedDeposits,
+            }))}
+            className="text-xl font-semibold"
+          />
+          {pendingByCurrency.length > 0 ? (
+            <span className="mt-0.5 flex flex-col text-xs text-warning">
+              {pendingByCurrency.map((c) => (
+                <span key={c.currency}>
+                  +{formatMoney(c.amount, c.currency)} ждут
+                </span>
+              ))}
+            </span>
+          ) : null}
+        </TotalTile>
+        <TotalTile icon={TrendingDown} label="Потрачено">
+          <MoneyStack
+            items={t.byCurrency.map((c) => ({
+              currency: c.currency,
+              amount: c.totalSpend,
+            }))}
+            className="text-xl font-semibold"
+          />
+        </TotalTile>
+        <TotalTile icon={Target} label="Лиды">
+          <span className="text-xl font-semibold tabular-nums">{t.leads}</span>
+        </TotalTile>
       </div>
 
       {/* Источники байера */}
@@ -175,31 +197,19 @@ export function BuyerReport({
 function TotalTile({
   icon: Icon,
   label,
-  value,
-  hint,
-  tone = 'default',
+  children,
 }: {
   icon: typeof Wallet
   label: string
-  value: string
-  hint?: string
-  tone?: 'default' | 'positive' | 'negative'
+  children: React.ReactNode
 }) {
-  const toneCls = {
-    default: 'text-foreground',
-    positive: 'text-success',
-    negative: 'text-destructive',
-  }[tone]
   return (
     <Card className="flex flex-col gap-1 p-4">
       <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Icon className="size-3.5" />
         {label}
       </span>
-      <span className={cn('text-xl font-semibold tabular-nums', toneCls)}>
-        {value}
-      </span>
-      {hint ? <span className="text-xs text-warning">{hint}</span> : null}
+      {children}
     </Card>
   )
 }

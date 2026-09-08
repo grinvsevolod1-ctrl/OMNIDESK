@@ -14,14 +14,12 @@ import { BuyerReport } from '@/components/admin/buyers/buyer-report'
 import { ManagerActions } from '@/components/admin/manager-actions'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import { formatMoney } from '@/lib/money'
+import { MoneyStack } from '@/components/money'
+import type { CurrencyTotals } from '@/lib/data/source-finance'
 import type { Manager } from '@/lib/types'
 
 export interface BuyerTotals {
-  balance: number
-  confirmedDeposits: number
-  pendingDeposits: number
-  totalSpend: number
+  byCurrency: CurrencyTotals[]
   leads: number
   pendingCount: number
   sourcesCount: number
@@ -116,23 +114,26 @@ export function BuyersTable({ buyers }: { buyers: BuyerWithTotals[] }) {
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 Баланс
               </p>
-              <p
-                className={
-                  totals.balance >= 0
-                    ? 'text-sm font-semibold tabular-nums text-success'
-                    : 'text-sm font-semibold tabular-nums text-destructive'
-                }
-              >
-                {formatMoney(totals.balance, 'RUB')}
-              </p>
+              <MoneyStack
+                items={totals.byCurrency.map((c) => ({
+                  currency: c.currency,
+                  amount: c.balance,
+                }))}
+                signedTone
+                className="items-center text-sm font-semibold"
+              />
             </div>
             <div className="rounded-lg bg-muted/40 px-2 py-1.5">
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 Потрачено
               </p>
-              <p className="text-sm font-semibold tabular-nums">
-                {formatMoney(totals.totalSpend, 'RUB')}
-              </p>
+              <MoneyStack
+                items={totals.byCurrency.map((c) => ({
+                  currency: c.currency,
+                  amount: c.totalSpend,
+                }))}
+                className="items-center text-sm font-semibold"
+              />
             </div>
             <div className="rounded-lg bg-muted/40 px-2 py-1.5">
               <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
