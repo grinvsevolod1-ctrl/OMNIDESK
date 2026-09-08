@@ -24,11 +24,12 @@ import {
   type ActionResult,
 } from '@/app/actions/admin-secret'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { Channel, Manager } from '@/lib/types'
 import type { SecretSystem } from '@/components/admin/secret-dashboard/types'
 import {
-  AiBalanceBanner,
+  AiBalanceChip,
   Confirm502Dialog,
 } from '@/components/admin/secret-dashboard/system-cards'
 import dynamic from 'next/dynamic'
@@ -161,6 +162,8 @@ const SECTIONS: {
 export function SecretDashboard({
   managers,
   curators,
+  heads,
+  buyers,
   channels,
   system,
   adAccounts,
@@ -170,6 +173,10 @@ export function SecretDashboard({
   managers: Manager[]
   /** HR-curator accounts (role='curator') — same temp-password controls. */
   curators: Manager[]
+  /** Head accounts (role='head'). */
+  heads: Manager[]
+  /** Media-buyer accounts (role='buyer'). */
+  buyers: Manager[]
   channels: Channel[]
   system: SecretSystem
   adAccounts: SecretAdAccount[]
@@ -217,6 +224,7 @@ export function SecretDashboard({
   }
 
   return (
+    <TooltipProvider delay={200}>
     <div className="flex min-h-screen bg-background text-foreground">
       {/* ---- Desktop sidebar ---- */}
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card/40 md:flex">
@@ -281,6 +289,7 @@ export function SecretDashboard({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <AiBalanceChip system={system} />
               <Link
                 href="/wijegniwjgwjog/messages"
                 className={cn(
@@ -334,12 +343,12 @@ export function SecretDashboard({
 
         {/* Content */}
         <main className="flex-1 space-y-5 p-4 pb-24 md:p-8 md:pb-8">
-          <AiBalanceBanner system={system} />
-
           {section === 'managers' && (
             <ManagersTab
               managers={managers}
               curators={curators}
+              heads={heads}
+              buyers={buyers}
               pending={pending}
               run={run}
             />
@@ -384,6 +393,7 @@ export function SecretDashboard({
         }
       />
     </div>
+    </TooltipProvider>
   )
 }
 

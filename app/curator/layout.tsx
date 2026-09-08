@@ -6,6 +6,7 @@ import { NotificationProvider } from '@/components/manager/notification-provider
 import { requireCurator } from '@/lib/auth'
 import { getManagerById } from '@/lib/data'
 import { TelegramContactGate } from '@/components/curator/telegram-contact-gate'
+import { ImpersonationBanner } from '@/components/shared/impersonation-banner'
 
 const nav: NavItem[] = [
   { href: '/curator', label: 'Обзор', icon: 'overview' },
@@ -19,6 +20,7 @@ export default async function CuratorLayout({
   children: ReactNode
 }) {
   const user = await requireCurator()
+  const impersonating = Boolean(user.impersonatedBy)
   // Аватарка не живёт в JWT (это был бы жирный data:-URL в cookie) — читаем
   // строку сотрудника из БД для шапки. Best-effort: без неё покажем инициалы.
   const account = await getManagerById(user.sub).catch(() => null)
@@ -27,8 +29,9 @@ export default async function CuratorLayout({
   // куратор не может пользоваться панелью — отдаём только полноэкранный гейт без
   // навигации и доступа к разделам. Менеджеру без этого контакта нечего слать
   // кандидату при передаче лида. Как только сохранит — layout перечитает строку
-  // (router.refresh в гейте) и пустит внутрь.
-  if (!account?.telegramContact?.trim()) {
+  // (router.refresh в гейте) и пустит внутрь. При инспекции админом гейт не
+  // применяется — админ просматривает кабинет, а не работает кандидатами.
+  if (!impersonating && !account?.telegramContact?.trim()) {
     return <TelegramContactGate curatorName={user.name} />
   }
 
@@ -44,7 +47,17 @@ export default async function CuratorLayout({
             avatarUrl: account?.avatarUrl ?? null,
           }}
         >
-          <NotificationGate>{children}</NotificationGate>
+          {impersonating ? (
+            <>
+              <ImpersonationBanner
+                name={user.name}
+                roleLabel="Менеджер по кадрам"
+              />
+              {children}
+            </>
+          ) : (
+            <NotificationGate>{children}</NotificationGate>
+          )}
         </DashboardShell>
       </NotificationProvider>
     </SWRProvider>

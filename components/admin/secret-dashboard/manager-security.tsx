@@ -38,6 +38,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { formatMskDateTime } from '@/lib/time'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
@@ -118,15 +123,22 @@ export function ManagerTwofa({ manager }: { manager: Manager }) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <Button
-        variant="outline"
-        size="sm"
-        className="gap-1.5"
-        onClick={() => onOpenChange(true)}
-      >
-        <ShieldCheck className="size-3.5" />
-        2FA
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => onOpenChange(true)}
+            >
+              <ShieldCheck className="size-3.5" />
+              2FA
+            </Button>
+          }
+        />
+        <TooltipContent>Статус и принудительный сброс 2FA</TooltipContent>
+      </Tooltip>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Двухфакторная защита</DialogTitle>
@@ -299,15 +311,22 @@ export function ManagerTempPassword({ manager }: { manager: Manager }) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <Button
-        variant="outline"
-        size="sm"
-        className="gap-1.5"
-        onClick={() => onOpenChange(true)}
-      >
-        <KeyRound className="size-3.5" />
-        Пароль
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => onOpenChange(true)}
+            >
+              <KeyRound className="size-3.5" />
+              Пароль
+            </Button>
+          }
+        />
+        <TooltipContent>Выдать или показать временный пароль</TooltipContent>
+      </Tooltip>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Временный пароль</DialogTitle>

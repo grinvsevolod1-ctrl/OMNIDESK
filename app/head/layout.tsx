@@ -3,6 +3,7 @@ import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
 import { SWRProvider } from '@/components/swr-provider'
 import { requireHead } from '@/lib/auth'
 import { getManagerById } from '@/lib/data'
+import { ImpersonationBanner } from '@/components/shared/impersonation-banner'
 
 const nav: NavItem[] = [
   { href: '/head', label: 'Обзор', icon: 'overview' },
@@ -30,6 +31,9 @@ export default async function HeadLayout({
           avatarUrl: account?.avatarUrl ?? null,
         }}
       >
+        {user.impersonatedBy ? (
+          <ImpersonationBanner name={user.name} roleLabel="Руководитель" />
+        ) : null}
         {children}
       </DashboardShell>
     </SWRProvider>

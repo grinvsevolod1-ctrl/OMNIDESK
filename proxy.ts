@@ -1,7 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { isAdminSessionCurrent } from './lib/admin-session'
 import { getManagerAuthState } from './lib/data/managers'
-import { SESSION_COOKIE, verifySession } from './lib/session'
+import {
+  IMPERSONATION_COOKIE,
+  SESSION_COOKIE,
+  verifyImpersonation,
+  verifySession,
+} from './lib/session'
 import type { SessionUser } from './lib/types'
 
 function buildCsp(nonce: string): string {
@@ -70,9 +75,26 @@ async function sessionIsValid(session: SessionUser): Promise<boolean> {
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl
-  const rawSession = await verifySession(req.cookies.get(SESSION_COOKIE)?.value)
-  const revoked = rawSession ? !(await sessionIsValid(rawSession)) : false
-  const session = revoked ? null : rawSession
+
+  // Impersonation takes PRIORITY over the admin's own session for routing, so a
+  // «войти под сотрудником» tab is treated as that staff role here — otherwise
+  // this middleware would bounce it back to /admin before the (impersonation-
+  // aware) page guard runs. Mirrors lib/auth.getSession. The admin's own
+  // SESSION_COOKIE is left untouched; ending the grant restores it.
+  const impGrant = await verifyImpersonation(
+    req.cookies.get(IMPERSONATION_COOKIE)?.value,
+  )
+  let session: SessionUser | null = null
+  let revoked = false
+  if (impGrant && (await sessionIsValid(impGrant.user))) {
+    session = { ...impGrant.user, impersonatedBy: impGrant.by }
+  } else {
+    const rawSession = await verifySession(
+      req.cookies.get(SESSION_COOKIE)?.value,
+    )
+    revoked = rawSession ? !(await sessionIsValid(rawSession)) : false
+    session = revoked ? null : rawSession
+  }
 
   const requestId = req.headers.get('x-request-id') || crypto.randomUUID()
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64')

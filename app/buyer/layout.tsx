@@ -3,6 +3,7 @@ import { DashboardShell, type NavItem } from '@/components/dashboard-shell'
 import { SWRProvider } from '@/components/swr-provider'
 import { requireBuyer } from '@/lib/auth'
 import { getManagerById } from '@/lib/data'
+import { ImpersonationBanner } from '@/components/shared/impersonation-banner'
 
 const nav: NavItem[] = [{ href: '/buyer', label: 'Обзор', icon: 'overview' }]
 
@@ -25,6 +26,9 @@ export default async function BuyerLayout({
           avatarUrl: account?.avatarUrl ?? null,
         }}
       >
+        {user.impersonatedBy ? (
+          <ImpersonationBanner name={user.name} roleLabel="Медиабайер" />
+        ) : null}
         {children}
       </DashboardShell>
     </SWRProvider>

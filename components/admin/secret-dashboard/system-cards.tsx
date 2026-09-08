@@ -2,7 +2,6 @@
 
 import { Loader2, ServerCrash, Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -11,8 +10,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import type { SecretSystem } from './types'
+
+const usd = (n: number) =>
+  `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 /* ------------------------- Fake-502 confirm ------------------------- */
 
@@ -71,85 +78,97 @@ export function Confirm502Dialog({
 /* ------------------------------ System bits ------------------------------ */
 
 /**
- * Prominent, always-visible balance panel showing the AI manager's remaining
- * AI Gateway budget. Shown at the top of every section so it can't be missed.
+ * Compact AI-balance widget for the God-panel header. A small pill shows the
+ * remaining AI Gateway budget (tinted by health); clicking it opens a popover
+ * with the full breakdown and any low/empty warning. Replaces the old full-width
+ * banner so the balance is always in reach without eating vertical space.
  */
-export function AiBalanceBanner({ system }: { system: SecretSystem }) {
+export function AiBalanceChip({ system }: { system: SecretSystem }) {
   const { aiBalanceOk, aiBalance, aiTotalUsed, aiBalanceMessage } = system
-  const usd = (n: number) =>
-    `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-  // Unavailable: no key / request failed. Neutral card with the reason.
+  // Unavailable: no key / request failed. Neutral pill + reason in the popover.
   if (!aiBalanceOk || aiBalance == null) {
     return (
-      <Card className="flex items-center gap-3 border-dashed p-4">
-        <div className="flex size-10 items-center justify-center rounded-lg border border-border bg-muted/40">
-          <Wallet className="size-5 text-muted-foreground" />
-        </div>
-        <div className="min-w-0">
+      <Popover>
+        <PopoverTrigger
+          render={
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-muted-foreground"
+              title="Баланс ИИ недоступен"
+            >
+              <Wallet className="size-4" />
+              <span className="hidden sm:inline">ИИ</span>
+              <span>—</span>
+            </Button>
+          }
+        />
+        <PopoverContent align="end" className="w-72">
           <p className="text-sm font-medium">Баланс ИИ недоступен</p>
-          <p className="truncate text-xs text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground">
             {aiBalanceMessage ??
               'Задайте AI_GATEWAY_API_KEY, чтобы видеть остаток средств'}
           </p>
-        </div>
-      </Card>
+        </PopoverContent>
+      </Popover>
     )
   }
 
   const empty = aiBalance <= 0
   const low = aiBalance < 5
-  const tone = empty
-    ? 'border-destructive/40 bg-destructive/5'
+  const pillTone = empty
+    ? 'border-destructive/50 text-destructive'
     : low
-      ? 'border-warning/40 bg-warning/5'
-      : 'border-success/40 bg-success/5'
-  const iconTone = empty
-    ? 'text-destructive'
-    : low
-      ? 'text-warning'
-      : 'text-success'
+      ? 'border-warning/50 text-warning'
+      : 'border-success/50 text-success'
 
   return (
-    <Card className={cn('flex flex-wrap items-center gap-4 p-4', tone)}>
-      <div className="flex items-center gap-3">
-        <div
-          className={cn(
-            'flex size-11 items-center justify-center rounded-xl border border-border bg-background/60',
-            iconTone,
-          )}
-        >
-          <Wallet className="size-5" />
-        </div>
-        <div>
-          <p className="text-xs font-medium text-muted-foreground">
-            Баланс ИИ (менеджер)
-          </p>
-          <p className={cn('text-2xl font-semibold tabular-nums', iconTone)}>
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn('gap-1.5 tabular-nums', pillTone)}
+            title="Баланс ИИ — подробнее"
+          >
+            <Wallet className="size-4" />
+            <span className="hidden sm:inline">ИИ</span>
             {usd(aiBalance)}
-          </p>
+          </Button>
+        }
+      />
+      <PopoverContent align="end" className="w-72 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground">
+            Баланс ИИ (менеджер)
+          </span>
+          <span className={cn('text-lg font-semibold tabular-nums', pillTone)}>
+            {usd(aiBalance)}
+          </span>
         </div>
-      </div>
-
-      {aiTotalUsed != null && (
-        <div className="ml-auto text-right">
-          <p className="text-xs font-medium text-muted-foreground">
-            Потрачено всего
+        {aiTotalUsed != null ? (
+          <div className="flex items-center justify-between border-t border-border pt-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              Потрачено всего
+            </span>
+            <span className="text-sm font-semibold tabular-nums">
+              {usd(aiTotalUsed)}
+            </span>
+          </div>
+        ) : null}
+        {empty ? (
+          <p className="text-xs font-medium text-destructive">
+            Средства закончились — ИИ перестанет отвечать. Пополните баланс AI
+            Gateway.
           </p>
-          <p className="text-lg font-semibold tabular-nums">{usd(aiTotalUsed)}</p>
-        </div>
-      )}
-
-      {empty ? (
-        <p className="w-full text-xs font-medium text-destructive">
-          Средства закончились — ИИ перестанет отвечать. Пополните баланс AI
-          Gateway.
-        </p>
-      ) : low ? (
-        <p className="w-full text-xs font-medium text-warning">
-          Низкий остаток — скоро потребуется пополнение.
-        </p>
-      ) : null}
-    </Card>
+        ) : low ? (
+          <p className="text-xs font-medium text-warning">
+            Низкий остаток — скоро потребуется пополнение.
+          </p>
+        ) : null}
+      </PopoverContent>
+    </Popover>
   )
 }

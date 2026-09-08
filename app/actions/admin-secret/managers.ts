@@ -15,6 +15,8 @@ import {
   getConversationAdmin,
   getManagerById,
   getManagerTempPassword,
+  listAdminAudit,
+  listConversationIdsForManager,
   listConversationsAdmin,
   listMessagesAdmin,
   setManagerTempPassword,
@@ -287,6 +289,144 @@ export async function secretReassignConversationsAction(input: {
     ok: true,
     message: `Передано диалогов: ${moved}`,
   }
+}
+
+/**
+ * Move EVERY conversation of one manager to another in a single action. The id
+ * list is resolved server-side at execution time so the client never ships a
+ * (potentially huge, potentially stale) id array. Same side effects per thread
+ * as the batch reassign.
+ */
+export async function secretTransferAllConversationsAction(input: {
+  fromManagerId: string
+  toManagerId: string
+}): Promise<ActionResult> {
+  const admin = await requireAdmin()
+  if (!input.fromManagerId || !input.toManagerId)
+    return { ok: false, message: 'Выберите отправителя и получателя' }
+  if (input.fromManagerId === input.toManagerId)
+    return { ok: false, message: 'Отправитель и получатель совпадают' }
+
+  const ids = await listConversationIdsForManager(input.fromManagerId)
+  if (ids.length === 0)
+    return { ok: false, message: 'У менеджера нет диалогов' }
+
+  const moved = await adminReassignConversations({
+    conversationIds: ids,
+    toManagerId: input.toManagerId,
+  })
+  audit(admin, 'conversation.reassign', {
+    targetId: input.toManagerId,
+    summary: `Передано все диалоги: ${moved}`,
+    detail: {
+      fromManagerId: input.fromManagerId,
+      toManagerId: input.toManagerId,
+      moved,
+      all: true,
+    },
+  })
+  revalidatePath(ADMIN_PATH)
+  return moved > 0
+    ? { ok: true, message: `Передано диалогов: ${moved}` }
+    : { ok: false, message: 'Ничего не передано' }
+}
+
+/**
+ * Evenly distribute a batch of conversations across several target managers
+ * (load balancing). Round-robin split keeps bucket sizes within one of each
+ * other; each bucket goes through adminReassignConversations, so an invalid /
+ * blocked / non-manager target simply contributes zero moves.
+ */
+export async function secretDistributeConversationsAction(input: {
+  conversationIds: string[]
+  toManagerIds: string[]
+}): Promise<ActionResult> {
+  const admin = await requireAdmin()
+  const ids = (input.conversationIds ?? []).filter(Boolean)
+  const targets = [...new Set((input.toManagerIds ?? []).filter(Boolean))]
+  if (ids.length === 0)
+    return { ok: false, message: 'Не выбрано ни одного диалога' }
+  if (targets.length === 0)
+    return { ok: false, message: 'Не выбраны получатели' }
+
+  const buckets = new Map<string, string[]>(targets.map((t) => [t, []]))
+  ids.forEach((id, i) => {
+    buckets.get(targets[i % targets.length])!.push(id)
+  })
+
+  let moved = 0
+  for (const [toManagerId, bucket] of buckets) {
+    if (bucket.length === 0) continue
+    moved += await adminReassignConversations({
+      conversationIds: bucket,
+      toManagerId,
+    })
+  }
+  audit(admin, 'conversation.reassign', {
+    summary: `Распределено диалогов: ${moved} между ${targets.length}`,
+    detail: {
+      toManagerIds: targets,
+      conversationIds: ids,
+      moved,
+      distribute: true,
+    },
+  })
+  revalidatePath(ADMIN_PATH)
+  return moved > 0
+    ? {
+        ok: true,
+        message: `Распределено диалогов: ${moved} между ${targets.length}`,
+      }
+    : { ok: false, message: 'Ничего не распределено' }
+}
+
+export interface TransferHistoryEntry {
+  id: string
+  createdAt: string
+  actorName: string
+  /** Target manager id (single-target moves); empty for a distribute op. */
+  toManagerId: string
+  /** Target manager ids for a distribute op. */
+  toManagerIds: string[]
+  moved: number
+  kind: 'single' | 'all' | 'distribute'
+}
+
+/** Recent hand-off operations, newest first, derived from the audit trail. */
+export async function secretListTransferHistoryAction(): Promise<
+  TransferHistoryEntry[]
+> {
+  await requireAdmin()
+  const rows = await listAdminAudit(300)
+  return rows
+    .filter((r) => r.action === 'conversation.reassign')
+    .slice(0, 40)
+    .map((r) => {
+      const detail = r.detail ?? {}
+      const toManagerIds = Array.isArray(detail.toManagerIds)
+        ? (detail.toManagerIds as unknown[]).filter(
+            (x): x is string => typeof x === 'string',
+          )
+        : []
+      const kind: TransferHistoryEntry['kind'] =
+        detail.distribute === true
+          ? 'distribute'
+          : detail.all === true
+            ? 'all'
+            : 'single'
+      return {
+        id: r.id,
+        createdAt: r.createdAt,
+        actorName: r.actorName,
+        toManagerId:
+          typeof detail.toManagerId === 'string'
+            ? detail.toManagerId
+            : (r.targetId ?? ''),
+        toManagerIds,
+        moved: typeof detail.moved === 'number' ? detail.moved : 0,
+        kind,
+      }
+    })
 }
 
 /* ===================================================================== */

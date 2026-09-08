@@ -5,9 +5,13 @@ import { redirect } from 'next/navigation'
 import { isAdminSessionCurrent } from './admin-session'
 import { getManagerAuthState } from './data'
 import {
+  IMPERSONATION_COOKIE,
+  impersonationCookieOptions,
   SESSION_COOKIE,
   sessionCookieOptions,
+  signImpersonation,
   signSession,
+  verifyImpersonation,
   verifySession,
 } from './session'
 import type { SessionUser } from './types'
@@ -109,6 +113,25 @@ export async function endSession(): Promise<void> {
 
 export async function getSession(): Promise<SessionUser | null> {
   const store = await cookies()
+
+  // Impersonation takes PRIORITY over the admin's own session: while the
+  // short-lived «войти под сотрудником» cookie is present and valid, every tab
+  // in this browser sees the staff account. The token is validated against the
+  // live DB exactly like a normal staff session (blocked / session_version), so
+  // a blocked or rotated account cannot be impersonated past its revocation.
+  // An invalid/expired grant is ignored and we fall through to the real session.
+  const imp = await verifyImpersonation(store.get(IMPERSONATION_COOKIE)?.value)
+  if (imp) {
+    const state = await getManagerAuthState(imp.user.sub)
+    if (
+      state &&
+      state.status !== 'blocked' &&
+      (imp.user.sv ?? 0) === state.sessionVersion
+    ) {
+      return { ...imp.user, impersonatedBy: imp.by }
+    }
+  }
+
   const session = await verifySession(store.get(SESSION_COOKIE)?.value)
   if (!session) return null
 
@@ -191,4 +214,31 @@ export async function requireBuyer(): Promise<SessionUser> {
   if (!session) redirect('/login')
   if (session.role !== 'buyer') redirect(roleHome(session.role))
   return session
+}
+
+/* --------------------------- Impersonation --------------------------- */
+
+/** Begin impersonating a staff account (admin-guarded by the caller). */
+export async function startImpersonation(
+  user: SessionUser,
+  byAdminSub: string,
+): Promise<void> {
+  const token = await signImpersonation(user, byAdminSub)
+  const store = await cookies()
+  store.set(IMPERSONATION_COOKIE, token, impersonationCookieOptions)
+}
+
+/** End the current impersonation, restoring the admin's own session. */
+export async function endImpersonation(): Promise<void> {
+  const store = await cookies()
+  store.delete(IMPERSONATION_COOKIE)
+}
+
+/** Current valid impersonation grant, or null. */
+export async function readImpersonation(): Promise<{
+  user: SessionUser
+  by: string
+} | null> {
+  const store = await cookies()
+  return verifyImpersonation(store.get(IMPERSONATION_COOKIE)?.value)
 }

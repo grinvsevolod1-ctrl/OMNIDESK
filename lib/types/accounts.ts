@@ -57,4 +57,11 @@ export interface SessionUser {
    * Curators share the same session_version machinery as managers.
    */
   sv?: number
+  /**
+   * Set only while an admin is «вошёл под сотрудником» (impersonation): holds
+   * the originating admin's id. Present on the resolved session so the UI can
+   * show the return-to-admin banner and layouts can relax staff-only gates
+   * (e.g. the mandatory push-notification gate) for the inspection session.
+   */
+  impersonatedBy?: string
 }

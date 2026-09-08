@@ -27,28 +27,87 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { Manager } from '@/lib/types'
 import { copyText } from './utils'
 import { ManagerTempPassword, ManagerTwofa } from './manager-security'
+import { ImpersonateButton } from './impersonate-button'
 
 /* ------------------------------ Managers ------------------------------ */
+
+type GroupId = 'managers' | 'curators' | 'heads' | 'buyers'
+
+const GROUPS: {
+  id: GroupId
+  label: string
+  manageHref: string
+  manageLabel: string
+  emptyTitle: string
+}[] = [
+  {
+    id: 'managers',
+    label: 'Менеджеры',
+    manageHref: '/admin/managers',
+    manageLabel: 'Управление менеджерами',
+    emptyTitle: 'Менеджеры не найдены',
+  },
+  {
+    id: 'curators',
+    label: 'По кадрам',
+    manageHref: '/admin/curators',
+    manageLabel: 'Управление кадрами',
+    emptyTitle: 'Менеджеры по кадрам не найдены',
+  },
+  {
+    id: 'heads',
+    label: 'Руководители',
+    manageHref: '/admin/heads',
+    manageLabel: 'Управление руководителями',
+    emptyTitle: 'Руководители не найдены',
+  },
+  {
+    id: 'buyers',
+    label: 'Байеры',
+    manageHref: '/admin/buyers',
+    manageLabel: 'Управление байерами',
+    emptyTitle: 'Медиабайеры не найдены',
+  },
+]
 
 export function ManagersTab({
   managers,
   curators,
+  heads,
+  buyers,
   pending,
   run,
 }: {
   managers: Manager[]
   /** HR-curator accounts — same controls (temp password, block) as managers. */
   curators: Manager[]
+  /** Head accounts. */
+  heads: Manager[]
+  /** Media-buyer accounts. */
+  buyers: Manager[]
   pending: boolean
   run: (a: () => Promise<ActionResult>, onDone?: () => void) => void
 }) {
   const [q, setQ] = useState('')
-  const [group, setGroup] = useState<'managers' | 'curators'>('managers')
-  const source = group === 'managers' ? managers : curators
+  const [group, setGroup] = useState<GroupId>('managers')
+
+  const sourceByGroup: Record<GroupId, Manager[]> = {
+    managers,
+    curators,
+    heads,
+    buyers,
+  }
+  const source = sourceByGroup[group]
+  const active = GROUPS.find((g) => g.id === group) ?? GROUPS[0]
   const filtered = source.filter(
     (m) =>
       m.name.toLowerCase().includes(q.toLowerCase()) ||
@@ -58,41 +117,30 @@ export function ManagersTab({
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center">
-          {/* Переключатель: менеджеры продаж / менеджеры по кадрам */}
+        <div className="flex flex-1 flex-col gap-3 lg:flex-row lg:items-center">
+          {/* Переключатель типов аккаунтов: продажи / кадры / руководители / байеры */}
           <div
             role="tablist"
             aria-label="Тип аккаунтов"
-            className="flex w-fit shrink-0 rounded-lg bg-muted/60 p-0.5"
+            className="flex w-fit shrink-0 flex-wrap rounded-lg bg-muted/60 p-0.5"
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={group === 'managers'}
-              onClick={() => setGroup('managers')}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                group === 'managers'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              Менеджеры
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={group === 'curators'}
-              onClick={() => setGroup('curators')}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                group === 'curators'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              По кадрам
-            </button>
+            {GROUPS.map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                role="tab"
+                aria-selected={group === g.id}
+                onClick={() => setGroup(g.id)}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                  group === g.id
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {g.label}
+              </button>
+            ))}
           </div>
           <div className="relative w-full sm:max-w-xs">
             <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -105,15 +153,13 @@ export function ManagersTab({
           </div>
         </div>
         <Link
-          href={group === 'managers' ? '/admin/managers' : '/admin/curators'}
+          href={active.manageHref}
           className={cn(
             buttonVariants({ variant: 'outline', size: 'sm' }),
             'gap-1.5',
           )}
         >
-          {group === 'managers'
-            ? 'Управление менеджерами'
-            : 'Управление кадрами'}
+          {active.manageLabel}
           <ArrowUpRight className="size-4" />
         </Link>
       </div>
@@ -162,44 +208,67 @@ export function ManagersTab({
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1.5">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => copyText(m.id)}
-                        className="gap-1.5"
-                      >
-                        <Copy className="size-3.5" />
-                        ID
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => copyText(m.id)}
+                              className="gap-1.5"
+                            >
+                              <Copy className="size-3.5" />
+                              ID
+                            </Button>
+                          }
+                        />
+                        <TooltipContent>
+                          Скопировать ID аккаунта
+                        </TooltipContent>
+                      </Tooltip>
+                      <ImpersonateButton account={m} />
                       <ManagerTempPassword manager={m} />
                       <ManagerTwofa manager={m} />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={pending}
-                        onClick={() =>
-                          run(() =>
-                            secretSetManagerStatusAction(
-                              m.id,
-                              m.status === 'active' ? 'blocked' : 'active',
-                            ),
-                          )
-                        }
-                        className={cn(
-                          'gap-1.5',
-                          m.status === 'active' && 'text-destructive',
-                        )}
-                      >
-                        {m.status === 'active' ? (
-                          <>
-                            <Ban className="size-3.5" /> Блок
-                          </>
-                        ) : (
-                          <>
-                            <CheckCircle2 className="size-3.5" /> Разблок
-                          </>
-                        )}
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={pending}
+                              onClick={() =>
+                                run(() =>
+                                  secretSetManagerStatusAction(
+                                    m.id,
+                                    m.status === 'active'
+                                      ? 'blocked'
+                                      : 'active',
+                                  ),
+                                )
+                              }
+                              className={cn(
+                                'gap-1.5',
+                                m.status === 'active' && 'text-destructive',
+                              )}
+                            >
+                              {m.status === 'active' ? (
+                                <>
+                                  <Ban className="size-3.5" /> Блок
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle2 className="size-3.5" /> Разблок
+                                </>
+                              )}
+                            </Button>
+                          }
+                        />
+                        <TooltipContent>
+                          {m.status === 'active'
+                            ? 'Заблокировать вход — активные сессии завершатся'
+                            : 'Снять блокировку и вернуть доступ'}
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -211,11 +280,7 @@ export function ManagersTab({
         <div className="p-6">
           <EmptyState
             icon={Users}
-            title={
-              group === 'managers'
-                ? 'Менеджеры не найдены'
-                : 'Менеджеры по кадрам не найдены'
-            }
+            title={active.emptyTitle}
             description="Измените запрос поиска или создайте аккаунт в разделе управления."
           />
         </div>

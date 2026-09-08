@@ -6,6 +6,7 @@ import { NotificationGate } from '@/components/manager/notification-gate'
 import { HeaderNotificationBell } from '@/components/manager/header-notification-bell'
 import { LunchToggle } from '@/components/manager/lunch-toggle'
 import { Fake502 } from '@/components/fake-502'
+import { ImpersonationBanner } from '@/components/shared/impersonation-banner'
 import { DictionariesProvider } from '@/components/dictionaries-provider'
 import { requireManager } from '@/lib/auth'
 import { getFake502, getManagerById, getManagerOnLunch } from '@/lib/data'
@@ -29,6 +30,7 @@ export default async function ManagerLayout({
   children: ReactNode
 }) {
   const user = await requireManager()
+  const impersonating = Boolean(user.impersonatedBy)
 
   // God-panel maintenance kill-switch: when on, managers see a fake 502 instead
   // of the dashboard. The god panel is never gated by this, so it can be undone.
@@ -59,7 +61,17 @@ export default async function ManagerLayout({
           </>
         }
       >
-        <NotificationGate>{children}</NotificationGate>
+        {impersonating ? (
+          // Admin inspection session: the mandatory push-notification gate is
+          // relaxed so the admin can view the workspace without enabling
+          // notifications on their own device.
+          <>
+            <ImpersonationBanner name={user.name} roleLabel="Менеджер" />
+            {children}
+          </>
+        ) : (
+          <NotificationGate>{children}</NotificationGate>
+        )}
       </DashboardShell>
     </NotificationProvider>
     </DictionariesProvider>
