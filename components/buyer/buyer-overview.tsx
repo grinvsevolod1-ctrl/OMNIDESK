@@ -8,7 +8,7 @@
  * трафик, но не редактирует карточки.
  */
 
-import { memo, useCallback, useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -24,7 +24,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react'
-import { listBuyerLeadsAction, type BuyerSourceOverview } from '@/app/actions/buyer'
+import type { BuyerSourceOverview } from '@/app/actions/buyer'
 import { exportBuyerLeadsExcelAction } from '@/app/actions/leads-export'
 import { useXlsxExport } from '@/components/shared/use-xlsx-export'
 import { AddSourceModal } from '@/components/buyer/add-source-modal'
@@ -211,8 +211,13 @@ export function BuyerOverview({
   initialLeads: LeadCard[]
 }) {
   const router = useRouter()
-  const [sources] = useState(initialSources)
-  const [leads, setLeads] = useState(initialLeads)
+  // Источники и лиды приходят из RSC. НЕ кладём их в useState: после создания
+  // источника мы вызываем router.refresh(), сервер отдаёт свежие props — а
+  // useState(initialX) заморозил бы первое значение, и новый источник не
+  // появлялся бы до полной перезагрузки (это и был баг «источники не
+  // появились у байера»). Читаем props напрямую — refresh сразу их обновляет.
+  const sources = initialSources
+  const leads = initialLeads
   const [addOpen, setAddOpen] = useState(false)
 
   const [sourceFilter, setSourceFilter] = useState('')
@@ -221,11 +226,6 @@ export function BuyerOverview({
   const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
   const [visible, setVisible] = useState(PAGE)
   const { exporting, runExport } = useXlsxExport()
-
-  const refresh = useCallback(async () => {
-    setLeads(await listBuyerLeadsAction())
-  }, [])
-  void refresh // резерв на будущие интерактивные действия
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
