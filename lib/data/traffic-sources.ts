@@ -434,6 +434,15 @@ export async function getSourceStats(
 
 /* --------------------- Отчёт по написавшим/переданным ------------------ */
 
+export interface SourceDaily {
+  /** YYYY-MM-DD в МСК. */
+  date: string
+  /** Написавших в этот день. */
+  wrote: number
+  /** Переданных куратору в этот день. */
+  transferred: number
+}
+
 export interface SourceTodayReport {
   /** Лиды, написавшие сегодня (МСК), новые сверху. */
   wroteToday: LeadCard[]
@@ -443,6 +452,8 @@ export interface SourceTodayReport {
   totalWrote: number
   /** Всего переданных куратору. */
   totalTransferred: number
+  /** Динамика по дням за последние 14 дней (МСК), старые слева. */
+  dailySeries: SourceDaily[]
 }
 
 /**
@@ -458,7 +469,7 @@ export async function getSourceTodayReport(
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
       WHERE lc.traffic_source_id = $1 AND lc.deleted_at IS NULL`
-  const [wrote, transferred, totals] = await Promise.all([
+  const [wrote, transferred, totals, daily] = await Promise.all([
     query<LeadCardRow>(
       `SELECT ${CARD_SELECT} ${leadJoins}
         AND (lc.created_at AT TIME ZONE 'Europe/Moscow')::date
@@ -483,12 +494,48 @@ export async function getSourceTodayReport(
         WHERE traffic_source_id = $1 AND deleted_at IS NULL`,
       [sourceId],
     ),
+    // Динамика за 14 дней: генерируем непрерывный ряд дат МСК (даже пустые
+    // дни = 0) и слева джойним написавших/переданных по дате в МСК.
+    query<{ date: string; wrote: number; transferred: number }>(
+      `WITH days AS (
+         SELECT generate_series(
+           (now() AT TIME ZONE 'Europe/Moscow')::date - INTERVAL '13 days',
+           (now() AT TIME ZONE 'Europe/Moscow')::date,
+           INTERVAL '1 day'
+         )::date AS d
+       )
+       SELECT to_char(days.d, 'YYYY-MM-DD') AS date,
+              COUNT(lc.id) FILTER (
+                WHERE (lc.created_at AT TIME ZONE 'Europe/Moscow')::date = days.d
+              )::int AS wrote,
+              COUNT(lc.id) FILTER (
+                WHERE lc.curator_id IS NOT NULL
+                  AND lc.transferred_at IS NOT NULL
+                  AND (lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date = days.d
+              )::int AS transferred
+         FROM days
+         LEFT JOIN lead_cards lc
+           ON lc.traffic_source_id = $1
+          AND lc.deleted_at IS NULL
+          AND (
+            (lc.created_at AT TIME ZONE 'Europe/Moscow')::date = days.d
+            OR (lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date = days.d
+          )
+        GROUP BY days.d
+        ORDER BY days.d`,
+      [sourceId],
+    ),
   ])
   return {
     wroteToday: wrote.map(toLeadCard),
     transferredToday: transferred.map(toLeadCard),
     totalWrote: totals[0]?.total_wrote ?? 0,
     totalTransferred: totals[0]?.total_transferred ?? 0,
+    dailySeries: daily.map((r) => ({
+      date: r.date,
+      wrote: r.wrote,
+      transferred: r.transferred,
+    })),
   }
 }
 
