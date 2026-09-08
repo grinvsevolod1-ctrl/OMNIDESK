@@ -8,15 +8,7 @@
  */
 
 import { useCallback, useState, useTransition } from 'react'
-import {
-  ArrowLeft,
-  Coins,
-  Loader2,
-  Target,
-  TrendingDown,
-  Wallet,
-} from 'lucide-react'
-import { toast } from 'sonner'
+import { ArrowLeft, Coins, Target, TrendingDown, Wallet } from 'lucide-react'
 import { getBuyerReportAction } from '@/app/actions/source-finance'
 import { DepositDialog } from '@/components/admin/buyers/deposit-dialog'
 import { PlatformLogo } from '@/components/buyer/platform-logo'

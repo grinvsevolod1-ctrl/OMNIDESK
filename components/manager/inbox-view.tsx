@@ -429,7 +429,7 @@ export function InboxView({
                       )}
                     >
                       {activeTrashed
-                        ? 'Лид вернулся от куратора и у��ран в trash · причина:'
+                        ? 'Лид вернулся от куратора и убран в trash · причина:'
                         : 'Лид вернулся на дожим · причина:'}{' '}
                       <span className="font-medium">
                         {active.curatorArchived

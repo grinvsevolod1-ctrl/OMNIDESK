@@ -628,7 +628,7 @@ export async function sendCuratorScheduledMessageAction(
   }
 
   const conv = await getConversationForCurator(conversationId, session.sub)
-  if (!conv) return { ok: false, message: 'Диалог н�� найден.' }
+  if (!conv) return { ok: false, message: 'Диалог не найден.' }
   if (conv.channelType !== 'telegram') {
     return {
       ok: false,
