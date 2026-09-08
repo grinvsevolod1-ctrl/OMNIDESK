@@ -10,7 +10,7 @@ import {
 import {
   MEDIA_MAX_STORE_BYTES,
 } from '@/lib/data/media-archive'
-import { applyLunchSubstitution } from '@/lib/data'
+import { applyLunchSubstitution, enqueueJob, markMessageFailed } from '@/lib/data'
 import { saveMediaFile } from '@/lib/media-store'
 import {
   assertConsoleOrMessenger,
@@ -394,8 +394,16 @@ export async function secretSendMediaMessageAction(
       message: `Файл слишком большой (макс. ${Math.floor(UPLOAD_MAX_BYTES / 1024 / 1024)} МБ)`,
     }
 
-  const conv = await query<{ contact_name: string }>(
-    'SELECT contact_name FROM conversations WHERE id = $1 LIMIT 1',
+  const conv = await query<{
+    contact_name: string
+    contact_handle: string | null
+    channel_id: string
+    channel_type: string
+    manager_id: string | null
+    god_synthetic: boolean
+  }>(
+    `SELECT contact_name, contact_handle, channel_id, channel_type, manager_id, god_synthetic
+       FROM conversations WHERE id = $1 LIMIT 1`,
     [conversationId],
   )
   if (!conv[0]) return { ok: false, message: 'Диалог не найден' }
@@ -467,6 +475,54 @@ export async function secretSendMediaMessageAction(
     )
     return rows[0]
   })
+
+  // Outbound media in a REAL (non-synthetic) Telegram god-dialog must actually
+  // reach the contact. The DB insert alone only made the bubble appear — it
+  // never left the panel, which is the reported "как будто отправилось, но не
+  // ушло" symptom. Mirror the manager composer: enqueue a send_file/send_voice
+  // job so the worker delivers it. Synthetic threads (god_synthetic = true) have
+  // no Telegram access_hash and are settled locally by design — never enqueue.
+  // Inbound "as the client" media is a pure simulation and is never delivered.
+  if (
+    direction === 'out' &&
+    !conv[0].god_synthetic &&
+    conv[0].channel_type === 'telegram' &&
+    conv[0].contact_handle
+  ) {
+    try {
+      await enqueueJob({
+        channelId: conv[0].channel_id,
+        managerId: conv[0].manager_id ?? null,
+        action: mediaType === 'voice' ? 'send_voice' : 'send_file',
+        payload:
+          mediaType === 'voice'
+            ? {
+                target: conv[0].contact_handle,
+                audio: bytes.toString('base64'),
+                mime,
+                messageId,
+              }
+            : {
+                target: conv[0].contact_handle,
+                file: bytes.toString('base64'),
+                mime,
+                name: file.name || undefined,
+                caption: caption || undefined,
+                messageId,
+              },
+      })
+    } catch (err) {
+      console.error('[god-messenger] failed to enqueue outbound media job:', err)
+      await markMessageFailed(
+        messageId,
+        'Не удалось поставить файл в очередь. Попробуйте ещё раз.',
+      ).catch(() => {})
+      return {
+        ok: false,
+        message: 'Не удалось отправить — файл не поставлен в очередь.',
+      }
+    }
+  }
 
   return {
     ok: true,
