@@ -4,7 +4,6 @@ import { PageHeader } from '@/components/page-parts'
 import { SystemHealthSection } from '@/components/admin/settings/system-health-section'
 import { AuditLogSection } from '@/components/admin/settings/audit-log-section'
 import {
-  SettingsIdentityCard,
   SettingsShell,
   type SettingsTab,
 } from '@/components/shared/settings-shell'
@@ -161,11 +160,6 @@ export default async function AdminSettingsPage() {
           about: aboutPanel,
         }}
       >
-        <SettingsIdentityCard
-          name={user.name}
-          email={user.email}
-          roleLabel="Администратор"
-        />
         <AppInstallCard />
       </SettingsShell>
     </div>

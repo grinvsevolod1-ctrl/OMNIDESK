@@ -8,7 +8,6 @@ import { AvatarUploader } from '@/components/shared/avatar-uploader'
 import { LoginHistory } from '@/components/shared/login-history'
 import { ProfileForm } from '@/components/shared/profile-form'
 import {
-  SettingsIdentityCard,
   SettingsShell,
   type SettingsTab,
 } from '@/components/shared/settings-shell'
@@ -150,11 +149,6 @@ export default async function CuratorSettingsPage() {
           sessions: sessionsPanel,
         }}
       >
-        <SettingsIdentityCard
-          name={session.name}
-          email={session.email}
-          roleLabel="Менеджер по кадрам"
-        />
         <AppInstallCard />
       </SettingsShell>
     </div>
