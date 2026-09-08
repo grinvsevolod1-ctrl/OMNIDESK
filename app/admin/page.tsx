@@ -1,34 +1,21 @@
-import { OverviewTab } from '@/components/admin/overview/overview-tab'
+import { SourcesOverview } from '@/components/admin/overview/sources-overview'
+import { PageHeader } from '@/components/page-parts'
 import { Card } from '@/components/ui/card'
 import { requireAdmin } from '@/lib/auth'
 import { checkDbConnection } from '@/lib/db'
-import { getSourcesOverview } from '@/lib/data/sources'
 import { getWorkerHealth } from '@/lib/data/worker-health'
-import { listAllChannels, listSourceGroups } from '@/lib/data'
+import { listSourcesOverviewAction } from '@/app/actions/source-finance'
+
+export const dynamic = 'force-dynamic'
 
 export default async function AdminOverviewPage() {
   await requireAdmin()
 
-  // Начальный период — 7 дней. Клиент дальше сам меняет период через SWR.
-  const to = new Date()
-  to.setHours(24, 0, 0, 0)
-  const from = new Date(to)
-  from.setDate(to.getDate() - 7)
-
-  const [overview, groups, channels, db, worker] = await Promise.all([
-    getSourcesOverview(from.toISOString(), to.toISOString(), 0),
-    listSourceGroups(),
-    listAllChannels(),
+  const [{ sources }, db, worker] = await Promise.all([
+    listSourcesOverviewAction(),
     checkDbConnection(),
     getWorkerHealth(),
   ])
-
-  const channelOptions = channels.map((c) => ({
-    id: c.id,
-    type: c.type,
-    name: c.name,
-    detail: c.detail,
-  }))
 
   return (
     <div className="flex flex-col gap-4">
@@ -46,11 +33,12 @@ export default async function AdminOverviewPage() {
         </Card>
       ) : null}
 
-      <OverviewTab
-        initialOverview={overview}
-        groups={groups}
-        channels={channelOptions}
+      <PageHeader
+        title="Обзор"
+        description="Все источники трафика единым списком: их ведут медиабайеры, а созданный байером источник появляется здесь сразу. Настройка и создание — на стороне байера."
       />
+
+      <SourcesOverview initial={sources} />
     </div>
   )
 }

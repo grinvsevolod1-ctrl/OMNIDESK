@@ -15,8 +15,12 @@ import { isBuyerOfHead, listBuyerIdsOfHead } from '@/lib/data/heads'
 import {
   getTrafficSourceById,
   getBuyerIdForSource,
+  getSourceStats,
   listBuyers,
+  listTrafficSources,
   listTrafficSourcesForBuyer,
+  type SourceStats,
+  type TrafficSource,
 } from '@/lib/data/traffic-sources'
 import { getManagerById } from '@/lib/data/managers'
 import {
@@ -30,6 +34,7 @@ import {
   listSpendDays,
   upsertSpendDay,
   type DepositStatus,
+  type SourceFinanceSummary,
 } from '@/lib/data/source-finance'
 
 /* ----------------------------- Скоуп-хелперы ---------------------------- */
@@ -220,6 +225,47 @@ export async function getBuyerReportAction(buyerId: string) {
     sources: sources.map((s) => ({
       source: s,
       summary: summaries.get(s.id) ?? null,
+    })),
+  }
+}
+
+/* ----------------- Единый обзор источников (admin/head) ----------------- */
+
+export interface SourceOverviewRow {
+  source: TrafficSource
+  summary: SourceFinanceSummary | null
+  stats: SourceStats | null
+}
+
+/**
+ * Все источники трафика единым списком для главного экрана «Обзор». Это тот же
+ * traffic_sources, что создаёт байер и видит раздел «Медиабайеры» — источник,
+ * созданный байером, появляется здесь сразу (единая сущность, без зеркал).
+ * Скоуп: админ видит все источники, руководитель — только источники байеров
+ * своей команды (перечитывается из БД на каждый запрос).
+ */
+export async function listSourcesOverviewAction(): Promise<{
+  sources: SourceOverviewRow[]
+}> {
+  const session = await getSession()
+  if (!session) throw new Error('Не авторизован.')
+  let sources = await listTrafficSources()
+  if (session.role === 'head') {
+    const allowed = new Set(await listBuyerIdsOfHead(session.sub))
+    sources = sources.filter((s) => s.buyerId != null && allowed.has(s.buyerId))
+  } else if (session.role !== 'admin') {
+    throw new Error('Недостаточно прав.')
+  }
+  const ids = sources.map((s) => s.id)
+  const [summaries, stats] = await Promise.all([
+    getSummariesForSources(ids),
+    getSourceStats(ids),
+  ])
+  return {
+    sources: sources.map((s) => ({
+      source: s,
+      summary: summaries.get(s.id) ?? null,
+      stats: stats.get(s.id) ?? null,
     })),
   }
 }
