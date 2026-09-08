@@ -10,7 +10,9 @@
 import { useMemo, useState } from 'react'
 import { Link as LinkIcon, Megaphone, Moon, Search, Sun, Wallet } from 'lucide-react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import type { SourceOverviewRow } from '@/app/actions/source-finance'
+import { SourceDetailDialog } from '@/components/admin/overview/source-detail-dialog'
 import { PlatformLogo } from '@/components/buyer/platform-logo'
 import { MoneyStack } from '@/components/money'
 import { EmptyState } from '@/components/page-parts'
@@ -69,13 +71,28 @@ function SummaryStat({
   )
 }
 
-function SourceCard({ row }: { row: SourceOverviewRow }) {
+function SourceCard({
+  row,
+  onOpen,
+}: {
+  row: SourceOverviewRow
+  onOpen: () => void
+}) {
   const { source, summary, stats } = row
   const platform = platformOrCustom(source.platformKey)
   return (
     <Card
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
       className={cn(
-        'flex flex-col gap-3 p-4 transition-colors hover:border-foreground/20',
+        'flex cursor-pointer flex-col gap-3 p-4 text-left transition-colors hover:border-foreground/30 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         !source.isActive && 'opacity-70',
       )}
     >
@@ -184,10 +201,12 @@ export function SourcesOverview({
 }: {
   initial: SourceOverviewRow[]
 }) {
+  const router = useRouter()
   const [search, setSearch] = useState('')
   const [buyer, setBuyer] = useState(ALL)
   const [platform, setPlatform] = useState(ALL)
   const [activeOnly, setActiveOnly] = useState(false)
+  const [selected, setSelected] = useState<SourceOverviewRow | null>(null)
 
   const buyerOptions = useMemo(() => {
     const map = new Map<string, string>()
@@ -325,10 +344,22 @@ export function SourcesOverview({
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((row) => (
-            <SourceCard key={row.source.id} row={row} />
+            <SourceCard
+              key={row.source.id}
+              row={row}
+              onOpen={() => setSelected(row)}
+            />
           ))}
         </div>
       )}
+
+      <SourceDetailDialog
+        row={selected}
+        onOpenChange={(open) => {
+          if (!open) setSelected(null)
+        }}
+        onChanged={() => router.refresh()}
+      />
     </div>
   )
 }

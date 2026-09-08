@@ -9,8 +9,12 @@
 
 import { useCallback, useState, useTransition } from 'react'
 import { ArrowLeft, Coins, Target, TrendingDown, Wallet } from 'lucide-react'
-import { getBuyerReportAction } from '@/app/actions/source-finance'
+import {
+  getBuyerReportAction,
+  type SourceOverviewRow,
+} from '@/app/actions/source-finance'
 import { DepositDialog } from '@/components/admin/buyers/deposit-dialog'
+import { SourceDetailDialog } from '@/components/admin/overview/source-detail-dialog'
 import { PlatformLogo } from '@/components/buyer/platform-logo'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -35,6 +39,7 @@ export function BuyerReport({
     name: string
     currency: string
   } | null>(null)
+  const [detailRow, setDetailRow] = useState<SourceOverviewRow | null>(null)
 
   const buyer = report.buyer
   const t = report.totals
@@ -132,7 +137,19 @@ export function BuyerReport({
             {report.sources.map(({ source, summary }) => {
               const platform = platformOrCustom(source.platformKey)
               return (
-                <Card key={source.id} className="flex flex-col gap-3 p-4">
+                <Card
+                  key={source.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setDetailRow({ source, summary, stats: null })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setDetailRow({ source, summary, stats: null })
+                    }
+                  }}
+                  className="flex cursor-pointer flex-col gap-3 p-4 text-left transition-colors hover:border-foreground/30 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   <div className="flex items-center gap-3">
                     <PlatformLogo platform={platform} size={40} />
                     <div className="min-w-0 flex-1">
@@ -166,13 +183,14 @@ export function BuyerReport({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() =>
+                    onClick={(e) => {
+                      e.stopPropagation()
                       setDepositSource({
                         id: source.id,
                         name: source.name,
                         currency: source.currency,
                       })
-                    }
+                    }}
                   >
                     <Coins className="size-4" />
                     Внести депозит
@@ -189,6 +207,14 @@ export function BuyerReport({
         onOpenChange={(v) => !v && setDepositSource(null)}
         source={depositSource}
         onCreated={refresh}
+      />
+
+      <SourceDetailDialog
+        row={detailRow}
+        onOpenChange={(open) => {
+          if (!open) setDetailRow(null)
+        }}
+        onChanged={refresh}
       />
     </div>
   )
