@@ -12,6 +12,7 @@ import {
 import {
   createChannel,
   deleteChannelById,
+  reassignChannelManager,
 } from '@/lib/data'
 import {
   type ChannelType,
@@ -78,6 +79,26 @@ export async function secretDeleteChannelAction(
   audit(admin, 'channel.delete', { targetId: id })
   revalidatePath(ADMIN_PATH)
   return { ok: true, message: 'Канал удалён' }
+}
+
+/** Admin: reassign a channel to another manager (or unassign with an empty id). */
+export async function secretReassignChannelAction(
+  id: string,
+  managerId: string,
+): Promise<ActionResult> {
+  const admin = await requireAdmin()
+  if (!id) return { ok: false, message: 'Не указан канал' }
+  const next =
+    managerId && managerId.trim() && managerId !== 'none'
+      ? managerId.trim()
+      : null
+  await reassignChannelManager(id, next)
+  audit(admin, 'channel.reassign', { targetId: id, detail: { managerId: next } })
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: next ? 'Канал переназначен' : 'Владелец снят',
+  }
 }
 
 export async function secretSetChannelStatusAction(

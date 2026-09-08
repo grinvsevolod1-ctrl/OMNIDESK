@@ -62,6 +62,7 @@ export function CatalogSection({
   const {
     data: countries,
     isLoading,
+    error,
     mutate,
   } = useSWR(
     'gmt-countries',
@@ -95,7 +96,17 @@ export function CatalogSection({
     <Card className="p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="font-medium">Каталог</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="font-medium">Каталог</h3>
+            {!isLoading && !error ? (
+              <Badge
+                variant="outline"
+                className="border-border text-muted-foreground"
+              >
+                {visible.length}
+              </Badge>
+            ) : null}
+          </div>
           <p className="text-xs text-muted-foreground">
             Цены с учётом персональной скидки · 1 шт или опт архивом
           </p>
@@ -148,6 +159,27 @@ export function CatalogSection({
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-16 rounded-md" />
           ))}
+        </div>
+      ) : error ? (
+        <div className="mt-4 flex flex-col items-center gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-6 text-center">
+          <TriangleAlert className="size-6 text-destructive" aria-hidden />
+          <div>
+            <p className="text-sm font-medium">Не удалось загрузить каталог</p>
+            <p className="mt-1 text-xs text-muted-foreground text-pretty">
+              {error instanceof Error
+                ? error.message
+                : 'Проверьте ключ API и попробуйте снова.'}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 bg-transparent"
+            onClick={() => void mutate()}
+          >
+            <RefreshCw className="size-3.5" />
+            Повторить
+          </Button>
         </div>
       ) : visible.length === 0 ? (
         <div className="mt-4">

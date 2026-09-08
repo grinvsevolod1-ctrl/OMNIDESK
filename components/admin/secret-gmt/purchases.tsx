@@ -20,6 +20,7 @@ import {
   Package,
   RefreshCw,
   RotateCcw,
+  TriangleAlert,
   UserPlus,
 } from 'lucide-react'
 import {
@@ -67,7 +68,7 @@ export function PurchasesSection({
   const [filter, setFilter] = useState<GmtPurchaseStatus | 'ALL'>('ALL')
   const [page, setPage] = useState(1)
 
-  const { data, isLoading, mutate } = useSWR(
+  const { data, isLoading, error, mutate } = useSWR(
     ['gmt-purchases', filter, page],
     async () => {
       const res = await secretGmtPurchasesAction(
@@ -135,6 +136,27 @@ export function PurchasesSection({
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-20 rounded-md" />
           ))}
+        </div>
+      ) : error && items.length === 0 ? (
+        <div className="mt-4 flex flex-col items-center gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-6 text-center">
+          <TriangleAlert className="size-6 text-destructive" aria-hidden />
+          <div>
+            <p className="text-sm font-medium">Не удалось загрузить покупки</p>
+            <p className="mt-1 text-xs text-muted-foreground text-pretty">
+              {error instanceof Error
+                ? error.message
+                : 'Проверьте ключ API и попробуйте снова.'}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 bg-transparent"
+            onClick={() => void mutate()}
+          >
+            <RefreshCw className="size-3.5" />
+            Повторить
+          </Button>
         </div>
       ) : items.length === 0 ? (
         <div className="mt-4">

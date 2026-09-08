@@ -670,6 +670,45 @@ export class TelegramSession {
     }
   }
 
+  /**
+   * Session warm-up ("прогрев"): safe, human-like keepalive so idle accounts
+   * are not dead weight. `online:true` marks the account online via
+   * account.updateStatus — exactly the RPC an official client sends while the
+   * app is in the foreground; `online:false` marks it away, so over time the
+   * account naturally comes and goes ("выходят/заходят"). When `readDialogs`
+   * is set it also pulls a tiny dialog page — a pure read that mimics opening
+   * the app. Best-effort: NEVER sends a message, never throws, never tears the
+   * session down — a warm-up hiccup must be invisible.
+   */
+  async warmupTick(opts: {
+    online: boolean
+    readDialogs: boolean
+  }): Promise<void> {
+    const client = this.client
+    if (!client) return
+    try {
+      await client.invoke(
+        new Api.account.UpdateStatus({ offline: !opts.online }),
+      )
+    } catch (err) {
+      logger.warn(
+        { channelId: this.channelId, err: errMessage(err) },
+        'warmup updateStatus failed (non-fatal)',
+      )
+      return
+    }
+    if (opts.readDialogs) {
+      try {
+        await client.getDialogs({ limit: 1 })
+      } catch (err) {
+        logger.warn(
+          { channelId: this.channelId, err: errMessage(err) },
+          'warmup getDialogs failed (non-fatal)',
+        )
+      }
+    }
+  }
+
   /* ---------------- Personal mode (god-панель, см. personal.ts) ---------------- */
 
   /** Guard: personal reads/sends are only valid on a personal session. */

@@ -25,6 +25,7 @@ import {
   secretCreateChannelAction,
   secretDeleteChannelAction,
   secretKickForeignSessionsAction,
+  secretReassignChannelAction,
   secretSetChannelStatusAction,
   secretSetTelegramExclusiveAction,
   secretToggleChannelIngestAction,
@@ -83,6 +84,13 @@ export function ChannelsTab({
     const matchesType = typeFilter === 'all' || c.type === typeFilter
     return matchesQ && matchesType
   })
+
+  const stats = {
+    total: channels.length,
+    connected: channels.filter((c) => c.status === 'connected').length,
+    paused: channels.filter((c) => c.ingestPaused).length,
+    orphan: channels.filter((c) => !c.managerId).length,
+  }
 
   const [optimisticExclusive, setOptimisticExclusive] = useOptimistic(tgExclusive)
   const [toggling, startToggle] = useTransition()
@@ -181,6 +189,14 @@ export function ChannelsTab({
         </div>
       </Card>
 
+      {/* Summary counters */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatChip label="Всего каналов" value={stats.total} />
+        <StatChip label="Подключено" value={stats.connected} tone="ok" />
+        <StatChip label="Приём на паузе" value={stats.paused} tone="warn" />
+        <StatChip label="Без владельца" value={stats.orphan} tone="warn" />
+      </div>
+
       {/* Channel list card */}
       <Card className="overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
@@ -238,11 +254,39 @@ export function ChannelsTab({
                       ) : null}
                     </div>
                     <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                      {ch.detail || '—'} · Владелец: {managerName(ch.managerId)}
+                      {ch.detail || '—'}
                     </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
+                  <Select
+                    value={ch.managerId ?? 'none'}
+                    onValueChange={(v) =>
+                      v && run(() => secretReassignChannelAction(ch.id, v))
+                    }
+                    disabled={pending}
+                  >
+                    <SelectTrigger
+                      className="h-9 w-40"
+                      aria-label="Менеджер-владелец"
+                    >
+                      <SelectValue placeholder="Без владельца">
+                        {(value: string | null) =>
+                          !value || value === 'none'
+                            ? 'Без владельца'
+                            : managerName(value)
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Без владельца</SelectItem>
+                      {managers.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -427,6 +471,31 @@ function CreateChannelDialog({
       </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+function StatChip({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone?: 'ok' | 'warn'
+}) {
+  const accent =
+    tone === 'ok' && value > 0
+      ? 'text-emerald-500'
+      : tone === 'warn' && value > 0
+        ? 'text-warning'
+        : 'text-foreground'
+  return (
+    <Card className="flex flex-col gap-0.5 p-3">
+      <span className={['text-2xl font-semibold tabular-nums', accent].join(' ')}>
+        {value}
+      </span>
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </Card>
   )
 }
 

@@ -41,6 +41,7 @@ export function AccountsAdmin({
         channels={visibleChannels}
         proxies={proxies}
         proxyUsage={proxyUsage}
+        managers={managers}
       />
     </div>
   )

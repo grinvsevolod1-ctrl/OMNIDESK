@@ -76,6 +76,27 @@ class Registry {
     return this.sessions.get(channelId)
   }
 
+  /** Channel ids that currently have a live session object registered. */
+  liveChannelIds(): string[] {
+    return [...this.sessions.keys()]
+  }
+
+  /**
+   * Warm-up adapter for the warm-up sweep: gently keep one live session active
+   * (online/offline toggling + optional light dialog read). Serialized through
+   * the same per-channel chain as queued jobs so a warm-up tick can never run
+   * concurrently with a send/login on the SAME MTProto session. Best-effort:
+   * a missing session is a no-op.
+   */
+  async warm(
+    channelId: string,
+    opts: { online: boolean; readDialogs: boolean },
+  ): Promise<void> {
+    const session = this.sessions.get(channelId)
+    if (!session) return
+    await runSerialized(channelId, () => session.warmupTick(opts))
+  }
+
   /**
    * Reconnect adapter for the revival sweep: (re)create the session object and
    * start it with the saved session string. Mirrors what restore() does for a

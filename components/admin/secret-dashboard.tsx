@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Target,
-  Lock,
+  LogOut,
   Users,
   type LucideIcon,
 } from 'lucide-react'
@@ -253,20 +253,6 @@ export function SecretDashboard({
             />
           ))}
         </nav>
-
-        {system.gateEnabled && (
-          <div className="flex flex-col gap-2 border-t border-border p-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void secretLockAction().then(() => router.refresh())}
-              className="press-scale w-full justify-start gap-2"
-            >
-              <Lock className="size-4" />
-              Заблокировать панель
-            </Button>
-          </div>
-        )}
       </aside>
 
       {/* ---- Main column ---- */}
@@ -320,25 +306,22 @@ export function SecretDashboard({
                 <ServerCrash className="size-4" />
                 {system.fake502 ? '502 вкл' : '502'}
               </Button>
+              {system.gateEnabled && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    void secretLockAction().then(() => router.refresh())
+                  }
+                  className="press-scale gap-1.5"
+                  title="Выйти из панели — потребуется снова ввести секретный пароль"
+                >
+                  <LogOut className="size-4" />
+                  <span className="hidden sm:inline">Выход</span>
+                </Button>
+              )}
             </div>
           </div>
-
-          {/* Mobile lock button (desktop shows it in the sidebar) */}
-          {system.gateEnabled && (
-            <div className="flex items-center px-4 pb-3 md:hidden">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  void secretLockAction().then(() => router.refresh())
-                }
-                className="press-scale ml-auto gap-1.5"
-              >
-                <Lock className="size-4" />
-                Блок
-              </Button>
-            </div>
-          )}
         </header>
 
         {/* Content */}

@@ -14,6 +14,7 @@ import { toast } from 'sonner'
 import {
   adminDeleteChannelAction,
   adminHealthCheckAction,
+  adminReassignManagerAction,
   adminReassignProxyAction,
   adminSetOutreachAction,
 } from '@/app/actions/admin-accounts'
@@ -34,7 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { getChannelMeta, type Proxy } from '@/lib/types'
+import { getChannelMeta, type Manager, type Proxy } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import type { AdminChannel } from '@/lib/data'
 import {
@@ -48,10 +49,12 @@ export function AccountsTable({
   channels,
   proxies,
   proxyUsage,
+  managers = [],
 }: {
   channels: AdminChannel[]
   proxies: Proxy[]
   proxyUsage: Record<string, string[]>
+  managers?: Manager[]
 }) {
   if (channels.length === 0) {
     return (
@@ -73,6 +76,7 @@ export function AccountsTable({
           channel={c}
           proxies={proxies}
           proxyUsage={proxyUsage}
+          managers={managers}
         />
       ))}
     </Card>
@@ -83,10 +87,12 @@ function AccountRow({
   channel,
   proxies,
   proxyUsage,
+  managers,
 }: {
   channel: AdminChannel
   proxies: Proxy[]
   proxyUsage: Record<string, string[]>
+  managers: Manager[]
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -133,6 +139,15 @@ function AccountRow({
       const res = await adminReassignProxyAction(channel.id, next)
       if (res.ok) toast.success(res.message)
       else toast.error(res.message)
+    })
+  }
+
+  function reassignManager(managerId: string) {
+    startTransition(async () => {
+      const res = await adminReassignManagerAction(channel.id, managerId)
+      if (res.ok) toast.success(res.message)
+      else toast.error(res.message)
+      router.refresh()
     })
   }
 
@@ -195,6 +210,35 @@ function AccountRow({
         </span>
         <StatusBadge status={channel.status} />
       </div>
+
+      {managers.length > 0 ? (
+        <div className="min-w-0 sm:w-44">
+          <Select
+            value={channel.managerId ?? 'none'}
+            onValueChange={(v) => v && reassignManager(v)}
+            disabled={pending}
+          >
+            <SelectTrigger className="h-9 min-w-0" aria-label="Менеджер-владелец">
+              <SelectValue placeholder="Без менеджера">
+                {(value: string | null) =>
+                  !value || value === 'none'
+                    ? 'Без менеджера'
+                    : (managers.find((m) => m.id === value)?.name ??
+                      'Менеджер назначен')
+                }
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Без менеджера</SelectItem>
+              {managers.map((m) => (
+                <SelectItem key={m.id} value={m.id}>
+                  {m.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
 
       <div className="min-w-0 sm:w-44">
         <ChannelSourceSelect channelId={channel.id} />

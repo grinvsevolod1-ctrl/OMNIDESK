@@ -14,6 +14,7 @@ import {
   listAdminChannels,
   listAllChannels,
   listAllProxies,
+  listManagers,
 } from '@/lib/data'
 import type { ChannelType } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -77,10 +78,11 @@ const SOURCES: SourceMeta[] = [
 
 export default async function AdminAccountsPage() {
   await requireAdmin()
-  const [allChannels, adminChannels, proxies] = await Promise.all([
+  const [allChannels, adminChannels, proxies, managers] = await Promise.all([
     listAllChannels(),
     listAdminChannels(),
     listAllProxies(),
+    listManagers(),
   ])
   const total = allChannels.length
   const online = allChannels.filter((c) => c.status === 'connected').length
@@ -176,6 +178,7 @@ export default async function AdminAccountsPage() {
           channels={adminChannels}
           proxies={proxies}
           proxyUsage={proxyUsage}
+          managers={managers}
         />
       </div>
     </div>

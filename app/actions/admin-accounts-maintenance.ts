@@ -10,6 +10,7 @@ import {
   getProxyForChannel,
   getVkChannelById,
   getWhatsappAppConfig,
+  reassignChannelManager,
   setOutreachChannel,
   updateChannelProxy,
   updateChannelSessionById,
@@ -205,6 +206,30 @@ export async function adminReassignProxyAction(
     message: nextProxyId
       ? 'Прокси переназначен.'
       : 'Прокси отключён — аккаунт подключается напрямую.',
+  }
+}
+
+/**
+ * Admin: reassign an account to another manager (or unassign with an empty id).
+ * Owner is just metadata for panel scoping — the live session/webhook keeps
+ * running, so no worker restart is required.
+ */
+export async function adminReassignManagerAction(
+  channelId: string,
+  managerId: string,
+): Promise<AdminAccountResult> {
+  await requireAdmin()
+  const channel = await getChannelById(channelId)
+  if (!channel) return { ok: false, message: 'Аккаунт не найден.' }
+  const next =
+    managerId && managerId.trim() && managerId !== 'none'
+      ? managerId.trim()
+      : null
+  await reassignChannelManager(channelId, next)
+  revalidatePath('/admin/accounts')
+  return {
+    ok: true,
+    message: next ? 'Аккаунт переназначен другому менеджеру.' : 'Владелец снят.',
   }
 }
 

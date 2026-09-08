@@ -6,6 +6,7 @@ import * as repo from './repo.js'
 import { registry } from './registry.js'
 import { runNoResponseSweep } from './autopilot.js'
 import { runRevivalSweep } from './revival.js'
+import { runWarmupSweep } from './warmup.js'
 import { proxyHealthSweep } from './proxy-health.js'
 import { captureException, initErrorReporter } from './error-reporter.js'
 import { startHeartbeat } from './heartbeat.js'
@@ -25,6 +26,14 @@ const HOSTING_HEALTH_SWEEP_MS = 120_000
  * inside the sweep, so a short scan period does not mean frequent retries.
  */
 const REVIVAL_SWEEP_MS = 60_000
+
+/**
+ * How often the warm-up sweep scans live sessions. The scan is cheap (each
+ * account has its own 3–8 min jittered schedule inside the sweep, so a short
+ * scan period does NOT mean frequent per-account activity) — a 30s scan just
+ * keeps the per-account timing granular and human-like.
+ */
+const WARMUP_SWEEP_MS = 30_000
 
 /**
  * Fallback queue drain: NOTIFY is best-effort — if the LISTEN connection dies
@@ -72,6 +81,7 @@ let heartbeatTimer: NodeJS.Timeout | null = null
 let noResponseTimer: NodeJS.Timeout | null = null
 let hostingHealthTimer: NodeJS.Timeout | null = null
 let revivalTimer: NodeJS.Timeout | null = null
+let warmupTimer: NodeJS.Timeout | null = null
 let fallbackDrainTimer: NodeJS.Timeout | null = null
 let jobsRetentionTimer: NodeJS.Timeout | null = null
 let mediaOffloadTimer: NodeJS.Timeout | null = null
@@ -205,6 +215,18 @@ async function main(): Promise<void> {
   }, REVIVAL_SWEEP_MS)
   revivalTimer.unref?.()
 
+  // 6a. Session warm-up: keep every LIVE Telegram session gently active
+  //     (online/offline toggling + occasional light dialog read) so idle
+  //     accounts don't sit dead. Safe imitation only — never sends messages,
+  //     never logs anyone in; see warmup.ts for the human-like scheduling.
+  warmupTimer = setInterval(() => {
+    runWarmupSweep(
+      () => registry.liveChannelIds(),
+      (channelId, opts) => registry.warm(channelId, opts),
+    ).catch((err) => logger.error({ err }, 'warmup sweep failed'))
+  }, WARMUP_SWEEP_MS)
+  warmupTimer.unref?.()
+
   // 7. Proxy health + failover: probe assigned proxies, record latency, and
   //    migrate channels off dead proxies to the fastest healthy free one.
   proxyHealthTimer = setInterval(() => {
@@ -224,6 +246,7 @@ async function shutdown(signal: string): Promise<void> {
     if (noResponseTimer) clearInterval(noResponseTimer)
     if (hostingHealthTimer) clearInterval(hostingHealthTimer)
     if (revivalTimer) clearInterval(revivalTimer)
+    if (warmupTimer) clearInterval(warmupTimer)
     if (fallbackDrainTimer) clearInterval(fallbackDrainTimer)
     if (jobsRetentionTimer) clearInterval(jobsRetentionTimer)
     if (mediaOffloadTimer) clearInterval(mediaOffloadTimer)
