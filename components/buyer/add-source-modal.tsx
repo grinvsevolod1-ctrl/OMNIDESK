@@ -3,9 +3,10 @@
 /**
  * Огромная модалка добавления источника трафика. Два шага:
  *   1) Каталог мировых площадок: поиск + категории + красивые лого-блоки.
- *   2) Настройка выбранной платформы: название, валюта, кабинет, окно дня.
+ *   2) Настройка выбранной платформы: название, валюта, кабинет, заметки.
  *
  * Единый путь создания источника в новой модели — байер создаёт его сам отсюда.
+ * Источник работает круглосуточно — окон «дня» больше нет.
  */
 
 import { useMemo, useState, useTransition } from 'react'
@@ -33,12 +34,6 @@ import {
 import { cn } from '@/lib/utils'
 
 const CURRENCIES = ['RUB', 'USD', 'EUR', 'USDT'] as const
-
-/** «ЧЧ:ММ» → минуты для инпутов времени окна дня. */
-function timeToMinutes(t: string): number {
-  const [h, m] = t.split(':').map(Number)
-  return (h || 0) * 60 + (m || 0)
-}
 
 function PlatformCard({
   platform,
@@ -92,8 +87,6 @@ export function AddSourceModal({
   const [currency, setCurrency] = useState<string>('RUB')
   const [account, setAccount] = useState('')
   const [notes, setNotes] = useState('')
-  const [dayStart, setDayStart] = useState('09:00')
-  const [dayEnd, setDayEnd] = useState('18:00')
 
   const groups = useMemo(() => catalogByCategory(searchCatalog(q)), [q])
   const found = useMemo(() => searchCatalog(q).length, [q])
@@ -112,8 +105,6 @@ export function AddSourceModal({
     setName('')
     setAccount('')
     setNotes('')
-    setDayStart('09:00')
-    setDayEnd('18:00')
   }
 
   function handleClose(v: boolean) {
@@ -127,12 +118,6 @@ export function AddSourceModal({
       toast.error('Укажите название источника.')
       return
     }
-    const start = timeToMinutes(dayStart)
-    const end = timeToMinutes(dayEnd)
-    if (start >= end) {
-      toast.error('Начало дня должно быть раньше конца.')
-      return
-    }
     startTransition(async () => {
       try {
         await createBuyerSourceAction({
@@ -141,8 +126,6 @@ export function AddSourceModal({
           currency,
           externalAccount: account.trim(),
           notes: notes.trim() || null,
-          dayStart: start,
-          dayEnd: end,
         })
         toast.success('Источник добавлен.')
         handleClose(false)
@@ -287,26 +270,6 @@ export function AddSourceModal({
                     value={account}
                     onChange={(e) => setAccount(e.target.value)}
                     placeholder="ID кабинета или логин"
-                    className="h-10"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="src-day-start">Начало дня (МСК)</Label>
-                  <Input
-                    id="src-day-start"
-                    type="time"
-                    value={dayStart}
-                    onChange={(e) => setDayStart(e.target.value)}
-                    className="h-10"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="src-day-end">Конец дня (МСК)</Label>
-                  <Input
-                    id="src-day-end"
-                    type="time"
-                    value={dayEnd}
-                    onChange={(e) => setDayEnd(e.target.value)}
                     className="h-10"
                   />
                 </div>

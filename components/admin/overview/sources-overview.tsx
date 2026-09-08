@@ -8,7 +8,14 @@
  * источники создаёт и настраивает только байер.
  */
 import { useMemo, useState } from 'react'
-import { Link as LinkIcon, Megaphone, Moon, Search, Sun, Wallet } from 'lucide-react'
+import {
+  Link as LinkIcon,
+  Megaphone,
+  MessageSquare,
+  Search,
+  Send,
+  Wallet,
+} from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { SourceOverviewRow } from '@/app/actions/source-finance'
@@ -31,13 +38,6 @@ import { platformOrCustom } from '@/lib/traffic-source-catalog'
 import { cn } from '@/lib/utils'
 
 const ALL = '__all__'
-
-/** Минуты от полуночи → «ЧЧ:ММ» (окно дня источника в МСК). */
-function fmtMinutes(m: number): string {
-  const h = Math.floor(m / 60)
-  const min = m % 60
-  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
-}
 
 /** Свести суммы по валютам для итоговой плашки (валюты не смешиваем). */
 function sumByCurrency(
@@ -166,25 +166,20 @@ function SourceCard({
         </div>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        День {fmtMinutes(source.dayStart)}–{fmtMinutes(source.dayEnd)} · долёты{' '}
-        {fmtMinutes(source.dayEnd)}–{fmtMinutes(source.dayStart)}
-      </p>
-
       <div className="flex items-center gap-4 text-sm">
-        <span
-          className="flex items-center gap-1.5"
-          title="Сегодня в дневном окне"
-        >
-          <Sun className="size-3.5 text-amber-500" />
+        <span className="flex items-center gap-1.5" title="Написали сегодня">
+          <MessageSquare className="size-3.5 text-primary" />
           <span className="font-medium tabular-nums">
-            {stats?.todayDay ?? 0}
+            {stats?.todayTotal ?? 0}
           </span>
         </span>
-        <span className="flex items-center gap-1.5" title="Сегодня «долёты»">
-          <Moon className="size-3.5 text-sky-500" />
+        <span
+          className="flex items-center gap-1.5"
+          title="Передано куратору сегодня"
+        >
+          <Send className="size-3.5 text-success" />
           <span className="font-medium tabular-nums">
-            {stats?.todayNight ?? 0}
+            {stats?.transferredToday ?? 0}
           </span>
         </span>
         <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">

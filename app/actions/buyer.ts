@@ -29,7 +29,7 @@ export interface BuyerSourceOverview extends TrafficSource {
   finance: SourceFinanceSummary
 }
 
-/** Обзор байера: его источники со статистикой день/«долёты» и финсводкой. */
+/** Обзор байера: его источники со статистикой написавших/переданных и финсводкой. */
 export async function listBuyerSourcesAction(): Promise<
   BuyerSourceOverview[]
 > {
@@ -46,8 +46,8 @@ export async function listBuyerSourcesAction(): Promise<
       sourceId: s.id,
       total: 0,
       todayTotal: 0,
-      todayDay: 0,
-      todayNight: 0,
+      transferredTotal: 0,
+      transferredToday: 0,
     },
     finance: finance.get(s.id) ?? {
       sourceId: s.id,
@@ -84,8 +84,6 @@ export async function createBuyerSourceAction(input: {
   currency: string
   externalAccount?: string
   notes?: string | null
-  dayStart?: number
-  dayEnd?: number
 }): Promise<TrafficSource> {
   const session = await requireBuyer()
   const source = await createTrafficSourceForBuyer({
@@ -95,8 +93,6 @@ export async function createBuyerSourceAction(input: {
     currency: input.currency,
     externalAccount: input.externalAccount,
     notes: input.notes,
-    dayStart: input.dayStart,
-    dayEnd: input.dayEnd,
   })
   revalidatePath('/buyer')
   return source
@@ -107,8 +103,6 @@ export async function updateBuyerSourceAction(input: {
   id: string
   name: string
   externalAccount?: string
-  dayStart: number
-  dayEnd: number
   notes?: string | null
 }): Promise<TrafficSource> {
   const session = await requireBuyer()

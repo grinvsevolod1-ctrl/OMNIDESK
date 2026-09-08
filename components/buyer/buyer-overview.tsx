@@ -1,16 +1,15 @@
 'use client'
 
 /**
- * Обзор медиабайера: карточки его источников со статистикой «день/долёты»
- * (окна берутся из настроек КАЖДОГО источника). Отсюда байер добавляет
- * источники и переходит в детальный учёт. Лиды вынесены в отдельную
- * вкладку «Лиды» (/buyer/leads).
+ * Обзор медиабайера: карточки его источников со статистикой написавших и
+ * переданных куратору за сегодня. Отсюда байер добавляет источники и переходит
+ * в детальный учёт. Лиды вынесены в отдельную вкладку «Лиды» (/buyer/leads).
  */
 
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Moon, Plus, Sun, Wallet } from 'lucide-react'
+import { MessageSquare, Plus, Send, Wallet } from 'lucide-react'
 import type { BuyerSourceOverview } from '@/app/actions/buyer'
 import { AddSourceModal } from '@/components/buyer/add-source-modal'
 import { PlatformLogo } from '@/components/buyer/platform-logo'
@@ -21,16 +20,9 @@ import { platformOrCustom } from '@/lib/traffic-source-catalog'
 import { formatMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 
-/** Минуты от полуночи → «ЧЧ:ММ». */
-function fmtMinutes(m: number): string {
-  const h = Math.floor(m / 60)
-  const mm = m % 60
-  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
-}
-
 /**
- * Карточка источника: логотип площадки, имя, баланс, окно дня и счётчики
- * сегодня. Вся карточка — ссылка на детальный учёт.
+ * Карточка источника: логотип площадки, имя, баланс и счётчики за сегодня
+ * (написали / передано куратору). Вся карточка — ссылка на детальный учёт.
  */
 function SourceCard({ source }: { source: BuyerSourceOverview }) {
   const platform = platformOrCustom(source.platformKey)
@@ -76,24 +68,23 @@ function SourceCard({ source }: { source: BuyerSourceOverview }) {
         <span className="text-xs text-muted-foreground">баланс</span>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        День {fmtMinutes(source.dayStart)}–{fmtMinutes(source.dayEnd)} · долёты{' '}
-        {fmtMinutes(source.dayEnd)}–{fmtMinutes(source.dayStart)}
-      </p>
       <div className="mt-1 flex items-center gap-4 text-sm">
         <span
           className="flex items-center gap-1.5"
-          title="Сегодня в дневном окне"
+          title="Написали сегодня"
         >
-          <Sun className="size-3.5 text-amber-500" />
+          <MessageSquare className="size-3.5 text-primary" />
           <span className="font-medium tabular-nums">
-            {source.stats.todayDay}
+            {source.stats.todayTotal}
           </span>
         </span>
-        <span className="flex items-center gap-1.5" title="Сегодня «долёты»">
-          <Moon className="size-3.5 text-sky-500" />
+        <span
+          className="flex items-center gap-1.5"
+          title="Передано куратору сегодня"
+        >
+          <Send className="size-3.5 text-success" />
           <span className="font-medium tabular-nums">
-            {source.stats.todayNight}
+            {source.stats.transferredToday}
           </span>
         </span>
       </div>

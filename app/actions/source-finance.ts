@@ -16,6 +16,7 @@ import {
   getTrafficSourceById,
   getBuyerIdForSource,
   getSourceStats,
+  getSourceTodayReport,
   listBuyers,
   listTrafficSources,
   listTrafficSourcesForBuyer,
@@ -142,6 +143,16 @@ export async function getSourceFinanceReportAction(sourceId: string) {
     getTrafficSourceById(sourceId),
   ])
   return { summary, deposits, spend, source }
+}
+
+/**
+ * Отчёт источника по написавшим и переданным лидам за сегодня (для модалки
+ * «Обзора»). Скоуп — тот же гейт, что у финансового отчёта: админ по любому
+ * источнику, руководитель — только по байерам своей команды.
+ */
+export async function getSourceLeadReportAction(sourceId: string) {
+  await assertCanManageSourceFinance(sourceId)
+  return getSourceTodayReport(sourceId)
 }
 
 /**

@@ -4,8 +4,8 @@
  * (managers.traffic_source_id), лиды фиксируют источник на момент обращения
  * (lead_cards.traffic_source_id — денормализация сознательная).
  *
- * Окно «дня» источника — [dayStart, dayEnd) в минутах от полуночи МСК;
- * «долёты» — всё остальное время суток. Умолчания 09:00–18:00.
+ * Источник работает всегда — окон «дня»/«долётов» больше нет. Статистика
+ * источника — написавшие (лиды) и переданные куратору, всего и за сегодня (МСК).
  */
 import { randomUUID } from 'crypto'
 import { query, withTransaction } from '../db'
@@ -38,9 +38,6 @@ export interface TrafficSource {
   externalAccount: string
   /** Байер завершил первичную настройку источника (мастер каталога). */
   setupCompleted: boolean
-  /** Минуты от полуночи МСК, [0, 1440). Окно дня — [dayStart, dayEnd). */
-  dayStart: number
-  dayEnd: number
   notes: string | null
   isActive: boolean
   createdAt: string
@@ -59,8 +56,6 @@ interface TrafficSourceRow {
   currency: string
   external_account: string
   setup_completed: boolean
-  day_start: number
-  day_end: number
   notes: string | null
   is_active: boolean
   created_at: string | Date
@@ -78,8 +73,6 @@ function toTrafficSource(row: TrafficSourceRow): TrafficSource {
     currency: row.currency,
     externalAccount: row.external_account,
     setupCompleted: row.setup_completed,
-    dayStart: row.day_start,
-    dayEnd: row.day_end,
     notes: row.notes,
     isActive: row.is_active,
     createdAt: new Date(row.created_at).toISOString(),
@@ -91,7 +84,7 @@ function toTrafficSource(row: TrafficSourceRow): TrafficSource {
 const SOURCE_SELECT = `
   ts.id, ts.name, ts.buyer_id, b.name AS buyer_name,
   ts.platform_key, ts.currency, ts.external_account, ts.setup_completed,
-  ts.day_start, ts.day_end, ts.notes, ts.is_active, ts.created_at,
+  ts.notes, ts.is_active, ts.created_at,
   (SELECT COUNT(*)::int FROM managers m
     WHERE m.traffic_source_id = ts.id AND m.role = 'manager') AS manager_count,
   (SELECT COUNT(*)::int FROM lead_cards lc
@@ -161,44 +154,18 @@ export async function getBuyerIdForSource(
   return rows[0]?.buyer_id ?? null
 }
 
-/**
- * Валидация окна дня [dayStart, dayEnd) в минутах МСК. Ночные окна через
- * полночь (start > end) не поддерживаем сознательно — «день» всегда внутри
- * одних суток (см. миграцию 145). Экспортирована для юнит-тестов.
- */
-export function validateWindow(dayStart: number, dayEnd: number): void {
-  if (
-    !Number.isInteger(dayStart) ||
-    !Number.isInteger(dayEnd) ||
-    dayStart < 0 ||
-    dayStart >= 1440 ||
-    dayEnd <= 0 ||
-    dayEnd > 1440 ||
-    dayStart >= dayEnd
-  ) {
-    throw new Error(
-      'Некорректное окно дня: начало должно быть раньше конца в пределах суток.',
-    )
-  }
-}
-
 export async function createTrafficSource(input: {
   name: string
   buyerId: string | null
-  dayStart?: number
-  dayEnd?: number
   notes?: string | null
 }): Promise<TrafficSource> {
   const name = input.name.trim()
   if (!name) throw new Error('Укажите название источника.')
-  const dayStart = input.dayStart ?? 540
-  const dayEnd = input.dayEnd ?? 1080
-  validateWindow(dayStart, dayEnd)
   const id = randomUUID()
   await query(
-    `INSERT INTO traffic_sources (id, name, buyer_id, day_start, day_end, notes)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [id, name, input.buyerId, dayStart, dayEnd, input.notes?.trim() || null],
+    `INSERT INTO traffic_sources (id, name, buyer_id, notes)
+     VALUES ($1, $2, $3, $4)`,
+    [id, name, input.buyerId, input.notes?.trim() || null],
   )
   const created = await getTrafficSourceById(id)
   if (!created) throw new Error('Source create failed')
@@ -219,22 +186,17 @@ export async function createTrafficSourceForBuyer(input: {
   externalAccount?: string
   notes?: string | null
   config?: Record<string, unknown>
-  dayStart?: number
-  dayEnd?: number
 }): Promise<TrafficSource> {
   const name = input.name.trim()
   if (!name) throw new Error('Укажите название источника.')
   const platformKey = input.platformKey.trim() || 'custom'
   const currency = input.currency.trim().toUpperCase() || 'RUB'
-  const dayStart = input.dayStart ?? 540
-  const dayEnd = input.dayEnd ?? 1080
-  validateWindow(dayStart, dayEnd)
   const id = randomUUID()
   await query(
     `INSERT INTO traffic_sources
        (id, name, buyer_id, platform_key, currency, external_account,
-        config, setup_completed, day_start, day_end, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, true, $8, $9, $10)`,
+        config, setup_completed, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, true, $8)`,
     [
       id,
       name,
@@ -243,8 +205,6 @@ export async function createTrafficSourceForBuyer(input: {
       currency,
       input.externalAccount?.trim() || '',
       JSON.stringify(input.config ?? {}),
-      dayStart,
-      dayEnd,
       input.notes?.trim() || null,
     ],
   )
@@ -254,7 +214,7 @@ export async function createTrafficSourceForBuyer(input: {
 }
 
 /**
- * Обновление настроек источника байером (название, кабинет, окно дня, заметки).
+ * Обновление настроек источника байером (название, кабинет, заметки).
  * Валюту/платформу после создания не меняем — от них зависят проведённые
  * депозиты и траты (изменение исказило бы историю баланса).
  */
@@ -263,17 +223,13 @@ export async function updateTrafficSourceByBuyer(input: {
   buyerId: string
   name: string
   externalAccount?: string
-  dayStart: number
-  dayEnd: number
   notes?: string | null
 }): Promise<TrafficSource> {
   const name = input.name.trim()
   if (!name) throw new Error('Укажите название источника.')
-  validateWindow(input.dayStart, input.dayEnd)
   const res = await query<{ id: string }>(
     `UPDATE traffic_sources
-        SET name = $3, external_account = $4, day_start = $5, day_end = $6,
-            notes = $7, updated_at = now()
+        SET name = $3, external_account = $4, notes = $5, updated_at = now()
       WHERE id = $1 AND buyer_id = $2
       RETURNING id`,
     [
@@ -281,8 +237,6 @@ export async function updateTrafficSourceByBuyer(input: {
       input.buyerId,
       name,
       input.externalAccount?.trim() || '',
-      input.dayStart,
-      input.dayEnd,
       input.notes?.trim() || null,
     ],
   )
@@ -309,25 +263,20 @@ export async function updateTrafficSource(input: {
   id: string
   name: string
   buyerId: string | null
-  dayStart: number
-  dayEnd: number
   notes?: string | null
   isActive: boolean
 }): Promise<TrafficSource> {
   const name = input.name.trim()
   if (!name) throw new Error('Укажите название источника.')
-  validateWindow(input.dayStart, input.dayEnd)
   await query(
     `UPDATE traffic_sources
-        SET name = $2, buyer_id = $3, day_start = $4, day_end = $5,
-            notes = $6, is_active = $7, updated_at = now()
+        SET name = $2, buyer_id = $3, notes = $4, is_active = $5,
+            updated_at = now()
       WHERE id = $1`,
     [
       input.id,
       name,
       input.buyerId,
-      input.dayStart,
-      input.dayEnd,
       input.notes?.trim() || null,
       input.isActive,
     ],
@@ -421,20 +370,21 @@ export async function setSourceManagers(
 
 export interface SourceStats {
   sourceId: string
-  /** Всего лидов за всё время. */
+  /** Всего написавших (лидов) за всё время. */
   total: number
-  /** Лидов за сегодня (МСК). */
+  /** Написавших сегодня (МСК). */
   todayTotal: number
-  /** Из них в дневном окне источника. */
-  todayDay: number
-  /** Из них «долёты» (вне дневного окна). */
-  todayNight: number
+  /** Всего передано куратору. */
+  transferredTotal: number
+  /** Передано куратору сегодня (МСК). */
+  transferredToday: number
 }
 
 /**
- * Статистика лидов по источникам одним запросом. «День»/«долёты»
- * определяются минутой первого обращения (created_at) в МСК против окна
- * КОНКРЕТНОГО источника — правило наследуется всеми его менеджерами.
+ * Статистика лидов по источникам одним запросом: сколько всего написали и
+ * написали сегодня (по created_at в МСК), сколько передано куратору всего и
+ * сегодня (по transferred_at в МСК). Окон «дня»/«долётов» больше нет —
+ * источник работает круглосуточно.
  */
 export async function getSourceStats(
   sourceIds: string[],
@@ -445,7 +395,8 @@ export async function getSourceStats(
     source_id: string
     total: number
     today_total: number
-    today_day: number
+    transferred_total: number
+    transferred_today: number
   }>(
     `SELECT ts.id AS source_id,
             COUNT(lc.id)::int AS total,
@@ -454,15 +405,14 @@ export async function getSourceStats(
                     = (now() AT TIME ZONE 'Europe/Moscow')::date
             )::int AS today_total,
             COUNT(lc.id) FILTER (
-              WHERE (lc.created_at AT TIME ZONE 'Europe/Moscow')::date
+              WHERE lc.curator_id IS NOT NULL
+            )::int AS transferred_total,
+            COUNT(lc.id) FILTER (
+              WHERE lc.curator_id IS NOT NULL
+                AND lc.transferred_at IS NOT NULL
+                AND (lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date
                     = (now() AT TIME ZONE 'Europe/Moscow')::date
-                AND (EXTRACT(HOUR FROM (lc.created_at AT TIME ZONE 'Europe/Moscow')) * 60
-                     + EXTRACT(MINUTE FROM (lc.created_at AT TIME ZONE 'Europe/Moscow')))
-                    >= ts.day_start
-                AND (EXTRACT(HOUR FROM (lc.created_at AT TIME ZONE 'Europe/Moscow')) * 60
-                     + EXTRACT(MINUTE FROM (lc.created_at AT TIME ZONE 'Europe/Moscow')))
-                    < ts.day_end
-            )::int AS today_day
+            )::int AS transferred_today
        FROM traffic_sources ts
        LEFT JOIN lead_cards lc
          ON lc.traffic_source_id = ts.id AND lc.deleted_at IS NULL
@@ -475,11 +425,71 @@ export async function getSourceStats(
       sourceId: r.source_id,
       total: r.total,
       todayTotal: r.today_total,
-      todayDay: r.today_day,
-      todayNight: r.today_total - r.today_day,
+      transferredTotal: r.transferred_total,
+      transferredToday: r.transferred_today,
     })
   }
   return out
+}
+
+/* --------------------- Отчёт по написавшим/переданным ------------------ */
+
+export interface SourceTodayReport {
+  /** Лиды, написавшие сегодня (МСК), новые сверху. */
+  wroteToday: LeadCard[]
+  /** Лиды, переданные куратору сегодня (МСК), новые сверху. */
+  transferredToday: LeadCard[]
+  /** Всего написавших за всё время. */
+  totalWrote: number
+  /** Всего переданных куратору. */
+  totalTransferred: number
+}
+
+/**
+ * Отчёт источника за сегодня для «Обзора»: списки написавших и переданных
+ * лидов (для drill-down в модалке) плюс итоги за всё время. Скоуп источника
+ * проверяет вызывающий server action.
+ */
+export async function getSourceTodayReport(
+  sourceId: string,
+): Promise<SourceTodayReport> {
+  const leadJoins = `
+       FROM lead_cards lc
+       LEFT JOIN managers m ON m.id = lc.manager_id
+       LEFT JOIN managers c ON c.id = lc.curator_id
+      WHERE lc.traffic_source_id = $1 AND lc.deleted_at IS NULL`
+  const [wrote, transferred, totals] = await Promise.all([
+    query<LeadCardRow>(
+      `SELECT ${CARD_SELECT} ${leadJoins}
+        AND (lc.created_at AT TIME ZONE 'Europe/Moscow')::date
+            = (now() AT TIME ZONE 'Europe/Moscow')::date
+      ORDER BY lc.created_at DESC`,
+      [sourceId],
+    ),
+    query<LeadCardRow>(
+      `SELECT ${CARD_SELECT} ${leadJoins}
+        AND lc.curator_id IS NOT NULL
+        AND lc.transferred_at IS NOT NULL
+        AND (lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date
+            = (now() AT TIME ZONE 'Europe/Moscow')::date
+      ORDER BY lc.transferred_at DESC`,
+      [sourceId],
+    ),
+    query<{ total_wrote: number; total_transferred: number }>(
+      `SELECT COUNT(*)::int AS total_wrote,
+              COUNT(*) FILTER (WHERE curator_id IS NOT NULL)::int
+                AS total_transferred
+         FROM lead_cards
+        WHERE traffic_source_id = $1 AND deleted_at IS NULL`,
+      [sourceId],
+    ),
+  ])
+  return {
+    wroteToday: wrote.map(toLeadCard),
+    transferredToday: transferred.map(toLeadCard),
+    totalWrote: totals[0]?.total_wrote ?? 0,
+    totalTransferred: totals[0]?.total_transferred ?? 0,
+  }
 }
 
 /**

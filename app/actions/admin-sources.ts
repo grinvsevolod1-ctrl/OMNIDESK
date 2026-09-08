@@ -2,7 +2,8 @@
 
 /**
  * Админ: источники трафика (миграция 145) — CRUD, назначение байера,
- * состав менеджеров, окна дня/«долётов». Всё под requireAdmin.
+ * состав менеджеров. Источник работает всегда, окон дня нет. Всё под
+ * requireAdmin.
  */
 import { revalidatePath } from 'next/cache'
 import { requireAdmin } from '@/lib/auth'
@@ -21,16 +22,6 @@ import {
 } from '@/lib/data/traffic-sources'
 import { writeAudit } from '@/lib/data/audit'
 import type { ActionResult } from '@/lib/types'
-
-/** Число минут из строки "HH:MM"; null при мусоре. */
-function minutesFromHhMm(raw: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(raw.trim())
-  if (!m) return null
-  const h = Number(m[1])
-  const min = Number(m[2])
-  if (h < 0 || h > 24 || min < 0 || min > 59) return null
-  return h * 60 + min
-}
 
 /** Admin: источники + справочники байеров и менеджеров (страница /admin/sources). */
 export async function listSourcesAdminAction() {
@@ -58,9 +49,9 @@ export async function listSourcesAdminAction() {
         id: m.id,
         name: m.name,
       })),
-      // Разрез «сегодня»: лидов в дневном окне источника и «долётов».
-      todayDay: stats.get(s.id)?.todayDay ?? 0,
-      todayNight: stats.get(s.id)?.todayNight ?? 0,
+      // Сегодня: написавших и переданных куратору.
+      todayTotal: stats.get(s.id)?.todayTotal ?? 0,
+      transferredToday: stats.get(s.id)?.transferredToday ?? 0,
     })),
     buyers: buyers.map((b) => ({ id: b.id, name: b.name, status: b.status })),
     allManagers: managers.map((m) => ({
@@ -79,24 +70,14 @@ export async function createSourceAction(
   await requireAdmin()
   const name = String(formData.get('name') ?? '').trim()
   const buyerId = String(formData.get('buyerId') ?? '').trim() || null
-  const dayStart = minutesFromHhMm(String(formData.get('dayStart') ?? '09:00'))
-  const dayEnd = minutesFromHhMm(String(formData.get('dayEnd') ?? '18:00'))
   const notes = String(formData.get('notes') ?? '').trim() || null
 
   if (!name) return { ok: false, message: 'Укажите название источника.' }
-  if (dayStart === null || dayEnd === null || dayStart >= dayEnd) {
-    return {
-      ok: false,
-      message: 'Окно дня: начало должно быть раньше конца в пределах суток.',
-    }
-  }
 
   try {
     const created = await createTrafficSource({
       name,
       buyerId,
-      dayStart,
-      dayEnd,
       notes,
     })
     await writeAudit({
@@ -105,7 +86,7 @@ export async function createSourceAction(
       action: 'traffic_source.create',
       entityType: 'traffic_source',
       entityId: created.id,
-      details: { name, buyerId, dayStart, dayEnd },
+      details: { name, buyerId },
     })
     revalidatePath('/admin/sources')
     revalidatePath('/admin/buyers')
@@ -118,7 +99,7 @@ export async function createSourceAction(
   }
 }
 
-/** Admin: обновить источник (название, байер, окна, заметки, активность). */
+/** Admin: обновить источник (название, байер, заметки, активность). */
 export async function updateSourceAction(
   formData: FormData,
 ): Promise<ActionResult> {
@@ -126,19 +107,11 @@ export async function updateSourceAction(
   const id = String(formData.get('id') ?? '').trim()
   const name = String(formData.get('name') ?? '').trim()
   const buyerId = String(formData.get('buyerId') ?? '').trim() || null
-  const dayStart = minutesFromHhMm(String(formData.get('dayStart') ?? ''))
-  const dayEnd = minutesFromHhMm(String(formData.get('dayEnd') ?? ''))
   const notes = String(formData.get('notes') ?? '').trim() || null
   const isActive = String(formData.get('isActive') ?? 'true') === 'true'
 
   if (!id) return { ok: false, message: 'Источник не найден.' }
   if (!name) return { ok: false, message: 'Укажите название источника.' }
-  if (dayStart === null || dayEnd === null || dayStart >= dayEnd) {
-    return {
-      ok: false,
-      message: 'Окно дня: начало должно быть раньше конца в пределах суток.',
-    }
-  }
 
   const existing = await getTrafficSourceById(id)
   if (!existing) return { ok: false, message: 'Источник не найден.' }
@@ -148,8 +121,6 @@ export async function updateSourceAction(
       id,
       name,
       buyerId,
-      dayStart,
-      dayEnd,
       notes,
       isActive,
     })
@@ -159,7 +130,7 @@ export async function updateSourceAction(
       action: 'traffic_source.update',
       entityType: 'traffic_source',
       entityId: id,
-      details: { name, buyerId, dayStart, dayEnd, isActive },
+      details: { name, buyerId, isActive },
     })
     revalidatePath('/admin/sources')
     revalidatePath('/admin/buyers')
