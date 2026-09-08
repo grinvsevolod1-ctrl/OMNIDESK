@@ -64,8 +64,6 @@ export function sectionPrompt(id: ShellSection, title: string): string {
       return 'Покажи список менеджеров'
     case 'accounts':
       return 'Покажи статусы всех аккаунтов'
-    case 'finance':
-      return 'Покажи финансовую сводку'
     case 'channels':
       return 'Покажи каналы'
     case 'proxies':

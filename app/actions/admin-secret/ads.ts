@@ -46,7 +46,6 @@ export async function secretSetAdOverrideAction(
 
   await setAdOverride(accountId, metric as AdMetricKey, value)
   revalidatePath(ADMIN_PATH)
-  revalidatePath('/admin/finance')
   return {
     ok: true,
     message: `${AD_METRIC_LABELS[metric as AdMetricKey]}: значение зафиксировано.`,
@@ -66,7 +65,6 @@ export async function secretClearAdOverrideAction(
 
   await clearAdOverride(accountId, metric as AdMetricKey)
   revalidatePath(ADMIN_PATH)
-  revalidatePath('/admin/finance')
   return {
     ok: true,
     message: `${AD_METRIC_LABELS[metric as AdMetricKey]}: корректировка снята.`,
@@ -81,6 +79,5 @@ export async function secretSyncAdAccountAction(
   if (!accountId) return { ok: false, message: 'Кабинет не найден.' }
   const result = await syncAdAccount(accountId)
   revalidatePath(ADMIN_PATH)
-  revalidatePath('/admin/finance')
   return { ok: result.ok, message: result.message }
 }

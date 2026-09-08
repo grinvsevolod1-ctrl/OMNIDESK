@@ -10,7 +10,6 @@ export type ShellSection =
   | 'overview'
   | 'managers'
   | 'accounts'
-  | 'finance'
   | 'channels'
   | 'proxies'
   | 'contacts'
@@ -51,12 +50,6 @@ export const SHELL_SECTIONS: ShellSectionInfo[] = [
     href: '/admin/accounts',
     // WhatsApp lives on its own page (/admin/whatsapp) — keep its keywords there.
     keywords: ['аккаунт', 'telegram', 'телеграм', 'сесси', 'vk', 'вконтакте', 'max', 'макс'],
-  },
-  {
-    id: 'finance',
-    title: 'Учёт',
-    href: '/admin/finance',
-    keywords: ['финанс', 'учёт', 'учет', 'расход', 'бюджет', 'реклам', 'трат'],
   },
   {
     id: 'channels',

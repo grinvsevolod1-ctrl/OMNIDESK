@@ -25,7 +25,6 @@ import {
   ChannelsPanel,
   ContactsPanel,
   DictionariesPanel,
-  FinancePanel,
   ManagersPanel,
   ProxiesPanel,
   StatsPanel,
@@ -64,8 +63,6 @@ function renderBody(view: DataView, onCommand?: (prompt: string) => void) {
       return <ProxiesPanel payload={view.payload} />
     case 'contacts':
       return <ContactsPanel payload={view.payload} />
-    case 'finance':
-      return <FinancePanel payload={view.payload} />
     case 'dictionaries':
       return <DictionariesPanel payload={view.payload} />
     case 'schedules':

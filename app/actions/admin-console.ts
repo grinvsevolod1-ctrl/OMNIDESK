@@ -20,7 +20,6 @@ import {
 import { removeDirective } from '@/lib/data/ai-directives'
 import { deleteKnowledge } from '@/lib/data/ai-assist'
 import { executeDeployApp } from '@/lib/admin-console/tools-servers'
-import { deleteFinanceEntry } from '@/lib/finance'
 import {
   SHELL_MODE_COOKIE,
   type AssistantResult,
@@ -253,11 +252,6 @@ export async function confirmShellPendingAction(
         await deleteProxy(id)
         revalidatePath('/admin/proxies')
         return { ok: true, message: 'Прокси удалён' }
-      }
-      case 'delete_finance_entry': {
-        await deleteFinanceEntry(id)
-        revalidatePath('/admin/finance')
-        return { ok: true, message: 'Запись удалена' }
       }
       default:
         return { ok: false, message: 'Неизвестное действие' }

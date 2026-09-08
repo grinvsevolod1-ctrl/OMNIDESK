@@ -14,7 +14,6 @@ import { dialogTools } from './tools-dialogs'
 import { managerTools } from './tools-managers'
 import { channelTools } from './tools-channels'
 import { contactTools } from './tools-contacts'
-import { financeTools } from './tools-finance'
 import { dictionaryTools } from './tools-dictionaries'
 import { navigationTools } from './tools-navigation'
 import { scheduleTools } from './tools-schedules'
@@ -113,7 +112,6 @@ export function prepareAssistantRun(
       ...managerTools(state),
       ...channelTools(state),
       ...contactTools(state),
-      ...financeTools(state),
       ...dictionaryTools(state),
       ...navigationTools(state),
       ...scheduleTools(state, userId),

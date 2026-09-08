@@ -30,9 +30,9 @@ export interface SourceActionResult {
 
 function revalidateSourceSurfaces(): void {
   invalidateAnalytics()
-  // Источник — единая сущность: меняется и Обзор, и Учёт.
+  // Источник виден в Обзоре админа и в разделе медиабайера.
   revalidatePath('/admin')
-  revalidatePath('/admin/finance')
+  revalidatePath('/buyer')
 }
 
 export async function createSourceAction(

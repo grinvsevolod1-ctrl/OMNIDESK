@@ -260,17 +260,10 @@ export function SourceDetail({
         </div>
       </section>
 
-      {/* Расходы — ведут в «Учёт», где эти же цифры можно редактировать */}
+      {/* Финансы источника ведёт медиабайер в своём разделе; здесь — сводка. */}
       <section aria-label="Расходы источника">
-        <h3 className="mb-2 text-sm font-medium">
-          <Link
-            href="/admin/finance"
-            className="group inline-flex items-center gap-1 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-            title="Открыть в «Учёте»"
-          >
-            Расходы
-            <ChevronRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
-          </Link>
+        <h3 className="mb-2 text-sm font-medium text-muted-foreground">
+          Расходы
         </h3>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-lg border border-border p-3">

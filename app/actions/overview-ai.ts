@@ -74,10 +74,10 @@ export async function confirmOverviewActionAction(
   action: PendingOverviewAction,
 ): Promise<ConfirmResult> {
   await requireAdmin()
-  // Источник — единая сущность «Обзора» и «Учёта»: обновляем обе вкладки.
+  // Источник виден в Обзоре админа и в разделе медиабайера — обновляем оба.
   const revalidate = () => {
     revalidatePath('/admin')
-    revalidatePath('/admin/finance')
+    revalidatePath('/buyer')
   }
   try {
     switch (action.type) {

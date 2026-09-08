@@ -2,7 +2,7 @@
 
 /**
  * Organisation-level panels: the metric-card stats grid, managers (with the
- * one-time password chip), channels, proxies, contact counts, finance entries
+ * one-time password chip), channels, proxies, contact counts
  * and the dictionary reference.
  */
 
@@ -244,49 +244,6 @@ export function ContactsPanel({ payload }: { payload: unknown }) {
         </div>
       ))}
     </dl>
-  )
-}
-
-/* ------------------------------ finance ----------------------------- */
-
-interface FinanceEntryRow {
-  id: string
-  title: string
-  vendor: string
-  amount: number
-  status: string
-  entryDate: string
-}
-
-export function FinancePanel({ payload }: { payload: unknown }) {
-  const obj = (payload ?? {}) as { entries?: unknown; totalUsd?: number }
-  const entries = asArray<FinanceEntryRow>(obj.entries).filter((e) => e?.id)
-  return (
-    <div className="flex flex-col gap-3">
-      {typeof obj.totalUsd === 'number' ? (
-        <p className="font-mono text-sm text-muted-foreground">
-          Итого:{' '}
-          <span className="font-semibold text-foreground">
-            ${obj.totalUsd.toFixed(2)}
-          </span>
-        </p>
-      ) : null}
-      {entries.length > 0 ? (
-        <SimpleTable
-          head={['Запись', 'Поставщик', 'Сумма', 'Дата']}
-          rows={entries
-            .slice(0, 20)
-            .map((e) => [
-              e.title,
-              e.vendor || '—',
-              `$${e.amount.toFixed(2)}`,
-              e.entryDate,
-            ])}
-        />
-      ) : (
-        <EmptyNote />
-      )}
-    </div>
   )
 }
 

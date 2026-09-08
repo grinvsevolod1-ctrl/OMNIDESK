@@ -25,7 +25,6 @@ import {
   BrainCircuit,
   Users,
   ContactRound,
-  Wallet,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import {
@@ -61,7 +60,6 @@ export type NavIcon =
   | 'autopilot'
   | 'ai'
   | 'telemost'
-  | 'finance'
   | 'docs'
   | 'settings'
 
@@ -84,7 +82,6 @@ const ICONS: Record<NavIcon, ComponentType<{ className?: string }>> = {
   autopilot: Bot,
   ai: BrainCircuit,
   telemost: TelemostIcon,
-  finance: Wallet,
   docs: BookOpen,
   settings: Settings,
 }

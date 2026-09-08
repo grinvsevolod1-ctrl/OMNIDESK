@@ -108,9 +108,9 @@ describe('tryLocalCommand — recognized commands (no gateway needed)', () => {
     expect(res?.views[0]?.kind).toBe('messages')
   })
 
-  it('handles navigation («открой раздел учёт»)', async () => {
-    const res = await tryLocalCommand('открой раздел учёт')
-    expect(res?.openSection).toBe('finance')
+  it('handles navigation («открой раздел прокси»)', async () => {
+    const res = await tryLocalCommand('открой раздел прокси')
+    expect(res?.openSection).toBe('proxies')
     expect(res?.views).toHaveLength(0)
   })
 
