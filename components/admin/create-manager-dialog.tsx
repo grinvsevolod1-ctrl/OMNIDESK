@@ -4,7 +4,11 @@ import { createManagerAction } from '@/app/actions/managers'
 import { CreateAccountDialog } from '@/components/admin/create-account-dialog'
 
 /** Тонкая обёртка над общим CreateAccountDialog: менеджер продаж. */
-export function CreateManagerDialog() {
+export function CreateManagerDialog({
+  onCreated,
+}: {
+  onCreated?: () => void
+} = {}) {
   return (
     <CreateAccountDialog
       triggerLabel="Новый менеджер"
@@ -15,6 +19,7 @@ export function CreateManagerDialog() {
       submitLabel="Создать менеджера"
       idPrefix="manager"
       action={createManagerAction}
+      onSuccess={onCreated}
     />
   )
 }

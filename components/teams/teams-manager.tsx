@@ -20,6 +20,9 @@ import {
   renameTeamAction,
 } from '@/app/actions/teams'
 import { EditTeamMembersDialog } from '@/components/teams/edit-team-members-dialog'
+import { CreateManagerDialog } from '@/components/admin/create-manager-dialog'
+import { CreateCuratorDialog } from '@/components/admin/create-curator-dialog'
+import { CreateBuyerDialog } from '@/components/admin/buyers/create-buyer-dialog'
 import { EmptyState, PageHeader } from '@/components/page-parts'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -63,11 +66,19 @@ export function TeamsManager({ initial }: { initial: LoaderData }) {
         title={isAdmin ? 'Команды' : 'Моя команда'}
         description="Команда — это руководитель, его менеджеры по кадрам и менеджеры продаж. Переданный менеджером лид попадает в пул команды и разбирается кураторами вручную."
         action={
-          <CreateTeamDialog
-            heads={view.heads}
-            isAdmin={isAdmin}
-            onCreated={refresh}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Создание сотрудников доступно и админу, и руководителю. У
+                руководителя новый человек сразу попадает в его команду
+                (экшены это делают на сервере); у админа — в общий пул. */}
+            <CreateManagerDialog onCreated={refresh} />
+            <CreateCuratorDialog onCreated={refresh} />
+            <CreateBuyerDialog onCreated={refresh} />
+            <CreateTeamDialog
+              heads={view.heads}
+              isAdmin={isAdmin}
+              onCreated={refresh}
+            />
+          </div>
         }
       />
 

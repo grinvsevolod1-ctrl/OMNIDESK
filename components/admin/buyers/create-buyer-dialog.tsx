@@ -4,7 +4,11 @@ import { createBuyerAction } from '@/app/actions/admin-buyers'
 import { CreateAccountDialog } from '@/components/admin/create-account-dialog'
 
 /** Тонкая обёртка над общим CreateAccountDialog: медиабайер. */
-export function CreateBuyerDialog() {
+export function CreateBuyerDialog({
+  onCreated,
+}: {
+  onCreated?: () => void
+} = {}) {
   return (
     <CreateAccountDialog
       triggerLabel="Новый медиабайер"
@@ -16,6 +20,7 @@ export function CreateBuyerDialog() {
       idPrefix="buyer"
       action={createBuyerAction}
       refreshOnSuccess
+      onSuccess={onCreated}
     />
   )
 }

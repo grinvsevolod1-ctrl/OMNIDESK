@@ -60,6 +60,7 @@ export function CreateAccountDialog({
   extraFieldsAfterPassword,
   beforeSubmit,
   onReset,
+  onSuccess,
 }: {
   triggerLabel: string
   triggerVariant?: 'default' | 'outline'
@@ -77,6 +78,8 @@ export function CreateAccountDialog({
   beforeSubmit?: (formData: FormData) => void
   /** Сброс роль-специфичного состояния обёртки при закрытии. */
   onReset?: () => void
+  /** Вызывается после УСПЕШНОГО создания (например, чтобы обновить список). */
+  onSuccess?: () => void
 }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
@@ -94,6 +97,7 @@ export function CreateAccountDialog({
         if (res.username) setCreatedUsername(res.username)
         if (res.password) setCreatedPassword(res.password)
         if (refreshOnSuccess) router.refresh()
+        onSuccess?.()
       } else {
         toast.error(res.message)
       }

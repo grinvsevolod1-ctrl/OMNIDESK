@@ -82,6 +82,23 @@ async function ensureHeadTeam(headId: string): Promise<string> {
   return rows[0].id
 }
 
+/**
+ * Закрепить только что созданного сотрудника (менеджер/куратор/байер) за
+ * основной командой руководителя. Используется при создании учётки из панели
+ * /head, чтобы новый человек сразу входил в команду и попадал во все
+ * head-скоуп-запросы (managers.team_id → teams.head_id). Идемпотентно.
+ */
+export async function addMemberToHeadTeam(
+  headId: string,
+  managerId: string,
+): Promise<void> {
+  const teamId = await ensureHeadTeam(headId)
+  await query(`UPDATE managers SET team_id = $2 WHERE id = $1`, [
+    managerId,
+    teamId,
+  ])
+}
+
 /** SQL-подзапрос: id команд, которыми владеет руководитель. */
 const HEAD_TEAMS = `(SELECT id FROM teams WHERE head_id = $1)`
 

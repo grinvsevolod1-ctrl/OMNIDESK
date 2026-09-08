@@ -8,7 +8,7 @@
  * (/head) — гейт внутри каждого экшена.
  */
 import { revalidatePath } from 'next/cache'
-import { getSession } from '@/lib/auth'
+import { requireAdminOrHead } from '@/lib/auth'
 import { query } from '@/lib/db'
 import { writeAudit } from '@/lib/data/audit'
 import { listHeads } from '@/lib/data/heads'
@@ -25,16 +25,6 @@ import {
 } from '@/lib/data/teams'
 import type { TeamStats } from '@/lib/data/teams'
 import type { ActionResult } from '@/lib/types'
-
-/** Сессия админа ИЛИ руководителя (обе роли управляют командами). */
-async function requireAdminOrHead() {
-  const session = await getSession()
-  if (!session) throw new Error('Unauthorized')
-  if (session.role !== 'admin' && session.role !== 'head') {
-    throw new Error('Forbidden')
-  }
-  return session
-}
 
 /** Руководитель владеет командой? (админ — всегда true.) */
 async function assertOwnsTeam(

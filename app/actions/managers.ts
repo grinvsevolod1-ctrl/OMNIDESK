@@ -2,8 +2,15 @@
 
 import { revalidatePath } from 'next/cache'
 import { invalidateAnalytics } from '@/lib/analytics-cache'
-import { getSession, hashPassword, requireAdmin } from '@/lib/auth'
+import {
+  getSession,
+  hashPassword,
+  requireAdmin,
+  requireAdminOrHead,
+} from '@/lib/auth'
+import { addMemberToHeadTeam } from '@/lib/data/heads'
 import { generatePassword } from '@/lib/crypto'
+import type { SessionUser } from '@/lib/types'
 import {
   createCurator,
   createManager,
@@ -42,6 +49,51 @@ function genPassword(): string {
 }
 
 /**
+ * Пост-создание учётки, общее для админа и руководителя: руководитель (head)
+ * сразу закрепляет нового сотрудника за своей командой (иначе тот попал бы в
+ * «Без команды» и не был бы виден руководителю), пишет аудит от своего имени и
+ * ревалидирует панель /head. Админ — прежнее поведение (учётка свободна, аудит
+ * от Administrator, ревалидация /admin). Возвращает суффикс к сообщению.
+ */
+async function finalizeCreatedAccount(
+  actor: SessionUser,
+  createdId: string,
+  details: {
+    action: string
+    entityType: string
+    name: string
+    extra?: Record<string, unknown>
+  },
+): Promise<{ teamNote: string }> {
+  if (actor.role === 'head') {
+    await addMemberToHeadTeam(actor.sub, createdId)
+    await writeAudit({
+      actorRole: 'head',
+      actorId: actor.sub,
+      actorLabel: actor.name ?? 'Руководитель',
+      action: details.action,
+      entityType: details.entityType,
+      entityId: createdId,
+      details: { ...details.extra, name: details.name },
+    })
+    revalidatePath('/head/team')
+    revalidatePath('/head')
+    return { teamNote: ' и добавлен в вашу команду' }
+  }
+  await writeAudit({
+    actorRole: 'admin',
+    actorLabel: 'Administrator',
+    action: details.action,
+    entityType: details.entityType,
+    entityId: createdId,
+    details: { ...details.extra, name: details.name },
+  })
+  revalidatePath('/admin/managers')
+  revalidatePath('/admin')
+  return { teamNote: '' }
+}
+
+/**
  * Города куратора: известные городá/регионы канонизируются по справочнику
  * («Чечня» → «Чеченская Республика»), а НЕИЗВЕСТНЫЕ населённые пункты
  * (посёлки вроде «Внуково») принимаются как есть — setCuratorCities сам
@@ -66,7 +118,7 @@ async function resolveCuratorCities(
 export async function createManagerAction(
   formData: FormData,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  const actor = await requireAdminOrHead()
   const name = String(formData.get('name') ?? '').trim()
   const email = String(formData.get('email') ?? '')
     .trim()
@@ -116,19 +168,15 @@ export async function createManagerAction(
   // A new manager appears in getManagerPerformance rollups; drop the analytics
   // cache so the dashboard lists them without waiting out the TTL.
   invalidateAnalytics()
-  await writeAudit({
-    actorRole: 'admin',
-    actorLabel: 'Administrator',
+  const { teamNote } = await finalizeCreatedAccount(actor, created.id, {
     action: 'manager.create',
     entityType: 'manager',
-    entityId: created.id,
-    details: { name, email },
+    name,
+    extra: { email },
   })
-  revalidatePath('/admin/managers')
-  revalidatePath('/admin')
   return {
     ok: true,
-    message: `Менеджер ${name} создан.`,
+    message: `Менеджер ${name} создан${teamNote}.`,
     password,
     username: created.username ?? undefined,
   }
@@ -142,7 +190,7 @@ export async function createManagerAction(
 export async function createCuratorAction(
   formData: FormData,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  const actor = await requireAdminOrHead()
   const name = String(formData.get('name') ?? '').trim()
   const email = String(formData.get('email') ?? '')
     .trim()
@@ -199,6 +247,14 @@ export async function createCuratorAction(
     username: username || undefined,
     city: cities[0],
   })
+  // Руководитель сразу закрепляет куратора за своей командой; аудит и
+  // ревалидация панелей — общие для админа и руководителя.
+  const { teamNote } = await finalizeCreatedAccount(actor, created.id, {
+    action: 'curator.create',
+    entityType: 'manager',
+    name,
+    extra: { email, city: cities[0] },
+  })
   // Store the full (canonicalized) city set; also fixes managers.city spelling.
   let canonical: string[]
   try {
@@ -207,11 +263,9 @@ export async function createCuratorAction(
     if (isMissingTableError(err)) {
       // Migrations 114+ not applied yet: the account exists (legacy
       // managers.city is set), only the multi-city dictionary is missing.
-      revalidatePath('/admin/managers')
-      revalidatePath('/admin')
       return {
         ok: true,
-        message: `Менеджер по кадрам ${name} (${cities[0]}) создан, но список городов не сохранён: на сервере не применены миграции БД. Выполните pnpm db:migrate и задайте города повторно.`,
+        message: `Менеджер по кадрам ${name} (${cities[0]}) создан${teamNote}, но список городов не сохранён: на сервере не применены миграции БД. Выполните pnpm db:migrate и задайте города повторно.`,
         password,
         username: created.username ?? undefined,
       }
@@ -219,20 +273,16 @@ export async function createCuratorAction(
     // Аккаунт уже создан (managers.city заполнен) — не роняем экшен digest'ом,
     // а честно сообщаем, что мульти-город не сохранился и почему.
     console.error('managers: createCurator setCuratorCities failed:', err)
-    revalidatePath('/admin/managers')
-    revalidatePath('/admin')
     return {
       ok: true,
-      message: `Менеджер по кадрам ${name} (${cities[0]}) создан, но список городов не сохранён (${err instanceof Error ? err.message : 'ошибка базы данных'}). Откройте «Города» у менеджера по кадрам и сохраните повторно.`,
+      message: `Менеджер по кадрам ${name} (${cities[0]}) создан${teamNote}, но список городов не сохранён (${err instanceof Error ? err.message : 'ошибка базы данных'}). Откройте «Города» у менеджера по кадрам и сохраните повторно.`,
       password,
       username: created.username ?? undefined,
     }
   }
-  revalidatePath('/admin/managers')
-  revalidatePath('/admin')
   return {
     ok: true,
-    message: `Менеджер по кадрам ${name} (${canonical.join(', ')}) создан.`,
+    message: `Менеджер по кадрам ${name} (${canonical.join(', ')}) создан${teamNote}.`,
     password,
     username: created.username ?? undefined,
   }

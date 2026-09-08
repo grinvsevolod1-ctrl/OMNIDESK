@@ -216,6 +216,22 @@ export async function requireBuyer(): Promise<SessionUser> {
   return session
 }
 
+/**
+ * Гейт «админ ИЛИ руководитель» для действий, доступных обеим ролям
+ * (управление командами, создание сотрудников). В отличие от require*-гейтов
+ * НЕ редиректит, а бросает — вызывается из server actions, где нужен throw, а
+ * не навигация. Каждый экшен дополнительно скоупит данные по session.sub, если
+ * актор — руководитель.
+ */
+export async function requireAdminOrHead(): Promise<SessionUser> {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+  if (session.role !== 'admin' && session.role !== 'head') {
+    throw new Error('Forbidden')
+  }
+  return session
+}
+
 /* --------------------------- Impersonation --------------------------- */
 
 /** Begin impersonating a staff account (admin-guarded by the caller). */

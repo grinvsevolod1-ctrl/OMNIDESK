@@ -6,7 +6,7 @@
  * app/actions/managers.ts. Источники байера назначаются на /admin/sources.
  */
 import { revalidatePath } from 'next/cache'
-import { hashPassword, requireAdmin } from '@/lib/auth'
+import { hashPassword, requireAdmin, requireAdminOrHead } from '@/lib/auth'
 import { generatePassword } from '@/lib/crypto'
 import {
   createManager,
@@ -14,6 +14,7 @@ import {
   getManagerByIdentifier,
   sanitizeUsername,
 } from '@/lib/data'
+import { addMemberToHeadTeam } from '@/lib/data/heads'
 import { listBuyers, listTrafficSources } from '@/lib/data/traffic-sources'
 import { writeAudit } from '@/lib/data/audit'
 import type { ActionResult as BaseActionResult } from '@/lib/types'
@@ -40,11 +41,11 @@ export async function listBuyersAdminAction() {
   }
 }
 
-/** Admin: создать учётку медиабайера. */
+/** Admin или руководитель: создать учётку медиабайера. */
 export async function createBuyerAction(
   formData: FormData,
 ): Promise<BuyerActionResult> {
-  await requireAdmin()
+  const actor = await requireAdminOrHead()
   const name = String(formData.get('name') ?? '').trim()
   const email = String(formData.get('email') ?? '')
     .trim()
@@ -84,18 +85,37 @@ export async function createBuyerAction(
     username: username || undefined,
     role: 'buyer',
   })
-  await writeAudit({
-    actorRole: 'admin',
-    actorLabel: 'Administrator',
-    action: 'buyer.create',
-    entityType: 'manager',
-    entityId: created.id,
-    details: { name, email },
-  })
+  // Руководитель сразу закрепляет байера за своей командой (иначе тот не попал
+  // бы в его скоуп-запросы); аудит пишется от лица актора.
+  let teamNote = ''
+  if (actor.role === 'head') {
+    await addMemberToHeadTeam(actor.sub, created.id)
+    teamNote = ' и добавлен в вашу команду'
+    await writeAudit({
+      actorRole: 'head',
+      actorId: actor.sub,
+      actorLabel: actor.name ?? 'Руководитель',
+      action: 'buyer.create',
+      entityType: 'manager',
+      entityId: created.id,
+      details: { name, email },
+    })
+    revalidatePath('/head/buyers')
+    revalidatePath('/head/team')
+  } else {
+    await writeAudit({
+      actorRole: 'admin',
+      actorLabel: 'Administrator',
+      action: 'buyer.create',
+      entityType: 'manager',
+      entityId: created.id,
+      details: { name, email },
+    })
+  }
   revalidatePath('/admin/buyers')
   return {
     ok: true,
-    message: `Медиабайер ${name} создан.`,
+    message: `Медиабайер ${name} создан${teamNote}.`,
     password,
     username: created.username ?? undefined,
   }

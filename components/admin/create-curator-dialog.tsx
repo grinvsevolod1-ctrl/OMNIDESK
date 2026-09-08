@@ -11,7 +11,11 @@ import { Label } from '@/components/ui/label'
  * Роль-специфичное поле — список городов (CityListInput), его состояние
  * живёт здесь и сбрасывается через onReset при закрытии диалога.
  */
-export function CreateCuratorDialog() {
+export function CreateCuratorDialog({
+  onCreated,
+}: {
+  onCreated?: () => void
+} = {}) {
   const [cities, setCities] = useState<string[]>([''])
 
   return (
@@ -23,6 +27,7 @@ export function CreateCuratorDialog() {
       submitLabel="Создать менеджера по кадрам"
       idPrefix="curator"
       action={createCuratorAction}
+      onSuccess={onCreated}
       onReset={() => setCities([''])}
       extraFieldsAfterEmail={
         <div className="flex flex-col gap-2">
