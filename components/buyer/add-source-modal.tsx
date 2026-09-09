@@ -24,6 +24,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import {
   catalogByCategory,
@@ -247,18 +254,21 @@ export function AddSourceModal({
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="src-currency">Валюта учёта</Label>
-                  <select
-                    id="src-currency"
+                  <Select
                     value={currency}
-                    onChange={(e) => setCurrency(e.target.value)}
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    onValueChange={(v) => setCurrency((v as string) ?? 'RUB')}
                   >
-                    {CURRENCIES.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger id="src-currency" className="h-10 w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CURRENCIES.map((c) => (
+                        <SelectItem key={c} value={c}>
+                          {c}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <p className="text-xs text-muted-foreground">
                     {SOURCE_CURRENCIES_HINT}
                   </p>

@@ -22,6 +22,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { formatMoney } from '@/lib/money'
 
@@ -125,18 +132,21 @@ export function DepositDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="dep-currency">Валюта</Label>
-              <select
-                id="dep-currency"
+              <Select
                 value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                onValueChange={(v) => setCurrency((v as string) ?? 'RUB')}
               >
-                {CURRENCIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="dep-currency" className="h-10 w-24">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
