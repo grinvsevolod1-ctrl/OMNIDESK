@@ -15,11 +15,12 @@ import { isBuyerOfHead, listBuyerIdsOfHead } from '@/lib/data/heads'
 import {
   getTrafficSourceById,
   getBuyerIdForSource,
+  getSourceLeadReport,
   getSourceStats,
-  getSourceTodayReport,
   listBuyers,
   listTrafficSources,
   listTrafficSourcesForBuyer,
+  type SourceReportRange,
   type SourceStats,
   type TrafficSource,
 } from '@/lib/data/traffic-sources'
@@ -30,6 +31,7 @@ import {
   deleteSpendDay,
   getBuyerFinanceTotals,
   getSourceFinanceSummary,
+  getSourceSpendReport,
   getSummariesForSources,
   listDeposits,
   listSpendDays,
@@ -146,13 +148,21 @@ export async function getSourceFinanceReportAction(sourceId: string) {
 }
 
 /**
- * Отчёт источника по написавшим и переданным лидам за сегодня (для модалки
- * «Обзора»). Скоуп — тот же гейт, что у финансового отчёта: админ по любому
- * источнику, руководитель — только по байерам своей команды.
+ * Полный отчёт источника для модалки «Обзора» за выбранный период: написавшие
+ * (по диалогам, любого статуса), переданные куратору, лиды «в работе» и
+ * суточный расход. Скоуп — тот же гейт, что у финансового отчёта: админ по
+ * любому источнику, руководитель — только по байерам своей команды.
  */
-export async function getSourceLeadReportAction(sourceId: string) {
+export async function getSourceReportAction(
+  sourceId: string,
+  range: SourceReportRange = 'today',
+) {
   await assertCanManageSourceFinance(sourceId)
-  return getSourceTodayReport(sourceId)
+  const [lead, spend] = await Promise.all([
+    getSourceLeadReport(sourceId, range),
+    getSourceSpendReport(sourceId, range),
+  ])
+  return { lead, spend }
 }
 
 /**

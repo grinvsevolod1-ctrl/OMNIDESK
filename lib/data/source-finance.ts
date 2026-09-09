@@ -17,6 +17,8 @@ import 'server-only'
 import { randomUUID } from 'crypto'
 import { query } from '../db'
 import type { FinanceCurrency } from '../finance-types'
+import { mskDayKey } from '../time'
+import { sqlMskRange, type SourceReportRange } from './traffic-sources'
 
 /* -------------------------------- Типы -------------------------------- */
 
@@ -524,5 +526,92 @@ export async function getBuyerFinanceTotals(
     leads: spendRows.reduce((s, r) => s + Number(r.leads), 0),
     pendingCount: depRows.reduce((s, r) => s + Number(r.pending_count), 0),
     sourcesCount: srcRows.reduce((s, r) => s + Number(r.n), 0),
+  }
+}
+
+/* ------------------- Суточный расход за период (модалка) ------------------- */
+
+export interface SourceSpendReport {
+  range: SourceReportRange
+  /** Записи расхода за период, свежие даты сверху. */
+  days: SourceSpendDay[]
+  /** Σ расхода за период (в базовой валюте источника). */
+  total: number
+  /** Σ расхода за всё время. */
+  allTime: number
+  currency: string
+  /** Показы/клики/лиды из лога трат за период. */
+  impressions: number
+  clicks: number
+  leads: number
+  /** Расход по дням за последние 14 дней (МСК), старые слева. */
+  daily: { date: string; spend: number }[]
+}
+
+/**
+ * Отчёт по суточному расходу источника за выбранный период — для модалки
+ * «Обзора» (админ/руководитель). Диапазон применяется к дате расхода
+ * (`spend_date` — МСК-дата, которую вводит байер). Всё в базовой валюте
+ * источника; суммы разных источников тут не смешиваются (один источник).
+ */
+export async function getSourceSpendReport(
+  sourceId: string,
+  range: SourceReportRange = 'today',
+): Promise<SourceSpendReport> {
+  const day = 's.spend_date'
+  const last14 = `(now() AT TIME ZONE 'Europe/Moscow')::date - 13`
+  const [meta] = await query<{ currency: string }>(
+    `SELECT currency FROM traffic_sources WHERE id = $1 LIMIT 1`,
+    [sourceId],
+  )
+  const [days, totals, daily] = await Promise.all([
+    query<SpendRow>(
+      `SELECT id, source_id, buyer_id, spend_date, spend, impressions,
+              clicks, leads, note, created_at, updated_at
+         FROM source_spend_daily s
+        WHERE source_id = $1 AND ${sqlMskRange(range, day)}
+        ORDER BY spend_date DESC`,
+      [sourceId],
+    ),
+    query<{
+      total: string | number
+      all_time: string | number
+      impressions: string | number
+      clicks: string | number
+      leads: string | number
+    }>(
+      `SELECT
+          COALESCE(SUM(spend) FILTER (WHERE ${sqlMskRange(range, day)}), 0) AS total,
+          COALESCE(SUM(spend), 0) AS all_time,
+          COALESCE(SUM(impressions) FILTER (WHERE ${sqlMskRange(range, day)}), 0) AS impressions,
+          COALESCE(SUM(clicks) FILTER (WHERE ${sqlMskRange(range, day)}), 0) AS clicks,
+          COALESCE(SUM(leads) FILTER (WHERE ${sqlMskRange(range, day)}), 0) AS leads
+         FROM source_spend_daily s
+        WHERE source_id = $1`,
+      [sourceId],
+    ),
+    query<{ d: string; spend: string | number }>(
+      `SELECT to_char(spend_date, 'YYYY-MM-DD') AS d, COALESCE(SUM(spend), 0) AS spend
+         FROM source_spend_daily s
+        WHERE source_id = $1 AND ${day} >= ${last14}
+        GROUP BY 1`,
+      [sourceId],
+    ),
+  ])
+  const axis: string[] = []
+  for (let i = 13; i >= 0; i--) {
+    axis.push(mskDayKey(new Date(Date.now() - i * 86_400_000)))
+  }
+  const byDay = new Map(daily.map((r) => [r.d, num(r.spend)]))
+  return {
+    range,
+    days: days.map(toSpendDay),
+    total: num(totals[0]?.total ?? 0),
+    allTime: num(totals[0]?.all_time ?? 0),
+    currency: meta?.currency ?? 'RUB',
+    impressions: Number(totals[0]?.impressions ?? 0),
+    clicks: Number(totals[0]?.clicks ?? 0),
+    leads: Number(totals[0]?.leads ?? 0),
+    daily: axis.map((d) => ({ date: d, spend: byDay.get(d) ?? 0 })),
   }
 }

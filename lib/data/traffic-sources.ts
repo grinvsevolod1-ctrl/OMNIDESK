@@ -22,6 +22,8 @@ import {
   type LeadCard,
   type LeadCardRow,
 } from './lead-cards-core'
+import { isLeadStatus, type LeadStatus } from '../lead-status'
+import { mskDayKey } from '../time'
 
 /* ------------------------------- Типы ------------------------------- */
 
@@ -443,99 +445,217 @@ export interface SourceDaily {
   transferred: number
 }
 
-export interface SourceTodayReport {
-  /** Лиды, написавшие сегодня (МСК), новые сверху. */
-  wroteToday: LeadCard[]
-  /** Лиды, переданные куратору сегодня (МСК), новые сверху. */
-  transferredToday: LeadCard[]
-  /** Всего написавших за всё время. */
-  totalWrote: number
-  /** Всего переданных куратору. */
-  totalTransferred: number
+/* ------------------------- Диапазоны отчёта ------------------------- */
+
+export type SourceReportRange = 'today' | 'yesterday' | 'week' | 'month' | 'all'
+
+/**
+ * SQL-предикат диапазона в МСК для выражения-ДАТЫ (`dayExpr` уже приведено к
+ * ::date в МСК). `range` — фиксированный enum, пользовательский ввод в SQL
+ * не попадает, поэтому интерполяция безопасна.
+ */
+export function sqlMskRange(range: SourceReportRange, dayExpr: string): string {
+  const today = `(now() AT TIME ZONE 'Europe/Moscow')::date`
+  switch (range) {
+    case 'today':
+      return `${dayExpr} = ${today}`
+    case 'yesterday':
+      return `${dayExpr} = ${today} - 1`
+    case 'week':
+      return `${dayExpr} >= ${today} - 6`
+    case 'month':
+      return `${dayExpr} >= ${today} - 29`
+    case 'all':
+      return 'TRUE'
+  }
+}
+
+/** Один написавший — по ДИАЛОГУ (первый входящий), а не по лид-карточке. */
+export interface SourceWriter {
+  conversationId: string
+  name: string
+  handle: string
+  channelType: string
+  /** ISO первого входящего сообщения (когда человек написал). */
+  wroteAt: string
+  /** Статус лид-карточки этого диалога, если её завели (иначе null). */
+  leadStatus: LeadStatus | null
+}
+
+export interface SourceLeadReport {
+  range: SourceReportRange
+  /** Все написавшие за период (по диалогам, любого статуса), новые сверху. */
+  writers: SourceWriter[]
+  /** Лиды, переданные куратору за период, новые сверху. */
+  transferred: LeadCard[]
+  /** Лиды в текущем статусе «В работе» (снимок «сейчас», не за период). */
+  working: LeadCard[]
+  /** Счётчики за выбранный период (working — текущий снимок). */
+  counts: { wrote: number; transferred: number; working: number }
+  /** Счётчики за всё время (working — текущий снимок). */
+  allTime: { wrote: number; transferred: number; working: number }
   /** Динамика по дням за последние 14 дней (МСК), старые слева. */
   dailySeries: SourceDaily[]
 }
 
+// Написавшие = ДИАЛОГИ источника (по текущему менеджеру) с входящим
+// сообщением. Дата «написал» — первый входящий. Источник у диалога берётся
+// через менеджера (managers.traffic_source_id), т.к. это единственная связь
+// диалога с источником в модели traffic_sources.
+const CONVO_CTE = `
+  WITH convo AS (
+    SELECT c.id, c.contact_name, c.contact_handle, c.channel_type,
+           MIN(m.created_at) FILTER (WHERE m.direction = 'in') AS first_in
+      FROM conversations c
+      JOIN managers mg ON mg.id = c.manager_id
+      JOIN messages m ON m.conversation_id = c.id
+     WHERE mg.traffic_source_id = $1
+     GROUP BY c.id, c.contact_name, c.contact_handle, c.channel_type
+  )`
+
 /**
- * Отчёт источника за сегодня для «Обзора»: списки написавших и переданных
- * лидов (для drill-down в модалке) плюс итоги за всё время. Скоуп источника
- * проверяет вызывающий server action.
+ * Отчёт источника для модалки «Обзора» за выбранный период:
+ *   • написавшие — по ДИАЛОГАМ с входящим (все, кто реально написал, любого
+ *     статуса), а не по заведённым вручную лид-карточкам;
+ *   • переданные куратору — по lead_cards.transferred_at за период;
+ *   • «в работе» — текущий снимок лидов в статусе working (не за период);
+ *   • динамика написавших/переданных за 14 дней для графика.
+ * Скоуп источника проверяет вызывающий server action.
  */
-export async function getSourceTodayReport(
+export async function getSourceLeadReport(
   sourceId: string,
-): Promise<SourceTodayReport> {
+  range: SourceReportRange = 'today',
+): Promise<SourceLeadReport> {
+  const wroteDay = `(convo.first_in AT TIME ZONE 'Europe/Moscow')::date`
+  const transDay = `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date`
+  const last14 = `(now() AT TIME ZONE 'Europe/Moscow')::date - 13`
   const leadJoins = `
        FROM lead_cards lc
        LEFT JOIN managers m ON m.id = lc.manager_id
        LEFT JOIN managers c ON c.id = lc.curator_id
       WHERE lc.traffic_source_id = $1 AND lc.deleted_at IS NULL`
-  const [wrote, transferred, totals, daily] = await Promise.all([
-    query<LeadCardRow>(
-      `SELECT ${CARD_SELECT} ${leadJoins}
-        AND (lc.created_at AT TIME ZONE 'Europe/Moscow')::date
-            = (now() AT TIME ZONE 'Europe/Moscow')::date
-      ORDER BY lc.created_at DESC`,
+
+  const [
+    writers,
+    wroteCounts,
+    wroteDaily,
+    transferred,
+    working,
+    leadCounts,
+    transferredDaily,
+  ] = await Promise.all([
+    query<{
+      id: string
+      contact_name: string
+      contact_handle: string
+      channel_type: string
+      first_in: string | Date
+      lead_status: string | null
+    }>(
+      `${CONVO_CTE}
+       SELECT convo.id, convo.contact_name, convo.contact_handle,
+              convo.channel_type, convo.first_in, lc.status AS lead_status
+         FROM convo
+         LEFT JOIN lead_cards lc
+           ON lc.conversation_id = convo.id AND lc.deleted_at IS NULL
+        WHERE convo.first_in IS NOT NULL
+          AND ${sqlMskRange(range, wroteDay)}
+        ORDER BY convo.first_in DESC
+        LIMIT 300`,
+      [sourceId],
+    ),
+    query<{ in_range: number; all_time: number }>(
+      `${CONVO_CTE}
+       SELECT count(*) FILTER (
+                WHERE convo.first_in IS NOT NULL AND ${sqlMskRange(range, wroteDay)}
+              )::int AS in_range,
+              count(*) FILTER (WHERE convo.first_in IS NOT NULL)::int AS all_time
+         FROM convo`,
+      [sourceId],
+    ),
+    query<{ d: string; n: number }>(
+      `${CONVO_CTE}
+       SELECT to_char(${wroteDay}, 'YYYY-MM-DD') AS d, count(*)::int AS n
+         FROM convo
+        WHERE convo.first_in IS NOT NULL AND ${wroteDay} >= ${last14}
+        GROUP BY 1`,
       [sourceId],
     ),
     query<LeadCardRow>(
       `SELECT ${CARD_SELECT} ${leadJoins}
         AND lc.curator_id IS NOT NULL
         AND lc.transferred_at IS NOT NULL
-        AND (lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date
-            = (now() AT TIME ZONE 'Europe/Moscow')::date
-      ORDER BY lc.transferred_at DESC`,
+        AND ${sqlMskRange(range, transDay)}
+      ORDER BY lc.transferred_at DESC
+      LIMIT 300`,
       [sourceId],
     ),
-    query<{ total_wrote: number; total_transferred: number }>(
-      `SELECT COUNT(*)::int AS total_wrote,
-              COUNT(*) FILTER (WHERE curator_id IS NOT NULL)::int
-                AS total_transferred
-         FROM lead_cards
-        WHERE traffic_source_id = $1 AND deleted_at IS NULL`,
+    query<LeadCardRow>(
+      `SELECT ${CARD_SELECT} ${leadJoins}
+        AND lc.status = 'working'
+      ORDER BY lc.transferred_at DESC NULLS LAST, lc.created_at DESC
+      LIMIT 300`,
       [sourceId],
     ),
-    // Динамика за 14 дней: генерируем непрерывный ряд дат МСК (даже пустые
-    // дни = 0) и слева джойним написавших/переданных по дате в МСК.
-    query<{ date: string; wrote: number; transferred: number }>(
-      `WITH days AS (
-         SELECT generate_series(
-           (now() AT TIME ZONE 'Europe/Moscow')::date - INTERVAL '13 days',
-           (now() AT TIME ZONE 'Europe/Moscow')::date,
-           INTERVAL '1 day'
-         )::date AS d
-       )
-       SELECT to_char(days.d, 'YYYY-MM-DD') AS date,
-              COUNT(lc.id) FILTER (
-                WHERE (lc.created_at AT TIME ZONE 'Europe/Moscow')::date = days.d
-              )::int AS wrote,
-              COUNT(lc.id) FILTER (
-                WHERE lc.curator_id IS NOT NULL
-                  AND lc.transferred_at IS NOT NULL
-                  AND (lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date = days.d
-              )::int AS transferred
-         FROM days
-         LEFT JOIN lead_cards lc
-           ON lc.traffic_source_id = $1
-          AND lc.deleted_at IS NULL
-          AND (
-            (lc.created_at AT TIME ZONE 'Europe/Moscow')::date = days.d
-            OR (lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date = days.d
-          )
-        GROUP BY days.d
-        ORDER BY days.d`,
+    query<{ trans_range: number; trans_all: number; working_now: number }>(
+      `SELECT
+          count(*) FILTER (
+            WHERE lc.curator_id IS NOT NULL AND lc.transferred_at IS NOT NULL
+              AND ${sqlMskRange(range, transDay)}
+          )::int AS trans_range,
+          count(*) FILTER (WHERE lc.curator_id IS NOT NULL)::int AS trans_all,
+          count(*) FILTER (WHERE lc.status = 'working')::int AS working_now
+         FROM lead_cards lc
+        WHERE lc.traffic_source_id = $1 AND lc.deleted_at IS NULL`,
+      [sourceId],
+    ),
+    query<{ d: string; n: number }>(
+      `SELECT to_char(${transDay}, 'YYYY-MM-DD') AS d, count(*)::int AS n
+         FROM lead_cards lc
+        WHERE lc.traffic_source_id = $1 AND lc.deleted_at IS NULL
+          AND lc.curator_id IS NOT NULL AND lc.transferred_at IS NOT NULL
+          AND ${transDay} >= ${last14}
+        GROUP BY 1`,
       [sourceId],
     ),
   ])
+
+  // 14-дневная ось в МСК (старые слева); МСК без DST — сдвиг по суткам стабилен.
+  const axis: string[] = []
+  for (let i = 13; i >= 0; i--) {
+    axis.push(mskDayKey(new Date(Date.now() - i * 86_400_000)))
+  }
+  const wroteByDay = new Map(wroteDaily.map((r) => [r.d, Number(r.n)]))
+  const transByDay = new Map(transferredDaily.map((r) => [r.d, Number(r.n)]))
+  const dailySeries: SourceDaily[] = axis.map((d) => ({
+    date: d,
+    wrote: wroteByDay.get(d) ?? 0,
+    transferred: transByDay.get(d) ?? 0,
+  }))
+
   return {
-    wroteToday: wrote.map(toLeadCard),
-    transferredToday: transferred.map(toLeadCard),
-    totalWrote: totals[0]?.total_wrote ?? 0,
-    totalTransferred: totals[0]?.total_transferred ?? 0,
-    dailySeries: daily.map((r) => ({
-      date: r.date,
-      wrote: r.wrote,
-      transferred: r.transferred,
+    range,
+    writers: writers.map((w) => ({
+      conversationId: w.id,
+      name: w.contact_name,
+      handle: w.contact_handle,
+      channelType: w.channel_type,
+      wroteAt: new Date(w.first_in).toISOString(),
+      leadStatus: isLeadStatus(w.lead_status) ? w.lead_status : null,
     })),
+    transferred: transferred.map(toLeadCard),
+    working: working.map(toLeadCard),
+    counts: {
+      wrote: wroteCounts[0]?.in_range ?? 0,
+      transferred: leadCounts[0]?.trans_range ?? 0,
+      working: leadCounts[0]?.working_now ?? 0,
+    },
+    allTime: {
+      wrote: wroteCounts[0]?.all_time ?? 0,
+      transferred: leadCounts[0]?.trans_all ?? 0,
+      working: leadCounts[0]?.working_now ?? 0,
+    },
+    dailySeries,
   }
 }
 
