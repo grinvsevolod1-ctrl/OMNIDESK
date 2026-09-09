@@ -17,10 +17,10 @@ import 'server-only'
 import { randomUUID } from 'crypto'
 import { query } from '../db'
 import type { FinanceCurrency } from '../finance-types'
-import { mskDayKey } from '../time'
 import {
-  reportWindowDays,
+  resolveChartWindow,
   sqlMskRange,
+  type SourceReportPeriod,
   type SourceReportRange,
 } from './traffic-sources'
 
@@ -560,11 +560,12 @@ export interface SourceSpendReport {
  */
 export async function getSourceSpendReport(
   sourceId: string,
-  range: SourceReportRange = 'today',
+  period: SourceReportPeriod = { range: 'today' },
 ): Promise<SourceSpendReport> {
   const day = 's.spend_date'
-  const windowDays = reportWindowDays(range)
-  const windowStart = `(now() AT TIME ZONE 'Europe/Moscow')::date - ${windowDays - 1}`
+  const { keys: axis, startKey, endKey } = resolveChartWindow(period)
+  const windowSql = `${day} BETWEEN '${startKey}'::date AND '${endKey}'::date`
+  const rangeSql = sqlMskRange(period, day)
   const [meta] = await query<{ currency: string }>(
     `SELECT currency FROM traffic_sources WHERE id = $1 LIMIT 1`,
     [sourceId],
@@ -574,7 +575,7 @@ export async function getSourceSpendReport(
       `SELECT id, source_id, buyer_id, spend_date, spend, impressions,
               clicks, leads, note, created_at, updated_at
          FROM source_spend_daily s
-        WHERE source_id = $1 AND ${sqlMskRange(range, day)}
+        WHERE source_id = $1 AND ${rangeSql}
         ORDER BY spend_date DESC`,
       [sourceId],
     ),
@@ -586,11 +587,11 @@ export async function getSourceSpendReport(
       leads: string | number
     }>(
       `SELECT
-          COALESCE(SUM(spend) FILTER (WHERE ${sqlMskRange(range, day)}), 0) AS total,
+          COALESCE(SUM(spend) FILTER (WHERE ${rangeSql}), 0) AS total,
           COALESCE(SUM(spend), 0) AS all_time,
-          COALESCE(SUM(impressions) FILTER (WHERE ${sqlMskRange(range, day)}), 0) AS impressions,
-          COALESCE(SUM(clicks) FILTER (WHERE ${sqlMskRange(range, day)}), 0) AS clicks,
-          COALESCE(SUM(leads) FILTER (WHERE ${sqlMskRange(range, day)}), 0) AS leads
+          COALESCE(SUM(impressions) FILTER (WHERE ${rangeSql}), 0) AS impressions,
+          COALESCE(SUM(clicks) FILTER (WHERE ${rangeSql}), 0) AS clicks,
+          COALESCE(SUM(leads) FILTER (WHERE ${rangeSql}), 0) AS leads
          FROM source_spend_daily s
         WHERE source_id = $1`,
       [sourceId],
@@ -598,18 +599,14 @@ export async function getSourceSpendReport(
     query<{ d: string; spend: string | number }>(
       `SELECT to_char(spend_date, 'YYYY-MM-DD') AS d, COALESCE(SUM(spend), 0) AS spend
          FROM source_spend_daily s
-        WHERE source_id = $1 AND ${day} >= ${windowStart}
+        WHERE source_id = $1 AND ${windowSql}
         GROUP BY 1`,
       [sourceId],
     ),
   ])
-  const axis: string[] = []
-  for (let i = windowDays - 1; i >= 0; i--) {
-    axis.push(mskDayKey(new Date(Date.now() - i * 86_400_000)))
-  }
   const byDay = new Map(daily.map((r) => [r.d, num(r.spend)]))
   return {
-    range,
+    range: period.range,
     days: days.map(toSpendDay),
     total: num(totals[0]?.total ?? 0),
     allTime: num(totals[0]?.all_time ?? 0),

@@ -20,7 +20,7 @@ import {
   listBuyers,
   listTrafficSources,
   listTrafficSourcesForBuyer,
-  type SourceReportRange,
+  type SourceReportPeriod,
   type SourceStats,
   type TrafficSource,
 } from '@/lib/data/traffic-sources'
@@ -155,12 +155,12 @@ export async function getSourceFinanceReportAction(sourceId: string) {
  */
 export async function getSourceReportAction(
   sourceId: string,
-  range: SourceReportRange = 'today',
+  period: SourceReportPeriod = { range: 'today' },
 ) {
   await assertCanManageSourceFinance(sourceId)
   const [lead, spend] = await Promise.all([
-    getSourceLeadReport(sourceId, range),
-    getSourceSpendReport(sourceId, range),
+    getSourceLeadReport(sourceId, period),
+    getSourceSpendReport(sourceId, period),
   ])
   return { lead, spend }
 }

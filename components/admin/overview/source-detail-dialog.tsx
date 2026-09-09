@@ -2,7 +2,7 @@
 
 /**
  * Отчёт одного источника трафика для админа/руководителя. Открывается по клику
- * на карточку источника в «Обзоре» большим модальным окном на ~85% экрана.
+ * на карточку источника в «Обзоре» большим модальным окном на ~90% экрана.
  *
  * Смысловое разделение (по требованию владельца):
  *   • «Написали» — ВСЕ, кто реально написал (по диалогам с входящим, любого
@@ -12,13 +12,17 @@
  *   • «Суточный расход» — деньги из дневного лога трат байера.
  *
  * Всё, кроме «в работе» (это снимок «сейчас»), считается за ВЫБРАННЫЙ период:
- * фильтр Сегодня / Вчера / 7 дней / 30 дней / Всё время. Переключение периода
- * рефетчит отчёт (SWR-ключ включает range) — цифры и списки скоупятся на
- * сервере. Скоуп по роли (админ — любой источник, руководитель — только байеры
- * своей команды) проверяет server action.
+ * пресеты Сегодня / Вчера / 7 / 30 дней / Всё время ИЛИ произвольный диапазон
+ * дат. Переключение периода рефетчит отчёт (SWR-ключ включает период) — цифры
+ * и списки скоупятся на сервере. Скоуп по роли (админ — любой источник,
+ * руководитель — только байеры своей команды) проверяет server action.
+ *
+ * Раскладка заполняет всю высоту модала: слева стопка графиков (трафик + расход),
+ * справа — детализация во всю высоту со внутренним скроллом, чтобы не оставалось
+ * пустого пространства.
  */
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import useSWR from 'swr'
 import {
   Area,
@@ -61,35 +65,33 @@ import {
   type ChartConfig,
 } from '@/components/ui/chart'
 import { Dialog, DialogClose, DialogContent } from '@/components/ui/dialog'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import type { LeadCard } from '@/lib/data/lead-cards-core'
 import type {
+  SourceReportPeriod,
   SourceReportRange,
   SourceWriter,
 } from '@/lib/data/traffic-sources'
 import { LEAD_STATUS_TONE, leadStatusLabel } from '@/lib/lead-status'
 import { formatMoney } from '@/lib/money'
-import { formatMskDateShort, formatMskDateTime } from '@/lib/time'
+import { formatMskDateShort, formatMskDateTime, mskDayKey } from '@/lib/time'
 import { platformOrCustom } from '@/lib/traffic-source-catalog'
 import { cn } from '@/lib/utils'
 
 type Segment = 'wrote' | 'transferred' | 'working'
 
-const RANGE_TABS: { key: SourceReportRange; label: string }[] = [
-  { key: 'today', label: 'Сегодня' },
-  { key: 'yesterday', label: 'Вчера' },
-  { key: 'week', label: '7 дней' },
-  { key: 'month', label: '30 дней' },
-  { key: 'all', label: 'Всё время' },
-]
-
-/** Сколько суток в периоде (для «среднее/день»); all — по факту записей. */
-const RANGE_DAYS: Record<SourceReportRange, number | null> = {
-  today: 1,
-  yesterday: 1,
-  week: 7,
-  month: 30,
-  all: null,
-}
+const PRESET_TABS: { key: Exclude<SourceReportRange, 'custom'>; label: string }[] =
+  [
+    { key: 'today', label: 'Сегодня' },
+    { key: 'yesterday', label: 'Вчера' },
+    { key: 'week', label: '7 дней' },
+    { key: 'month', label: '30 дней' },
+    { key: 'all', label: 'Всё время' },
+  ]
 
 const CHANNEL_LABEL: Record<string, string> = {
   telegram: 'Telegram',
@@ -109,6 +111,20 @@ const spendChartConfig = {
   spend: { label: 'Расход', color: 'var(--chart-3)' },
 } satisfies ChartConfig
 
+/** Сдвиг МСК-дня (YYYY-MM-DD) на delta суток; полдень UTC исключает краевые TZ. */
+function addDaysKey(key: string, delta: number): string {
+  const d = new Date(`${key}T09:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + delta)
+  return mskDayKey(d)
+}
+
+/** Число суток в диапазоне [from, to] включительно (для «среднее/день»). */
+function spanDays(from: string, to: string): number {
+  const a = new Date(`${from}T09:00:00Z`).getTime()
+  const b = new Date(`${to}T09:00:00Z`).getTime()
+  return Math.max(1, Math.round((b - a) / 86_400_000) + 1)
+}
+
 /**
  * Управляемая обёртка: рендерит модалку, когда выбран источник (row != null).
  */
@@ -126,7 +142,7 @@ export function SourceDetailDialog({
       {row ? (
         <DialogContent
           showCloseButton={false}
-          className="flex h-[88vh] max-h-[88vh] w-[88vw] max-w-[88vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[88vw]"
+          className="flex h-[90vh] max-h-[90vh] w-[92vw] max-w-[92vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[92vw]"
         >
           <SourceDetailBody row={row} />
         </DialogContent>
@@ -141,17 +157,32 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
   const [range, setRange] = useState<SourceReportRange>('today')
   const [segment, setSegment] = useState<Segment>('wrote')
 
+  const todayKey = useMemo(() => mskDayKey(new Date()), [])
+  const [customFrom, setCustomFrom] = useState(() => addDaysKey(todayKey, -6))
+  const [customTo, setCustomTo] = useState(todayKey)
+
+  const period: SourceReportPeriod =
+    range === 'custom' ? { range, from: customFrom, to: customTo } : { range }
+
   const { data, isLoading } = useSWR(
-    ['source-report', source.id, range],
-    () => getSourceReportAction(source.id, range),
+    [
+      'source-report',
+      source.id,
+      range,
+      range === 'custom' ? customFrom : '',
+      range === 'custom' ? customTo : '',
+    ],
+    () => getSourceReportAction(source.id, period),
     { keepPreviousData: true, revalidateOnFocus: false },
   )
 
   const lead = data?.lead
   const spend = data?.spend
   const currency = spend?.currency ?? source.currency ?? 'RUB'
-  const rangeLabel =
-    RANGE_TABS.find((t) => t.key === range)?.label.toLowerCase() ?? ''
+  const isCustom = range === 'custom'
+  const rangeLabel = isCustom
+    ? `${formatMskDateShort(customFrom)} — ${formatMskDateShort(customTo)}`
+    : PRESET_TABS.find((t) => t.key === range)?.label.toLowerCase() ?? ''
   const showAllTimeHint = range !== 'all'
 
   // Метрики за период.
@@ -160,38 +191,54 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
   const workingCount = lead?.counts.working ?? 0
   const spendTotal = spend?.total ?? 0
 
-  // Динамика 14 дней (для графика трафика).
-  const series = lead?.dailySeries ?? []
-  const wrote14 = series.reduce((s, d) => s + d.wrote, 0)
-  const transferred14 = series.reduce((s, d) => s + d.transferred, 0)
+  // Динамика (окно графика следует за фильтром).
+  const series = useMemo(() => lead?.dailySeries ?? [], [lead?.dailySeries])
+  const wroteWindow = series.reduce((s, d) => s + d.wrote, 0)
+  const transferredWindow = series.reduce((s, d) => s + d.transferred, 0)
   const avgWrote =
-    series.length > 0 ? Math.round((wrote14 / series.length) * 10) / 10 : 0
+    series.length > 0 ? Math.round((wroteWindow / series.length) * 10) / 10 : 0
   const peak = series.reduce((m, d) => Math.max(m, d.wrote), 0)
   const convRate =
-    wrote14 > 0 ? Math.round((transferred14 / wrote14) * 100) : 0
+    wroteWindow > 0 ? Math.round((transferredWindow / wroteWindow) * 100) : 0
 
-  const trafficData = series.map((d) => ({
-    day: formatMskDateShort(d.date),
-    wrote: d.wrote,
-    transferred: d.transferred,
-  }))
+  const trafficData = useMemo(
+    () =>
+      series.map((d) => ({
+        day: formatMskDateShort(d.date),
+        wrote: d.wrote,
+        transferred: d.transferred,
+      })),
+    [series],
+  )
 
   // Суточный расход.
-  const spendDivisor = RANGE_DAYS[range] ?? Math.max(1, spend?.days.length ?? 1)
+  const spendDivisor = isCustom
+    ? spanDays(customFrom, customTo)
+    : range === 'today' || range === 'yesterday'
+      ? 1
+      : range === 'week'
+        ? 7
+        : range === 'month'
+          ? 30
+          : Math.max(1, spend?.days.length ?? 1)
   const avgSpend = spendTotal / spendDivisor
   const spendLeads = spend?.leads ?? 0
   const cpl = spendLeads > 0 ? spendTotal / spendLeads : null
-  const spendData = (spend?.daily ?? []).map((d) => ({
-    day: formatMskDateShort(d.date),
-    spend: d.spend,
-  }))
+  const spendData = useMemo(
+    () =>
+      (spend?.daily ?? []).map((d) => ({
+        day: formatMskDateShort(d.date),
+        spend: d.spend,
+      })),
+    [spend?.daily],
+  )
   const hasSpendChart = (spend?.daily ?? []).some((d) => d.spend > 0)
 
   return (
     <>
       {/* Шапка: закреплена, не скроллится */}
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card/60 px-5 py-4">
-        <PlatformLogo platform={platform} size={52} rounded="rounded-xl" />
+        <PlatformLogo platform={platform} size={48} rounded="rounded-xl" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="truncate text-lg font-semibold">{source.name}</h2>
@@ -218,103 +265,115 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
         </DialogClose>
       </header>
 
-      {/* Тело: скроллится */}
-      <div className="flex-1 overflow-y-auto px-5 py-5">
-        <div className="mx-auto flex max-w-6xl flex-col gap-5">
-          {/* Фильтр периода */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <CalendarRange className="size-4" />
-              Период
-            </div>
-            <div className="flex flex-wrap gap-1 rounded-lg bg-muted/50 p-1">
-              {RANGE_TABS.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setRange(tab.key)}
-                  className={cn(
-                    'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                    range === tab.key
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+      {/* Тело: на десктопе заполняет высоту, на узких экранах — скроллится */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5 lg:overflow-hidden">
+        {/* Фильтр периода */}
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <CalendarRange className="size-4" />
+            Период
+          </span>
+          <div className="flex flex-wrap items-center gap-1 rounded-lg bg-muted/50 p-1">
+            {PRESET_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setRange(tab.key)}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                  range === tab.key
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
+            <CustomRangePicker
+              active={isCustom}
+              from={customFrom}
+              to={customTo}
+              max={todayKey}
+              label={isCustom ? rangeLabel : 'Даты'}
+              onApply={(from, to) => {
+                setCustomFrom(from)
+                setCustomTo(to)
+                setRange('custom')
+              }}
+            />
           </div>
+        </div>
 
-          {/* Метрики за период */}
-          <section
-            aria-label="Показатели источника"
-            className="grid grid-cols-2 gap-3 lg:grid-cols-4"
-          >
-            <MiniStat
-              icon={MessageSquare}
-              label="Написали"
-              value={wroteCount}
-              tone="primary"
-              hint={
-                showAllTimeHint
-                  ? `За всё время ${lead?.allTime.wrote ?? 0}`
-                  : 'Все, кто написал'
-              }
-              loading={!lead}
-            />
-            <MiniStat
-              icon={Send}
-              label="Передано куратору"
-              value={transferredCount}
-              tone="success"
-              hint={
-                showAllTimeHint
-                  ? `За всё время ${lead?.allTime.transferred ?? 0}`
-                  : undefined
-              }
-              loading={!lead}
-            />
-            <MiniStat
-              icon={Headset}
-              label="В работе сейчас"
-              value={workingCount}
-              tone="info"
-              hint="Текущий статус у кураторов"
-              loading={!lead}
-            />
-            <MiniStat
-              icon={Wallet}
-              label="Расход"
-              value={formatMoney(spendTotal, currency)}
-              tone="warning"
-              hint={
-                showAllTimeHint
-                  ? `За всё время ${formatMoney(spend?.allTime ?? 0, currency)}`
-                  : undefined
-              }
-              loading={!spend}
-            />
-          </section>
+        {/* Метрики за период */}
+        <section
+          aria-label="Показатели источника"
+          className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4"
+        >
+          <MiniStat
+            icon={MessageSquare}
+            label="Написали"
+            value={wroteCount}
+            tone="primary"
+            hint={
+              showAllTimeHint
+                ? `За всё время ${lead?.allTime.wrote ?? 0}`
+                : 'Все, кто написал'
+            }
+            loading={!lead}
+          />
+          <MiniStat
+            icon={Send}
+            label="Передано куратору"
+            value={transferredCount}
+            tone="success"
+            hint={
+              showAllTimeHint
+                ? `За всё время ${lead?.allTime.transferred ?? 0}`
+                : undefined
+            }
+            loading={!lead}
+          />
+          <MiniStat
+            icon={Headset}
+            label="В работе сейчас"
+            value={workingCount}
+            tone="info"
+            hint="Текущий статус у кураторов"
+            loading={!lead}
+          />
+          <MiniStat
+            icon={Wallet}
+            label="Расход"
+            value={formatMoney(spendTotal, currency)}
+            tone="warning"
+            hint={
+              showAllTimeHint
+                ? `За всё время ${formatMoney(spend?.allTime ?? 0, currency)}`
+                : undefined
+            }
+            loading={!spend}
+          />
+        </section>
 
-          {/* Графики: трафик (2/3) + суточный расход (1/3) */}
-          <div className="grid gap-4 lg:grid-cols-3">
-            {/* Динамика написавших/переданных за окно тренда (14/30/90 дней) */}
-            <Card className="flex flex-col gap-4 p-5 lg:col-span-2">
-              <div className="flex flex-wrap items-end justify-between gap-3">
+        {/* Основная область: графики (слева) + детализация (справа), во всю высоту */}
+        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-5">
+          {/* Левая колонка: трафик + расход */}
+          <div className="flex min-h-0 flex-col gap-4 lg:col-span-3">
+            {/* Динамика написавших/переданных */}
+            <Card className="flex min-h-[280px] flex-col gap-3 p-5 lg:min-h-0 lg:flex-1">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 className="flex items-center gap-2 text-sm font-semibold">
                     <TrendingUp className="size-4 text-primary" />
-                    Динамика за {series.length || 14} дней
+                    Динамика{isCustom ? '' : ` за ${series.length || 14} дней`}
                   </h3>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    Написавшие (заливка) и переданные куратору (линия) по дням,
-                    МСК.
+                    Написавшие (заливка) и переданные (линия) по дням, МСК.
                   </p>
                 </div>
                 <div className="flex items-center gap-4 text-right">
-                  <SummaryNum label="Написали" value={wrote14} />
-                  <SummaryNum label="Среднее/день" value={avgWrote} />
+                  <SummaryNum label="Написали" value={wroteWindow} />
+                  <SummaryNum label="Ср./день" value={avgWrote} />
                   <SummaryNum label="Пик" value={peak} />
                   <SummaryNum label="Конверсия" value={`${convRate}%`} />
                 </div>
@@ -327,7 +386,7 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
               ) : (
                 <ChartContainer
                   config={trafficChartConfig}
-                  className="h-[260px] w-full"
+                  className="min-h-[200px] w-full flex-1"
                 >
                   <AreaChart
                     data={trafficData}
@@ -384,24 +443,36 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
             </Card>
 
             {/* Суточный расход */}
-            <Card className="flex flex-col gap-4 p-5">
-              <div>
-                <h3 className="flex items-center gap-2 text-sm font-semibold">
-                  <Coins className="size-4 text-warning" />
-                  Суточный расход
-                </h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Траты байера за {rangeLabel}.
-                </p>
+            <Card className="flex shrink-0 flex-col gap-3 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="flex items-center gap-2 text-sm font-semibold">
+                    <Coins className="size-4 text-warning" />
+                    Суточный расход
+                  </h3>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Траты байера за {rangeLabel}.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1">
+                    <Eye className="size-3.5" />
+                    {(spend?.impressions ?? 0).toLocaleString('ru-RU')}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <MousePointerClick className="size-3.5" />
+                    {(spend?.clicks ?? 0).toLocaleString('ru-RU')}
+                  </span>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <SpendNum
                   label="Всего"
                   value={formatMoney(spendTotal, currency)}
                 />
                 <SpendNum
-                  label="Среднее/день"
+                  label="Ср./день"
                   value={formatMoney(avgSpend, currency)}
                 />
                 <SpendNum
@@ -443,64 +514,154 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
                 </ChartContainer>
               ) : (
                 <p className="flex h-[120px] items-center justify-center rounded-lg border border-dashed border-border text-center text-xs text-muted-foreground">
-                  Байер ещё не вносил расход за последние дни.
+                  Байер ещё не вносил расход за этот период.
                 </p>
               )}
-
-              <div className="flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <Eye className="size-3.5" />
-                  {(spend?.impressions ?? 0).toLocaleString('ru-RU')} показов
-                </span>
-                <span className="flex items-center gap-1">
-                  <MousePointerClick className="size-3.5" />
-                  {(spend?.clicks ?? 0).toLocaleString('ru-RU')} кликов
-                </span>
-              </div>
             </Card>
           </div>
 
-          {/* Детализация с переключателем сегмента */}
-          <Card className="flex flex-col gap-3 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Правая колонка: детализация во всю высоту со скроллом */}
+          <Card className="flex min-h-[360px] flex-col gap-3 p-4 lg:col-span-2 lg:min-h-0">
+            <div className="flex shrink-0 flex-col gap-2">
               <h3 className="text-sm font-semibold">
                 Детализация{' '}
                 <span className="font-normal text-muted-foreground">
                   {segment === 'working' ? '(сейчас)' : `· ${rangeLabel}`}
                 </span>
               </h3>
-              <div className="flex flex-wrap gap-1 rounded-lg bg-muted/50 p-1">
+              <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted/50 p-1">
                 <SegBtn
                   active={segment === 'wrote'}
                   onClick={() => setSegment('wrote')}
                   icon={MessageSquare}
-                  label={`Написали (${wroteCount})`}
+                  label="Написали"
+                  count={wroteCount}
                 />
                 <SegBtn
                   active={segment === 'transferred'}
                   onClick={() => setSegment('transferred')}
                   icon={Send}
-                  label={`Передано (${transferredCount})`}
+                  label="Передано"
+                  count={transferredCount}
                 />
                 <SegBtn
                   active={segment === 'working'}
                   onClick={() => setSegment('working')}
                   icon={Headset}
-                  label={`В работе (${workingCount})`}
+                  label="В работе"
+                  count={workingCount}
                 />
               </div>
             </div>
 
+            <div className="min-h-0 flex-1 overflow-y-auto max-lg:max-h-[420px]">
               <DetailList
                 key={segment}
                 segment={segment}
                 lead={lead}
                 loading={isLoading && !data}
               />
+            </div>
           </Card>
         </div>
       </div>
     </>
+  )
+}
+
+/* --------------------------- Выбор произвольных дат --------------------------- */
+
+function CustomRangePicker({
+  active,
+  from,
+  to,
+  max,
+  label,
+  onApply,
+}: {
+  active: boolean
+  from: string
+  to: string
+  max: string
+  label: string
+  onApply: (from: string, to: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [draftFrom, setDraftFrom] = useState(from)
+  const [draftTo, setDraftTo] = useState(to)
+
+  // При каждом открытии синхронизируем черновик с текущим диапазоном.
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      setDraftFrom(from)
+      setDraftTo(to)
+    }
+    setOpen(next)
+  }
+
+  const invalid = draftFrom > draftTo
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+              active
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          />
+        }
+      >
+        <CalendarRange className="size-3.5" />
+        {label}
+      </PopoverTrigger>
+      <PopoverContent align="end" side="bottom" className="w-64 space-y-3">
+        <p className="text-sm font-medium">Произвольный период</p>
+        <div className="space-y-2">
+          <label className="block space-y-1">
+            <span className="text-xs text-muted-foreground">С</span>
+            <input
+              type="date"
+              value={draftFrom}
+              max={draftTo || max}
+              onChange={(e) => setDraftFrom(e.target.value)}
+              className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs text-muted-foreground">По</span>
+            <input
+              type="date"
+              value={draftTo}
+              min={draftFrom}
+              max={max}
+              onChange={(e) => setDraftTo(e.target.value)}
+              className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+        </div>
+        {invalid ? (
+          <p className="text-xs text-destructive">
+            Дата «С» не может быть позже даты «По».
+          </p>
+        ) : null}
+        <Button
+          size="sm"
+          className="w-full"
+          disabled={invalid || !draftFrom || !draftTo}
+          onClick={() => {
+            onApply(draftFrom, draftTo)
+            setOpen(false)
+          }}
+        >
+          Применить
+        </Button>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -538,7 +699,9 @@ function DetailList({
 
   if (segment === 'wrote') {
     if (lead.writers.length === 0) {
-      return <ListEmpty text="За выбранный период по этому источнику ещё никто не написал." />
+      return (
+        <ListEmpty text="За выбранный период по этому источнику ещё никто не написал." />
+      )
     }
     return (
       <div className="flex flex-col gap-3">
@@ -689,25 +852,30 @@ function SegBtn({
   onClick,
   icon: Icon,
   label,
+  count,
 }: {
   active: boolean
   onClick: () => void
   icon: typeof MessageSquare
   label: string
+  count: number
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+        'flex min-w-0 flex-col items-center gap-0.5 rounded-md px-2 py-1.5 text-center transition-colors',
         active
           ? 'bg-background text-foreground shadow-sm'
           : 'text-muted-foreground hover:text-foreground',
       )}
     >
-      <Icon className="size-3.5" />
-      {label}
+      <span className="flex items-center gap-1 text-[11px] font-medium">
+        <Icon className="size-3.5" />
+        <span className="truncate">{label}</span>
+      </span>
+      <span className="text-sm font-semibold tabular-nums">{count}</span>
     </button>
   )
 }
@@ -716,7 +884,7 @@ function SegBtn({
 
 function ChartSkeleton() {
   return (
-    <div className="flex h-[260px] items-center justify-center">
+    <div className="flex min-h-[200px] flex-1 items-center justify-center">
       <Loader2 className="size-6 animate-spin text-muted-foreground" />
       <span className="sr-only">Загрузка динамики источника</span>
     </div>
@@ -725,7 +893,7 @@ function ChartSkeleton() {
 
 function ChartEmpty({ text }: { text: string }) {
   return (
-    <p className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
+    <p className="flex min-h-[200px] flex-1 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
       {text}
     </p>
   )

@@ -447,16 +447,64 @@ export interface SourceDaily {
 
 /* ------------------------- Диапазоны отчёта ------------------------- */
 
-export type SourceReportRange = 'today' | 'yesterday' | 'week' | 'month' | 'all'
+export type SourceReportRange =
+  | 'today'
+  | 'yesterday'
+  | 'week'
+  | 'month'
+  | 'all'
+  | 'custom'
+
+/** Период отчёта: пресет или произвольный диапазон дат (МСК, YYYY-MM-DD). */
+export interface SourceReportPeriod {
+  range: SourceReportRange
+  /** Только для range==='custom'. */
+  from?: string
+  to?: string
+}
+
+const MSK_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** Валидная МСК-дата YYYY-MM-DD либо null (защита от SQL-инъекций). */
+function safeMskDate(s: string | undefined): string | null {
+  return s && MSK_DATE_RE.test(s) ? s : null
+}
+
+/** Нормализованные границы custom-периода (from ≤ to) или null, если невалидно. */
+function customBounds(
+  period: SourceReportPeriod,
+): { from: string; to: string } | null {
+  const a = safeMskDate(period.from)
+  const b = safeMskDate(period.to)
+  if (!a || !b) return null
+  return a <= b ? { from: a, to: b } : { from: b, to: a }
+}
+
+/** Сдвиг МСК-дня на delta суток (полдень МСК исключает краевые эффекты TZ). */
+function addDaysKey(key: string, delta: number): string {
+  const d = new Date(`${key}T09:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + delta)
+  return mskDayKey(d)
+}
+
+/** Число суток между двумя МСК-днями (b - a). */
+function daysBetween(a: string, b: string): number {
+  const da = new Date(`${a}T09:00:00Z`).getTime()
+  const db = new Date(`${b}T09:00:00Z`).getTime()
+  return Math.round((db - da) / 86_400_000)
+}
 
 /**
- * SQL-предикат диапазона в МСК для выражения-ДАТЫ (`dayExpr` уже приведено к
- * ::date в МСК). `range` — фиксированный enum, пользовательский ввод в SQL
- * не попадает, поэтому интерполяция безопасна.
+ * SQL-предикат периода в МСК для выражения-ДАТЫ (`dayExpr` уже приведено к
+ * ::date в МСК). Пресеты — фиксированный enum; custom-даты проходят строгую
+ * валидацию `MSK_DATE_RE` перед интерполяцией, поэтому SQL-инъекция исключена.
  */
-export function sqlMskRange(range: SourceReportRange, dayExpr: string): string {
+export function sqlMskRange(
+  period: SourceReportPeriod,
+  dayExpr: string,
+): string {
   const today = `(now() AT TIME ZONE 'Europe/Moscow')::date`
-  switch (range) {
+  switch (period.range) {
     case 'today':
       return `${dayExpr} = ${today}`
     case 'yesterday':
@@ -467,13 +515,17 @@ export function sqlMskRange(range: SourceReportRange, dayExpr: string): string {
       return `${dayExpr} >= ${today} - 29`
     case 'all':
       return 'TRUE'
+    case 'custom': {
+      const b = customBounds(period)
+      if (!b) return 'TRUE'
+      return `${dayExpr} BETWEEN '${b.from}'::date AND '${b.to}'::date`
+    }
   }
 }
 
 /**
- * Ширина окна тренд-графика (в днях) под выбранный фильтр: короткие диапазоны
- * дают 14-дневный контекст, месяц — 30, «за всё время» — 90. График всегда
- * показывает связный ряд дат, даже когда сам фильтр — «сегодня».
+ * Ширина окна тренд-графика (в днях) для пресетов: короткие диапазоны дают
+ * 14-дневный контекст, месяц — 30, «за всё время» — 90.
  */
 export function reportWindowDays(range: SourceReportRange): number {
   switch (range) {
@@ -484,6 +536,34 @@ export function reportWindowDays(range: SourceReportRange): number {
     default:
       return 14
   }
+}
+
+const MAX_CHART_DAYS = 90
+
+/**
+ * Ось тренд-графика: связный ряд МСК-дней (старые слева) под выбранный период.
+ * Пресеты — окно, заканчивающееся сегодня; custom — ровно выбранный диапазон
+ * (ограничен последними {@link MAX_CHART_DAYS} днями, чтобы не раздувать SVG).
+ */
+export function resolveChartWindow(period: SourceReportPeriod): {
+  keys: string[]
+  startKey: string
+  endKey: string
+} {
+  let endKey = mskDayKey(new Date())
+  let count = reportWindowDays(period.range)
+  if (period.range === 'custom') {
+    const b = customBounds(period)
+    if (b) {
+      endKey = b.to
+      count = Math.min(MAX_CHART_DAYS, Math.max(1, daysBetween(b.from, b.to) + 1))
+    } else {
+      count = 14
+    }
+  }
+  const keys: string[] = []
+  for (let i = count - 1; i >= 0; i--) keys.push(addDaysKey(endKey, -i))
+  return { keys, startKey: keys[0], endKey: keys[keys.length - 1] }
 }
 
 /** Один написавший — по ДИАЛОГУ (первый входящий), а не по лид-карточке. */
@@ -541,12 +621,13 @@ const CONVO_CTE = `
  */
 export async function getSourceLeadReport(
   sourceId: string,
-  range: SourceReportRange = 'today',
+  period: SourceReportPeriod = { range: 'today' },
 ): Promise<SourceLeadReport> {
   const wroteDay = `(convo.first_in AT TIME ZONE 'Europe/Moscow')::date`
   const transDay = `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date`
-  const windowDays = reportWindowDays(range)
-  const windowStart = `(now() AT TIME ZONE 'Europe/Moscow')::date - ${windowDays - 1}`
+  const { keys: axis, startKey, endKey } = resolveChartWindow(period)
+  const windowSql = (day: string) =>
+    `${day} BETWEEN '${startKey}'::date AND '${endKey}'::date`
   const leadJoins = `
        FROM lead_cards lc
        LEFT JOIN managers m ON m.id = lc.manager_id
@@ -577,7 +658,7 @@ export async function getSourceLeadReport(
          LEFT JOIN lead_cards lc
            ON lc.conversation_id = convo.id AND lc.deleted_at IS NULL
         WHERE convo.first_in IS NOT NULL
-          AND ${sqlMskRange(range, wroteDay)}
+          AND ${sqlMskRange(period, wroteDay)}
         ORDER BY convo.first_in DESC
         LIMIT 300`,
       [sourceId],
@@ -585,7 +666,7 @@ export async function getSourceLeadReport(
     query<{ in_range: number; all_time: number }>(
       `${CONVO_CTE}
        SELECT count(*) FILTER (
-                WHERE convo.first_in IS NOT NULL AND ${sqlMskRange(range, wroteDay)}
+                WHERE convo.first_in IS NOT NULL AND ${sqlMskRange(period, wroteDay)}
               )::int AS in_range,
               count(*) FILTER (WHERE convo.first_in IS NOT NULL)::int AS all_time
          FROM convo`,
@@ -595,7 +676,7 @@ export async function getSourceLeadReport(
       `${CONVO_CTE}
        SELECT to_char(${wroteDay}, 'YYYY-MM-DD') AS d, count(*)::int AS n
          FROM convo
-        WHERE convo.first_in IS NOT NULL AND ${wroteDay} >= ${windowStart}
+        WHERE convo.first_in IS NOT NULL AND ${windowSql(wroteDay)}
         GROUP BY 1`,
       [sourceId],
     ),
@@ -603,7 +684,7 @@ export async function getSourceLeadReport(
       `SELECT ${CARD_SELECT} ${leadJoins}
         AND lc.curator_id IS NOT NULL
         AND lc.transferred_at IS NOT NULL
-        AND ${sqlMskRange(range, transDay)}
+        AND ${sqlMskRange(period, transDay)}
       ORDER BY lc.transferred_at DESC
       LIMIT 300`,
       [sourceId],
@@ -619,7 +700,7 @@ export async function getSourceLeadReport(
       `SELECT
           count(*) FILTER (
             WHERE lc.curator_id IS NOT NULL AND lc.transferred_at IS NOT NULL
-              AND ${sqlMskRange(range, transDay)}
+              AND ${sqlMskRange(period, transDay)}
           )::int AS trans_range,
           count(*) FILTER (WHERE lc.curator_id IS NOT NULL)::int AS trans_all,
           count(*) FILTER (WHERE lc.status = 'working')::int AS working_now
@@ -632,17 +713,12 @@ export async function getSourceLeadReport(
          FROM lead_cards lc
         WHERE lc.traffic_source_id = $1 AND lc.deleted_at IS NULL
           AND lc.curator_id IS NOT NULL AND lc.transferred_at IS NOT NULL
-          AND ${transDay} >= ${windowStart}
+          AND ${windowSql(transDay)}
         GROUP BY 1`,
       [sourceId],
     ),
   ])
 
-  // Ось тренда в МСК (старые слева); МСК без DST — сдвиг по суткам стабилен.
-  const axis: string[] = []
-  for (let i = windowDays - 1; i >= 0; i--) {
-    axis.push(mskDayKey(new Date(Date.now() - i * 86_400_000)))
-  }
   const wroteByDay = new Map(wroteDaily.map((r) => [r.d, Number(r.n)]))
   const transByDay = new Map(transferredDaily.map((r) => [r.d, Number(r.n)]))
   const dailySeries: SourceDaily[] = axis.map((d) => ({
@@ -652,7 +728,7 @@ export async function getSourceLeadReport(
   }))
 
   return {
-    range,
+    range: period.range,
     writers: writers.map((w) => ({
       conversationId: w.id,
       name: w.contact_name,
