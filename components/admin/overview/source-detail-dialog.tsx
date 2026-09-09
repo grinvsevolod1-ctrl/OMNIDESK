@@ -299,13 +299,13 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
 
           {/* Графики: трафик (2/3) + суточный расход (1/3) */}
           <div className="grid gap-4 lg:grid-cols-3">
-            {/* Динамика написавших/переданных за 14 дней */}
+            {/* Динамика написавших/переданных за окно тренда (14/30/90 дней) */}
             <Card className="flex flex-col gap-4 p-5 lg:col-span-2">
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <h3 className="flex items-center gap-2 text-sm font-semibold">
                     <TrendingUp className="size-4 text-primary" />
-                    Динамика за 14 дней
+                    Динамика за {series.length || 14} дней
                   </h3>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     Написавшие (заливка) и переданные куратору (линия) по дням,
@@ -491,11 +491,12 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
               </div>
             </div>
 
-            <DetailList
-              segment={segment}
-              lead={lead}
-              loading={isLoading && !data}
-            />
+              <DetailList
+                key={segment}
+                segment={segment}
+                lead={lead}
+                loading={isLoading && !data}
+              />
           </Card>
         </div>
       </div>
@@ -520,6 +521,12 @@ function DetailList({
     | undefined
   loading: boolean
 }) {
+  // Списки могут быть длинными (сервер отдаёт до 300) — показываем порциями,
+  // чтобы не рендерить сотни строк сразу. Сброс при смене вкладки обеспечивает
+  // key={segment} у родителя (компонент перемонтируется).
+  const PAGE = 25
+  const [visible, setVisible] = useState(PAGE)
+
   if (loading || !lead) {
     return (
       <div className="flex h-40 items-center justify-center">
@@ -534,11 +541,18 @@ function DetailList({
       return <ListEmpty text="За выбранный период по этому источнику ещё никто не написал." />
     }
     return (
-      <ul className="flex flex-col gap-2">
-        {lead.writers.map((w) => (
-          <WriterRow key={w.conversationId} writer={w} />
-        ))}
-      </ul>
+      <div className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-2">
+          {lead.writers.slice(0, visible).map((w) => (
+            <WriterRow key={w.conversationId} writer={w} />
+          ))}
+        </ul>
+        <ShowMore
+          shown={Math.min(visible, lead.writers.length)}
+          total={lead.writers.length}
+          onMore={() => setVisible((v) => v + PAGE)}
+        />
+      </div>
     )
   }
 
@@ -555,11 +569,48 @@ function DetailList({
     )
   }
   return (
-    <ul className="flex flex-col gap-2">
-      {leads.map((l) => (
-        <LeadRow key={l.id} lead={l} segment={segment} />
-      ))}
-    </ul>
+    <div className="flex flex-col gap-3">
+      <ul className="flex flex-col gap-2">
+        {leads.slice(0, visible).map((l) => (
+          <LeadRow key={l.id} lead={l} segment={segment} />
+        ))}
+      </ul>
+      <ShowMore
+        shown={Math.min(visible, leads.length)}
+        total={leads.length}
+        onMore={() => setVisible((v) => v + PAGE)}
+      />
+    </div>
+  )
+}
+
+/** Кнопка «показать ещё» + счётчик «показано N из M». Скрыта, когда всё видно. */
+function ShowMore({
+  shown,
+  total,
+  onMore,
+}: {
+  shown: number
+  total: number
+  onMore: () => void
+}) {
+  if (shown >= total) {
+    return total > 0 ? (
+      <p className="text-center text-xs text-muted-foreground">
+        Показаны все {total}
+        {total >= 300 ? ' (максимум)' : ''}
+      </p>
+    ) : null
+  }
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <Button variant="outline" size="sm" onClick={onMore}>
+        Показать ещё
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        Показано {shown} из {total}
+      </span>
+    </div>
   )
 }
 

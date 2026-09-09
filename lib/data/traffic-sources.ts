@@ -470,6 +470,22 @@ export function sqlMskRange(range: SourceReportRange, dayExpr: string): string {
   }
 }
 
+/**
+ * Ширина окна тренд-графика (в днях) под выбранный фильтр: короткие диапазоны
+ * дают 14-дневный контекст, месяц — 30, «за всё время» — 90. График всегда
+ * показывает связный ряд дат, даже когда сам фильтр — «сегодня».
+ */
+export function reportWindowDays(range: SourceReportRange): number {
+  switch (range) {
+    case 'month':
+      return 30
+    case 'all':
+      return 90
+    default:
+      return 14
+  }
+}
+
 /** Один написавший — по ДИАЛОГУ (первый входящий), а не по лид-карточке. */
 export interface SourceWriter {
   conversationId: string
@@ -494,22 +510,23 @@ export interface SourceLeadReport {
   counts: { wrote: number; transferred: number; working: number }
   /** Счётчики за всё время (working — текущий снимок). */
   allTime: { wrote: number; transferred: number; working: number }
-  /** Динамика по дням за последние 14 дней (МСК), старые слева. */
+  /** Динамика по дням за окно тренда (14/30/90 по фильтру, МСК), старые слева. */
   dailySeries: SourceDaily[]
 }
 
-// Написавшие = ДИАЛОГИ источника (по текущему менеджеру) с входящим
-// сообщением. Дата «написал» — первый входящий. Источник у диалога берётся
-// через менеджера (managers.traffic_source_id), т.к. это единственная связь
-// диалога с источником в модели traffic_sources.
+// Написавшие = ДИАЛОГИ источника с входящим сообщением. Дата «написал» —
+// первый входящий. Источник берём с самого диалога (зафиксирован в момент
+// обращения, миграция 169), а если он ещё не проставлен (очень старый диалог
+// до бэкофилла) — падаем на текущую привязку менеджера. Так перевод менеджера
+// в другой источник больше не переписывает историю задним числом.
 const CONVO_CTE = `
   WITH convo AS (
     SELECT c.id, c.contact_name, c.contact_handle, c.channel_type,
            MIN(m.created_at) FILTER (WHERE m.direction = 'in') AS first_in
       FROM conversations c
-      JOIN managers mg ON mg.id = c.manager_id
+      LEFT JOIN managers mg ON mg.id = c.manager_id
       JOIN messages m ON m.conversation_id = c.id
-     WHERE mg.traffic_source_id = $1
+     WHERE COALESCE(c.traffic_source_id, mg.traffic_source_id) = $1
      GROUP BY c.id, c.contact_name, c.contact_handle, c.channel_type
   )`
 
@@ -519,7 +536,7 @@ const CONVO_CTE = `
  *     статуса), а не по заведённым вручную лид-карточкам;
  *   • переданные куратору — по lead_cards.transferred_at за период;
  *   • «в работе» — текущий снимок лидов в статусе working (не за период);
- *   • динамика написавших/переданных за 14 дней для графика.
+ *   • динамика написавших/переданных за окно тренда (14/30/90) для графика.
  * Скоуп источника проверяет вызывающий server action.
  */
 export async function getSourceLeadReport(
@@ -528,7 +545,8 @@ export async function getSourceLeadReport(
 ): Promise<SourceLeadReport> {
   const wroteDay = `(convo.first_in AT TIME ZONE 'Europe/Moscow')::date`
   const transDay = `(lc.transferred_at AT TIME ZONE 'Europe/Moscow')::date`
-  const last14 = `(now() AT TIME ZONE 'Europe/Moscow')::date - 13`
+  const windowDays = reportWindowDays(range)
+  const windowStart = `(now() AT TIME ZONE 'Europe/Moscow')::date - ${windowDays - 1}`
   const leadJoins = `
        FROM lead_cards lc
        LEFT JOIN managers m ON m.id = lc.manager_id
@@ -577,7 +595,7 @@ export async function getSourceLeadReport(
       `${CONVO_CTE}
        SELECT to_char(${wroteDay}, 'YYYY-MM-DD') AS d, count(*)::int AS n
          FROM convo
-        WHERE convo.first_in IS NOT NULL AND ${wroteDay} >= ${last14}
+        WHERE convo.first_in IS NOT NULL AND ${wroteDay} >= ${windowStart}
         GROUP BY 1`,
       [sourceId],
     ),
@@ -614,15 +632,15 @@ export async function getSourceLeadReport(
          FROM lead_cards lc
         WHERE lc.traffic_source_id = $1 AND lc.deleted_at IS NULL
           AND lc.curator_id IS NOT NULL AND lc.transferred_at IS NOT NULL
-          AND ${transDay} >= ${last14}
+          AND ${transDay} >= ${windowStart}
         GROUP BY 1`,
       [sourceId],
     ),
   ])
 
-  // 14-дневная ось в МСК (старые слева); МСК без DST — сдвиг по суткам стабилен.
+  // Ось тренда в МСК (старые слева); МСК без DST — сдвиг по суткам стабилен.
   const axis: string[] = []
-  for (let i = 13; i >= 0; i--) {
+  for (let i = windowDays - 1; i >= 0; i--) {
     axis.push(mskDayKey(new Date(Date.now() - i * 86_400_000)))
   }
   const wroteByDay = new Map(wroteDaily.map((r) => [r.d, Number(r.n)]))

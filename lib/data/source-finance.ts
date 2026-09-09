@@ -18,7 +18,11 @@ import { randomUUID } from 'crypto'
 import { query } from '../db'
 import type { FinanceCurrency } from '../finance-types'
 import { mskDayKey } from '../time'
-import { sqlMskRange, type SourceReportRange } from './traffic-sources'
+import {
+  reportWindowDays,
+  sqlMskRange,
+  type SourceReportRange,
+} from './traffic-sources'
 
 /* -------------------------------- Типы -------------------------------- */
 
@@ -559,7 +563,8 @@ export async function getSourceSpendReport(
   range: SourceReportRange = 'today',
 ): Promise<SourceSpendReport> {
   const day = 's.spend_date'
-  const last14 = `(now() AT TIME ZONE 'Europe/Moscow')::date - 13`
+  const windowDays = reportWindowDays(range)
+  const windowStart = `(now() AT TIME ZONE 'Europe/Moscow')::date - ${windowDays - 1}`
   const [meta] = await query<{ currency: string }>(
     `SELECT currency FROM traffic_sources WHERE id = $1 LIMIT 1`,
     [sourceId],
@@ -593,13 +598,13 @@ export async function getSourceSpendReport(
     query<{ d: string; spend: string | number }>(
       `SELECT to_char(spend_date, 'YYYY-MM-DD') AS d, COALESCE(SUM(spend), 0) AS spend
          FROM source_spend_daily s
-        WHERE source_id = $1 AND ${day} >= ${last14}
+        WHERE source_id = $1 AND ${day} >= ${windowStart}
         GROUP BY 1`,
       [sourceId],
     ),
   ])
   const axis: string[] = []
-  for (let i = 13; i >= 0; i--) {
+  for (let i = windowDays - 1; i >= 0; i--) {
     axis.push(mskDayKey(new Date(Date.now() - i * 86_400_000)))
   }
   const byDay = new Map(daily.map((r) => [r.d, num(r.spend)]))
