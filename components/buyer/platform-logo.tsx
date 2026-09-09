@@ -72,6 +72,11 @@ export function PlatformLogo({
         className={cn('flex shrink-0 overflow-hidden', rounded, className)}
         style={{ width: size, height: size }}
       >
+        {/* Intentional <img>: logos come from arbitrary external CDNs (theSVG /
+            jsDelivr) and per-source custom URLs whose domains can't be
+            whitelisted in next/image remotePatterns, and we rely on the native
+            onError → monogram fallback. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={url || '/placeholder.svg'}
           alt=""
@@ -94,7 +99,10 @@ export function PlatformLogo({
       )}
       style={{ width: size, height: size }}
     >
-      {/* Логотип бренда из theSVG.org (jsDelivr CDN). */}
+      {/* Логотип бренда из theSVG.org (jsDelivr CDN). Intentional <img>: external
+          CDN domain isn't whitelistable in next/image and we rely on the native
+          onError → monogram fallback. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={url || '/placeholder.svg'}
         alt=""

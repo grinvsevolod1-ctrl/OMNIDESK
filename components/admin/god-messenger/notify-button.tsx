@@ -114,6 +114,7 @@ export function NotifyButton({ available }: { available: boolean }) {
         disabled
         className="size-9 text-muted-foreground"
         title="Уведомления недоступны"
+        aria-label="Уведомления недоступны"
       >
         <BellOff className="size-5" />
       </Button>
@@ -134,6 +135,11 @@ export function NotifyButton({ available }: { available: boolean }) {
       }}
       className={cn('size-9', state === 'on' && 'text-primary')}
       title={
+        state === 'on'
+          ? 'Уведомления включены — нажмите для теста, двойной клик чтобы выключить'
+          : 'Включить уведомления на этом устройстве'
+      }
+      aria-label={
         state === 'on'
           ? 'Уведомления включены — нажмите для теста, двойной клик чтобы выключить'
           : 'Включить уведомления на этом устройстве'

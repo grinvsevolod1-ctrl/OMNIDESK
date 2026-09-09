@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'crypto'
+import { constantTimeEqual } from '@/lib/crypto'
 import {
   getProxyForChannel,
   getVkChannelById,
@@ -24,13 +24,6 @@ import {
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-/** Constant-time secret comparison (hash both sides to equalize length). */
-function secretMatches(a: string, b: string): boolean {
-  const ha = createHash('sha256').update(a).digest()
-  const hb = createHash('sha256').update(b).digest()
-  return timingSafeEqual(ha, hb)
-}
 
 /** Plain-text response helper (VK expects "ok" / the confirmation string). */
 function text(body: string, status = 200): Response {
@@ -98,7 +91,7 @@ async function handlePost(
   }
 
   // 2. Authenticate every real event against our per-channel secret.
-  if (!update.secret || !secretMatches(update.secret, channel.webhookSecret)) {
+  if (!update.secret || !constantTimeEqual(update.secret, channel.webhookSecret)) {
     return text('bad_secret', 403)
   }
 

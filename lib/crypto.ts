@@ -4,6 +4,7 @@ import {
   randomBytes,
   randomInt,
   createHash,
+  timingSafeEqual,
 } from 'crypto'
 
 /**
@@ -142,4 +143,16 @@ export function generatePassword(length = 16): string {
 export function maskSecret(secret: string, visible = 4): string {
   if (secret.length <= visible * 2) return '••••'
   return `${secret.slice(0, visible)}…${secret.slice(-visible)}`
+}
+
+/**
+ * Constant-time string comparison for secrets/tokens. Both sides are hashed to
+ * SHA-256 first so the compared buffers are always equal length (timingSafeEqual
+ * throws on length mismatch and would otherwise leak length via that error).
+ * Used by inbound webhooks (VK/MAX) to verify per-channel secrets.
+ */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a).digest()
+  const hb = createHash('sha256').update(b).digest()
+  return timingSafeEqual(ha, hb)
 }
