@@ -5,14 +5,30 @@ import { NotificationGate } from '@/components/manager/notification-gate'
 import { NotificationProvider } from '@/components/manager/notification-provider'
 import { requireCurator } from '@/lib/auth'
 import { getManagerById } from '@/lib/data'
+import { countUnreadConversationsForCurator } from '@/lib/data/curator-conversations'
+import { getCuratorUnreadCountAction } from '@/app/actions/unread-badges'
+import { NavUnreadBadge } from '@/components/nav-unread-badge'
 import { TelegramContactGate } from '@/components/curator/telegram-contact-gate'
 import { ImpersonationBanner } from '@/components/shared/impersonation-banner'
 
-const nav: NavItem[] = [
-  { href: '/curator', label: 'Обзор', icon: 'overview' },
-  { href: '/curator/chats', label: 'Чаты', icon: 'inbox' },
-  { href: '/curator/settings', label: 'Настройки', icon: 'settings' },
-]
+function buildNav(initialUnread: number): NavItem[] {
+  return [
+    { href: '/curator', label: 'Обзор', icon: 'overview' },
+    {
+      href: '/curator/chats',
+      label: 'Чаты',
+      icon: 'inbox',
+      badge: (collapsed) => (
+        <NavUnreadBadge
+          initial={initialUnread}
+          fetchCount={getCuratorUnreadCountAction}
+          collapsed={collapsed}
+        />
+      ),
+    },
+    { href: '/curator/settings', label: 'Настройки', icon: 'settings' },
+  ]
+}
 
 export default async function CuratorLayout({
   children,
@@ -34,6 +50,12 @@ export default async function CuratorLayout({
   if (!impersonating && !account?.telegramContact?.trim()) {
     return <TelegramContactGate curatorName={user.name} />
   }
+
+  // Стартовое значение бейджа «Чаты» — из БД, дальше живёт по push.
+  const initialUnread = await countUnreadConversationsForCurator(
+    user.sub,
+  ).catch(() => 0)
+  const nav = buildNav(initialUnread)
 
   return (
     <SWRProvider>

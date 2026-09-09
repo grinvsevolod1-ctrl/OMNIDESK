@@ -73,6 +73,28 @@ export async function listConversations(
 }
 
 /**
+ * Число НЕПРОЧИТАННЫХ диалогов менеджера — для живого бейджа на пункте
+ * «Входящие» в сайдбаре. Скоуп ТОЧНО совпадает со списком инбокса
+ * (listConversations): владелец = менеджер, мягко удалённый лид (корзина
+ * админа) исключён. Считаем диалоги (не сообщения) с unread > 0 — бейдж
+ * показывает, сколько бесед ждут ответа, а не сумму сообщений.
+ */
+export async function countUnreadConversationsForManager(
+  managerId: string,
+): Promise<number> {
+  const rows = await query<{ n: string | number }>(
+    `SELECT count(*)::int AS n
+       FROM conversations c
+       LEFT JOIN lead_cards lc ON lc.conversation_id = c.id
+      WHERE c.manager_id = $1
+        AND c.unread > 0
+        AND (lc.id IS NULL OR lc.deleted_at IS NULL)`,
+    [managerId],
+  )
+  return Number(rows[0]?.n ?? 0)
+}
+
+/**
  * Менеджер убирает вернувшийся на дожим лид «в trash»: карточка исчезает из
  * раздела «Доработки». Скоуп — через владельца диалога (conversations.manager_id
  * = менеджер), так что чужой лид не тронуть. Возвращает true, если строка

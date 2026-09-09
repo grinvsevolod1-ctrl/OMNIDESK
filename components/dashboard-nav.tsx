@@ -26,7 +26,7 @@ import {
   Users,
   ContactRound,
 } from 'lucide-react'
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import {
   MaxIcon,
   TelegramIcon,
@@ -92,6 +92,13 @@ export interface NavItem {
   icon: NavIcon
   /** When present, this item becomes a collapsible group of sub-links. */
   children?: NavItem[]
+  /**
+   * Необязательный бейдж на пункте (напр. живой счётчик непрочитанного).
+   * Render-проп получает `collapsed`, чтобы в свёрнутом рэйле показать точку
+   * поверх иконки, а в развёрнутом — число справа. Клиентский компонент
+   * (например NavUnreadBadge) сам держит своё realtime-состояние.
+   */
+  badge?: (collapsed: boolean) => ReactNode
 }
 
 function collectHrefs(nav: NavItem[]): string[] {
@@ -264,6 +271,9 @@ export function NavLinks({
           )}
         />
         {!collapsed ? item.label : null}
+        {/* Бейдж: в развёрнутом — число справа (ml-auto внутри самого бейджа),
+            в свёрнутом — точка, спозиционированная поверх иконки. */}
+        {item.badge ? item.badge(Boolean(collapsed)) : null}
       </Link>
     )
     if (collapsed) {

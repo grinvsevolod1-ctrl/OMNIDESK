@@ -142,6 +142,28 @@ export async function listConversationsForCurator(
   }))
 }
 
+/**
+ * Число НЕПРОЧИТАННЫХ диалогов куратора — для живого бейджа на пункте «Чаты»
+ * в сайдбаре. Скоуп ТОЧНО совпадает со списком (listConversationsForCurator):
+ * переданные диалоги куратора (curator_id = он), мягко удалённый лид исключён.
+ */
+export async function countUnreadConversationsForCurator(
+  curatorId: string,
+): Promise<number> {
+  const rows = await query<{ n: string | number }>(
+    `SELECT count(*)::int AS n
+       FROM conversations c
+      WHERE c.curator_id = $1
+        AND c.unread > 0
+        AND NOT EXISTS (
+          SELECT 1 FROM lead_cards lc
+           WHERE lc.conversation_id = c.id AND lc.deleted_at IS NOT NULL
+        )`,
+    [curatorId],
+  )
+  return Number(rows[0]?.n ?? 0)
+}
+
 /** Один диалог куратора со скоупом по curator_id (защита от IDOR). */
 export async function getConversationForCurator(
   conversationId: string,

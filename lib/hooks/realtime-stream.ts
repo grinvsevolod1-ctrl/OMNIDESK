@@ -25,6 +25,14 @@ const handlers: Record<DataEvent, Set<Handler>> = {
   channel: new Set(),
 }
 const reconnectHandlers = new Set<() => void>()
+/**
+ * Подписчики на «что-то поменялось в диалогах этой вкладки». SSE-роут шлёт
+ * менеджеру и куратору кадр `update` на каждое message/conversation-событие их
+ * диалогов (см. app/api/stream). Мы не парсим тело — потребитель (бейдж
+ * непрочитанного) просто перезапрашивает свой счётчик scoped-экшеном. Так
+ * бейдж в сайдбаре живёт на ТОМ ЖЕ едином EventSource, что и lead/source.
+ */
+const inboxHandlers = new Set<() => void>()
 
 let es: EventSource | null = null
 let refs = 0
@@ -59,6 +67,18 @@ function open(): void {
       }
     })
   }
+
+  // Кадр `update` (новое/изменённое сообщение или диалог) — сигналим бейджам.
+  // Тело не разбираем: подписчик сам перечитает свой счётчик.
+  es.addEventListener('update', () => {
+    for (const fn of inboxHandlers) {
+      try {
+        fn()
+      } catch {
+        /* изолируем */
+      }
+    }
+  })
 
   es.addEventListener('ready', () => {
     readyCount += 1
@@ -104,6 +124,20 @@ export function onStreamReconnect(fn: () => void): () => void {
   open()
   return () => {
     reconnectHandlers.delete(fn)
+    release()
+  }
+}
+
+/**
+ * Подписка на «изменились диалоги этой вкладки» (кадр `update`). Возвращает
+ * отписку. Для живого бейджа непрочитанного в сайдбаре.
+ */
+export function onStreamInbox(fn: () => void): () => void {
+  inboxHandlers.add(fn)
+  refs += 1
+  open()
+  return () => {
+    inboxHandlers.delete(fn)
     release()
   }
 }

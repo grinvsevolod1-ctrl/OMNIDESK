@@ -9,20 +9,40 @@ import { Fake502 } from '@/components/fake-502'
 import { ImpersonationBanner } from '@/components/shared/impersonation-banner'
 import { DictionariesProvider } from '@/components/dictionaries-provider'
 import { requireManager } from '@/lib/auth'
-import { getFake502, getManagerById, getManagerOnLunch } from '@/lib/data'
+import {
+  countUnreadConversationsForManager,
+  getFake502,
+  getManagerById,
+  getManagerOnLunch,
+} from '@/lib/data'
 import { getDictionaries } from '@/lib/data/dictionaries'
+import { getManagerUnreadCountAction } from '@/app/actions/unread-badges'
+import { NavUnreadBadge } from '@/components/nav-unread-badge'
 
-const nav: NavItem[] = [
-  { href: '/app', label: 'Обзор', icon: 'overview' },
-  { href: '/app/connections', label: 'Подключения', icon: 'connections' },
-  { href: '/app/inbox', label: 'Входящие', icon: 'inbox' },
-  { href: '/app/leads', label: 'Мои лиды', icon: 'managers' },
-  { href: '/app/quick-replies', label: 'Автоответы', icon: 'quickReplies' },
-  { href: '/app/autopilot', label: 'Автопилот', icon: 'autopilot' },
-  { href: '/app/meetings', label: 'Видеовстречи', icon: 'telemost' },
-  { href: '/app/proxies', label: 'Прокси', icon: 'proxies' },
-  { href: '/app/settings', label: 'Настройки', icon: 'settings' },
-]
+function buildNav(initialUnread: number): NavItem[] {
+  return [
+    { href: '/app', label: 'Обзор', icon: 'overview' },
+    { href: '/app/connections', label: 'Подключения', icon: 'connections' },
+    {
+      href: '/app/inbox',
+      label: 'Входящие',
+      icon: 'inbox',
+      badge: (collapsed) => (
+        <NavUnreadBadge
+          initial={initialUnread}
+          fetchCount={getManagerUnreadCountAction}
+          collapsed={collapsed}
+        />
+      ),
+    },
+    { href: '/app/leads', label: 'Мои лиды', icon: 'managers' },
+    { href: '/app/quick-replies', label: 'Автоответы', icon: 'quickReplies' },
+    { href: '/app/autopilot', label: 'Автопилот', icon: 'autopilot' },
+    { href: '/app/meetings', label: 'Видеовстречи', icon: 'telemost' },
+    { href: '/app/proxies', label: 'Прокси', icon: 'proxies' },
+    { href: '/app/settings', label: 'Настройки', icon: 'settings' },
+  ]
+}
 
 export default async function ManagerLayout({
   children,
@@ -42,6 +62,12 @@ export default async function ManagerLayout({
   const dictionaries = await getDictionaries()
   // Аватарка для шапки (в JWT её нет — читаем строку сотрудника из БД).
   const account = await getManagerById(user.sub).catch(() => null)
+  // Стартовое значение бейджа «Входящие» — из БД (без мигания на загрузке);
+  // дальше клиентский NavUnreadBadge держит его живым по push.
+  const initialUnread = await countUnreadConversationsForManager(
+    user.sub,
+  ).catch(() => 0)
+  const nav = buildNav(initialUnread)
   return (
     <SWRProvider>
     <DictionariesProvider value={dictionaries}>
