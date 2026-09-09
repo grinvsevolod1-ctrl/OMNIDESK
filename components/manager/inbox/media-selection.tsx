@@ -391,7 +391,7 @@ export function MediaSelectionBar({
       toast.success(`ZIP с ${files.length} файлами готов.`)
       close()
     } catch (err) {
-      console.error('media-selection: zip failed:', err)
+      console.error('[media] zip failed:', err)
       toast.error('Не удалось собрать ZIP. Попробуйте скачать по отдельности.')
       setPhase({ kind: 'idle' })
     }
