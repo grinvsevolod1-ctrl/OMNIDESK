@@ -253,7 +253,7 @@ export async function personalResendCodeAction(
       attemptId: globalThis.crypto.randomUUID(),
     },
   })
-  return { ok: true, message: 'Запра��иваем новый код входа…', channelId }
+  return { ok: true, message: 'Запрашиваем новый код входа…', channelId }
 }
 
 export async function personalSubmitCodeAction(
