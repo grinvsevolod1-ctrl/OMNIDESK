@@ -17,12 +17,9 @@ import {
   type CSSProperties,
 } from 'react'
 import {
-  ChevronDown,
   Loader2,
   Paperclip,
   SendHorizonal,
-  BrainCircuit,
-  Zap,
   Smile,
   Sticker,
 } from 'lucide-react'
@@ -31,6 +28,8 @@ import {
   EmojiDock,
   type DockTab,
 } from '@/components/manager/inbox/emoji-dock'
+import { AiLedBanner } from '@/components/manager/inbox/ai-led-banner'
+import { QuickRepliesTray } from '@/components/manager/inbox/quick-replies-tray'
 import { VoiceRecorder } from '@/components/manager/inbox/voice-recorder'
 import { useStickerPreload } from '@/components/manager/inbox/use-sticker-preload'
 import { ScheduleSendPopover } from '@/components/manager/inbox/schedule-send'
@@ -483,58 +482,16 @@ export const MessageComposer = memo(function MessageComposer({
           insert into the draft. Collapsed by default to keep the composer
           uncluttered. */}
       {quickReplies.length > 0 ? (
-        <div className="border-b border-border/60 px-3 pt-2">
-          <button
-            type="button"
-            onClick={() => setQuickRepliesOpen((v) => !v)}
-            className="flex items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-            aria-expanded={quickRepliesOpen}
-          >
-            <Zap className="size-3.5" />
-            Автоответы
-            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
-              {quickReplies.length}
-            </span>
-            <ChevronDown
-              className={cn(
-                'size-3.5 transition-transform',
-                quickRepliesOpen && 'rotate-180',
-              )}
-            />
-          </button>
-          {quickRepliesOpen ? (
-            <div className="scrollbar-thin -mx-1 mt-2 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto px-1 pb-2">
-              {quickReplies.map((qr) => (
-                <button
-                  key={qr.id}
-                  type="button"
-                  onClick={() => insertQuickReply(qr.body)}
-                  title={qr.body}
-                  className="max-w-[15rem] truncate rounded-full border border-border bg-muted/60 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
-                >
-                  {qr.title?.trim() || qr.body}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
+        <QuickRepliesTray
+          quickReplies={quickReplies}
+          open={quickRepliesOpen}
+          onToggleOpen={() => setQuickRepliesOpen((v) => !v)}
+          onInsert={insertQuickReply}
+        />
       ) : null}
 
       {aiLed ? (
-        <button
-          type="button"
-          onClick={onToggleAi}
-          disabled={statusPending}
-          className="flex w-full items-center gap-2 border-b border-primary/20 bg-primary/10 px-4 py-2 text-left text-xs font-medium text-primary transition-colors hover:bg-primary/15"
-        >
-          <BrainCircuit className="size-3.5 shrink-0" />
-          <span className="flex-1">
-            ИИ ведёт этот диалог. Отключите ИИ, чтобы ответить самому.
-          </span>
-          <span className="shrink-0 rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground">
-            Отключить ИИ
-          </span>
-        </button>
+        <AiLedBanner onToggleAi={onToggleAi} statusPending={statusPending} />
       ) : null}
 
       <form
