@@ -2,9 +2,9 @@
 
 import { memo } from 'react'
 import { MapPin, MessageSquare } from 'lucide-react'
+import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { Badge } from '@/components/ui/badge'
 import type { ManagerLeadListItem } from '@/lib/data/lead-stats'
-import { LEAD_STATUS_TONE, leadStatusLabel } from '@/lib/lead-status'
 import { formatMskDateTime as formatDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
@@ -32,7 +32,6 @@ export const ManagerLeadRow = memo(function ManagerLeadRow({
   showTransferredDate: boolean
   onOpen: (leadId: string) => void
 }) {
-  const tone = lead.status ? LEAD_STATUS_TONE[lead.status] : null
   return (
     <li
       className={cn(
@@ -111,32 +110,13 @@ export const ManagerLeadRow = memo(function ManagerLeadRow({
         )}
       </span>
 
-      {/* Статус — левые края бейджей выровнены по колонке. */}
+      {/* Статус — общий бейдж (dot · подпись · время подтверждения). */}
       <span className="min-w-0 overflow-hidden">
-        {tone && lead.status ? (
-          <div className="flex min-w-0 flex-col items-start gap-0.5">
-            <Badge
-              variant="outline"
-              className={cn(
-                'max-w-full gap-1.5 border-transparent',
-                tone.bg,
-                tone.text,
-              )}
-            >
-              <span
-                className={cn('size-1.5 shrink-0 rounded-full', tone.dot)}
-              />
-              <span className="truncate">{leadStatusLabel(lead.status)}</span>
-            </Badge>
-            {lead.statusConfirmedAt ? (
-              <time
-                dateTime={lead.statusConfirmedAt}
-                className="whitespace-nowrap text-[11px] leading-none tabular-nums text-muted-foreground"
-              >
-                {formatDateTime(lead.statusConfirmedAt)}
-              </time>
-            ) : null}
-          </div>
+        {lead.status ? (
+          <LeadStatusBadge
+            status={lead.status}
+            at={lead.statusConfirmedAt}
+          />
         ) : (
           <span className="text-xs text-muted-foreground">—</span>
         )}
