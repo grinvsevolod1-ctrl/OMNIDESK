@@ -19,6 +19,7 @@ import {
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { SourceOverviewRow } from '@/app/actions/source-finance'
+import { OverviewAiBar } from '@/components/admin/overview/overview-ai-bar'
 import { SourceDetailDialog } from '@/components/admin/overview/source-detail-dialog'
 import { PlatformLogo } from '@/components/buyer/platform-logo'
 import { MoneyStack } from '@/components/money'
@@ -252,6 +253,15 @@ export function SourcesOverview({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* ИИ-строка Обзора: вопросы на естественном языке + команды над источниками */}
+      <OverviewAiBar
+        onOpenSource={(sourceId) => {
+          const row = initial.find((r) => r.source.id === sourceId)
+          if (row) setSelected(row)
+        }}
+        onChanged={() => router.refresh()}
+      />
+
       {/* Итоги по отфильтрованному срезу — валюты не смешиваются */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <SummaryStat label="Источники">

@@ -251,6 +251,8 @@ describe('AI prompt modules stay valid UTF-8 (no U+FFFD)', () => {
     'lib/ai-overview/run-overview-ai.ts',
     'lib/ai-overview/intents.ts',
     'lib/ai-overview/handlers.ts',
+    // UI-бар строки Обзора: подсказки, подписи и виджеты ответов — русский текст.
+    'components/admin/overview/overview-ai-bar.tsx',
   ]
   for (const rel of PROMPT_FILES) {
     it(`${rel} contains no replacement characters`, () => {
