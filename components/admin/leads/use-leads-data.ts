@@ -249,23 +249,38 @@ export function useLeadsData({
   useSharedPoll('admin-leads', async () => {
     const f = stateRef.current
     const range = presetRange(f.preset, f.day, f.from, f.to)
-    const res = await listAllLeadsAdminAction({
-      curatorId: f.curatorId || null,
-      status: f.status || null,
-      search: f.search || null,
-      sort: f.sort,
-      from: range.from,
-      to: range.to,
-      orphanedOnly: f.orphanedOnly,
-      archivedOnly: f.archivedOnly,
-      limit: LEADS_PAGE_SIZE,
-      offset: f.offset,
-    })
+    // Плашка статистики за период считает активных лидов; для «всего» и архива
+    // она не показывается (см. reload), поэтому и не перезапрашиваем. В прочих
+    // режимах тянем список И статистику параллельно — иначе на живых
+    // lead-событиях плитки «создано/передано» застывали до смены фильтра.
+    const statsWanted = f.preset !== 'all' && !f.archivedOnly
+    const [res, st] = await Promise.all([
+      listAllLeadsAdminAction({
+        curatorId: f.curatorId || null,
+        status: f.status || null,
+        search: f.search || null,
+        sort: f.sort,
+        from: range.from,
+        to: range.to,
+        orphanedOnly: f.orphanedOnly,
+        archivedOnly: f.archivedOnly,
+        limit: LEADS_PAGE_SIZE,
+        offset: f.offset,
+      }),
+      statsWanted
+        ? getLeadCardStatsAdminAction({
+            from: range.from,
+            to: range.to,
+            curatorId: f.orphanedOnly ? null : f.curatorId || null,
+          })
+        : Promise.resolve(null),
+    ])
     const arrived = res.leads
       .map((l) => l.id)
       .filter((id) => !knownIdsRef.current.has(id))
     setLeads((prev) => mergeLeads(prev, res.leads))
     setTotal(res.total)
+    if (statsWanted) setStats(st)
     for (const id of arrived) knownIdsRef.current.add(id)
     if (arrived.length > 0) {
       setFreshIds((prev) => {
