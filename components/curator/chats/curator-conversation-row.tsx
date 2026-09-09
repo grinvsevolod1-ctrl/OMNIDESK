@@ -31,9 +31,11 @@ export const ConversationRow = memo(function ConversationRow({
         type="button"
         onClick={() => onSelect(c.id)}
         className={cn(
-          'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors',
+          'relative flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors',
+          // Активный (открытый) диалог: единый с инбоксом менеджера стиль —
+          // заливка primary, внутренний ring и левая акцентная полоса.
           isActive
-            ? 'bg-primary/10 ring-1 ring-primary/30'
+            ? 'bg-primary/10 ring-1 ring-inset ring-primary/40 before:absolute before:inset-y-2 before:left-0 before:w-1 before:rounded-r-full before:bg-primary'
             : 'hover:bg-muted/60',
         )}
       >

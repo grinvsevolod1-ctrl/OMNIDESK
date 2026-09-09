@@ -214,8 +214,13 @@ export function ConversationList({
                     type="button"
                     onClick={() => setActiveId(c.id)}
                     className={cn(
-                      'flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-muted/60 active:scale-[0.985]',
-                      activeId === c.id ? 'bg-secondary hover:bg-secondary' : '',
+                      'relative flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-muted/60 active:scale-[0.985]',
+                      // Активный (открытый) диалог: заметная заливка primary,
+                      // внутренний ring и левая акцентная полоса — сразу видно,
+                      // какой диалог сейчас открыт справа.
+                      activeId === c.id
+                        ? 'bg-primary/10 ring-1 ring-inset ring-primary/40 hover:bg-primary/10 before:absolute before:inset-y-2 before:left-0 before:w-1 before:rounded-r-full before:bg-primary'
+                        : '',
                       c.aiHandoffPending && activeId !== c.id
                         ? 'bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/40 hover:bg-emerald-500/15'
                         : '',
