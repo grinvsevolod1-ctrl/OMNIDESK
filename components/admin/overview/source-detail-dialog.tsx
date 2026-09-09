@@ -20,6 +20,9 @@
  * Раскладка заполняет всю высоту модала: слева стопка графиков (трафик + расход),
  * справа — детализация во всю высоту со внутренним скроллом, чтобы не оставалось
  * пустого пространства.
+ *
+ * Презентационные части вынесены в соседние файлы: атомы (source-detail-atoms),
+ * список детализации (source-detail-list), выбор дат (source-range-picker).
  */
 
 import { useMemo, useState } from 'react'
@@ -35,19 +38,15 @@ import {
   YAxis,
 } from 'recharts'
 import {
-  AtSign,
   CalendarRange,
   Coins,
   Eye,
   Headset,
   Loader2,
-  MapPin,
   MessageSquare,
   MousePointerClick,
-  Phone,
   Send,
   TrendingUp,
-  Users,
   Wallet,
 } from 'lucide-react'
 import {
@@ -65,25 +64,26 @@ import {
   type ChartConfig,
 } from '@/components/ui/chart'
 import { Dialog, DialogClose, DialogContent } from '@/components/ui/dialog'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
-import type { LeadCard } from '@/lib/data/lead-cards-core'
 import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 import type {
   SourceReportPeriod,
   SourceReportRange,
-  SourceWriter,
 } from '@/lib/data/traffic-sources'
-import { LEAD_STATUS_TONE, leadStatusLabel } from '@/lib/lead-status'
 import { formatMoney } from '@/lib/money'
-import { formatMskDateShort, formatMskDateTime, mskDayKey } from '@/lib/time'
+import { formatMskDateShort, mskDayKey } from '@/lib/time'
 import { platformOrCustom } from '@/lib/traffic-source-catalog'
 import { cn } from '@/lib/utils'
-
-type Segment = 'wrote' | 'transferred' | 'working'
+import {
+  ChartEmpty,
+  ChartSkeleton,
+  MiniStat,
+  SegBtn,
+  SpendNum,
+  SummaryNum,
+  type Segment,
+} from './source-detail-atoms'
+import { DetailList } from './source-detail-list'
+import { CustomRangePicker } from './source-range-picker'
 
 const PRESET_TABS: { key: Exclude<SourceReportRange, 'custom'>; label: string }[] =
   [
@@ -93,15 +93,6 @@ const PRESET_TABS: { key: Exclude<SourceReportRange, 'custom'>; label: string }[
     { key: 'month', label: '30 дней' },
     { key: 'all', label: 'Всё время' },
   ]
-
-const CHANNEL_LABEL: Record<string, string> = {
-  telegram: 'Telegram',
-  telegram_personal: 'Telegram',
-  whatsapp: 'WhatsApp',
-  vk: 'VK',
-  max: 'MAX',
-  livechat: 'Онлайн-чат',
-}
 
 const trafficChartConfig = {
   wrote: { label: 'Написали', color: 'var(--chart-1)' },
@@ -578,466 +569,5 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
         </div>
       </div>
     </>
-  )
-}
-
-/* --------------------------- Выбор произвольных дат --------------------------- */
-
-function CustomRangePicker({
-  active,
-  from,
-  to,
-  max,
-  label,
-  onApply,
-}: {
-  active: boolean
-  from: string
-  to: string
-  max: string
-  label: string
-  onApply: (from: string, to: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [draftFrom, setDraftFrom] = useState(from)
-  const [draftTo, setDraftTo] = useState(to)
-
-  // При каждом открытии синхронизируем черновик с текущим диапазоном.
-  function handleOpenChange(next: boolean) {
-    if (next) {
-      setDraftFrom(from)
-      setDraftTo(to)
-    }
-    setOpen(next)
-  }
-
-  const invalid = draftFrom > draftTo
-
-  return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger
-        render={
-          <button
-            type="button"
-            className={cn(
-              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-              active
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          />
-        }
-      >
-        <CalendarRange className="size-3.5" />
-        {label}
-      </PopoverTrigger>
-      <PopoverContent align="end" side="bottom" className="w-64 space-y-3">
-        <p className="text-sm font-medium">Произвольный период</p>
-        <div className="space-y-2">
-          <label className="block space-y-1">
-            <span className="text-xs text-muted-foreground">С</span>
-            <input
-              type="date"
-              value={draftFrom}
-              max={draftTo || max}
-              onChange={(e) => setDraftFrom(e.target.value)}
-              className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </label>
-          <label className="block space-y-1">
-            <span className="text-xs text-muted-foreground">По</span>
-            <input
-              type="date"
-              value={draftTo}
-              min={draftFrom}
-              max={max}
-              onChange={(e) => setDraftTo(e.target.value)}
-              className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </label>
-        </div>
-        {invalid ? (
-          <p className="text-xs text-destructive">
-            Дата «С» не может быть позже даты «По».
-          </p>
-        ) : null}
-        <Button
-          size="sm"
-          className="w-full"
-          disabled={invalid || !draftFrom || !draftTo}
-          onClick={() => {
-            onApply(draftFrom, draftTo)
-            setOpen(false)
-          }}
-        >
-          Применить
-        </Button>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-/* ------------------------------ Детализация ------------------------------ */
-
-function DetailList({
-  segment,
-  lead,
-  loading,
-}: {
-  segment: Segment
-  lead:
-    | {
-        writers: SourceWriter[]
-        transferred: LeadCard[]
-        working: LeadCard[]
-      }
-    | undefined
-  loading: boolean
-}) {
-  // Списки могут быть длинными (сервер отдаёт до 300) — показываем порциями,
-  // чтобы не рендерить сотни строк сразу. Сброс при смене вкладки обеспечивает
-  // key={segment} у родителя (компонент перемонтируется).
-  const PAGE = 25
-  const [visible, setVisible] = useState(PAGE)
-
-  if (loading || !lead) {
-    return (
-      <div className="flex h-40 items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
-        <span className="sr-only">Загрузка списка</span>
-      </div>
-    )
-  }
-
-  if (segment === 'wrote') {
-    if (lead.writers.length === 0) {
-      return (
-        <ListEmpty text="За выбранный период по этому источнику ещё никто не написал." />
-      )
-    }
-    return (
-      <div className="flex flex-col gap-3">
-        <ul className="flex flex-col gap-2">
-          {lead.writers.slice(0, visible).map((w) => (
-            <WriterRow key={w.conversationId} writer={w} />
-          ))}
-        </ul>
-        <ShowMore
-          shown={Math.min(visible, lead.writers.length)}
-          total={lead.writers.length}
-          onMore={() => setVisible((v) => v + PAGE)}
-        />
-      </div>
-    )
-  }
-
-  const leads = segment === 'transferred' ? lead.transferred : lead.working
-  if (leads.length === 0) {
-    return (
-      <ListEmpty
-        text={
-          segment === 'transferred'
-            ? 'За выбранный период передач куратору не было.'
-            : 'Сейчас нет лидов в статусе «В работе».'
-        }
-      />
-    )
-  }
-  return (
-    <div className="flex flex-col gap-3">
-      <ul className="flex flex-col gap-2">
-        {leads.slice(0, visible).map((l) => (
-          <LeadRow key={l.id} lead={l} segment={segment} />
-        ))}
-      </ul>
-      <ShowMore
-        shown={Math.min(visible, leads.length)}
-        total={leads.length}
-        onMore={() => setVisible((v) => v + PAGE)}
-      />
-    </div>
-  )
-}
-
-/** Кнопка «показать ещё» + счётчик «показано N из M». Скрыта, когда всё видно. */
-function ShowMore({
-  shown,
-  total,
-  onMore,
-}: {
-  shown: number
-  total: number
-  onMore: () => void
-}) {
-  if (shown >= total) {
-    return total > 0 ? (
-      <p className="text-center text-xs text-muted-foreground">
-        Показаны все {total}
-        {total >= 300 ? ' (максимум)' : ''}
-      </p>
-    ) : null
-  }
-  return (
-    <div className="flex flex-col items-center gap-1.5">
-      <Button variant="outline" size="sm" onClick={onMore}>
-        Показать ещё
-      </Button>
-      <span className="text-xs text-muted-foreground">
-        Показано {shown} из {total}
-      </span>
-    </div>
-  )
-}
-
-/* ------------------------------ Мини-плитка ------------------------------ */
-
-function MiniStat({
-  icon: Icon,
-  label,
-  value,
-  tone = 'default',
-  hint,
-  loading,
-}: {
-  icon: typeof MessageSquare
-  label: string
-  value: number | string
-  tone?: 'default' | 'primary' | 'success' | 'info' | 'warning'
-  hint?: string
-  loading?: boolean
-}) {
-  const toneCls = {
-    default: 'text-foreground',
-    primary: 'text-primary',
-    success: 'text-success',
-    info: 'text-sky-600 dark:text-sky-400',
-    warning: 'text-warning',
-  }[tone]
-  return (
-    <Card className="flex flex-col gap-1 p-4">
-      <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        <Icon className={cn('size-3.5', tone === 'default' ? '' : toneCls)} />
-        {label}
-      </span>
-      {loading ? (
-        <span className="h-8 w-16 animate-pulse rounded bg-muted" />
-      ) : (
-        <span className={cn('text-2xl font-semibold tabular-nums', toneCls)}>
-          {value}
-        </span>
-      )}
-      {hint ? (
-        <span className="text-xs text-muted-foreground">{hint}</span>
-      ) : null}
-    </Card>
-  )
-}
-
-/* --------------------------- Число в шапке графика --------------------------- */
-
-function SummaryNum({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="flex flex-col">
-      <span className="text-lg font-semibold tabular-nums leading-none">
-        {value}
-      </span>
-      <span className="mt-1 text-[11px] text-muted-foreground">{label}</span>
-    </div>
-  )
-}
-
-function SpendNum({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg bg-muted/40 px-3 py-2">
-      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
-      <p className="mt-0.5 text-sm font-semibold tabular-nums">{value}</p>
-    </div>
-  )
-}
-
-/* --------------------------- Переключатель сегмента --------------------------- */
-
-function SegBtn({
-  active,
-  onClick,
-  icon: Icon,
-  label,
-  count,
-}: {
-  active: boolean
-  onClick: () => void
-  icon: typeof MessageSquare
-  label: string
-  count: number
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex min-w-0 flex-col items-center gap-0.5 rounded-md px-2 py-1.5 text-center transition-colors',
-        active
-          ? 'bg-background text-foreground shadow-sm'
-          : 'text-muted-foreground hover:text-foreground',
-      )}
-    >
-      <span className="flex items-center gap-1 text-[11px] font-medium">
-        <Icon className="size-3.5" />
-        <span className="truncate">{label}</span>
-      </span>
-      <span className="text-sm font-semibold tabular-nums">{count}</span>
-    </button>
-  )
-}
-
-/* ------------------------------ Пустые состояния ------------------------------ */
-
-function ChartSkeleton() {
-  return (
-    <div className="flex min-h-[200px] flex-1 items-center justify-center">
-      <Loader2 className="size-6 animate-spin text-muted-foreground" />
-      <span className="sr-only">Загрузка динамики источника</span>
-    </div>
-  )
-}
-
-function ChartEmpty({ text }: { text: string }) {
-  return (
-    <p className="flex min-h-[200px] flex-1 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
-      {text}
-    </p>
-  )
-}
-
-function ListEmpty({ text }: { text: string }) {
-  return (
-    <p className="rounded-lg border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
-      {text}
-    </p>
-  )
-}
-
-/* ------------------------------ Строка написавшего ------------------------------ */
-
-function WriterRow({ writer }: { writer: SourceWriter }) {
-  const handle = writer.handle?.replace(/^@/, '') || ''
-  const channel = CHANNEL_LABEL[writer.channelType] ?? writer.channelType
-  const tone = writer.leadStatus ? LEAD_STATUS_TONE[writer.leadStatus] : null
-  return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-border bg-background/40 px-3 py-2.5">
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">
-          {writer.name || 'Без имени'}
-        </span>
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          {handle ? (
-            <span className="flex items-center gap-1">
-              <AtSign className="size-3" />
-              {handle}
-            </span>
-          ) : null}
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium">
-            {channel}
-          </span>
-        </span>
-      </span>
-      {writer.leadStatus && tone ? (
-        <span
-          className={cn(
-            'flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
-            tone.bg,
-            tone.text,
-          )}
-        >
-          <span className={cn('size-1.5 rounded-full', tone.dot)} />
-          {leadStatusLabel(writer.leadStatus)}
-        </span>
-      ) : (
-        <Badge
-          variant="outline"
-          className="shrink-0 border-transparent bg-muted/60 text-[11px] text-muted-foreground"
-        >
-          Без карточки
-        </Badge>
-      )}
-      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-        {formatMskDateTime(writer.wroteAt)}
-      </span>
-    </li>
-  )
-}
-
-/* ------------------------------ Строка лида ------------------------------ */
-
-/** Контакт лида: @username → телефон → Telegram ID → «—». */
-function leadContact(lead: LeadCard): { icon: typeof AtSign; text: string } {
-  if (lead.telegramUsername) {
-    return { icon: AtSign, text: lead.telegramUsername.replace(/^@/, '') }
-  }
-  if (lead.phone) return { icon: Phone, text: lead.phone }
-  if (lead.telegramId) return { icon: AtSign, text: lead.telegramId }
-  return { icon: AtSign, text: '—' }
-}
-
-function LeadRow({
-  lead,
-  segment,
-}: {
-  lead: LeadCard
-  segment: Exclude<Segment, 'wrote'>
-}) {
-  const contact = leadContact(lead)
-  const ContactIcon = contact.icon
-  const when = segment === 'transferred' ? lead.transferredAt : lead.createdAt
-  const tone = lead.status ? LEAD_STATUS_TONE[lead.status] : null
-  return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-border bg-background/40 px-3 py-2.5">
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">
-          {lead.fullName || 'Без имени'}
-        </span>
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <ContactIcon className="size-3" />
-            {contact.text}
-          </span>
-          {lead.city ? (
-            <span className="flex items-center gap-1">
-              <MapPin className="size-3" />
-              {lead.city}
-            </span>
-          ) : null}
-          {lead.curatorName ? (
-            <span className="flex items-center gap-1">
-              <Users className="size-3" />
-              {lead.curatorName}
-            </span>
-          ) : null}
-        </span>
-      </span>
-      {lead.status && tone ? (
-        <span
-          className={cn(
-            'flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
-            tone.bg,
-            tone.text,
-          )}
-        >
-          <span className={cn('size-1.5 rounded-full', tone.dot)} />
-          {leadStatusLabel(lead.status)}
-        </span>
-      ) : (
-        <Badge variant="outline" className="shrink-0 text-xs">
-          {leadStatusLabel(lead.status)}
-        </Badge>
-      )}
-      {when ? (
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {formatMskDateTime(when)}
-        </span>
-      ) : null}
-    </li>
   )
 }
