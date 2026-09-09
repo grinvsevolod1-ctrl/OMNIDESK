@@ -22,7 +22,7 @@ export default function GlobalError({
   return (
     <html lang="ru" className="dark">
       <body className="bg-background text-foreground font-sans antialiased">
-        <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="flex min-h-dvh-safe items-center justify-center p-6">
           <div className="flex max-w-md flex-col items-center gap-4 rounded-xl border border-border bg-card p-8 text-center">
             <h2 className="text-lg font-semibold">Что-то пошло не так</h2>
             <p className="text-sm text-muted-foreground">

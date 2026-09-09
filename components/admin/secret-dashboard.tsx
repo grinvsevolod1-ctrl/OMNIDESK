@@ -225,9 +225,9 @@ export function SecretDashboard({
 
   return (
     <TooltipProvider delay={200}>
-    <div className="flex min-h-screen bg-background text-foreground">
+    <div className="flex min-h-dvh-safe bg-background text-foreground">
       {/* ---- Desktop sidebar ---- */}
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card/40 md:flex">
+      <aside className="sticky top-0 hidden h-dvh-safe w-64 shrink-0 flex-col border-r border-border bg-card/40 md:flex">
         <div className="flex items-center gap-3 border-b border-border px-5 py-5">
           <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-muted/50">
             <ShieldCheck className="size-5" />
@@ -355,7 +355,7 @@ export function SecretDashboard({
       </div>
 
       {/* ---- Mobile bottom nav ---- */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-border bg-card/95 backdrop-blur md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-border bg-card/95 pb-safe backdrop-blur md:hidden">
         {SECTIONS.map((s) => (
           <BottomNavItem
             key={s.id}
