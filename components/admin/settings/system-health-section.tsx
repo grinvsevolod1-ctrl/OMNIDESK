@@ -51,12 +51,12 @@ function StatChip({
 }) {
   const toneClasses: Record<Tone, string> = {
     ok: 'border-border bg-muted/30',
-    warn: 'border-amber-500/40 bg-amber-500/5',
+    warn: 'border-warning/40 bg-warning/5',
     bad: 'border-destructive/40 bg-destructive/5',
   }
   const iconTone: Record<Tone, string> = {
     ok: 'text-muted-foreground',
-    warn: 'text-amber-600 dark:text-amber-500',
+    warn: 'text-warning',
     bad: 'text-destructive',
   }
   return (
@@ -143,8 +143,8 @@ export async function SystemHealthSection({
           variant="outline"
           className={
             overallOk
-              ? 'gap-1 border-emerald-500/40 bg-emerald-500/5 text-emerald-600 dark:text-emerald-500'
-              : 'gap-1 border-amber-500/40 bg-amber-500/5 text-amber-600 dark:text-amber-500'
+              ? 'gap-1 border-success/40 bg-success/5 text-success'
+              : 'gap-1 border-warning/40 bg-warning/5 text-warning'
           }
         >
           {overallOk ? (
@@ -244,7 +244,7 @@ export async function SystemHealthSection({
                     : 'ok'
                 const toneCls: Record<Tone, string> = {
                   ok: 'border-border text-muted-foreground',
-                  warn: 'border-amber-500/40 bg-amber-500/5 text-amber-600 dark:text-amber-500',
+                  warn: 'border-warning/40 bg-warning/5 text-warning',
                   bad: 'border-destructive/40 bg-destructive/5 text-destructive',
                 }
                 const okAgo = j.lastOkAt
@@ -306,7 +306,7 @@ export async function SystemHealthSection({
                 ${health.gateway.balanceUsd.toFixed(2)}
               </span>
             ) : (
-              <span className="font-medium text-amber-600 dark:text-amber-500">
+              <span className="font-medium text-warning">
                 {health.gateway.note ?? 'недоступен'}
               </span>
             )}

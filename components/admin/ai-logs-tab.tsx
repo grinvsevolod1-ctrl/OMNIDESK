@@ -51,11 +51,11 @@ const SOURCE_LABEL: Record<string, string> = {
 function levelClasses(level: AiLogLevel): string {
   switch (level) {
     case 'error':
-      return 'border-l-red-500 bg-red-500/5'
+      return 'border-l-destructive bg-destructive/5'
     case 'warn':
-      return 'border-l-amber-500 bg-amber-500/5'
+      return 'border-l-warning bg-warning/5'
     case 'info':
-      return 'border-l-emerald-500 bg-emerald-500/5'
+      return 'border-l-success bg-success/5'
     default:
       return 'border-l-border bg-transparent'
   }
@@ -64,11 +64,11 @@ function levelClasses(level: AiLogLevel): string {
 function levelBadgeClasses(level: AiLogLevel): string {
   switch (level) {
     case 'error':
-      return 'bg-red-500/15 text-red-600 dark:text-red-400'
+      return 'bg-destructive/15 text-destructive'
     case 'warn':
-      return 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+      return 'bg-warning/15 text-warning'
     case 'info':
-      return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+      return 'bg-success/15 text-success'
     default:
       return 'bg-muted text-muted-foreground'
   }
@@ -133,7 +133,7 @@ export function AiLogsTab() {
           <div className="flex items-center gap-2">
             <span
               className={`inline-block size-2 rounded-full ${
-                live ? 'animate-pulse bg-emerald-500' : 'bg-muted-foreground'
+                live ? 'animate-pulse bg-success' : 'bg-muted-foreground'
               }`}
               aria-hidden
             />
@@ -259,15 +259,15 @@ function DiagnosticsBanner({ diag }: { diag: AiDiagnostics | null }) {
     <Card
       className={`flex flex-col gap-3 p-4 ${
         healthy
-          ? 'border-emerald-500/40 bg-emerald-500/5'
-          : 'border-amber-500/40 bg-amber-500/5'
+          ? 'border-success/40 bg-success/5'
+          : 'border-warning/40 bg-warning/5'
       }`}
     >
       <div className="flex items-center gap-2">
         {healthy ? (
-          <CheckCircle2 className="size-5 text-emerald-600 dark:text-emerald-400" />
+          <CheckCircle2 className="size-5 text-success" />
         ) : (
-          <AlertTriangle className="size-5 text-amber-600 dark:text-amber-400" />
+          <AlertTriangle className="size-5 text-warning" />
         )}
         <p className="font-medium">
           {healthy
@@ -277,7 +277,7 @@ function DiagnosticsBanner({ diag }: { diag: AiDiagnostics | null }) {
       </div>
 
       {!healthy ? (
-        <ul className="ml-1 flex list-inside list-disc flex-col gap-1 text-sm text-amber-700 dark:text-amber-300">
+        <ul className="ml-1 flex list-inside list-disc flex-col gap-1 text-sm text-warning">
           {problems.map((p, i) => (
             <li key={i}>{p}</li>
           ))}
@@ -298,8 +298,8 @@ function StatusChip({ ok, label }: { ok: boolean; label: string }) {
       variant="outline"
       className={`gap-1 ${
         ok
-          ? 'text-emerald-600 dark:text-emerald-400'
-          : 'text-red-600 dark:text-red-400'
+          ? 'text-success'
+          : 'text-destructive'
       }`}
     >
       {ok ? <CheckCircle2 className="size-3" /> : <XCircle className="size-3" />}

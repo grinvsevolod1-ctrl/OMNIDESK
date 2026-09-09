@@ -30,9 +30,9 @@ function scorePassword(pw: string): number {
 const STRENGTH: Record<number, { label: string; cls: string }> = {
   0: { label: '', cls: '' },
   1: { label: 'Слабый', cls: 'bg-destructive' },
-  2: { label: 'Средний', cls: 'bg-amber-500' },
-  3: { label: 'Хороший', cls: 'bg-emerald-500' },
-  4: { label: 'Отличный', cls: 'bg-emerald-500' },
+  2: { label: 'Средний', cls: 'bg-warning' },
+  3: { label: 'Хороший', cls: 'bg-success' },
+  4: { label: 'Отличный', cls: 'bg-success' },
 }
 
 function PasswordInput({
@@ -167,14 +167,14 @@ export function ChangePasswordForm({ email }: { email?: string }) {
               key={c.label}
               className={cn(
                 'flex items-center gap-2 text-xs transition-colors',
-                c.ok ? 'text-emerald-600 dark:text-emerald-500' : 'text-muted-foreground',
+                c.ok ? 'text-success' : 'text-muted-foreground',
               )}
             >
               <span
                 className={cn(
                   'flex size-3.5 items-center justify-center rounded-full border transition-colors',
                   c.ok
-                    ? 'border-emerald-500/50 bg-emerald-500/10'
+                    ? 'border-success/50 bg-success/10'
                     : 'border-border',
                 )}
               >

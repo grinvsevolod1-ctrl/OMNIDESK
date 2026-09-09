@@ -78,7 +78,7 @@ export function CharCounter({
           left < 0
             ? 'font-medium text-destructive'
             : left <= Math.max(5, Math.round(max * 0.1))
-              ? 'text-amber-600 dark:text-amber-400'
+              ? 'text-warning'
               : 'text-muted-foreground',
           className,
         )}
