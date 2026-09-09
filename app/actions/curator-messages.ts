@@ -29,11 +29,14 @@ import {
   markWhatsappConversationRead,
 } from '@/lib/whatsapp-dispatch'
 import type { Message } from '@/lib/types'
+import {
+  reactMessageCore,
+  deleteMessageCore,
+  editMessageCore,
+  type SimpleResult,
+} from '@/lib/data/message-actions-core'
 
-export interface SimpleResult {
-  ok: boolean
-  message: string
-}
+export type { SimpleResult }
 
 /** Путь ревалидации раздела «Чаты» куратора. */
 const CURATOR_CHATS_PATH = '/curator/chats'
@@ -193,48 +196,21 @@ export async function reactCuratorMessageAction(
   emoji: string,
 ): Promise<SimpleResult> {
   const session = await requireCurator()
-
   const dispatch = await getMessageDispatchForCurator(messageId, session.sub)
-  if (!dispatch) return { ok: false, message: 'Сообщение не найдено.' }
-  if (dispatch.channelType !== 'telegram') {
-    return { ok: false, message: 'Реакции доступны только для Telegram.' }
-  }
-  // God-created dialog: nothing exists in Telegram to react to — the local
-  // row IS the truth, so skip both the provider-id gate and the worker job.
-  if (!dispatch.synthetic && !dispatch.providerMessageId) {
-    return { ok: false, message: 'Сообщение ещё не доставлено.' }
-  }
-
-  await setMessageReactionForCurator(messageId, session.sub, emoji || null)
-
-  if (dispatch.synthetic) {
-    revalidatePath(CURATOR_CHATS_PATH)
-    return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
-  }
-
-  const enqueued = await enqueueJob({
-    channelId: dispatch.channelId,
-    managerId: dispatch.managerId,
-    action: 'react_message',
-    payload: {
-      target: dispatch.contactHandle,
-      providerMessageId: dispatch.providerMessageId,
-      emoji,
+  return reactMessageCore(
+    {
+      revalidatePath: CURATOR_CHATS_PATH,
+      // Curator has no Telegram session — enqueue under the channel owner.
+      enqueueManagerId: dispatch?.managerId ?? '',
     },
-  })
-    .then(() => true)
-    .catch((err) => {
-      console.error('[panel] curator react enqueue failed:', err)
-      return false
-    })
-
-  revalidatePath(CURATOR_CHATS_PATH)
-  // Local reaction persisted; if the provider job didn't queue, report delayed
-  // sync rather than a clean success that diverges from Telegram.
-  if (!enqueued) {
-    return { ok: true, message: 'Реакция сохранена, синхронизация с Telegram задержана.' }
-  }
-  return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
+    dispatch,
+    emoji,
+    () =>
+      setMessageReactionForCurator(messageId, session.sub, emoji || null).then(
+        () => {},
+      ),
+    '[panel] curator react enqueue failed:',
+  )
 }
 
 /** Delete a message for everyone (Telegram only, curator-scoped). */
@@ -242,45 +218,16 @@ export async function deleteCuratorMessageAction(
   messageId: string,
 ): Promise<SimpleResult> {
   const session = await requireCurator()
-
   const dispatch = await getMessageDispatchForCurator(messageId, session.sub)
-  if (!dispatch) return { ok: false, message: 'Сообщение не найдено.' }
-  if (dispatch.channelType !== 'telegram') {
-    return { ok: false, message: 'Удаление доступно только для Telegram.' }
-  }
-  // God-created dialog: the send never reached Telegram, so there is no
-  // provider id and nothing to revoke — a local soft-delete is the whole job.
-  if (!dispatch.synthetic && !dispatch.providerMessageId) {
-    return { ok: false, message: 'Сообщение ещё не доставлено.' }
-  }
-
-  await markMessageDeletedForCurator(messageId, session.sub)
-
-  if (dispatch.synthetic) {
-    revalidatePath(CURATOR_CHATS_PATH)
-    return { ok: true, message: 'Сообщение удалено.' }
-  }
-
-  const enqueued = await enqueueJob({
-    channelId: dispatch.channelId,
-    managerId: dispatch.managerId,
-    action: 'delete_message',
-    payload: {
-      target: dispatch.contactHandle,
-      providerMessageId: dispatch.providerMessageId,
+  return deleteMessageCore(
+    {
+      revalidatePath: CURATOR_CHATS_PATH,
+      enqueueManagerId: dispatch?.managerId ?? '',
     },
-  })
-    .then(() => true)
-    .catch((err) => {
-      console.error('[panel] curator delete enqueue failed:', err)
-      return false
-    })
-
-  revalidatePath(CURATOR_CHATS_PATH)
-  if (!enqueued) {
-    return { ok: true, message: 'Удалено локально, синхронизация с Telegram задержана.' }
-  }
-  return { ok: true, message: 'Сообщение удалено.' }
+    dispatch,
+    () => markMessageDeletedForCurator(messageId, session.sub).then(() => {}),
+    '[panel] curator delete enqueue failed:',
+  )
 }
 
 /** Edit the text of the curator's OWN outgoing message (Telegram only). */
@@ -293,46 +240,16 @@ export async function editCuratorMessageAction(
   if (!text) return { ok: false, message: 'Текст не может быть пустым.' }
 
   const dispatch = await getMessageDispatchForCurator(messageId, session.sub)
-  if (!dispatch) return { ok: false, message: 'Сообщение не найдено.' }
-  if (dispatch.direction !== 'out') {
-    return { ok: false, message: 'Можно редактировать только свои сообщения.' }
-  }
-  if (dispatch.channelType !== 'telegram') {
-    return { ok: false, message: 'Редактирование доступно только для Telegram.' }
-  }
-  if (!dispatch.synthetic && !dispatch.providerMessageId) {
-    return { ok: false, message: 'Сообщение ещё не доставлено.' }
-  }
-
-  const changed = await editMessageBodyForCurator(messageId, session.sub, text)
-  if (!changed) return { ok: true, message: 'Без изменений.' }
-
-  if (dispatch.synthetic) {
-    revalidatePath(CURATOR_CHATS_PATH)
-    return { ok: true, message: 'Сообщение изменено.' }
-  }
-
-  const enqueued = await enqueueJob({
-    channelId: dispatch.channelId,
-    managerId: dispatch.managerId,
-    action: 'edit_message',
-    payload: {
-      target: dispatch.contactHandle,
-      providerMessageId: dispatch.providerMessageId,
-      body: text,
+  return editMessageCore(
+    {
+      revalidatePath: CURATOR_CHATS_PATH,
+      enqueueManagerId: dispatch?.managerId ?? '',
     },
-  })
-    .then(() => true)
-    .catch((err) => {
-      console.error('[panel] curator edit enqueue failed:', err)
-      return false
-    })
-
-  revalidatePath(CURATOR_CHATS_PATH)
-  if (!enqueued) {
-    return { ok: true, message: 'Изменено локально, синхронизация с Telegram задержана.' }
-  }
-  return { ok: true, message: 'Сообщение изменено.' }
+    dispatch,
+    text,
+    () => editMessageBodyForCurator(messageId, session.sub, text),
+    '[panel] curator edit enqueue failed:',
+  )
 }
 
 /**

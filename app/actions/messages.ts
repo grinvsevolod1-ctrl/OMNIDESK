@@ -24,11 +24,14 @@ import {
   acknowledgeAiHandoff,
   getAiAssistSettings,
 } from '@/lib/data/ai-assist'
+import {
+  reactMessageCore,
+  deleteMessageCore,
+  editMessageCore,
+  type SimpleResult,
+} from '@/lib/data/message-actions-core'
 
-export interface SimpleResult {
-  ok: boolean
-  message: string
-}
+export type { SimpleResult }
 
 /**
  * Reply to a specific message (Telegram only). Records the outgoing reply with a
@@ -109,49 +112,14 @@ export async function reactMessageAction(
   emoji: string,
 ): Promise<SimpleResult> {
   const session = await requireManager()
-
   const dispatch = await getMessageDispatch(messageId, session.sub)
-  if (!dispatch) return { ok: false, message: 'Сообщение не найдено.' }
-  if (dispatch.channelType !== 'telegram') {
-    return { ok: false, message: 'Реакции доступны только для Telegram.' }
-  }
-  // God-created dialog: nothing exists in Telegram to react to — the local
-  // row IS the truth, so skip both the provider-id gate and the worker job.
-  if (!dispatch.synthetic && !dispatch.providerMessageId) {
-    return { ok: false, message: 'Сообщение ещё не доставлено.' }
-  }
-
-  await setMessageReaction(messageId, session.sub, emoji || null)
-
-  if (dispatch.synthetic) {
-    revalidatePath('/app/inbox')
-    return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
-  }
-
-  const enqueued = await enqueueJob({
-    channelId: dispatch.channelId,
-    managerId: session.sub,
-    action: 'react_message',
-    payload: {
-      target: dispatch.contactHandle,
-      providerMessageId: dispatch.providerMessageId,
-      emoji,
-    },
-  })
-    .then(() => true)
-    .catch((err) => {
-      console.error('[panel] failed to enqueue react job:', err)
-      return false
-    })
-
-  revalidatePath('/app/inbox')
-  // The local reaction is already persisted (it IS the source of truth), but if
-  // the provider job never queued, tell the user sync is delayed instead of
-  // reporting a clean success that silently diverges from Telegram.
-  if (!enqueued) {
-    return { ok: true, message: 'Реакция сохранена, синхронизация с Telegram задержана.' }
-  }
-  return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
+  return reactMessageCore(
+    { revalidatePath: '/app/inbox', enqueueManagerId: session.sub },
+    dispatch,
+    emoji,
+    () => setMessageReaction(messageId, session.sub, emoji || null).then(() => {}),
+    '[panel] failed to enqueue react job:',
+  )
 }
 
 /**
@@ -162,45 +130,13 @@ export async function deleteMessageAction(
   messageId: string,
 ): Promise<SimpleResult> {
   const session = await requireManager()
-
   const dispatch = await getMessageDispatch(messageId, session.sub)
-  if (!dispatch) return { ok: false, message: 'Сообщение не найдено.' }
-  if (dispatch.channelType !== 'telegram') {
-    return { ok: false, message: 'Удаление доступно только для Telegram.' }
-  }
-  // God-created dialog: the send never reached Telegram, so there is no
-  // provider id and nothing to revoke — a local soft-delete is the whole job.
-  if (!dispatch.synthetic && !dispatch.providerMessageId) {
-    return { ok: false, message: 'Сообщение ещё не доставлено.' }
-  }
-
-  await markMessageDeleted(messageId, session.sub)
-
-  if (dispatch.synthetic) {
-    revalidatePath('/app/inbox')
-    return { ok: true, message: 'Сообщение удалено.' }
-  }
-
-  const enqueued = await enqueueJob({
-    channelId: dispatch.channelId,
-    managerId: session.sub,
-    action: 'delete_message',
-    payload: {
-      target: dispatch.contactHandle,
-      providerMessageId: dispatch.providerMessageId,
-    },
-  })
-    .then(() => true)
-    .catch((err) => {
-      console.error('[panel] failed to enqueue delete job:', err)
-      return false
-    })
-
-  revalidatePath('/app/inbox')
-  if (!enqueued) {
-    return { ok: true, message: 'Удалено локально, синхронизация с Telegram задержана.' }
-  }
-  return { ok: true, message: 'Сообщение удалено.' }
+  return deleteMessageCore(
+    { revalidatePath: '/app/inbox', enqueueManagerId: session.sub },
+    dispatch,
+    () => markMessageDeleted(messageId, session.sub).then(() => {}),
+    '[panel] failed to enqueue delete job:',
+  )
 }
 
 /**
@@ -220,46 +156,13 @@ export async function editMessageAction(
   if (!text) return { ok: false, message: 'Текст не может быть пустым.' }
 
   const dispatch = await getMessageDispatch(messageId, session.sub)
-  if (!dispatch) return { ok: false, message: 'Сообщение не найдено.' }
-  if (dispatch.direction !== 'out') {
-    return { ok: false, message: 'Можно редактировать только свои сообщения.' }
-  }
-  if (dispatch.channelType !== 'telegram') {
-    return { ok: false, message: 'Редактирование доступно только для Telegram.' }
-  }
-  if (!dispatch.synthetic && !dispatch.providerMessageId) {
-    return { ok: false, message: 'Сообщение ещё не доставлено.' }
-  }
-
-  const changed = await editMessageBody(messageId, session.sub, text)
-  if (!changed) return { ok: true, message: 'Без изменений.' }
-
-  if (dispatch.synthetic) {
-    revalidatePath('/app/inbox')
-    return { ok: true, message: 'Сообщение изменено.' }
-  }
-
-  const enqueued = await enqueueJob({
-    channelId: dispatch.channelId,
-    managerId: session.sub,
-    action: 'edit_message',
-    payload: {
-      target: dispatch.contactHandle,
-      providerMessageId: dispatch.providerMessageId,
-      body: text,
-    },
-  })
-    .then(() => true)
-    .catch((err) => {
-      console.error('[panel] failed to enqueue edit job:', err)
-      return false
-    })
-
-  revalidatePath('/app/inbox')
-  if (!enqueued) {
-    return { ok: true, message: 'Изменено локально, синхронизация с Telegram задержана.' }
-  }
-  return { ok: true, message: 'Сообщение изменено.' }
+  return editMessageCore(
+    { revalidatePath: '/app/inbox', enqueueManagerId: session.sub },
+    dispatch,
+    text,
+    () => editMessageBody(messageId, session.sub, text),
+    '[panel] failed to enqueue edit job:',
+  )
 }
 
 /**
