@@ -318,7 +318,11 @@ export function MessageList({
                   const bubble = (
                     <div
                       className={cn(
-                        'text-sm',
+                        // min-w-0 + max-w-full keep a long single-line message
+                        // inside the 80%/70% column instead of overflowing it
+                        // and getting clipped by the feed's overflow-x-hidden
+                        // (the reported "текст обрезан справа" on narrow phones).
+                        'min-w-0 max-w-full text-sm',
                         bare
                           ? ''
                           : cn(
@@ -458,7 +462,7 @@ export function MessageList({
                     >
                     <div
                       className={cn(
-                        'flex max-w-[80%] flex-col gap-1 sm:max-w-[70%]',
+                        'flex min-w-0 max-w-[80%] flex-col gap-1 sm:max-w-[70%]',
                         isOut ? 'items-end' : 'items-start',
                         // Подсветка цели поиска/медиа-навигации/прыжка к
                         // цитате — как в Telegram: мягкое кольцо вокруг

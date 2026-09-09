@@ -53,6 +53,14 @@ export const viewport: Viewport = {
   // the browser never needs to zoom to make a focused field legible.
   maximumScale: 5,
   userScalable: true,
+  // Android Chrome: when the on-screen keyboard opens, resize the LAYOUT
+  // viewport (not just the visual one) so the `fixed inset-0` app shell and
+  // `100dvh` shrink to the space above the keyboard. Without this the default
+  // `resizes-visual` lets the keyboard OVERLAY the page and the browser scrolls
+  // the fixed shell up — the reported "экран швыряет вверх, всё чёрное" bug when
+  // tapping the composer. (iOS ignores this key; its keyboard is handled by the
+  // visualViewport --app-vh override in dashboard-shell.)
+  interactiveWidget: 'resizes-content',
 }
 
 export default function RootLayout({

@@ -115,8 +115,22 @@ export function DashboardShell({
     if (typeof window === 'undefined') return
     const vv = window.visualViewport
     const apply = () => {
-      const h = vv?.height ?? window.innerHeight
-      document.documentElement.style.setProperty('--app-vh', `${h}px`)
+      if (!vv) return
+      // Only PIN an explicit shell height while a soft keyboard is actually
+      // open. iOS ignores `interactive-widget`, so its keyboard overlays the
+      // page and only the visual viewport shrinks — pin the shell to that so
+      // the composer rides above the keyboard. When the keyboard is closed (or
+      // on Android, where `resizes-content` already shrank the layout viewport)
+      // we CLEAR the override and let CSS `100dvh` govern. This kills the stale
+      // short height that used to leave a black gap ("подвал") under the
+      // composer after the keyboard closed.
+      const keyboardInset = window.innerHeight - vv.height
+      const root = document.documentElement
+      if (keyboardInset > 120) {
+        root.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
+      } else {
+        root.style.removeProperty('--app-vh')
+      }
     }
     apply()
     vv?.addEventListener('resize', apply)
