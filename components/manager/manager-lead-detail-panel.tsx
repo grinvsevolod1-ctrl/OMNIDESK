@@ -21,6 +21,7 @@ import {
 } from '@/components/shared/slide-over'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 import type { LeadCard } from '@/lib/data/lead-cards'
 import { formatMskDateTimeFull as formatDateTime } from '@/lib/time'
 
@@ -85,6 +86,17 @@ export function ManagerLeadDetailPanel({
   const hydrating = !detail || detail.partial === true
   const comments = detail?.comments ?? []
   const statusHistory = detail?.statusHistory ?? []
+
+  // Открытая карточка обновляется вживую, когда её меняет другой сотрудник
+  // (комментарий/статус/передача): событие 'lead' с id этой карточки (миграция
+  // 170) → тихий refetch. Закрытая панель (leadId === null) не дёргается.
+  useRealtimeRefresh({
+    onRefresh: () => {
+      if (leadId) void mutate()
+    },
+    lead: true,
+    leadId: activeId,
+  })
 
   function saveFreeComment() {
     if (!activeId || !freeComment.trim()) return

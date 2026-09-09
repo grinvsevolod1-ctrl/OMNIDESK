@@ -25,6 +25,7 @@ import {
   SlideOver,
   SlideOverSectionSkeleton,
 } from '@/components/shared/slide-over'
+import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 import type { LeadCard } from '@/lib/data/lead-cards'
 
 type LeadCardDetail = NonNullable<
@@ -102,6 +103,18 @@ export function LeadDetailPanel({
   const card = detail?.card ?? null
   // Пока пришла только частичная деталь из списка — секции сети в скелетонах.
   const hydrating = !detail || detail.partial === true
+
+  // Открытая карточка обновляется вживую при изменении её другим сотрудником
+  // (событие 'lead' с id этой карточки, миграция 170). getLeadCardDetailAction
+  // скоупится правами, поэтому refetch безопасен в любой роли. Список снаружи
+  // обновляет свой useLeadEvents — здесь трогаем только SWR панели.
+  useRealtimeRefresh({
+    onRefresh: () => {
+      if (leadId) void mutate()
+    },
+    lead: true,
+    leadId: activeId,
+  })
 
   /** После сохранения статуса: обновить панель и список снаружи. */
   function onStatusSaved() {

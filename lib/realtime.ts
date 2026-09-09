@@ -31,6 +31,7 @@ export interface RealtimeEvent {
     | 'typing'
     | 'presence'
     | 'lead'
+    | 'source'
     | 'resync'
   /**
    * For message events: 'insert' (new message) or 'update' (a message changed
@@ -63,6 +64,14 @@ export interface RealtimeEvent {
    * to whichever of the two is connected (and to admins, who see all leads).
    */
   curatorId?: string | null
+  /**
+   * Source-finance events ('source', migration 170): a traffic source, its
+   * daily spend, or a deposit changed. `sourceId` scopes the refetch; `buyerId`
+   * is the owning media buyer, used to deliver only own-source events to buyers.
+   * Admins and heads receive every source event (they see all sources).
+   */
+  sourceId?: string
+  buyerId?: string | null
   channelId?: string
   channelType?: string
   conversationId?: string

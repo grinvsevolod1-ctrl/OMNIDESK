@@ -71,6 +71,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import type { LeadCard } from '@/lib/data/lead-cards-core'
+import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 import type {
   SourceReportPeriod,
   SourceReportRange,
@@ -164,7 +165,7 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
   const period: SourceReportPeriod =
     range === 'custom' ? { range, from: customFrom, to: customTo } : { range }
 
-  const { data, isLoading } = useSWR(
+  const { data, isLoading, mutate } = useSWR(
     [
       'source-report',
       source.id,
@@ -175,6 +176,17 @@ function SourceDetailBody({ row }: { row: SourceOverviewRow }) {
     () => getSourceReportAction(source.id, period),
     { keepPreviousData: true, revalidateOnFocus: false },
   )
+
+  // Живой отчёт, пока модал открыт: source-события этого источника (расход/
+  // депозит) и любые lead-события (новый диалог/передача влияют на «написали/
+  // передано») тихо перечитывают отчёт за текущий период. Лид-события не несут
+  // sourceId, поэтому по источнику фильтруем только 'source'.
+  useRealtimeRefresh({
+    onRefresh: () => void mutate(),
+    lead: true,
+    source: true,
+    sourceId: source.id,
+  })
 
   const lead = data?.lead
   const spend = data?.spend

@@ -152,7 +152,20 @@ export async function GET(request: Request): Promise<Response> {
             event.managerId === managerId ||
             event.curatorId === managerId
           ) {
-            send('lead', { type: 'lead' })
+            // id (миграция 170) позволяет ОТКРЫТОЙ карточке обновиться точечно,
+            // а спискам — как раньше сделать полный refetch, игнорируя id.
+            send('lead', { type: 'lead', id: event.id })
+          }
+          return
+        }
+        // Source-finance события (миграция 170): расход/депозит/сам источник.
+        // Дашборды обзора (админ/руководитель) и модал отчёта видят все
+        // источники; байер — только свои (по buyerId). Менеджеру/куратору
+        // источники не нужны. Payload несёт лишь id источника для точечного
+        // рефетча — данные потребитель тянет своим scoped-экшеном.
+        if (event.type === 'source') {
+          if (isAdmin || isHead || (isBuyer && event.buyerId === viewerId)) {
+            send('source', { type: 'source', id: event.sourceId })
           }
           return
         }

@@ -33,6 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 import { formatMoney } from '@/lib/money'
 import { platformOrCustom } from '@/lib/traffic-source-catalog'
 import { cn } from '@/lib/utils'
@@ -202,6 +203,17 @@ export function SourcesOverview({
   const [platform, setPlatform] = useState(ALL)
   const [activeOnly, setActiveOnly] = useState(false)
   const [selected, setSelected] = useState<SourceOverviewRow | null>(null)
+
+  // Живой обзор: новый лид, передача куратору или изменение расхода/депозита
+  // (события 'lead' и 'source', миграция 170) перезапрашивают RSC — плитки
+  // «написали/передано/баланс/потрачено» тикают без обновления страницы.
+  // Дебаунс 500мс, т.к. router.refresh() перегоняет весь серверный компонент.
+  useRealtimeRefresh({
+    onRefresh: () => router.refresh(),
+    lead: true,
+    source: true,
+    debounceMs: 500,
+  })
 
   const buyerOptions = useMemo(() => {
     const map = new Map<string, string>()

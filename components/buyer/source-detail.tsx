@@ -35,6 +35,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 import type { TrafficSource } from '@/lib/data/traffic-sources'
 import type {
   SourceDeposit,
@@ -125,6 +126,15 @@ export function BuyerSourceDetail({
     setData(await getBuyerSourceFinanceAction(source.id))
     router.refresh()
   }, [source.id, router])
+
+  // Живой учёт: если депозит/расход/сам источник поменялись (в т.ч. решение
+  // админа по депозиту в другой вкладке) — событие 'source' этого источника
+  // (миграция 170) тихо перечитывает финансы без ручного обновления.
+  useRealtimeRefresh({
+    onRefresh: () => void refresh(),
+    source: true,
+    sourceId: source.id,
+  })
 
   return (
     <div className="flex w-full flex-col gap-5">
