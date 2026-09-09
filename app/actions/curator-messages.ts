@@ -212,7 +212,7 @@ export async function reactCuratorMessageAction(
     return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
   }
 
-  await enqueueJob({
+  const enqueued = await enqueueJob({
     channelId: dispatch.channelId,
     managerId: dispatch.managerId,
     action: 'react_message',
@@ -221,11 +221,19 @@ export async function reactCuratorMessageAction(
       providerMessageId: dispatch.providerMessageId,
       emoji,
     },
-  }).catch((err) => {
-    console.error('[panel] curator react enqueue failed:', err)
   })
+    .then(() => true)
+    .catch((err) => {
+      console.error('[panel] curator react enqueue failed:', err)
+      return false
+    })
 
   revalidatePath(CURATOR_CHATS_PATH)
+  // Local reaction persisted; if the provider job didn't queue, report delayed
+  // sync rather than a clean success that diverges from Telegram.
+  if (!enqueued) {
+    return { ok: true, message: 'Реакция сохранена, синхронизация с Telegram задержана.' }
+  }
   return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
 }
 
@@ -253,7 +261,7 @@ export async function deleteCuratorMessageAction(
     return { ok: true, message: 'Сообщение удалено.' }
   }
 
-  await enqueueJob({
+  const enqueued = await enqueueJob({
     channelId: dispatch.channelId,
     managerId: dispatch.managerId,
     action: 'delete_message',
@@ -261,11 +269,17 @@ export async function deleteCuratorMessageAction(
       target: dispatch.contactHandle,
       providerMessageId: dispatch.providerMessageId,
     },
-  }).catch((err) => {
-    console.error('[panel] curator delete enqueue failed:', err)
   })
+    .then(() => true)
+    .catch((err) => {
+      console.error('[panel] curator delete enqueue failed:', err)
+      return false
+    })
 
   revalidatePath(CURATOR_CHATS_PATH)
+  if (!enqueued) {
+    return { ok: true, message: 'Удалено локально, синхронизация с Telegram задержана.' }
+  }
   return { ok: true, message: 'Сообщение удалено.' }
 }
 
@@ -298,7 +312,7 @@ export async function editCuratorMessageAction(
     return { ok: true, message: 'Сообщение изменено.' }
   }
 
-  await enqueueJob({
+  const enqueued = await enqueueJob({
     channelId: dispatch.channelId,
     managerId: dispatch.managerId,
     action: 'edit_message',
@@ -307,11 +321,17 @@ export async function editCuratorMessageAction(
       providerMessageId: dispatch.providerMessageId,
       body: text,
     },
-  }).catch((err) => {
-    console.error('[panel] curator edit enqueue failed:', err)
   })
+    .then(() => true)
+    .catch((err) => {
+      console.error('[panel] curator edit enqueue failed:', err)
+      return false
+    })
 
   revalidatePath(CURATOR_CHATS_PATH)
+  if (!enqueued) {
+    return { ok: true, message: 'Изменено локально, синхронизация с Telegram задержана.' }
+  }
   return { ok: true, message: 'Сообщение изменено.' }
 }
 

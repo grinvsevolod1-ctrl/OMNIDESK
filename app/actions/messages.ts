@@ -128,7 +128,7 @@ export async function reactMessageAction(
     return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
   }
 
-  await enqueueJob({
+  const enqueued = await enqueueJob({
     channelId: dispatch.channelId,
     managerId: session.sub,
     action: 'react_message',
@@ -137,11 +137,20 @@ export async function reactMessageAction(
       providerMessageId: dispatch.providerMessageId,
       emoji,
     },
-  }).catch((err) => {
-    console.error('[panel] failed to enqueue react job:', err)
   })
+    .then(() => true)
+    .catch((err) => {
+      console.error('[panel] failed to enqueue react job:', err)
+      return false
+    })
 
   revalidatePath('/app/inbox')
+  // The local reaction is already persisted (it IS the source of truth), but if
+  // the provider job never queued, tell the user sync is delayed instead of
+  // reporting a clean success that silently diverges from Telegram.
+  if (!enqueued) {
+    return { ok: true, message: 'Реакция сохранена, синхронизация с Telegram задержана.' }
+  }
   return { ok: true, message: emoji ? 'Реакция добавлена.' : 'Реакция убрана.' }
 }
 
@@ -172,7 +181,7 @@ export async function deleteMessageAction(
     return { ok: true, message: 'Сообщение удалено.' }
   }
 
-  await enqueueJob({
+  const enqueued = await enqueueJob({
     channelId: dispatch.channelId,
     managerId: session.sub,
     action: 'delete_message',
@@ -180,11 +189,17 @@ export async function deleteMessageAction(
       target: dispatch.contactHandle,
       providerMessageId: dispatch.providerMessageId,
     },
-  }).catch((err) => {
-    console.error('[panel] failed to enqueue delete job:', err)
   })
+    .then(() => true)
+    .catch((err) => {
+      console.error('[panel] failed to enqueue delete job:', err)
+      return false
+    })
 
   revalidatePath('/app/inbox')
+  if (!enqueued) {
+    return { ok: true, message: 'Удалено локально, синхронизация с Telegram задержана.' }
+  }
   return { ok: true, message: 'Сообщение удалено.' }
 }
 
@@ -224,7 +239,7 @@ export async function editMessageAction(
     return { ok: true, message: 'Сообщение изменено.' }
   }
 
-  await enqueueJob({
+  const enqueued = await enqueueJob({
     channelId: dispatch.channelId,
     managerId: session.sub,
     action: 'edit_message',
@@ -233,11 +248,17 @@ export async function editMessageAction(
       providerMessageId: dispatch.providerMessageId,
       body: text,
     },
-  }).catch((err) => {
-    console.error('[panel] failed to enqueue edit job:', err)
   })
+    .then(() => true)
+    .catch((err) => {
+      console.error('[panel] failed to enqueue edit job:', err)
+      return false
+    })
 
   revalidatePath('/app/inbox')
+  if (!enqueued) {
+    return { ok: true, message: 'Изменено локально, синхронизация с Telegram задержана.' }
+  }
   return { ok: true, message: 'Сообщение изменено.' }
 }
 
