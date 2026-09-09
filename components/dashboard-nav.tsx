@@ -26,7 +26,7 @@ import {
   Users,
   ContactRound,
 } from 'lucide-react'
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType } from 'react'
 import {
   MaxIcon,
   TelegramIcon,
@@ -39,7 +39,21 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { NavUnreadBadge } from '@/components/nav-unread-badge'
+import {
+  getCuratorUnreadCountAction,
+  getManagerUnreadCountAction,
+} from '@/app/actions/unread-badges'
 import { cn } from '@/lib/utils'
+
+/**
+ * Scoped-экшен счётчика непрочитанного по роли. Ссылка на server action живёт
+ * на клиенте штатно (в отличие от произвольной функции в пропах из RSC).
+ */
+const UNREAD_FETCHERS: Record<'manager' | 'curator', () => Promise<number>> = {
+  manager: getManagerUnreadCountAction,
+  curator: getCuratorUnreadCountAction,
+}
 
 export type NavIcon =
   | 'overview'
@@ -93,12 +107,14 @@ export interface NavItem {
   /** When present, this item becomes a collapsible group of sub-links. */
   children?: NavItem[]
   /**
-   * Необязательный бейдж на пункте (напр. живой счётчик непрочитанного).
-   * Render-проп получает `collapsed`, чтобы в свёрнутом рэйле показать точку
-   * поверх иконки, а в развёрнутом — число справа. Клиентский компонент
-   * (например NavUnreadBadge) сам держит своё realtime-состояние.
+   * Необязательный живой бейдж непрочитанного на пункте. ВАЖНО: это
+   * СЕРИАЛИЗУЕМЫЙ дескриптор, а не render-проп/функция — nav приходит из
+   * серверного layout в клиентский DashboardShell, а функции через границу
+   * RSC не переносятся (иначе Server Components render error / React #441 и
+   * весь дашборд падает). Клиентский NavLinks сам строит NavUnreadBadge по
+   * этому дескриптору, выбирая scoped-экшен по роли.
    */
-  badge?: (collapsed: boolean) => ReactNode
+  unreadBadge?: { role: 'manager' | 'curator'; initial: number }
 }
 
 function collectHrefs(nav: NavItem[]): string[] {
@@ -272,8 +288,15 @@ export function NavLinks({
         />
         {!collapsed ? item.label : null}
         {/* Бейдж: в развёрнутом — число справа (ml-auto внутри самого бейджа),
-            в свёрнутом — точка, спозиционированная поверх иконки. */}
-        {item.badge ? item.badge(Boolean(collapsed)) : null}
+            в свёрнутом — точка, спозиционированная поверх иконки. Клиентский
+            NavUnreadBadge строится ЗДЕСЬ по сериализуемому дескриптору. */}
+        {item.unreadBadge ? (
+          <NavUnreadBadge
+            initial={item.unreadBadge.initial}
+            fetchCount={UNREAD_FETCHERS[item.unreadBadge.role]}
+            collapsed={Boolean(collapsed)}
+          />
+        ) : null}
       </Link>
     )
     if (collapsed) {

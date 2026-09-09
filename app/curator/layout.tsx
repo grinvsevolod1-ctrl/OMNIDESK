@@ -6,8 +6,6 @@ import { NotificationProvider } from '@/components/manager/notification-provider
 import { requireCurator } from '@/lib/auth'
 import { getManagerById } from '@/lib/data'
 import { countUnreadConversationsForCurator } from '@/lib/data/curator-conversations'
-import { getCuratorUnreadCountAction } from '@/app/actions/unread-badges'
-import { NavUnreadBadge } from '@/components/nav-unread-badge'
 import { TelegramContactGate } from '@/components/curator/telegram-contact-gate'
 import { ImpersonationBanner } from '@/components/shared/impersonation-banner'
 
@@ -18,13 +16,9 @@ function buildNav(initialUnread: number): NavItem[] {
       href: '/curator/chats',
       label: 'Чаты',
       icon: 'inbox',
-      badge: (collapsed) => (
-        <NavUnreadBadge
-          initial={initialUnread}
-          fetchCount={getCuratorUnreadCountAction}
-          collapsed={collapsed}
-        />
-      ),
+      // Сериализуемый дескриптор (не функция!) — nav уходит из этого серверного
+      // layout в клиентский DashboardShell; сам бейдж строит клиентский NavLinks.
+      unreadBadge: { role: 'curator', initial: initialUnread },
     },
     { href: '/curator/settings', label: 'Настройки', icon: 'settings' },
   ]

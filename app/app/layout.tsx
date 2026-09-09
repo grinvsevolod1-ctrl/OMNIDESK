@@ -16,8 +16,6 @@ import {
   getManagerOnLunch,
 } from '@/lib/data'
 import { getDictionaries } from '@/lib/data/dictionaries'
-import { getManagerUnreadCountAction } from '@/app/actions/unread-badges'
-import { NavUnreadBadge } from '@/components/nav-unread-badge'
 
 function buildNav(initialUnread: number): NavItem[] {
   return [
@@ -27,13 +25,9 @@ function buildNav(initialUnread: number): NavItem[] {
       href: '/app/inbox',
       label: 'Входящие',
       icon: 'inbox',
-      badge: (collapsed) => (
-        <NavUnreadBadge
-          initial={initialUnread}
-          fetchCount={getManagerUnreadCountAction}
-          collapsed={collapsed}
-        />
-      ),
+      // Сериализуемый дескриптор (не функция!) — nav уходит из этого серверного
+      // layout в клиентский DashboardShell; сам бейдж строит клиентский NavLinks.
+      unreadBadge: { role: 'manager', initial: initialUnread },
     },
     { href: '/app/leads', label: 'Мои лиды', icon: 'managers' },
     { href: '/app/quick-replies', label: 'Автоответы', icon: 'quickReplies' },
