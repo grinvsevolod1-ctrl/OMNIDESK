@@ -169,6 +169,15 @@ export async function GET(request: Request): Promise<Response> {
           }
           return
         }
+        // Channel-события админского уровня (напр. виджет livechat впервые
+        // подключился с сайта, markLivechatConnected). Нужны только админу —
+        // это его экран livechat переключает «Не интегрирован» → «Активен».
+        if (event.type === 'channel') {
+          if (isAdmin) {
+            send('channel', { type: 'channel', channelId: event.channelId })
+          }
+          return
+        }
         // Куратор: доставляем ТОЛЬКО message/conversation-события его
         // переданных диалогов (по curator_id). Эфемерные typing/presence и
         // channel-события — менеджерские, куратору не нужны.

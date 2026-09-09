@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Check,
   Copy,
@@ -11,6 +12,7 @@ import {
   Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 import {
   createLivechatAction,
   deleteLivechatAction,
@@ -130,12 +132,21 @@ export function LivechatAdmin({
   channels: LivechatAdminChannel[]
   managers: Manager[]
 }) {
+  const router = useRouter()
   const [open, setOpen] = useState(false)
   const [pool, setPool] = useState<string[]>([])
   const [apiKey, setApiKey] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
   const [busyId, setBusyId] = useState<string | null>(null)
   const [origin, setOrigin] = useState('')
+
+  // Живой статус: когда виджет впервые коннектится с сайта, сервер шлёт
+  // событие 'channel' (markLivechatConnected) — перечитываем RSC, и бейдж
+  // «Не интегрирован» сам переключается на «Активен» без перезагрузки.
+  useRealtimeRefresh({
+    onRefresh: () => router.refresh(),
+    channel: true,
+  })
 
   useEffect(() => {
     // Read the real origin on the client so generated snippet/webhook URLs match
@@ -418,7 +429,7 @@ function EditQueue({
         <div className="my-3 flex flex-col gap-2">
           <QueuePicker managers={managers} selected={pool} onChange={setPool} />
           <span className="text-xs text-muted-foreground">
-            выбрано: {pool.length}
+            Выбрано: {pool.length}
           </span>
         </div>
         <div className="flex justify-end gap-2">

@@ -4,6 +4,7 @@
  * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
  */
 import { query } from '../db'
+import { publishRealtime } from '../realtime'
 import { TtlCache } from '../ttl-cache'
 import type { ChannelStatus, ConversationMeta, Message } from '../types'
 import {
@@ -68,12 +69,22 @@ export function isLivechatConnected(
  * pending -> active transition.
  */
 export async function markLivechatConnected(channelId: string): Promise<void> {
-  await query(
+  // RETURNING id срабатывает ТОЛЬКО когда статус реально сменился (WHERE
+  // status <> 'connected'), поэтому realtime-событие 'channel' публикуется
+  // ровно один раз — при первом хендшейке виджета. Админский экран (подписан
+  // на 'channel') тут же перещёлкивает бейдж «Не интегрирован» → «Активен»
+  // без перезагрузки. Публикация не в транзакции апдейта — событие эфемерное,
+  // потеря NOTIFY некритична (бейдж догонится при следующем заходе).
+  const changed = await query<{ id: string }>(
     `UPDATE channels
         SET status = 'connected', last_checked_at = now()
-      WHERE id = $1 AND type = 'livechat' AND status <> 'connected'`,
+      WHERE id = $1 AND type = 'livechat' AND status <> 'connected'
+      RETURNING id`,
     [channelId],
   )
+  if (changed.length > 0) {
+    await publishRealtime({ type: 'channel', channelId }).catch(() => {})
+  }
 }
 
 /**

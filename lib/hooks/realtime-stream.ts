@@ -1,7 +1,8 @@
 'use client'
 
 /**
- * Один общий EventSource на вкладку для лёгких push-сигналов `lead` и `source`.
+ * Один общий EventSource на вкладку для лёгких push-сигналов `lead`, `source`
+ * и `channel`.
  *
  * Раньше каждый хук (список лидов, попап уведомлений, открытая карточка,
  * дашборды источников) открывал свой EventSource — на одной странице их
@@ -15,12 +16,13 @@
 
 type Handler = (data: unknown) => void
 
-const DATA_EVENTS = ['lead', 'source'] as const
+const DATA_EVENTS = ['lead', 'source', 'channel'] as const
 type DataEvent = (typeof DATA_EVENTS)[number]
 
 const handlers: Record<DataEvent, Set<Handler>> = {
   lead: new Set(),
   source: new Set(),
+  channel: new Set(),
 }
 const reconnectHandlers = new Set<() => void>()
 
@@ -84,7 +86,7 @@ function release(): void {
   }
 }
 
-/** Подписка на именованный кадр (`lead` | `source`). Возвращает отписку. */
+/** Подписка на именованный кадр (`lead` | `source` | `channel`). Возвращает отписку. */
 export function onStreamEvent(name: DataEvent, fn: Handler): () => void {
   handlers[name].add(fn)
   refs += 1

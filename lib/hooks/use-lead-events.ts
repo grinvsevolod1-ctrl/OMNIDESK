@@ -66,6 +66,8 @@ export function useRealtimeRefresh(opts: {
   onRefresh: () => void
   lead?: boolean
   source?: boolean
+  /** Реагировать на событие 'channel' (напр. виджет livechat подключился). */
+  channel?: boolean
   leadId?: string | null
   sourceId?: string | null
   debounceMs?: number
@@ -73,6 +75,7 @@ export function useRealtimeRefresh(opts: {
   const {
     lead = false,
     source = false,
+    channel = false,
     leadId = null,
     sourceId = null,
     debounceMs = 300,
@@ -112,11 +115,14 @@ export function useRealtimeRefresh(opts: {
         }),
       )
     }
-    if (lead || source) offs.push(onStreamReconnect(fire))
+    if (channel) {
+      offs.push(onStreamEvent('channel', fire))
+    }
+    if (lead || source || channel) offs.push(onStreamReconnect(fire))
 
     return () => {
       if (timer) clearTimeout(timer)
       for (const off of offs) off()
     }
-  }, [lead, source, leadId, sourceId, debounceMs])
+  }, [lead, source, channel, leadId, sourceId, debounceMs])
 }
