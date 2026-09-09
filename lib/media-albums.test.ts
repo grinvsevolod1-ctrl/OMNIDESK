@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Message } from './types'
 import {
+  albumCellSpansRow,
+  albumGridCols,
   computeAlbums,
   isSelectableMedia,
   MAX_ALBUM_SIZE,
@@ -24,6 +26,25 @@ function photo(
     ...overrides,
   } as Message
 }
+
+describe('albumGridCols', () => {
+  it('lays 2–4 items two-up and 5+ in three columns', () => {
+    expect(albumGridCols(2)).toBe(2)
+    expect(albumGridCols(3)).toBe(2)
+    expect(albumGridCols(4)).toBe(2)
+    expect(albumGridCols(5)).toBe(3)
+    expect(albumGridCols(10)).toBe(3)
+  })
+})
+
+describe('albumCellSpansRow', () => {
+  it('spans only the first cell of a 3-item album', () => {
+    expect(albumCellSpansRow(3, 0)).toBe(true)
+    expect(albumCellSpansRow(3, 1)).toBe(false)
+    expect(albumCellSpansRow(2, 0)).toBe(false)
+    expect(albumCellSpansRow(4, 0)).toBe(false)
+  })
+})
 
 describe('sameAlbum', () => {
   it('groups photos/videos from one side within the time window', () => {

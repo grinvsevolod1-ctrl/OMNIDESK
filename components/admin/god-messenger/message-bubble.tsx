@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
+import { albumCellSpansRow, albumGridCols } from '@/lib/media-albums'
 import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import { fmtDayChip, fmtTime } from './utils'
 import { parseReply } from './reply'
@@ -354,12 +355,11 @@ function ImageWithSkeleton({
  *  4→2×2, 5+→3 columns. Every cell is a square crop with its own upload state. */
 function MediaAlbum({ items }: { items: Message[] }) {
   const n = items.length
-  const cols = n <= 4 ? 2 : 3
   return (
     <div
       className={cn(
         'mb-1 grid w-64 max-w-full gap-0.5 sm:w-72',
-        cols === 2 ? 'grid-cols-2' : 'grid-cols-3',
+        albumGridCols(n) === 2 ? 'grid-cols-2' : 'grid-cols-3',
       )}
     >
       {items.map((m, idx) => (
@@ -367,7 +367,7 @@ function MediaAlbum({ items }: { items: Message[] }) {
           key={m.id}
           message={m}
           // 3-photo album: first spans the full width above the pair.
-          className={n === 3 && idx === 0 ? 'col-span-2' : undefined}
+          className={albumCellSpansRow(n, idx) ? 'col-span-2' : undefined}
         />
       ))}
     </div>

@@ -15,6 +15,23 @@ export const ALBUM_TIME_WINDOW_MS = 5000
  */
 export const MAX_ALBUM_SIZE = 10
 
+/**
+ * Column count for an album grid, mirroring Telegram: up to 4 items lay out
+ * two-up, 5+ switch to three columns. Shared by every album renderer (manager
+ * inbox, god messenger) so the layout can't drift between surfaces.
+ */
+export function albumGridCols(n: number): 2 | 3 {
+  return n <= 4 ? 2 : 3
+}
+
+/**
+ * In a 3-item album the first image spans the full width above the pair below
+ * it; every other cell is a single square.
+ */
+export function albumCellSpansRow(n: number, idx: number): boolean {
+  return n === 3 && idx === 0
+}
+
 /** Effective media type with defensive re-typing for historical rows:
  *  telegram «кружки» ingested before video_note support were stored as
  *  voice/audio while keeping their video/* MIME. */

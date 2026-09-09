@@ -24,7 +24,11 @@ import { useRetryingMediaSrc } from '@/components/manager/inbox/use-retrying-med
 import { VideoNotePlayer } from '@/components/shared/video-note-player'
 import type { Message } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { effectiveMediaType } from '@/lib/media-albums'
+import {
+  albumCellSpansRow,
+  albumGridCols,
+  effectiveMediaType,
+} from '@/lib/media-albums'
 import { mediaFilename } from '@/lib/media-download'
 
 export { MediaGalleryProvider } from '@/components/manager/inbox/media-lightbox'
@@ -68,13 +72,12 @@ function MessageMediaAlbumImpl({ items }: { items: Message[] }) {
     else setLocalIndex(items.findIndex((x) => x.id === m.id))
   }
   const n = items.length
-  const cols = n <= 4 ? 2 : 3
   return (
     <>
       <div
         className={cn(
           'grid w-64 max-w-full gap-0.5 sm:w-72',
-          cols === 2 ? 'grid-cols-2' : 'grid-cols-3',
+          albumGridCols(n) === 2 ? 'grid-cols-2' : 'grid-cols-3',
         )}
       >
         {items.map((m, idx) => (
@@ -82,7 +85,7 @@ function MessageMediaAlbumImpl({ items }: { items: Message[] }) {
             key={m.id}
             message={m}
             // 3-photo album: the first image spans the full width above the pair.
-            className={n === 3 && idx === 0 ? 'col-span-2' : undefined}
+            className={albumCellSpansRow(n, idx) ? 'col-span-2' : undefined}
             onOpen={() => openCell(m)}
           />
         ))}
