@@ -6,11 +6,7 @@
         "ecosystem.config.js",
         "native/capacitor.config.ts",
         "scripts/*.mjs",
-        "scripts/build-widget.mjs",
         "widget-src/livechat.js",
-        "vitest.config.ts",
-        "vitest.integration.config.ts",
-        "playwright.config.ts",
         "tests/integration/**/*.test.ts"
       ],
       "project": ["**/*.{ts,tsx,js,mjs}"],
