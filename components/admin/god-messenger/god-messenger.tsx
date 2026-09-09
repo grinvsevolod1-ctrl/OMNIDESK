@@ -11,6 +11,7 @@ import {
 import { useSearchParams } from 'next/navigation'
 
 import { toast } from 'sonner'
+import { useVisualViewportHeight } from '@/lib/hooks/use-visual-viewport-height'
 import { secretSetContactBlockedAction } from '@/app/actions/admin-secret/conversation-edits'
 import { secretReassignConversationManagerAction } from '@/app/actions/admin-secret/conversations'
 import type { Channel, Manager } from '@/lib/types'
@@ -149,8 +150,16 @@ export function GodMessenger({
       : managerNameOf(thread.conversation?.managerId ?? null)
     : ''
 
+  // Standalone full-screen chat (outside the dashboard shell): sync --app-vh so
+  // iOS keyboards ride above the composer instead of overlaying it — identical
+  // behaviour to the manager/curator inbox.
+  useVisualViewportHeight()
+
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className="flex flex-col overflow-hidden bg-background text-foreground"
+      style={{ height: 'var(--app-vh, 100dvh)' }}
+    >
       <div className="flex min-h-0 flex-1">
         <ChatListPane
           showThread={showThread}

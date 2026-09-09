@@ -24,6 +24,7 @@ import { updateMyAvatarAction } from '@/app/actions/account'
 import type { SimpleResult } from '@/app/actions/account-shared'
 import { unregisterNativePush } from '@/lib/capacitor-push'
 import { unsubscribePushThisDevice } from '@/lib/push-client'
+import { useVisualViewportHeight } from '@/lib/hooks/use-visual-viewport-height'
 import { AvatarPickerDialog } from '@/components/shared/avatar-picker'
 import { SupportDialog } from '@/components/shared/support-dialog'
 import { BrandMark } from '@/components/brand'
@@ -105,43 +106,11 @@ export function DashboardShell({
   )
 
   // iOS standalone PWA: `fixed inset-0` местами берёт высоту «маленького»
-  // вьюпорта и оставляет снизу щель, где просвечивает фон страницы (bg-background,
-  // темнее композера) — та же чёрная полоса, что была справа. Пишем реальную
-  // видимую высоту в --app-vh (visualViewport.height). Оболочка остаётся
-  // `fixed inset-0` (left/right/top прибиты → ширина всегда целая, правой полосы
-  // нет), а заданная height перекрывает bottom:0 (при top+height свойство bottom
-  // по спеке игнорируется) → низ ровно по видимому краю, без щели.
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const vv = window.visualViewport
-    const apply = () => {
-      if (!vv) return
-      // Only PIN an explicit shell height while a soft keyboard is actually
-      // open. iOS ignores `interactive-widget`, so its keyboard overlays the
-      // page and only the visual viewport shrinks — pin the shell to that so
-      // the composer rides above the keyboard. When the keyboard is closed (or
-      // on Android, where `resizes-content` already shrank the layout viewport)
-      // we CLEAR the override and let CSS `100dvh` govern. This kills the stale
-      // short height that used to leave a black gap ("подвал") under the
-      // composer after the keyboard closed.
-      const keyboardInset = window.innerHeight - vv.height
-      const root = document.documentElement
-      if (keyboardInset > 120) {
-        root.style.setProperty('--app-vh', `${Math.round(vv.height)}px`)
-      } else {
-        root.style.removeProperty('--app-vh')
-      }
-    }
-    apply()
-    vv?.addEventListener('resize', apply)
-    window.addEventListener('resize', apply)
-    window.addEventListener('orientationchange', apply)
-    return () => {
-      vv?.removeEventListener('resize', apply)
-      window.removeEventListener('resize', apply)
-      window.removeEventListener('orientationchange', apply)
-    }
-  }, [])
+  // вьюпорта и оставляет снизу щель, где просвечивает фон страницы. Общий хук
+  // пишет реальную видимую высоту в --app-vh (visualViewport.height) только пока
+  // открыта клавиатура; оболочка остаётся `fixed inset-0` (ширина всегда целая),
+  // а заданная height перекрывает bottom:0 → низ ровно по видимому краю.
+  useVisualViewportHeight()
 
   // Sign out cleanly: drop THIS device's push subscription BEFORE ending the
   // session, otherwise the server row survives and the dispatcher keeps pushing
