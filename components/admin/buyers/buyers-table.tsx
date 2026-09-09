@@ -7,9 +7,11 @@
  * аккаунта (блокировка/сброс/удаление) остаются в строке через ManagerActions.
  */
 import { useCallback, useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { ChevronRight, Loader2, Megaphone, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import { getBuyerReportAction } from '@/app/actions/source-finance'
+import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 import { BuyerReport } from '@/components/admin/buyers/buyer-report'
 import { ManagerActions } from '@/components/admin/manager-actions'
 import { Badge } from '@/components/ui/badge'
@@ -55,9 +57,24 @@ function StatusPill({ status }: { status: Manager['status'] }) {
 }
 
 export function BuyersTable({ buyers }: { buyers: BuyerWithTotals[] }) {
+  const router = useRouter()
   const [report, setReport] = useState<Report | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
   const [, startTransition] = useTransition()
+
+  // Живые балансы: расход/депозит (событие 'source', миграция 170) и новые
+  // лиды (событие 'lead' — влияет на счётчик лидов байера) перечитывают RSC.
+  // Страница force-dynamic, поэтому router.refresh() обновляет карточки.
+  // Пока открыт отчёт байера (report != null), таблица скрыта — refresh не
+  // мешает, а свои финансы отчёт обновляет через source-detail внутри.
+  useRealtimeRefresh({
+    onRefresh: () => {
+      if (!report) router.refresh()
+    },
+    lead: true,
+    source: true,
+    debounceMs: 500,
+  })
 
   const openReport = useCallback((buyerId: string) => {
     setLoadingId(buyerId)
