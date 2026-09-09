@@ -5,7 +5,7 @@
  * Split out of the former monolithic lib/data.ts; re-exported via lib/data.ts.
  */
 import { randomUUID } from 'crypto'
-import { query } from '../db'
+import { query, withTransaction } from '../db'
 import { randomAvatarPreset } from '../avatar-presets'
 import type { AccountRole, Manager, ManagerStatus } from '../types'
 import {
@@ -386,36 +386,41 @@ export async function deleteManager(id: string): Promise<void> {
   // ON DELETE SET NULL (to protect live-chat), so we remove them explicitly to
   // preserve the previous behaviour for these worker-backed channels.
   // Curators never own channels, so the DELETEs are harmless no-ops for them.
-  await query(
-    `DELETE FROM channels WHERE manager_id = $1 AND type <> 'livechat'`,
-    [id],
-  )
-  // Live-chat channels are standalone resources and must SURVIVE manager
-  // deletion. Strip this manager's id out of every live-chat round-robin pool
-  // so routing never points at a ghost manager. The channels.manager_id FK
-  // (ON DELETE SET NULL) keeps the channel itself; it simply shows "no agents
-  // available" in the widget until a manager is assigned again.
-  await query(
-    `UPDATE channels
-        SET config = jsonb_set(
-              COALESCE(config, '{}'::jsonb),
-              '{pool}',
-              COALESCE(
-                (
-                  SELECT jsonb_agg(p)
-                  FROM jsonb_array_elements_text(config->'pool') AS p
-                  WHERE p <> $1
-                ),
-                '[]'::jsonb
+  // All three writes run in one transaction so a mid-way failure can't leave
+  // the manager deleted while their channels/pool references survive (or vice
+  // versa).
+  await withTransaction(async (db) => {
+    await db.query(
+      `DELETE FROM channels WHERE manager_id = $1 AND type <> 'livechat'`,
+      [id],
+    )
+    // Live-chat channels are standalone resources and must SURVIVE manager
+    // deletion. Strip this manager's id out of every live-chat round-robin pool
+    // so routing never points at a ghost manager. The channels.manager_id FK
+    // (ON DELETE SET NULL) keeps the channel itself; it simply shows "no agents
+    // available" in the widget until a manager is assigned again.
+    await db.query(
+      `UPDATE channels
+          SET config = jsonb_set(
+                COALESCE(config, '{}'::jsonb),
+                '{pool}',
+                COALESCE(
+                  (
+                    SELECT jsonb_agg(p)
+                    FROM jsonb_array_elements_text(config->'pool') AS p
+                    WHERE p <> $1
+                  ),
+                  '[]'::jsonb
+                )
               )
-            )
-      WHERE type = 'livechat'
-        AND config->'pool' IS NOT NULL`,
-    [id],
-  )
-  // Finally remove the manager/curator. Their own conversations cascade away;
-  // live-chat channels they owned have manager_id set to NULL by the FK.
-  await query('DELETE FROM managers WHERE id = $1', [id])
+        WHERE type = 'livechat'
+          AND config->'pool' IS NOT NULL`,
+      [id],
+    )
+    // Finally remove the manager/curator. Their own conversations cascade away;
+    // live-chat channels they owned have manager_id set to NULL by the FK.
+    await db.query('DELETE FROM managers WHERE id = $1', [id])
+  })
   // Drop cached auth state so the deleted account is logged out immediately.
   invalidateManagerAuthState(id)
 }

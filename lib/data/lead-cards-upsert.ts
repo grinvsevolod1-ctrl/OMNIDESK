@@ -3,7 +3,7 @@
  * dedup, duplicate warnings, transfer-on-upsert semantics.
  */
 import { randomUUID } from 'crypto'
-import { query } from '../db'
+import { query, withTransaction, type DbExecutor } from '../db'
 import { normalizeCityName, rememberCity } from './cities'
 import type { LeadCard } from './lead-cards-core'
 import { recordStatusHistory, recordTransfer } from './lead-history'
@@ -202,71 +202,88 @@ export async function upsertLeadCard(
     // curator — reassignment goes through the admin (with a status reset).
     if (isReassign && !input.isAdmin) {
       throw new Error(
-        'Лид уже закреплён за другим менеджером по кадрам. Переназначение выполняет администратор.',
+        'Лид уже закреплён за другим менеджером по кадрам. Переназн��чение выполняет администратор.',
       )
     }
 
     const isFreshTransfer = curatorId !== null && curatorId !== prevCuratorId
 
-    await query(
-      `UPDATE lead_cards
-          SET full_name = $2,
-              phone = $3,
-              telegram_username = $4,
-              telegram_id = $5,
-              city = $6,
-              address = $7,
-              vacancy = $8,
-              manager_id = $9,
-              curator_id = COALESCE($10, curator_id),
-              transferred_at = CASE
-                WHEN $11::boolean THEN now()
-                ELSE transferred_at
-              END,
-              -- Свежая передача: лид «только зашёл» — статус NEW; куратор
-              -- всё равно обязан подтвердить реальный статус сегодня.
-              status = CASE WHEN $11::boolean THEN 'new' ELSE status END,
-              previous_status = CASE
-                WHEN $11::boolean THEN COALESCE(status, previous_status)
-                ELSE previous_status
-              END,
-              status_confirmed_at = CASE
-                WHEN $11::boolean THEN NULL ELSE status_confirmed_at
-              END,
-              status_confirmed_date = CASE
-                WHEN $11::boolean THEN NULL ELSE status_confirmed_date
-              END,
-              updated_at = now()
-        WHERE id = $1`,
-      [
-        existing[0].id,
-        fullName,
-        phone,
-        telegramUsername,
-        telegramId,
-        city,
-        address,
-        vacancy,
-        input.managerId,
-        curatorId,
-        isFreshTransfer,
-      ],
-    )
+    const updateExistingCard = (exec: DbExecutor) =>
+      exec.query(
+        `UPDATE lead_cards
+            SET full_name = $2,
+                phone = $3,
+                telegram_username = $4,
+                telegram_id = $5,
+                city = $6,
+                address = $7,
+                vacancy = $8,
+                manager_id = $9,
+                curator_id = COALESCE($10, curator_id),
+                transferred_at = CASE
+                  WHEN $11::boolean THEN now()
+                  ELSE transferred_at
+                END,
+                -- Свежая передача: лид «только зашёл» — статус NEW; куратор
+                -- всё равно обязан подтвердить реальный статус сегодня.
+                status = CASE WHEN $11::boolean THEN 'new' ELSE status END,
+                previous_status = CASE
+                  WHEN $11::boolean THEN COALESCE(status, previous_status)
+                  ELSE previous_status
+                END,
+                status_confirmed_at = CASE
+                  WHEN $11::boolean THEN NULL ELSE status_confirmed_at
+                END,
+                status_confirmed_date = CASE
+                  WHEN $11::boolean THEN NULL ELSE status_confirmed_date
+                END,
+                updated_at = now()
+          WHERE id = $1`,
+        [
+          existing[0].id,
+          fullName,
+          phone,
+          telegramUsername,
+          telegramId,
+          city,
+          address,
+          vacancy,
+          input.managerId,
+          curatorId,
+          isFreshTransfer,
+        ],
+      )
 
     if (isFreshTransfer && curatorId) {
-      await recordTransfer({
-        leadCardId: existing[0].id,
-        fromCuratorId: prevCuratorId,
-        toCuratorId: curatorId,
-        initiatedById: input.isAdmin ? null : input.managerId,
-        initiatedByRole: input.isAdmin ? 'admin' : 'manager',
+      // Свежая передача фиксируется атомарно: обновление карточки, запись
+      // передачи (она же пишет conversations.curator_id) и сброс статуса — в
+      // одной транзакции. Иначе сбой recordTransfer после успешного UPDATE
+      // оставит lead_cards.curator_id и conversations.curator_id рассинхрон-
+      // ными (ровно тот дрейф, который бэкофиллила миграция 162).
+      await withTransaction(async (db) => {
+        await updateExistingCard(db)
+        await recordTransfer(
+          {
+            leadCardId: existing[0].id,
+            fromCuratorId: prevCuratorId,
+            toCuratorId: curatorId,
+            initiatedById: input.isAdmin ? null : input.managerId,
+            initiatedByRole: input.isAdmin ? 'admin' : 'manager',
+          },
+          db,
+        )
+        await recordStatusHistory(
+          {
+            leadCardId: existing[0].id,
+            curatorId,
+            status: null,
+            reason: 'transfer_reset',
+          },
+          db,
+        )
       })
-      await recordStatusHistory({
-        leadCardId: existing[0].id,
-        curatorId,
-        status: null,
-        reason: 'transfer_reset',
-      })
+    } else {
+      await updateExistingCard({ query })
     }
 
     const card = await getLeadCardById(existing[0].id)
@@ -279,40 +296,52 @@ export async function upsertLeadCard(
   // ЛИБО команда (пуловая маршрутизация): в обоих случаях transferred_at = now,
   // статус NEW. team_id заполняется только для пуловой ветки.
   const transferredNow = Boolean(curatorId) || Boolean(teamId)
-  await query(
-    `INSERT INTO lead_cards (
-       id, conversation_id, manager_id, curator_id, team_id,
-       full_name, phone, telegram_username, telegram_id, city, address, vacancy,
-       transferred_at, status, traffic_source_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               CASE WHEN $13::boolean THEN now() ELSE NULL END,
-               CASE WHEN $13::boolean THEN 'new' ELSE NULL END,
-               (SELECT traffic_source_id FROM managers WHERE id = $3))`,
-    [
-      id,
-      input.conversationId,
-      input.managerId,
-      curatorId,
-      teamId,
-      fullName,
-      phone,
-      telegramUsername,
-      telegramId,
-      city,
-      address,
-      vacancy,
-      transferredNow,
-    ],
-  )
+  const insertNewCard = (exec: DbExecutor) =>
+    exec.query(
+      `INSERT INTO lead_cards (
+         id, conversation_id, manager_id, curator_id, team_id,
+         full_name, phone, telegram_username, telegram_id, city, address, vacancy,
+         transferred_at, status, traffic_source_id
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                 CASE WHEN $13::boolean THEN now() ELSE NULL END,
+                 CASE WHEN $13::boolean THEN 'new' ELSE NULL END,
+                 (SELECT traffic_source_id FROM managers WHERE id = $3))`,
+      [
+        id,
+        input.conversationId,
+        input.managerId,
+        curatorId,
+        teamId,
+        fullName,
+        phone,
+        telegramUsername,
+        telegramId,
+        city,
+        address,
+        vacancy,
+        transferredNow,
+      ],
+    )
 
   if (curatorId) {
-    await recordTransfer({
-      leadCardId: id,
-      fromCuratorId: null,
-      toCuratorId: curatorId,
-      initiatedById: input.isAdmin ? null : input.managerId,
-      initiatedByRole: input.isAdmin ? 'admin' : 'manager',
+    // Новая карточка с прямым закреплением за куратором + запись передачи
+    // (пишет и conversations.curator_id) — атомарно, иначе при сбое
+    // recordTransfer две ссылки на куратора разойдутся.
+    await withTransaction(async (db) => {
+      await insertNewCard(db)
+      await recordTransfer(
+        {
+          leadCardId: id,
+          fromCuratorId: null,
+          toCuratorId: curatorId,
+          initiatedById: input.isAdmin ? null : input.managerId,
+          initiatedByRole: input.isAdmin ? 'admin' : 'manager',
+        },
+        db,
+      )
     })
+  } else {
+    await insertNewCard({ query })
   }
 
   const card = await getLeadCardById(id)
