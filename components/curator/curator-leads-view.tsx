@@ -12,21 +12,22 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
 import useSWR from 'swr'
 import {
   Archive,
-  ArrowDownWideNarrow,
-  ArrowUpNarrowWide,
   FileSpreadsheet,
-  LayoutGrid,
-  List,
-  ListFilter,
   Loader2,
-  Search,
   User,
-  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { setLeadArchivedAction } from '@/app/actions/lead-cards'
 import { exportMyLeadsExcelAction } from '@/app/actions/leads-export'
 import { useXlsxExport } from '@/components/shared/use-xlsx-export'
+import { filterLeadsByStatusAndSearch } from '@/components/shared/leads/filter-leads'
+import {
+  LeadsSearchInput,
+  LeadsSortButton,
+  LeadsStatusFilter,
+  LeadsViewToggle,
+} from '@/components/shared/leads/leads-toolbar-controls'
+import { useLeadsViewMode } from '@/components/shared/leads/use-leads-view-mode'
 import { ArchiveLeadDialog } from '@/components/curator/archive-lead-dialog'
 import { CuratorLeadRow } from '@/components/curator/curator-lead-row'
 import { CuratorNotices } from '@/components/curator/curator-notices'
@@ -35,21 +36,10 @@ import { StatusReminder } from '@/components/curator/status-reminder'
 import { EmptyState, PageHeader } from '@/components/page-parts'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import type { LeadCard } from '@/lib/data/lead-cards'
 import {
   DAILY_STATUS_DEADLINE_HOUR,
   isPastDailyDeadline,
-  LEAD_STATUSES,
-  LEAD_STATUS_LABELS,
-  LEAD_STATUS_TONE,
   leadNeedsDailyStatus,
   leadStatusRank,
 } from '@/lib/lead-status'
@@ -75,18 +65,8 @@ export function CuratorLeadsView({
     return () => window.clearInterval(id)
   }, [])
 
-  // Вид: список / карточки. Читаем из localStorage после маунта (SSR-безопасно)
-  // и сохраняем при каждом переключении — выбор переживает перелогин.
-  const [view, setView] = useState<'list' | 'grid'>('list')
-  useEffect(() => {
-    const saved = window.localStorage.getItem(VIEW_STORAGE_KEY)
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- гидратация: на сервере localStorage нет, восстановить выбор можно только после маунта
-    if (saved === 'grid' || saved === 'list') setView(saved)
-  }, [])
-  const switchView = useCallback((v: 'list' | 'grid') => {
-    setView(v)
-    window.localStorage.setItem(VIEW_STORAGE_KEY, v)
-  }, [])
+  // Вид: список / карточки — общий хук (localStorage, выбор переживает перелогин).
+  const { view, switchView } = useLeadsViewMode(VIEW_STORAGE_KEY)
 
   // Фильтры — как у админа: статус, общий поиск, сортировка.
   const [statusFilter, setStatusFilter] = useState('')
@@ -196,17 +176,7 @@ export function CuratorLeadsView({
   // сервер не нужен — фильтр и поиск мгновенные.
   const filtered = useMemo(() => {
     const source = tab === 'archive' ? (archived ?? []) : leads
-    const q = search.trim().toLowerCase()
-    let out = source
-    if (statusFilter === 'none') out = out.filter((l) => !l.status)
-    else if (statusFilter) out = out.filter((l) => l.status === statusFilter)
-    if (q) {
-      out = out.filter((l) =>
-        [l.fullName, l.phone, l.telegramUsername, l.city, l.vacancy]
-          .filter(Boolean)
-          .some((v) => String(v).toLowerCase().includes(q)),
-      )
-    }
+    let out = filterLeadsByStatusAndSearch(source, statusFilter, search)
     const key = (l: LeadCard) =>
       new Date(l.transferredAt ?? l.createdAt).getTime()
     // Основная сортировка активной вкладки — по статусам: NEW всегда
@@ -328,83 +298,24 @@ export function CuratorLeadsView({
           </button>
         </div>
 
-        <Select
+        <LeadsStatusFilter
           value={statusFilter}
-          onValueChange={(v) => setStatusFilter((v as string) ?? '')}
-        >
-          <SelectTrigger
-            className={cn(
-              'h-9 gap-2 font-medium transition-all duration-300',
-              searchExpanded && 'max-w-40',
-            )}
-            aria-label="Фильтр по статусу"
-          >
-            <ListFilter className="size-4 shrink-0 text-muted-foreground" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent className="w-auto min-w-44">
-            <SelectItem value="">Все статусы (по умолчанию)</SelectItem>
-            <SelectItem value="none">Без статуса</SelectItem>
-            {LEAD_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                <span className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'size-1.5 shrink-0 rounded-full',
-                      LEAD_STATUS_TONE[s].dot,
-                    )}
-                  />
-                  {LEAD_STATUS_LABELS[s]}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          onChange={setStatusFilter}
+          searchExpanded={searchExpanded}
+        />
 
-        {/* Компактный поиск: узкий по умолчанию, плавно расширяется на фокус */}
-        <div
-          className={cn(
-            'relative min-w-0 transition-all duration-300 ease-out',
-            searchExpanded ? 'flex-1 basis-64' : 'flex-none basis-44',
-          )}
-        >
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
-            placeholder={searchExpanded ? 'ФИО, телефон, @username, город…' : 'Поиск'}
-            className="h-9 pl-8 pr-8"
-            aria-label="Поиск по лидам"
-          />
-          {search ? (
-            <button
-              type="button"
-              onClick={() => setSearch('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-              aria-label="Очистить поиск"
-            >
-              <X className="size-4" />
-            </button>
-          ) : null}
-        </div>
+        <LeadsSearchInput
+          value={search}
+          onChange={setSearch}
+          focused={searchFocused}
+          onFocusedChange={setSearchFocused}
+        />
 
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-9"
-          onClick={() => setSort((s) => (s === 'newest' ? 'oldest' : 'newest'))}
-          aria-label="Переключить сортировку"
-          title={sort === 'newest' ? 'Сначала новые' : 'Сначала старые'}
-        >
-          {sort === 'newest' ? (
-            <ArrowDownWideNarrow className="size-4 shrink-0" />
-          ) : (
-            <ArrowUpNarrowWide className="size-4 shrink-0" />
-          )}
-          {!searchExpanded ? (sort === 'newest' ? 'Новые' : 'Старые') : null}
-        </Button>
+        <LeadsSortButton
+          sort={sort}
+          onToggle={() => setSort((s) => (s === 'newest' ? 'oldest' : 'newest'))}
+          searchExpanded={searchExpanded}
+        />
 
         {/* Выгрузка текущей вкладки в Excel — как у админа */}
         <Button
@@ -424,37 +335,8 @@ export function CuratorLeadsView({
           {!searchExpanded ? 'Excel' : null}
         </Button>
 
-        {/* Переключатель вида: список / карточки — h-9, как все контролы */}
-        <div className="flex h-9 items-center rounded-lg border border-border p-1">
-          <button
-            type="button"
-            onClick={() => switchView('list')}
-            aria-label="Вид: список"
-            aria-pressed={view === 'list'}
-            className={cn(
-              'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
-              view === 'list'
-                ? 'bg-muted text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <List className="size-4 shrink-0" />
-          </button>
-          <button
-            type="button"
-            onClick={() => switchView('grid')}
-            aria-label="Вид: карточки"
-            aria-pressed={view === 'grid'}
-            className={cn(
-              'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
-              view === 'grid'
-                ? 'bg-muted text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <LayoutGrid className="size-4 shrink-0" />
-          </button>
-        </div>
+        {/* Переключатель вида: список / карточки — общий контрол */}
+        <LeadsViewToggle view={view} onSwitch={switchView} />
       </div>
 
       {/* Список / сетка */}
