@@ -34,6 +34,8 @@ import {
   LeadsViewToggle,
 } from '@/components/shared/leads/leads-toolbar-controls'
 import { useLeadsViewMode } from '@/components/shared/leads/use-leads-view-mode'
+import { useLeadEvents } from '@/lib/hooks/use-lead-events'
+import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import { Card } from '@/components/ui/card'
 import type { HeadCurator, HeadManager } from '@/lib/data/heads'
 import type { LeadCard } from '@/lib/data/lead-cards'
@@ -264,6 +266,11 @@ export function HeadLeadsView({
   const refresh = useCallback(async () => {
     setLeads(await listGroupLeadsAction())
   }, [])
+
+  // Realtime: руководитель получает lead-пинок по SSE (роль head в /api/stream)
+  // и мгновенно перечитывает лиды группы; shared-poll раз в 60с — фолбэк.
+  useLeadEvents('head-leads')
+  useSharedPoll('head-leads', refresh, 60_000)
 
   // Стабильный колбэк для мемоизированных строк.
   const openLead = useCallback((id: string) => setSelectedId(id), [])

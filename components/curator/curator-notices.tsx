@@ -9,6 +9,7 @@ import {
   listMyNoticesAction,
   markNoticeSeenAction,
 } from '@/app/actions/lead-cards'
+import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -34,9 +35,19 @@ export function CuratorNotices({
   onLeadsChanged?: () => void
 }) {
   const { data, mutate } = useSWR('curator-notices', () => listMyNoticesAction(), {
-    refreshInterval: 30_000,
     revalidateOnFocus: true,
   })
+  // Realtime: pool-уведомления критичны по времени (гонка «кто первый возьмёт
+  // лид»). Раньше был SWR refreshInterval 30с; теперь shared-poll 30с + push —
+  // useLeadEvents в CuratorLeadsView пинает ключ 'curator-notices' на событие
+  // `lead`, поэтому новый лид в пуле всплывает мгновенно, а не ждёт тика.
+  useSharedPoll(
+    'curator-notices',
+    async () => {
+      await mutate()
+    },
+    30_000,
+  )
   const [pending, startTransition] = useTransition()
 
   const current = data && data.length > 0 ? data[0] : null

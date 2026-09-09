@@ -33,6 +33,13 @@ export async function GET(request: Request): Promise<Response> {
   // gap-recovery (у куратора нет менеджерского бэкфилла — шлём resync).
   const viewerId = session.sub
   const isCurator = session.role === 'curator'
+  // Руководитель (/head) и медиабайер (/buyer) подписаны на этот же SSE только
+  // ради lead-пинка: событие несёт лишь сигнал «лиды изменились» (без данных),
+  // а их вьюхи перезапрашивают свои списки через собственные server actions с
+  // проверкой прав. Поэтому им безопасно доставлять ВСЕ lead-события (как
+  // админу) — точечная фильтрация по связям здесь была бы дорогой и лишней.
+  const isHead = session.role === 'head'
+  const isBuyer = session.role === 'buyer'
   const lastEventId = request.headers.get('last-event-id')
 
   const encoder = new TextEncoder()
@@ -72,7 +79,9 @@ export async function GET(request: Request): Promise<Response> {
       // просто просим клиента перезапросить данные (resync), без id.
       if (lastEventId && isCurator) {
         send('update', { type: 'conversation', managerId: viewerId, event: 'resync' })
-      } else if (lastEventId) {
+      } else if (lastEventId && !isHead && !isBuyer) {
+        // head/buyer: менеджерских сообщений нет — бэкфилл не нужен. Клиент
+        // (useLeadEvents) сам пинает поллеры на 'ready' после реконнекта.
         const since = new Date(lastEventId)
         if (!Number.isNaN(since.getTime())) {
           try {
@@ -138,6 +147,8 @@ export async function GET(request: Request): Promise<Response> {
         if (event.type === 'lead') {
           if (
             isAdmin ||
+            isHead ||
+            isBuyer ||
             event.managerId === managerId ||
             event.curatorId === managerId
           ) {

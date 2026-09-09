@@ -28,6 +28,8 @@ import {
   LeadsViewToggle,
 } from '@/components/shared/leads/leads-toolbar-controls'
 import { useLeadsViewMode } from '@/components/shared/leads/use-leads-view-mode'
+import { useLeadEvents } from '@/lib/hooks/use-lead-events'
+import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import { ArchiveLeadDialog } from '@/components/curator/archive-lead-dialog'
 import { CuratorLeadRow } from '@/components/curator/curator-lead-row'
 import { CuratorNotices } from '@/components/curator/curator-notices'
@@ -111,6 +113,12 @@ export function CuratorLeadsView({
     setLeads(next)
     void reloadArchive()
   }, [reloadArchive])
+
+  // Realtime: событие `lead` по SSE мгновенно перечитывает списки, а shared-poll
+  // раз в 60с — страховка на случай обрыва SSE (см. use-lead-events). Один
+  // EventSource пинает и список лидов, и попап уведомлений о пуле.
+  useLeadEvents(['curator-leads', 'curator-notices'])
+  useSharedPoll('curator-leads', refresh, 60_000)
 
   // Стабильные колбэки для мемоизированных строк.
   const openLead = useCallback((id: string) => setSelectedId(id), [])
