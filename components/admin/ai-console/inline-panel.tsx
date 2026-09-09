@@ -162,9 +162,9 @@ export function PendingCard({
 }) {
   const [busy, setBusy] = useState(false)
   return (
-    <div className="ml-9 flex flex-col gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3.5 duration-300 animate-in fade-in slide-in-from-top-1">
+    <div className="ml-9 flex flex-col gap-2.5 rounded-xl border border-warning/40 bg-warning/5 p-3.5 duration-300 animate-in fade-in slide-in-from-top-1">
       <p className="flex items-start gap-2 text-sm text-pretty">
-        <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-500" />
+        <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning" />
         <span>{detail}</span>
       </p>
       <div className="flex flex-wrap gap-2">

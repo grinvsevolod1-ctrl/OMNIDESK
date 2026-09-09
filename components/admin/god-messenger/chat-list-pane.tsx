@@ -77,9 +77,7 @@ export const ChatListPane = memo(function ChatListPane({
             <span
               className={cn(
                 'mt-1.5 inline-flex items-center gap-1.5 text-[11px] font-medium',
-                live
-                  ? 'text-emerald-600 dark:text-emerald-400'
-                  : 'text-amber-600 dark:text-amber-400',
+                live ? 'text-success' : 'text-warning',
               )}
               role="status"
               aria-live="polite"
@@ -88,14 +86,14 @@ export const ChatListPane = memo(function ChatListPane({
                 <span
                   className={cn(
                     'absolute inline-flex size-full animate-ping rounded-full opacity-60',
-                    live ? 'bg-emerald-500' : 'bg-amber-500',
+                    live ? 'bg-success' : 'bg-warning',
                   )}
                   aria-hidden
                 />
                 <span
                   className={cn(
                     'relative inline-flex size-2 rounded-full',
-                    live ? 'bg-emerald-500' : 'bg-amber-500',
+                    live ? 'bg-success' : 'bg-warning',
                   )}
                   aria-hidden
                 />

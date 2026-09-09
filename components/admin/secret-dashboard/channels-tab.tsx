@@ -137,12 +137,12 @@ export function ChannelsTab({
               className={[
                 'flex size-9 shrink-0 items-center justify-center rounded-lg border',
                 optimisticExclusive
-                  ? 'border-emerald-500/30 bg-emerald-500/10'
+                  ? 'border-success/30 bg-success/10'
                   : 'border-border bg-muted/40',
               ].join(' ')}
             >
               {optimisticExclusive ? (
-                <ShieldCheck className="size-4 text-emerald-500" />
+                <ShieldCheck className="size-4 text-success" />
               ) : (
                 <ShieldOff className="size-4 text-muted-foreground" />
               )}
@@ -485,7 +485,7 @@ function StatChip({
 }) {
   const accent =
     tone === 'ok' && value > 0
-      ? 'text-emerald-500'
+      ? 'text-success'
       : tone === 'warn' && value > 0
         ? 'text-warning'
         : 'text-foreground'

@@ -283,7 +283,7 @@ function Field({
 
 function SavedNote({ text }: { text: string }) {
   return (
-    <div className="ml-9 flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/5 px-3.5 py-2.5 text-sm text-emerald-600 duration-300 animate-in fade-in dark:text-emerald-400">
+    <div className="ml-9 flex items-center gap-2 rounded-xl border border-success/40 bg-success/5 px-3.5 py-2.5 text-sm text-success duration-300 animate-in fade-in">
       <Check className="size-4 shrink-0" />
       {text}
     </div>

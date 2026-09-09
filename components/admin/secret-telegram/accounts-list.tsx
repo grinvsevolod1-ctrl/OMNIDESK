@@ -41,8 +41,8 @@ import { AccountConnectDialog } from './account-connect'
 import { RenameDialog, SettingsDialog, StartDialog } from './account-dialogs'
 
 const STATUS_META: Record<string, { label: string; dot: string }> = {
-  online: { label: 'В сети', dot: 'bg-emerald-500' },
-  starting: { label: 'Подключение…', dot: 'bg-amber-500 animate-pulse' },
+  online: { label: 'В сети', dot: 'bg-success' },
+  starting: { label: 'Подключение…', dot: 'bg-warning animate-pulse' },
   waiting_qr: { label: 'Ожидает QR', dot: 'bg-sky-500 animate-pulse' },
   waiting_code: { label: 'Ожидает код', dot: 'bg-sky-500 animate-pulse' },
   waiting_password: { label: 'Ожидает 2FA', dot: 'bg-sky-500 animate-pulse' },

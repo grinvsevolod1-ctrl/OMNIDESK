@@ -50,14 +50,14 @@ function WidgetStatus({ status }: { status: LivechatAdminChannel['status'] }) {
       className={cn(
         'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium',
         connected
-          ? 'border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
-          : 'border-amber-500/30 text-amber-600 dark:text-amber-400',
+          ? 'border-success/30 text-success'
+          : 'border-warning/30 text-warning',
       )}
     >
       <span
         className={cn(
           'size-1.5 rounded-full',
-          connected ? 'bg-emerald-500' : 'bg-amber-500',
+          connected ? 'bg-success' : 'bg-warning',
         )}
       />
       {connected ? 'Активен' : 'Не интегрирован'}

@@ -99,7 +99,7 @@ export function AiConsole({
       ) : null}
 
       {!configured ? (
-        <Card className="border-amber-500/40 bg-amber-500/5 p-4 text-sm text-amber-700 dark:text-amber-400">
+        <Card className="border-warning/40 bg-warning/5 p-4 text-sm text-warning">
           Ключ AI Gateway не найден. Полноценный разговор с ассистентом заработает,
           когда будет задан <code className="font-mono">AI_GATEWAY_API_KEY</code>.
           Пока я буду просто открывать нужные разделы по вашему запросу — все

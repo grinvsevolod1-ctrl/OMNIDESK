@@ -251,7 +251,7 @@ function MeetingRow({
         title="Скопировать ссылку на встречу"
       >
         {copied ? (
-          <Check className="size-4 text-green-600" />
+          <Check className="size-4 text-success" />
         ) : (
           <Copy className="size-4" />
         )}

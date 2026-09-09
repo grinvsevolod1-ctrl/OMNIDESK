@@ -65,7 +65,7 @@ function StatusChip({
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
         tone === 'on' &&
-          'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+          'border-success/40 bg-success/10 text-success',
         tone === 'off' && 'border-border bg-muted/50 text-muted-foreground',
         tone === 'neutral' && 'border-border bg-card text-foreground',
       )}

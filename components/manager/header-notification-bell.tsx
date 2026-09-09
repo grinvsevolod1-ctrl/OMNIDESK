@@ -69,7 +69,7 @@ export function HeaderNotificationBell() {
             <span
               className={cn(
                 'absolute right-1 top-1 size-2 rounded-full ring-2 ring-background',
-                ready ? 'bg-emerald-500' : 'bg-amber-500',
+                ready ? 'bg-success' : 'bg-warning',
               )}
               aria-hidden="true"
             />
@@ -87,7 +87,7 @@ export function HeaderNotificationBell() {
           <span
             className={cn(
               'size-2 shrink-0 rounded-full',
-              ready ? 'bg-emerald-500' : 'bg-amber-500',
+              ready ? 'bg-success' : 'bg-warning',
             )}
             aria-hidden="true"
           />
