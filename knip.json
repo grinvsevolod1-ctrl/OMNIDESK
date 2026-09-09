@@ -1,0 +1,29 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "ecosystem.config.js",
+        "native/capacitor.config.ts",
+        "scripts/*.mjs",
+        "scripts/build-widget.mjs",
+        "widget-src/livechat.js",
+        "vitest.config.ts",
+        "vitest.integration.config.ts",
+        "playwright.config.ts",
+        "tests/integration/**/*.test.ts"
+      ],
+      "project": ["**/*.{ts,tsx,js,mjs}"],
+      "ignore": [
+        "public/**",
+        "lib/god-ext/templates/**"
+      ]
+    },
+    "worker": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    }
+  },
+  "ignoreBinaries": ["pm2"],
+  "ignoreDependencies": []
+}

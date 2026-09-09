@@ -202,7 +202,7 @@ export async function upsertLeadCard(
     // curator — reassignment goes through the admin (with a status reset).
     if (isReassign && !input.isAdmin) {
       throw new Error(
-        'Лид уже закреплён за другим менеджером по кадрам. Переназн��чение выполняет администратор.',
+        'Лид уже закреплён за другим менеджером по кадрам. Переназначение выполняет администратор.',
       )
     }
 

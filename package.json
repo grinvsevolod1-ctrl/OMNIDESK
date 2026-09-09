@@ -19,6 +19,7 @@
     "db:size": "node --env-file-if-exists=.env --env-file-if-exists=.env.production.local --env-file-if-exists=.env.local --env-file-if-exists=.env.development.local scripts/db-size-report.mjs",
     "db:verify-fresh": "node --env-file-if-exists=.env --env-file-if-exists=.env.production.local --env-file-if-exists=.env.local --env-file-if-exists=.env.development.local scripts/verify-fresh-migrations.mjs",
     "generate-admin-hash": "node scripts/generate-admin-hash.mjs",
+    "knip": "knip",
     "check": "pnpm lint && pnpm typecheck && pnpm typecheck:worker && pnpm test"
   },
   "dependencies": {
@@ -79,6 +80,7 @@
     "esbuild": "^0.28.1",
     "eslint": "^9.39.4",
     "eslint-config-next": "16",
+    "knip": "^6.35.0",
     "postcss": "^8.5.26",
     "shadcn": "^4.8.0",
     "tailwindcss": "^4.2.0",
