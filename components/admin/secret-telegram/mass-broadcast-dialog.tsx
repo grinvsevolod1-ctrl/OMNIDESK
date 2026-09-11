@@ -74,7 +74,7 @@ export function MassBroadcastDialog({
         if (!next) reset()
       }}
     >
-      <DialogContent className="flex h-[90dvh] w-[95vw] max-w-[85rem] flex-col gap-0 overflow-hidden p-0 sm:h-[85vh] sm:w-[85vw]">
+      <DialogContent className="flex h-[100dvh] max-h-[100dvh] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-[100dvh] sm:max-w-none">
         <DialogHeader className="shrink-0 border-b border-border px-4 py-4 pr-12 sm:px-5">
           <DialogTitle className="flex items-center gap-2">
             <Megaphone className="size-4 shrink-0 text-primary" />
@@ -434,7 +434,7 @@ function MassReviewStep({
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
           <p className="text-sm text-muted-foreground text-pretty">
             ИИ сделал отдельный текст для каждого из {view.campaigns.length}{' '}
-            аккаунтов. Проверьте и при желании поправьте — затем одна кнопка
+            аккаунтов. Проверьте и при жела��ии поправьте — затем одна кнопка
             запустит рассылку со всех сразу.
           </p>
 
