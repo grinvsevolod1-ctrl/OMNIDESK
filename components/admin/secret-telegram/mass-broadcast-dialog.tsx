@@ -74,7 +74,7 @@ export function MassBroadcastDialog({
         if (!next) reset()
       }}
     >
-      <DialogContent className="flex max-h-[90dvh] w-full max-w-[calc(100%-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+      <DialogContent className="flex h-[90dvh] w-[95vw] max-w-[85rem] flex-col gap-0 overflow-hidden p-0 sm:h-[85vh] sm:w-[85vw]">
         <DialogHeader className="shrink-0 border-b border-border px-4 py-4 pr-12 sm:px-5">
           <DialogTitle className="flex items-center gap-2">
             <Megaphone className="size-4 shrink-0 text-primary" />
@@ -171,8 +171,10 @@ function MassComposeStep({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-5">
-      <Card className="flex flex-col gap-2 p-4">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5 sm:px-6">
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
+          <Card className="flex flex-col gap-2 p-4">
         <div className="flex items-center justify-between gap-2">
           <Label className="flex items-center gap-2">
             <Users className="size-4 shrink-0 text-primary" />
@@ -338,8 +340,14 @@ function MassComposeStep({
         </p>
       </Card>
 
-      <div className="sticky bottom-0 -mx-4 flex justify-end gap-2 border-t border-border bg-background/90 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5">
-        <Button onClick={submit} disabled={pending || online.length === 0}>
+        </div>
+      </div>
+      <div className="flex shrink-0 justify-end gap-2 border-t border-border bg-background px-4 py-3 sm:px-6">
+        <Button
+          size="lg"
+          onClick={submit}
+          disabled={pending || online.length === 0}
+        >
           {pending ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
@@ -421,38 +429,51 @@ function MassReviewStep({
     })
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-5">
-      <p className="text-sm text-muted-foreground text-pretty">
-        ИИ сделал отдельный текст для каждого из {view.campaigns.length}{' '}
-        аккаунтов. Проверьте и при желании поправьте — затем одна кнопка запустит
-        рассылку со всех сразу.
-      </p>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5 sm:px-6">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+          <p className="text-sm text-muted-foreground text-pretty">
+            ИИ сделал отдельный текст для каждого из {view.campaigns.length}{' '}
+            аккаунтов. Проверьте и при желании поправьте — затем одна кнопка
+            запустит рассылку со всех сразу.
+          </p>
 
-      {view.campaigns.map((c) => (
-        <AccountTextCard
-          key={c.campaign.id}
-          campaignId={c.campaign.id}
-          accountName={c.accountName}
-          groupsCount={c.targets.length}
-          initialText={c.campaign.baseText}
-        />
-      ))}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {view.campaigns.map((c) => (
+              <AccountTextCard
+                key={c.campaign.id}
+                campaignId={c.campaign.id}
+                accountName={c.accountName}
+                groupsCount={c.targets.length}
+                initialText={c.campaign.baseText}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
 
-      <div className="sticky bottom-0 -mx-4 flex flex-col gap-2 border-t border-border bg-background/90 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5">
-        <p className="text-xs text-muted-foreground text-pretty">
-          {view.campaigns.length} аккаунтов × {groupsPerAccount} групп ={' '}
-          <span className="font-semibold text-foreground">{totalSends}</span>{' '}
-          отправок. Каждый аккаунт вступит в группы, пройдёт проверку «ты не
-          бот?» и опубликует свой текст с паузами.
-        </p>
-        <Button size="lg" onClick={launch} disabled={pending}>
-          {pending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Play className="size-4" />
-          )}
-          Запустить со всех {view.campaigns.length} аккаунтов
-        </Button>
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border bg-background px-4 py-3 sm:px-6">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground text-pretty">
+            {view.campaigns.length} аккаунтов × {groupsPerAccount} групп ={' '}
+            <span className="font-semibold text-foreground">{totalSends}</span>{' '}
+            отправок. Каждый аккаунт вступит в группы, пройдёт проверку «ты не
+            бот?» и опубликует свой текст с паузами.
+          </p>
+          <Button
+            size="lg"
+            className="w-full shrink-0 sm:w-auto"
+            onClick={launch}
+            disabled={pending}
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Play className="size-4" />
+            )}
+            Запустить со всех {view.campaigns.length} аккаунтов
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -608,8 +629,10 @@ function MassProgressStep({
     })
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-5">
-      <Card className="flex flex-col gap-3 p-4">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5 sm:px-6">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+          <Card className="flex flex-col gap-3 p-4">
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium">
             Прогресс:{' '}
@@ -642,8 +665,9 @@ function MassProgressStep({
         </div>
       </Card>
 
-      {view.campaigns.map((c) => {
-        const total = c.targets.length
+          <div className="grid gap-4 lg:grid-cols-2">
+            {view.campaigns.map((c) => {
+              const total = c.targets.length
         const done =
           c.counts.sent +
           c.counts.failed +
@@ -693,9 +717,12 @@ function MassProgressStep({
             )}
           </Card>
         )
-      })}
+            })}
+          </div>
+        </div>
+      </div>
 
-      <div className="sticky bottom-0 -mx-5 flex justify-end border-t border-border bg-background/90 px-5 py-3 backdrop-blur">
+      <div className="flex shrink-0 justify-end border-t border-border bg-background px-4 py-3 sm:px-6">
         <Button variant="outline" onClick={onExit}>
           Закрыть
         </Button>
