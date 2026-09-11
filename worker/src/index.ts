@@ -13,6 +13,7 @@ import { startHeartbeat } from './heartbeat.js'
 import { processDeployJob, drainDeployQueue } from './hosting/jobs.js'
 import { sweepServerHealth } from './hosting/ops.js'
 import { recoverStuckDeployments } from './hosting/repo.js'
+import { runBroadcastTick } from './broadcast-runner.js'
 
 /** How often the autopilot 'no_response' scheduler scans for silent threads. */
 const NO_RESPONSE_SWEEP_MS = 60_000
@@ -77,7 +78,16 @@ const MEDIA_OFFLOAD_SWEEP_MS = 30_000
  */
 const PROXY_HEALTH_SWEEP_MS = 5 * 60 * 1000
 
+/**
+ * Broadcast runner cadence: scans running campaigns and processes AT MOST one
+ * group per campaign per tick. Real pacing is enforced by each campaign's
+ * `not_before` lock (a human-like 45–90s gap between sends), so this short scan
+ * period only keeps the runner responsive — it never means frequent sends.
+ */
+const BROADCAST_TICK_MS = 10_000
+
 let heartbeatTimer: NodeJS.Timeout | null = null
+let broadcastTimer: NodeJS.Timeout | null = null
 let noResponseTimer: NodeJS.Timeout | null = null
 let hostingHealthTimer: NodeJS.Timeout | null = null
 let revivalTimer: NodeJS.Timeout | null = null
@@ -236,6 +246,16 @@ async function main(): Promise<void> {
   }, PROXY_HEALTH_SWEEP_MS)
   proxyHealthTimer.unref?.()
 
+  // 8. Broadcast runner: drive group-broadcast campaigns from personal accounts
+  //    (join → captcha → post), one group per campaign per tick, paced by each
+  //    campaign's not_before lock. Uses live sessions from the registry.
+  broadcastTimer = setInterval(() => {
+    runBroadcastTick((channelId) => registry.get(channelId)).catch((err) =>
+      logger.error({ err }, 'broadcast tick failed'),
+    )
+  }, BROADCAST_TICK_MS)
+  broadcastTimer.unref?.()
+
   logger.info('Omnidesk worker ready')
 }
 
@@ -243,6 +263,7 @@ async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Shutting down worker')
   try {
     if (heartbeatTimer) clearInterval(heartbeatTimer)
+    if (broadcastTimer) clearInterval(broadcastTimer)
     if (noResponseTimer) clearInterval(noResponseTimer)
     if (hostingHealthTimer) clearInterval(hostingHealthTimer)
     if (revivalTimer) clearInterval(revivalTimer)

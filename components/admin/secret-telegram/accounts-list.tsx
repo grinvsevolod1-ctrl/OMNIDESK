@@ -7,6 +7,7 @@ import {
   Flame,
   Layers,
   Loader2,
+  Megaphone,
   MessageCircle,
   MoreVertical,
   Pause,
@@ -73,6 +74,7 @@ export function AccountsList({
   unread,
   onOpen,
   onOpenPool,
+  onBroadcast,
   onRefresh,
   refreshing,
 }: {
@@ -82,6 +84,8 @@ export function AccountsList({
   onOpen: (account: PersonalAccountItem) => void
   /** Открыть общий пул — чаты всех аккаунтов в одном списке. */
   onOpenPool: () => void
+  /** Открыть панель рассылки по группам для этого аккаунта. */
+  onBroadcast: (account: PersonalAccountItem) => void
   onRefresh: () => void
   refreshing: boolean
 }) {
@@ -314,6 +318,10 @@ export function AccountsList({
                                 <DropdownMenuItem onClick={() => setWritingFor(a)}>
                                   <Send className="size-4" />
                                   Написать первым
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => onBroadcast(a)}>
+                                  <Megaphone className="size-4" />
+                                  Рассылка по группам
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   onClick={() => setSettingsFor(a)}

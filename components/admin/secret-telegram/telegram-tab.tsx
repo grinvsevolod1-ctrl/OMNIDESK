@@ -9,6 +9,7 @@ import {
 } from '@/app/actions/admin-secret/telegram-personal'
 import { AccountsList } from './accounts-list'
 import { PersonalMessenger } from './personal-messenger'
+import { BroadcastPanel } from './broadcast-panel'
 
 /**
  * Вкладка «Telegram» god-панели: контейнер над AccountsList и
@@ -26,6 +27,10 @@ export function SecretTelegramTab() {
   // Открытый мессенджер общего пула: null = закрыт, иначе фильтр ('all' или
   // id аккаунта — стартовый выбор при входе).
   const [messengerFilter, setMessengerFilter] = useState<string | null>(null)
+  // Открытая панель рассылки: null = закрыта, иначе выбранный личный аккаунт.
+  const [broadcastFor, setBroadcastFor] = useState<PersonalAccountItem | null>(
+    null,
+  )
   // id аккаунта -> непрочитанных всего (живой фан-аут на worker).
   const [unread, setUnread] = useState<Record<string, number>>({})
 
@@ -100,6 +105,18 @@ export function SecretTelegramTab() {
     )
   }
 
+  if (broadcastFor !== null) {
+    return (
+      <div className="h-[calc(100dvh-14rem)] min-h-[24rem] md:h-[calc(100dvh-11.5rem)]">
+        <BroadcastPanel
+          key={broadcastFor.id}
+          account={broadcastFor}
+          onBack={() => setBroadcastFor(null)}
+        />
+      </div>
+    )
+  }
+
   if (messengerFilter !== null) {
     const pooledAccounts = accounts.map((a) => ({
       id: a.id,
@@ -125,6 +142,7 @@ export function SecretTelegramTab() {
       unread={unread}
       onOpen={(a) => setMessengerFilter(a.id)}
       onOpenPool={() => setMessengerFilter('all')}
+      onBroadcast={(a) => setBroadcastFor(a)}
       onRefresh={() => void refresh()}
       refreshing={refreshing}
     />

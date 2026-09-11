@@ -62,6 +62,14 @@ import {
   forwardMessageIn,
   type TgMessagingDeps,
 } from './telegram-messaging.js'
+import {
+  joinTarget,
+  parseTarget,
+  passCaptcha,
+  postToGroup,
+  type CaptchaOutcome,
+  type JoinResult,
+} from './broadcast.js'
 
 // The feature modules this monolith was split into re-export their public
 // surface here so existing importers (e.g. registry.ts) keep resolving them
@@ -829,6 +837,49 @@ export class TelegramSession {
     await this.throttleSend()
     try {
       return await sendPersonalFile(client, entity, file)
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
+  }
+
+  /**
+   * Broadcast: join a group by link/@username. Throttled like a send so the
+   * account never joins two groups back-to-back. Returns the resolved entity
+   * and metadata for the panel preview. Personal mode only.
+   */
+  async broadcastJoin(rawInput: string): Promise<JoinResult> {
+    const client = this.personalClient()
+    await this.throttleSend()
+    try {
+      return await joinTarget(client, parseTarget(rawInput))
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
+  }
+
+  /**
+   * Broadcast: best-effort "ты не бот?" gate handling for a joined group.
+   * Never throws — returns 'passed' | 'none' | 'needs_human'. Not throttled as a
+   * send (it may only read), but a reply inside goes through Telegram normally.
+   */
+  async broadcastCaptcha(
+    entity: Api.TypeInputPeer | string,
+    replyPhrase: string,
+  ): Promise<CaptchaOutcome> {
+    return passCaptcha(this.personalClient(), entity, replyPhrase)
+  }
+
+  /** Broadcast: post one text variant to a joined group. Throttled. */
+  async broadcastPost(
+    entity: Api.TypeInputPeer | string,
+    text: string,
+  ): Promise<string | null> {
+    const client = this.personalClient()
+    await this.throttleSend()
+    try {
+      return await postToGroup(client, entity, text)
     } catch (err) {
       this.tripFloodCooldown(err)
       throw err
