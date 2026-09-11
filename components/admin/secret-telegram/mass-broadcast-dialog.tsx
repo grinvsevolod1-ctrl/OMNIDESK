@@ -74,10 +74,10 @@ export function MassBroadcastDialog({
         if (!next) reset()
       }}
     >
-      <DialogContent className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
-        <DialogHeader className="border-b border-border px-5 py-4">
+      <DialogContent className="flex max-h-[90dvh] w-full max-w-[calc(100%-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+        <DialogHeader className="shrink-0 border-b border-border px-4 py-4 pr-12 sm:px-5">
           <DialogTitle className="flex items-center gap-2">
-            <Megaphone className="size-4 text-primary" />
+            <Megaphone className="size-4 shrink-0 text-primary" />
             Массовая рассылка
           </DialogTitle>
           <DialogDescription className="text-pretty">
@@ -171,11 +171,11 @@ function MassComposeStep({
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-5">
       <Card className="flex flex-col gap-2 p-4">
         <div className="flex items-center justify-between gap-2">
           <Label className="flex items-center gap-2">
-            <Users className="size-4 text-primary" />
+            <Users className="size-4 shrink-0 text-primary" />
             Аккаунты для рассылки
           </Label>
           {online.length > 0 && (
@@ -338,7 +338,7 @@ function MassComposeStep({
         </p>
       </Card>
 
-      <div className="sticky bottom-0 -mx-5 flex justify-end gap-2 border-t border-border bg-background/90 px-5 py-3 backdrop-blur">
+      <div className="sticky bottom-0 -mx-4 flex justify-end gap-2 border-t border-border bg-background/90 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5">
         <Button onClick={submit} disabled={pending || online.length === 0}>
           {pending ? (
             <Loader2 className="size-4 animate-spin" />
@@ -421,7 +421,7 @@ function MassReviewStep({
     })
 
   return (
-    <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-5">
       <p className="text-sm text-muted-foreground text-pretty">
         ИИ сделал отдельный текст для каждого из {view.campaigns.length}{' '}
         аккаунтов. Проверьте и при желании поправьте — затем одна кнопка запустит
@@ -438,7 +438,7 @@ function MassReviewStep({
         />
       ))}
 
-      <div className="sticky bottom-0 -mx-5 flex flex-col gap-2 border-t border-border bg-background/90 px-5 py-3 backdrop-blur">
+      <div className="sticky bottom-0 -mx-4 flex flex-col gap-2 border-t border-border bg-background/90 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5">
         <p className="text-xs text-muted-foreground text-pretty">
           {view.campaigns.length} аккаунтов × {groupsPerAccount} групп ={' '}
           <span className="font-semibold text-foreground">{totalSends}</span>{' '}
@@ -608,7 +608,7 @@ function MassProgressStep({
     })
 
   return (
-    <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-5">
       <Card className="flex flex-col gap-3 p-4">
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium">
