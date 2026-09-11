@@ -41,6 +41,8 @@ export interface BroadcastCampaign {
   captchaReply: string
   consecErrors: number
   lastError: string | null
+  /** Массовый запуск: одна кампания на аккаунт делит общий batch_id (172). */
+  batchId: string | null
 }
 
 export interface BroadcastTarget {
@@ -69,6 +71,7 @@ interface CampaignRow {
   captcha_reply: string
   consec_errors: number
   last_error: string | null
+  batch_id: string | null
 }
 
 interface TargetRow {
@@ -98,6 +101,7 @@ function toCampaign(r: CampaignRow): BroadcastCampaign {
     captchaReply: r.captcha_reply,
     consecErrors: r.consec_errors,
     lastError: r.last_error,
+    batchId: r.batch_id,
   }
 }
 
@@ -126,14 +130,17 @@ export async function createCampaign(input: {
   minDelaySec?: number
   maxDelaySec?: number
   rawInputs: string[]
+  /** Массовый запуск: общий id пачки (одна кампания на аккаунт). */
+  batchId?: string
 }): Promise<BroadcastCampaign> {
   const rows = await query<CampaignRow>(
     `INSERT INTO broadcast_campaigns
-       (channel_id, context, captcha_reply, min_delay_sec, max_delay_sec)
+       (channel_id, context, captcha_reply, min_delay_sec, max_delay_sec, batch_id)
      VALUES ($1, $2,
              COALESCE(NULLIF($3, ''), DEFAULT),
              COALESCE($4, DEFAULT),
-             COALESCE($5, DEFAULT))
+             COALESCE($5, DEFAULT),
+             $6)
      RETURNING *`,
     [
       input.channelId,
@@ -141,6 +148,7 @@ export async function createCampaign(input: {
       input.captchaReply ?? '',
       input.minDelaySec ?? null,
       input.maxDelaySec ?? null,
+      input.batchId ?? null,
     ],
   )
   const campaign = toCampaign(rows[0])
@@ -185,6 +193,19 @@ export async function getLatestCampaignForChannel(
     [channelId],
   )
   return rows[0] ? toCampaign(rows[0]) : null
+}
+
+/** All campaigns of one mass launch, oldest first (stable review order). */
+export async function getCampaignsByBatch(
+  batchId: string,
+): Promise<BroadcastCampaign[]> {
+  const rows = await query<CampaignRow>(
+    `SELECT * FROM broadcast_campaigns
+     WHERE batch_id = $1
+     ORDER BY created_at, id`,
+    [batchId],
+  )
+  return rows.map(toCampaign)
 }
 
 export async function setCampaignBaseText(

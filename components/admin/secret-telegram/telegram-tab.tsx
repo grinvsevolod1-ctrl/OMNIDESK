@@ -10,6 +10,7 @@ import {
 import { AccountsList } from './accounts-list'
 import { PersonalMessenger } from './personal-messenger'
 import { BroadcastPanel } from './broadcast-panel'
+import { MassBroadcastDialog } from './mass-broadcast-dialog'
 
 /**
  * Вкладка «Telegram» god-панели: контейнер над AccountsList и
@@ -31,6 +32,8 @@ export function SecretTelegramTab() {
   const [broadcastFor, setBroadcastFor] = useState<PersonalAccountItem | null>(
     null,
   )
+  // Массовая рассылка сразу с нескольких аккаунтов (единый диалог).
+  const [massOpen, setMassOpen] = useState(false)
   // id аккаунта -> непрочитанных всего (живой фан-аут на worker).
   const [unread, setUnread] = useState<Record<string, number>>({})
 
@@ -137,14 +140,22 @@ export function SecretTelegramTab() {
   }
 
   return (
-    <AccountsList
-      accounts={accounts}
-      unread={unread}
-      onOpen={(a) => setMessengerFilter(a.id)}
-      onOpenPool={() => setMessengerFilter('all')}
-      onBroadcast={(a) => setBroadcastFor(a)}
-      onRefresh={() => void refresh()}
-      refreshing={refreshing}
-    />
+    <>
+      <AccountsList
+        accounts={accounts}
+        unread={unread}
+        onOpen={(a) => setMessengerFilter(a.id)}
+        onOpenPool={() => setMessengerFilter('all')}
+        onBroadcast={(a) => setBroadcastFor(a)}
+        onMassBroadcast={() => setMassOpen(true)}
+        onRefresh={() => void refresh()}
+        refreshing={refreshing}
+      />
+      <MassBroadcastDialog
+        open={massOpen}
+        onOpenChange={setMassOpen}
+        accounts={accounts}
+      />
+    </>
   )
 }

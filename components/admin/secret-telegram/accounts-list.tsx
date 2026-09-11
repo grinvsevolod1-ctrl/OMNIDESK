@@ -75,6 +75,7 @@ export function AccountsList({
   onOpen,
   onOpenPool,
   onBroadcast,
+  onMassBroadcast,
   onRefresh,
   refreshing,
 }: {
@@ -86,6 +87,8 @@ export function AccountsList({
   onOpenPool: () => void
   /** Открыть панель рассылки по группам для этого аккаунта. */
   onBroadcast: (account: PersonalAccountItem) => void
+  /** Открыть массовую рассылку сразу с нескольких аккаунтов. */
+  onMassBroadcast: () => void
   onRefresh: () => void
   refreshing: boolean
 }) {
@@ -160,6 +163,12 @@ export function AccountsList({
             <Button variant="secondary" onClick={onOpenPool}>
               <Layers className="size-4" />
               Все чаты
+            </Button>
+          )}
+          {online > 0 && (
+            <Button variant="secondary" onClick={onMassBroadcast}>
+              <Megaphone className="size-4" />
+              Массовая рассылка
             </Button>
           )}
           <Button onClick={() => setConnectOpen(true)}>
