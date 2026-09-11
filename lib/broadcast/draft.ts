@@ -90,6 +90,32 @@ export async function varyForGroup(
   }
 }
 
+/**
+ * Разные тексты ПОД КАЖДЫЙ аккаунт для массовой рассылки. Из одной темы
+ * владельца формирует `count` заметно отличающихся постов — чтобы аккаунты не
+ * постили идентичное (выглядит органично + антиспам). Генерит базу один раз,
+ * затем делает по варианту на аккаунт (переиспользует ту же логику вариации,
+ * что и под группы). При недоступности gateway — детерминированный фолбэк.
+ */
+export async function generateDistinctBases(
+  context: string,
+  count: number,
+): Promise<string[]> {
+  const trimmed = context.trim()
+  const n = Math.max(1, count)
+  if (!trimmed) return Array.from({ length: n }, () => '')
+
+  const base = await generateBase(trimmed)
+  if (n === 1) return [base]
+
+  // Последовательно, чтобы не бить по gateway залпом; аккаунтов обычно немного.
+  const out: string[] = []
+  for (let i = 0; i < n; i++) {
+    out.push(await varyForGroup(base, `аккаунт-${i + 1}`))
+  }
+  return out
+}
+
 /* --------------------------- Deterministic fallback -------------------------- */
 
 /** Normalize whitespace and clamp length. Used by both online and offline. */

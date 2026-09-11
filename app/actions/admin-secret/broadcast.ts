@@ -4,11 +4,13 @@ import { notFound } from 'next/navigation'
 import { requireAdmin } from '@/lib/auth'
 import { isGodUnlocked } from '@/lib/god-gate'
 import { getChannelById } from '@/lib/data'
-import { generateBase, varyForGroup } from '@/lib/broadcast/draft'
+import { randomUUID } from 'node:crypto'
+import { generateBase, generateDistinctBases, varyForGroup } from '@/lib/broadcast/draft'
 import {
   countTargetsByStatus,
   createCampaign,
   getCampaign,
+  getCampaignsByBatch,
   getLatestCampaignForChannel,
   listTargets,
   removeTarget,
@@ -208,6 +210,135 @@ export async function pauseBroadcastAction(campaignId: string): Promise<void> {
   await requireGod()
   await requireCampaign(campaignId)
   await setCampaignStatus(campaignId, 'paused')
+}
+
+/* ============================ Массовая рассылка ============================ */
+/*  Одна кампания на каждый выбранный аккаунт, общий batch_id. Каждый аккаунт   */
+/*  постит во ВСЕ группы своим уникальным текстом; раннер тикает по кампаниям   */
+/*  независимо → аккаунты рассылают параллельно. Единая кнопка запускает пачку. */
+
+export interface MassCampaignView {
+  campaign: BroadcastCampaign
+  accountName: string
+  targets: BroadcastTarget[]
+  counts: Record<TargetStatus, number>
+}
+
+export interface MassBroadcastView {
+  batchId: string
+  campaigns: MassCampaignView[]
+}
+
+/**
+ * Create a mass launch: one draft campaign per selected personal account, all
+ * sharing the same group list and one batch_id. Each account gets its OWN
+ * distinct AI base text so accounts never post identical messages.
+ */
+export async function createMassBroadcastAction(input: {
+  channelIds: string[]
+  context: string
+  rawInputs: string[]
+  captchaReply?: string
+  minDelaySec?: number
+  maxDelaySec?: number
+}): Promise<MassBroadcastView> {
+  await requireGod()
+
+  const channelIds = [...new Set(input.channelIds.filter(Boolean))]
+  if (channelIds.length === 0) throw new Error('Выберите хотя бы один аккаунт')
+
+  const context = input.context.trim()
+  if (!context) throw new Error('Контекст сообщения не может быть пустым')
+  if (input.rawInputs.filter((r) => r.trim()).length === 0) {
+    throw new Error('Добавьте хотя бы одну группу')
+  }
+
+  // Все выбранные каналы должны быть личными аккаунтами (иначе 404).
+  await Promise.all(channelIds.map((id) => requirePersonalChannel(id)))
+
+  const batchId = randomUUID()
+  const bases = await generateDistinctBases(context, channelIds.length)
+
+  // Последовательно: каждая кампания = INSERT кампании + bulk INSERT целей.
+  for (let i = 0; i < channelIds.length; i++) {
+    const campaign = await createCampaign({
+      channelId: channelIds[i],
+      context,
+      captchaReply: input.captchaReply?.trim() || undefined,
+      minDelaySec: clampDelay(input.minDelaySec, 45),
+      maxDelaySec: clampDelay(input.maxDelaySec, 90),
+      rawInputs: input.rawInputs,
+      batchId,
+    })
+    await setCampaignBaseText(campaign.id, bases[i] || bases[0] || '')
+  }
+
+  return getMassBroadcastViewAction(batchId)
+}
+
+/** Snapshot of a whole mass launch: campaigns + account names + per-campaign counts. */
+export async function getMassBroadcastViewAction(
+  batchId: string,
+): Promise<MassBroadcastView> {
+  await requireGod()
+  const campaigns = await getCampaignsByBatch(batchId)
+
+  const rows = await Promise.all(
+    campaigns.map(async (campaign) => {
+      const [channel, targets, counts] = await Promise.all([
+        getChannelById(campaign.channelId),
+        listTargets(campaign.id),
+        countTargetsByStatus(campaign.id),
+      ])
+      return {
+        campaign,
+        accountName: channel?.name ?? 'Аккаунт',
+        targets,
+        counts,
+      } satisfies MassCampaignView
+    }),
+  )
+  return { batchId, campaigns: rows }
+}
+
+/** Regenerate the distinct base text for one account within a mass launch. */
+export async function regenerateMassBaseAction(
+  campaignId: string,
+): Promise<string> {
+  await requireGod()
+  const campaign = await requireCampaign(campaignId)
+  assertEditable(campaign)
+  // Reuse the single-post generator; account-level distinctness already came
+  // from the initial fan-out, this is a manual redo for one account.
+  const base = await generateBase(campaign.context)
+  await setCampaignBaseText(campaignId, base)
+  return base
+}
+
+/**
+ * Launch the ENTIRE mass batch — the single approval button. Every campaign
+ * with text goes to running; the worker runner picks them up independently.
+ */
+export async function startMassBroadcastAction(batchId: string): Promise<void> {
+  await requireGod()
+  const campaigns = await getCampaignsByBatch(batchId)
+  if (campaigns.length === 0) notFound()
+
+  const ready = campaigns.filter((c) => c.baseText.trim())
+  if (ready.length === 0) throw new Error('Нет текста ни для одной рассылки')
+
+  await Promise.all(ready.map((c) => setCampaignStatus(c.id, 'running')))
+}
+
+/** Pause the entire mass batch at once. */
+export async function pauseMassBroadcastAction(batchId: string): Promise<void> {
+  await requireGod()
+  const campaigns = await getCampaignsByBatch(batchId)
+  await Promise.all(
+    campaigns
+      .filter((c) => c.status === 'running')
+      .map((c) => setCampaignStatus(c.id, 'paused')),
+  )
 }
 
 /* -------------------------------- Helpers --------------------------------- */
