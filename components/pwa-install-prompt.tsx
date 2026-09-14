@@ -98,10 +98,10 @@ export function PwaInstallPrompt() {
     <>
       {bannerOpen ? (
         <div
-          className="fixed inset-x-0 bottom-0 z-[9998] flex justify-center px-4"
-          style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+          className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-[9998] flex justify-center px-4 sm:bottom-0"
+          style={{ paddingBottom: 'max(0px, env(safe-area-inset-bottom))' }}
         >
-          <div className="flex w-full max-w-md items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-2xl animate-in slide-in-from-bottom-4 fade-in-0 duration-300">
+          <div className="pointer-events-auto flex w-full max-w-md items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-2xl animate-in slide-in-from-bottom-4 fade-in-0 duration-300">
             <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <Download className="size-5" strokeWidth={1.75} />
             </span>
