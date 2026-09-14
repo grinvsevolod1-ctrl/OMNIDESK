@@ -434,7 +434,7 @@ function MassReviewStep({
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
           <p className="text-sm text-muted-foreground text-pretty">
             ИИ сделал отдельный текст для каждого из {view.campaigns.length}{' '}
-            аккаунтов. Проверьте и при жела��ии поправьте — затем одна кнопка
+            аккаунтов. Проверьте и при желании поправьте — затем одна кнопка
             запустит рассылку со всех сразу.
           </p>
 
