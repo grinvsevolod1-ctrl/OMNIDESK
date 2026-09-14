@@ -33,6 +33,7 @@ import { useSharedPoll } from '@/lib/hooks/use-shared-poll'
 import { ArchiveLeadDialog } from '@/components/curator/archive-lead-dialog'
 import { CuratorLeadRow } from '@/components/curator/curator-lead-row'
 import { CuratorNotices } from '@/components/curator/curator-notices'
+import { LeadTransferToaster } from '@/components/curator/lead-transfer-toaster'
 import { LeadDetailPanel } from '@/components/curator/lead-detail-panel'
 import { StatusReminder } from '@/components/curator/status-reminder'
 import { EmptyState, PageHeader } from '@/components/page-parts'
@@ -232,6 +233,7 @@ export function CuratorLeadsView({
   return (
     <div className="relative flex w-full flex-col gap-5">
       <StatusReminder leads={leads.filter((l) => !l.isPool)} />
+      <LeadTransferToaster />
       <CuratorNotices onLeadsChanged={() => void refresh()} />
 
       <PageHeader

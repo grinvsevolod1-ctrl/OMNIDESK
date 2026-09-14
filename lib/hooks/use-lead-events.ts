@@ -2,7 +2,11 @@
 
 import { useEffect, useRef } from 'react'
 import { pokeSharedPoll } from '@/lib/hooks/use-shared-poll'
-import { onStreamEvent, onStreamReconnect } from '@/lib/hooks/realtime-stream'
+import {
+  onStreamEvent,
+  onStreamInbox,
+  onStreamReconnect,
+} from '@/lib/hooks/realtime-stream'
 
 /**
  * Push-обновление вьюх лидов: подписка на общий `/api/stream` (SSE) и мгновенный
@@ -68,6 +72,14 @@ export function useRealtimeRefresh(opts: {
   source?: boolean
   /** Реагировать на событие 'channel' (напр. виджет livechat подключился). */
   channel?: boolean
+  /**
+   * Реагировать на кадр `update` (новое/изменённое сообщение или диалог этой
+   * вкладки — см. onStreamInbox). Для вьюх, чьи данные зависят от входящего
+   * трафика (графики активности, обзорные сводки): они обновляются, когда
+   * приходят новые обращения, без своего EventSource. Обычно в паре с большим
+   * debounceMs, чтобы шквал сообщений схлопнулся в один пересчёт.
+   */
+  inbox?: boolean
   leadId?: string | null
   sourceId?: string | null
   debounceMs?: number
@@ -76,6 +88,7 @@ export function useRealtimeRefresh(opts: {
     lead = false,
     source = false,
     channel = false,
+    inbox = false,
     leadId = null,
     sourceId = null,
     debounceMs = 300,
@@ -118,11 +131,14 @@ export function useRealtimeRefresh(opts: {
     if (channel) {
       offs.push(onStreamEvent('channel', fire))
     }
-    if (lead || source || channel) offs.push(onStreamReconnect(fire))
+    if (inbox) {
+      offs.push(onStreamInbox(fire))
+    }
+    if (lead || source || channel || inbox) offs.push(onStreamReconnect(fire))
 
     return () => {
       if (timer) clearTimeout(timer)
       for (const off of offs) off()
     }
-  }, [lead, source, channel, leadId, sourceId, debounceMs])
+  }, [lead, source, channel, inbox, leadId, sourceId, debounceMs])
 }

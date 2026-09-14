@@ -25,6 +25,7 @@ import type { SimpleResult } from '@/app/actions/account-shared'
 import { unregisterNativePush } from '@/lib/capacitor-push'
 import { unsubscribePushThisDevice } from '@/lib/push-client'
 import { useVisualViewportHeight } from '@/lib/hooks/use-visual-viewport-height'
+import { useOperatorPresenceHeartbeat } from '@/lib/hooks/use-operator-presence'
 import { AvatarPickerDialog } from '@/components/shared/avatar-picker'
 import { SupportDialog } from '@/components/shared/support-dialog'
 import { BrandMark } from '@/components/brand'
@@ -111,6 +112,11 @@ export function DashboardShell({
   // открыта клавиатура; оболочка остаётся `fixed inset-0` (ширина всегда целая),
   // а заданная height перекрывает bottom:0 → низ ровно по видимому краю.
   useVisualViewportHeight()
+
+  // Presence «на смене»: открытая вкладка оператора (менеджер/куратор/
+  // руководитель) шлёт heartbeat, который админская панель показывает вживую.
+  // Для не-операторских ролей heartbeat-роут просто игнорирует пинг.
+  useOperatorPresenceHeartbeat()
 
   // Sign out cleanly: drop THIS device's push subscription BEFORE ending the
   // session, otherwise the server row survives and the dispatcher keeps pushing

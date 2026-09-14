@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic'
 import { Loader2 } from 'lucide-react'
 import useSWR from 'swr'
 import { getManagerActivityAnalyticsAction } from '@/app/actions/manager-analytics'
+import { useRealtimeRefresh } from '@/lib/hooks/use-lead-events'
 // Large canvas chart whose data is fetched client-side after mount; keep it out
 // of the manager home's initial bundle and load it lazily. ssr:false since
 // there's nothing meaningful to render before the client fetch resolves.
@@ -30,7 +31,7 @@ export function ManagerActivityChart({
   fromISO: string
   toISO: string
 }) {
-  const { data: analytics, isValidating } = useSWR(
+  const { data: analytics, isValidating, mutate } = useSWR(
     ['manager-activity', fromISO, toISO],
     async () => {
       // Часовой пояс менеджера знает браузер; сервер раскладывает дни по нему,
@@ -42,6 +43,18 @@ export function ManagerActivityChart({
     },
     { keepPreviousData: true },
   )
+
+  // Живой пересчёт: график считает входящие обращения, поэтому обновляемся на
+  // кадр `update` общего SSE (новое сообщение/диалог этой вкладки) — без своего
+  // EventSource. Большой debounce схлопывает шквал входящих в один refetch,
+  // чтобы активная переписка не дёргала server action на каждое сообщение.
+  useRealtimeRefresh({
+    onRefresh: () => {
+      void mutate()
+    },
+    inbox: true,
+    debounceMs: 8000,
+  })
 
   return (
     <section className="flex flex-col gap-3">

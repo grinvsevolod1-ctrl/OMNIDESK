@@ -33,6 +33,12 @@ const reconnectHandlers = new Set<() => void>()
  * бейдж в сайдбаре живёт на ТОМ ЖЕ едином EventSource, что и lead/source.
  */
 const inboxHandlers = new Set<() => void>()
+/**
+ * Подписчики на presence операторов «на смене» (кадр `agent-presence`).
+ * SSE-роут шлёт его ТОЛЬКО админу — живая панель «Кто на смене». Тело
+ * (id/имя/роль/presence) передаём как есть, потребитель ведёт свою карту с TTL.
+ */
+const agentPresenceHandlers = new Set<Handler>()
 
 let es: EventSource | null = null
 let refs = 0
@@ -80,6 +86,22 @@ function open(): void {
     }
   })
 
+  es.addEventListener('agent-presence', (e: MessageEvent) => {
+    let data: unknown = null
+    try {
+      data = e.data ? JSON.parse(e.data) : null
+    } catch {
+      /* битый кадр игнорируем */
+    }
+    for (const fn of agentPresenceHandlers) {
+      try {
+        fn(data)
+      } catch {
+        /* изолируем */
+      }
+    }
+  })
+
   es.addEventListener('ready', () => {
     readyCount += 1
     if (readyCount > 1) {
@@ -113,6 +135,20 @@ export function onStreamEvent(name: DataEvent, fn: Handler): () => void {
   open()
   return () => {
     handlers[name].delete(fn)
+    release()
+  }
+}
+
+/**
+ * Подписка на presence операторов (кадр `agent-presence`, только у админа).
+ * Возвращает отписку. Для живой панели «Кто на смене».
+ */
+export function onStreamAgentPresence(fn: Handler): () => void {
+  agentPresenceHandlers.add(fn)
+  refs += 1
+  open()
+  return () => {
+    agentPresenceHandlers.delete(fn)
     release()
   }
 }

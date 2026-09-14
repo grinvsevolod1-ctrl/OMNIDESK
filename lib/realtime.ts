@@ -56,6 +56,15 @@ export interface RealtimeEvent {
    * page. Fans out to the owning manager so the inbox can show live presence.
    */
   presence?: 'open' | 'minimized' | 'away' | 'left'
+  /**
+   * Operator presence ("on shift") when `actor === 'agent'`: which role the
+   * online operator holds. Ephemeral like visitor presence — published via
+   * pg_notify from the heartbeat route (app/api/presence/heartbeat), NEVER
+   * stored. The SSE route forwards agent presence ONLY to admins, who see the
+   * live "who is on shift" panel; `id` carries the operator id and
+   * `authorName` their display name.
+   */
+  actorRole?: 'manager' | 'curator' | 'head'
   authorName?: string
   managerId?: string
   /**
@@ -64,6 +73,17 @@ export interface RealtimeEvent {
    * to whichever of the two is connected (and to admins, who see all leads).
    */
   curatorId?: string | null
+  /**
+   * Semantic hint for a 'lead' event, set only when the change is a meaningful
+   * cross-role action worth a one-off toast (not a routine field edit).
+   * 'transferred' = a card was just assigned/handed to `curatorId`. The DB
+   * trigger never sets this; it is attached by explicit publishRealtime calls
+   * at the transfer chokepoints. The SSE route forwards it ONLY to the targeted
+   * recipient, so other viewers still get a plain refetch-only lead frame.
+   */
+  leadKind?: 'transferred'
+  /** Human-readable lead name for the toast body (own lead — safe to show). */
+  leadName?: string | null
   /**
    * Source-finance events ('source', migration 170): a traffic source, its
    * daily spend, or a deposit changed. `sourceId` scopes the refetch; `buyerId`

@@ -41,6 +41,7 @@ import {
   type LeadStatus,
 } from '@/lib/lead-status'
 import { sendPushToManager } from '@/lib/push'
+import { publishRealtime } from '@/lib/realtime'
 import { mskDayKey } from '@/lib/time'
 import {
   assertCuratorNotLocked,
@@ -95,6 +96,16 @@ export async function transferMyLeadAction(input: {
     )
     if (card.curatorId) {
       void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
+      // Живой toast получателю, если его вкладка открыта (web-push кроет
+      // закрытую). Эфемерный сигнал — SSE-роут покажет тост только целевому
+      // куратору, остальным зрителям придёт обычный refetch-кадр.
+      void publishRealtime({
+        type: 'lead',
+        id: card.id,
+        curatorId: card.curatorId,
+        leadKind: 'transferred',
+        leadName: card.fullName || null,
+      })
     }
     return {
       ok: true,
@@ -189,6 +200,13 @@ export async function saveLeadCardAction(input: {
     // Прямое закрепление (админ) — пуш конкретному куратору, как раньше.
     if (transferred && card.curatorId) {
       void notifyCuratorOfTransfer(card.curatorId, card.fullName, card.city)
+      void publishRealtime({
+        type: 'lead',
+        id: card.id,
+        curatorId: card.curatorId,
+        leadKind: 'transferred',
+        leadName: card.fullName || null,
+      })
     }
 
     const warn = duplicateWarning ? ` ${duplicateWarning}` : ''

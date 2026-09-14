@@ -1,4 +1,5 @@
 import { SourcesOverview } from '@/components/admin/overview/sources-overview'
+import { OnlineOperators } from '@/components/admin/overview/online-operators'
 import { PageHeader } from '@/components/page-parts'
 import { Card } from '@/components/ui/card'
 import { requireAdmin } from '@/lib/auth'
@@ -38,7 +39,10 @@ export default async function AdminOverviewPage() {
         description="Все источники трафика единым списком: их ведут медиабайеры, а созданный байером источник появляется здесь сразу. Настройка и создание — на стороне байера."
       />
 
-      <SourcesOverview initial={sources} />
+      <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
+        <SourcesOverview initial={sources} />
+        <OnlineOperators />
+      </div>
     </div>
   )
 }

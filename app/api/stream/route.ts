@@ -154,7 +154,17 @@ export async function GET(request: Request): Promise<Response> {
           ) {
             // id (миграция 170) позволяет ОТКРЫТОЙ карточке обновиться точечно,
             // а спискам — как раньше сделать полный refetch, игнорируя id.
-            send('lead', { type: 'lead', id: event.id })
+            // Семантический leadKind (напр. 'transferred') несём ТОЛЬКО целевому
+            // получателю — только его вкладка покажет toast; остальным зрителям
+            // (админ/руководитель/байер/менеджер) уходит обычный refetch-кадр.
+            const isRecipient = event.curatorId === viewerId
+            send('lead', {
+              type: 'lead',
+              id: event.id,
+              ...(isRecipient && event.leadKind
+                ? { leadKind: event.leadKind, leadName: event.leadName ?? null }
+                : {}),
+            })
           }
           return
         }
@@ -175,6 +185,21 @@ export async function GET(request: Request): Promise<Response> {
         if (event.type === 'channel') {
           if (isAdmin) {
             send('channel', { type: 'channel', channelId: event.channelId })
+          }
+          return
+        }
+        // Presence операторов «на смене» (actor: 'agent', эфемерно как typing/
+        // visitor presence — из heartbeat-роута, никогда не пишется в БД).
+        // Доставляем ТОЛЬКО админу — это его живая панель «Кто на смене».
+        // Несём id оператора, роль и имя (own-data, безопасно показать).
+        if (event.type === 'presence' && event.actor === 'agent') {
+          if (isAdmin) {
+            send('agent-presence', {
+              id: event.id,
+              authorName: event.authorName,
+              actorRole: event.actorRole,
+              presence: event.presence,
+            })
           }
           return
         }
