@@ -402,14 +402,85 @@ export async function getSourceFinanceSummary(
   }
 }
 
-/** Сводки для набора источников (для списков байера/админа) одним проходом. */
+/**
+ * Сводки для набора источников (для списков байера/админа) одним проходом.
+ * Три агрегатных запроса на ВЕСЬ набор id (через `= ANY`), а не по три
+ * запроса на каждый источник — раньше это был последовательный N+1, который
+ * линейно рос со списком источников байера.
+ */
 export async function getSummariesForSources(
   sourceIds: string[],
 ): Promise<Map<string, SourceFinanceSummary>> {
   const out = new Map<string, SourceFinanceSummary>()
   if (sourceIds.length === 0) return out
+
+  const [srcRows, depRows, spendRows] = await Promise.all([
+    query<{ id: string; currency: string }>(
+      `SELECT id, currency FROM traffic_sources WHERE id = ANY($1)`,
+      [sourceIds],
+    ),
+    query<{
+      source_id: string
+      confirmed: string | number
+      pending: string | number
+      pending_count: string | number
+    }>(
+      `SELECT source_id,
+          COALESCE(SUM(amount) FILTER (WHERE status = 'confirmed'), 0) AS confirmed,
+          COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0) AS pending,
+          COUNT(*) FILTER (WHERE status = 'pending') AS pending_count
+         FROM source_deposits WHERE source_id = ANY($1)
+         GROUP BY source_id`,
+      [sourceIds],
+    ),
+    query<{
+      source_id: string
+      spend: string | number
+      impressions: string | number
+      clicks: string | number
+      leads: string | number
+    }>(
+      `SELECT source_id,
+              COALESCE(SUM(spend), 0) AS spend,
+              COALESCE(SUM(impressions), 0) AS impressions,
+              COALESCE(SUM(clicks), 0) AS clicks,
+              COALESCE(SUM(leads), 0) AS leads
+         FROM source_spend_daily WHERE source_id = ANY($1)
+         GROUP BY source_id`,
+      [sourceIds],
+    ),
+  ])
+
+  const currencyById = new Map(srcRows.map((r) => [r.id, r.currency]))
+  const depById = new Map(depRows.map((r) => [r.source_id, r]))
+  const spendById = new Map(spendRows.map((r) => [r.source_id, r]))
+
   for (const id of sourceIds) {
-    out.set(id, await getSourceFinanceSummary(id))
+    const dep = depById.get(id)
+    const sp = spendById.get(id)
+    const confirmedDeposits = num(dep?.confirmed ?? 0)
+    const pendingDeposits = num(dep?.pending ?? 0)
+    const totalSpend = num(sp?.spend ?? 0)
+    const impressions = Number(sp?.impressions ?? 0)
+    const clicks = Number(sp?.clicks ?? 0)
+    const leads = Number(sp?.leads ?? 0)
+    out.set(id, {
+      sourceId: id,
+      currency: currencyById.get(id) ?? 'RUB',
+      confirmedDeposits,
+      pendingDeposits,
+      totalSpend,
+      balance: Math.round((confirmedDeposits - totalSpend) * 100) / 100,
+      utilization:
+        confirmedDeposits > 0 ? (totalSpend / confirmedDeposits) * 100 : 0,
+      impressions,
+      clicks,
+      leads,
+      ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+      cr: clicks > 0 ? (leads / clicks) * 100 : 0,
+      cpl: leads > 0 ? totalSpend / leads : Number.POSITIVE_INFINITY,
+      pendingCount: Number(dep?.pending_count ?? 0),
+    })
   }
   return out
 }
