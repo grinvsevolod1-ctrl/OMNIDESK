@@ -98,6 +98,13 @@ function selfHash() {
 
 const startHash = selfHash()
 let deploying = false
+// Set by the SIGTERM/SIGINT handler when a signal arrives WHILE a deploy (and
+// its post-deploy Telegram notification) is in flight. We must not exit at that
+// moment: the ✅/❌ notice is sent via `await tgSendMessage` right after the
+// synchronous deploy, and exiting at that await point kills the process before
+// the fetch to Telegram completes — the deploy succeeds but no notification is
+// ever delivered. tick()'s finally honors this deferred request once it is safe.
+let shutdownRequested = ''
 // Commit sha whose deploy failure was already reported to Telegram — resets
 // on any success so a NEW breakage on the next commit is reported again.
 let failNotifiedSha = ''
@@ -426,6 +433,14 @@ async function tick() {
     log('unexpected error:', err?.message || err)
   } finally {
     deploying = false
+    // A stop/restart signal arrived mid-deploy and we deferred it so the
+    // notification could be sent. Now that the tick is fully done, honor it.
+    if (shutdownRequested) {
+      log(
+        `deploy finished — honoring deferred ${shutdownRequested}, exiting now.`,
+      )
+      process.exit(0)
+    }
   }
 }
 
@@ -464,6 +479,22 @@ function main() {
 // and will finish before the process actually exits.
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
+    // If a deploy is in flight, DEFER the exit: the post-deploy ✅/❌ Telegram
+    // notice is sent via `await tgSendMessage` right after the synchronous
+    // deploy, and exiting at that await point would kill the process before the
+    // notification is delivered (deploy succeeds, but you never hear about it —
+    // the exact symptom when a `pm2 restart` overlapped a watcher-run deploy).
+    // tick()'s finally block performs the real exit once the notice is sent.
+    if (deploying) {
+      if (!shutdownRequested) {
+        shutdownRequested = sig
+        log(
+          `received ${sig} during deploy — will exit after it finishes and ` +
+            `the notification is sent.`,
+        )
+      }
+      return
+    }
     log(`received ${sig} — shutting down watcher.`)
     process.exit(0)
   })
