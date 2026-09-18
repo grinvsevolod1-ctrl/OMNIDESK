@@ -832,7 +832,14 @@ export class TelegramSession {
       replyToMsgId?: number
     },
   ): Promise<{ providerMessageId: string | null }> {
-    const client = this.personalClient()
+    // NB: файл/фото отправляется на ЛЮБОЙ сессии (обычный аккаунт менеджера,
+    // не только personal god-панель) — ровно как sendMessage/sendVoice/
+    // sendSticker. Раньше здесь стоял this.personalClient(), который бросал
+    // "Not a personal session" на обычной сессии, из-за чего фото менеджера
+    // помечалось failed и НИКОГДА не доходило до реального Telegram контакта,
+    // хотя текст/голос/стикеры уходили. Используем клиент сессии напрямую.
+    const client = this.client
+    if (!client) throw new Error('Session not started')
     const entity = await this.resolveTarget(peer)
     await this.throttleSend()
     try {
