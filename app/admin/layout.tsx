@@ -47,6 +47,7 @@ const nav: NavItem[] = [
       { href: '/admin/livechat', label: 'Онлайн-чат', icon: 'livechat' },
     ],
   },
+  { href: '/admin/outreach', label: 'Исходящие', icon: 'outreach' },
   { href: '/admin/proxies', label: 'Прокси', icon: 'proxies' },
   { href: '/admin/servers', label: 'Серверы', icon: 'servers' },
   { href: '/admin/contacts', label: 'Контакты', icon: 'inbox' },
