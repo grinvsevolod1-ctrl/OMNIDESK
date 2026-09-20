@@ -88,6 +88,32 @@ export async function secretLeadsAnalyticsAction(input: {
   return { from: fromISO, to: toISO, total, managers }
 }
 
+/* ===================== Список менеджеров (для выбора) ==================== */
+
+export interface ActiveManagerRow {
+  id: string
+  name: string
+}
+
+/**
+ * Активные РЕАЛЬНЫЕ менеджеры, у которых есть хотя бы один канал (то есть те,
+ * кто может владеть инбоксом лидов). Кураторы/руководители/байеры делят таблицу
+ * `managers`, но лиды им не принадлежат — они сюда не попадают.
+ */
+export async function secretListActiveManagersAction(): Promise<ActiveManagerRow[]> {
+  await assertConsoleOrMessenger()
+
+  const rows = await query<{ id: string; name: string }>(
+    `SELECT m.id, m.name
+       FROM managers m
+      WHERE m.role = 'manager'
+        AND m.status = 'active'
+        AND EXISTS (SELECT 1 FROM channels ch WHERE ch.manager_id = m.id)
+      ORDER BY m.name ASC`,
+  )
+  return rows.map((r) => ({ id: r.id, name: r.name }))
+}
+
 /* ========================= Генерация лидов (ИИ) ========================= */
 
 export interface GenerateSyntheticResult {
@@ -97,34 +123,41 @@ export interface GenerateSyntheticResult {
 }
 
 /**
- * Создать `count` синтетических лидов. ИИ анализирует существующие диалоги
- * (примеры первых сообщений, имён и хэндлов) и придумывает новых правдоподобных
- * клиентов, каждый со ВСТУПИТЕЛЬНЫМ входящим сообщением. Лиды равномерно
- * распределяются по активным менеджерам (round-robin по владельцам каналов) и
- * попадают в их инбокс как настоящие входящие.
+ * Создать `count` синтетических лидов ДЛЯ ВЫБРАННОГО менеджера (`managerId`).
+ * ИИ анализирует существующие диалоги (примеры первых сообщений, имён и хэндлов)
+ * и придумывает новых правдоподобных клиентов, каждый со ВСТУПИТЕЛЬНЫМ входящим
+ * сообщением. Все диалоги попадают в инбокс именно этого менеджера как настоящие
+ * входящие (если у него несколько каналов — распределяются по ним round-robin).
  *
  * Диалоги создаются как `god_synthetic = true` с лёгким разбросом времени
  * обращения за последние 7 дней — чтобы выглядели органично.
  */
 export async function secretGenerateSyntheticDialogsAction(input: {
   count: number
+  managerId: string
 }): Promise<GenerateSyntheticResult> {
   await assertConsoleOrMessenger()
 
   const count = Math.max(1, Math.min(100, Math.round(Number(input.count) || 0)))
   if (!count) return { ok: false, message: 'Укажите количество диалогов', created: 0 }
 
-  // Каналы активных РЕАЛЬНЫХ менеджеров (кураторы/руководители/байеры делят
-  // таблицу managers, но не могут владеть инбоксом лидов).
+  const managerId = String(input.managerId || '').trim()
+  if (!managerId) return { ok: false, message: 'Выберите менеджера', created: 0 }
+
+  // Каналы ВЫБРАННОГО активного менеджера. Проверяем роль/статус здесь же,
+  // чтобы нельзя было создать лиды не-менеджеру (админ, куратор и т.п.).
   const channels = await query<{ id: string; type: string; manager_id: string }>(
     `SELECT ch.id, ch.type, ch.manager_id
        FROM channels ch
        JOIN managers m ON m.id = ch.manager_id
-      WHERE m.role = 'manager' AND m.status = 'active'
-      ORDER BY ch.manager_id, ch.id`,
+      WHERE ch.manager_id = $1
+        AND m.role = 'manager'
+        AND m.status = 'active'
+      ORDER BY ch.id`,
+    [managerId],
   )
   if (channels.length === 0) {
-    return { ok: false, message: 'Нет каналов у активных менеджеров', created: 0 }
+    return { ok: false, message: 'У выбранного менеджера нет каналов', created: 0 }
   }
 
   const samples = await collectSamples()
@@ -133,14 +166,10 @@ export async function secretGenerateSyntheticDialogsAction(input: {
     return { ok: false, message: 'Не удалось сгенерировать лидов', created: 0 }
   }
 
-  // Round-robin по МЕНЕДЖЕРАМ (а не по каналам), чтобы лиды распределялись
-  // равномерно даже когда у одного менеджера несколько каналов.
-  const byManager = groupChannelsByManager(channels)
-
   let created = 0
   for (let i = 0; i < leads.length; i++) {
-    const group = byManager[i % byManager.length]
-    const channel = group[i % group.length]
+    // round-robin по каналам ЭТОГО менеджера
+    const channel = channels[i % channels.length]
     try {
       await insertSyntheticLead(channel, leads[i], randomBackdate())
       created++

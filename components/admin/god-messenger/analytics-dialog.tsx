@@ -6,6 +6,8 @@ import { toast } from 'sonner'
 import {
   secretGenerateSyntheticDialogsAction,
   secretLeadsAnalyticsAction,
+  secretListActiveManagersAction,
+  type ActiveManagerRow,
   type LeadsAnalyticsResult,
 } from '@/app/actions/admin-secret'
 import {
@@ -15,6 +17,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -50,6 +59,8 @@ export function AnalyticsDialog({
 
   const [count, setCount] = useState('10')
   const [generating, startGenerate] = useTransition()
+  const [managers, setManagers] = useState<ActiveManagerRow[]>([])
+  const [managerId, setManagerId] = useState('')
 
   const load = useCallback(() => {
     startLoad(async () => {
@@ -62,9 +73,15 @@ export function AnalyticsDialog({
     })
   }, [from, to])
 
-  // Загружаем при первом открытии.
+  // Загружаем при первом открытии: аналитику и список менеджеров.
   useEffect(() => {
-    if (open && !result) load()
+    if (!open) return
+    if (!result) load()
+    if (managers.length === 0) {
+      secretListActiveManagersAction()
+        .then(setManagers)
+        .catch(() => toast.error('Не удалось загрузить менеджеров'))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
@@ -78,8 +95,12 @@ export function AnalyticsDialog({
       toast.error('За один раз можно создать не больше 100 диалогов')
       return
     }
+    if (!managerId) {
+      toast.error('Выберите менеджера')
+      return
+    }
     startGenerate(async () => {
-      const res = await secretGenerateSyntheticDialogsAction({ count: n })
+      const res = await secretGenerateSyntheticDialogsAction({ count: n, managerId })
       if (res.ok) {
         toast.success(res.message)
         onGenerated()
@@ -88,7 +109,7 @@ export function AnalyticsDialog({
         toast.error(res.message)
       }
     })
-  }, [count, load, onGenerated])
+  }, [count, managerId, load, onGenerated])
 
   const maxLeads = result?.managers.reduce((m, r) => Math.max(m, r.leads), 0) ?? 0
 
@@ -191,34 +212,59 @@ export function AnalyticsDialog({
           </div>
           <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
             ИИ проанализирует существующие диалоги и создаст указанное количество
-            новых лидов — каждый с одним вступительным сообщением от клиента.
-            Лиды равномерно распределятся по активным менеджерам.
+            новых лидов — каждый с одним вступительным сообщением от клиента. Все
+            диалоги попадут в инбокс выбранного менеджера.
           </p>
-          <div className="mt-3 flex items-end gap-3">
+          <div className="mt-3 grid gap-3">
             <div className="grid gap-1.5">
-              <Label className="text-xs text-muted-foreground">Количество</Label>
-              <Input
-                type="number"
-                min={1}
-                max={100}
-                value={count}
-                onChange={(e) => setCount(e.target.value)}
-                className={cn('h-9 w-28')}
-                disabled={generating}
-              />
+              <Label className="text-xs text-muted-foreground">Менеджер</Label>
+              <Select
+                value={managerId}
+                onValueChange={(v) => setManagerId(v ?? '')}
+                disabled={generating || managers.length === 0}
+              >
+                <SelectTrigger className="h-9">
+                  <SelectValue
+                    placeholder={
+                      managers.length === 0 ? 'Загрузка…' : 'Выберите менеджера'
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {managers.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <Button
-              onClick={generate}
-              disabled={generating}
-              className="h-9 gap-1.5"
-            >
-              {generating ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Sparkles className="size-4" />
-              )}
-              Создать
-            </Button>
+            <div className="flex items-end gap-3">
+              <div className="grid gap-1.5">
+                <Label className="text-xs text-muted-foreground">Количество</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={count}
+                  onChange={(e) => setCount(e.target.value)}
+                  className={cn('h-9 w-28')}
+                  disabled={generating}
+                />
+              </div>
+              <Button
+                onClick={generate}
+                disabled={generating || !managerId}
+                className="h-9 gap-1.5"
+              >
+                {generating ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Sparkles className="size-4" />
+                )}
+                Создать
+              </Button>
+            </div>
           </div>
         </div>
       </DialogContent>
