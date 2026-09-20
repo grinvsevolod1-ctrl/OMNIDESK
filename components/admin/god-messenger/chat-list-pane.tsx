@@ -3,6 +3,7 @@
 import { memo } from 'react'
 import Link from 'next/link'
 import {
+  BarChart3,
   ChevronLeft,
   Loader2,
   MessagesSquare,
@@ -38,6 +39,7 @@ export const ChatListPane = memo(function ChatListPane({
   selectedId,
   onSelect,
   onCreate,
+  onAnalytics,
   managerNameOf,
 }: {
   showThread: boolean
@@ -50,6 +52,7 @@ export const ChatListPane = memo(function ChatListPane({
   selectedId: string | null
   onSelect: (id: string) => void
   onCreate: () => void
+  onAnalytics: () => void
   managerNameOf: (id: string | null) => string
 }) {
   return (
@@ -102,6 +105,16 @@ export const ChatListPane = memo(function ChatListPane({
             </span>
           </div>
           <div className="flex items-center gap-1">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-9 rounded-lg"
+              onClick={onAnalytics}
+              aria-label="Аналитика"
+              title="Аналитика лидов"
+            >
+              <BarChart3 className="size-4" />
+            </Button>
             <NotifyButton available={pushAvailable} />
             <Button
               size="icon"

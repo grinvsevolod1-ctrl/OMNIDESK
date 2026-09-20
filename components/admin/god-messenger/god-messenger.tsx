@@ -16,6 +16,7 @@ import { secretSetContactBlockedAction } from '@/app/actions/admin-secret/conver
 import { secretReassignConversationManagerAction } from '@/app/actions/admin-secret/conversations'
 import type { Channel, Manager } from '@/lib/types'
 import { NewChatDialog } from './new-chat-dialog'
+import { AnalyticsDialog } from './analytics-dialog'
 import { ChatListPane } from './chat-list-pane'
 import { ThreadPane, MESSAGES_WINDOW } from './thread-pane'
 import { MessageActionSheet } from './message-action-sheet'
@@ -52,6 +53,7 @@ export function GodMessenger({
 
   const [search, setSearch] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  const [analyticsOpen, setAnalyticsOpen] = useState(false)
   // Render window: only the newest N messages hit the DOM. Long chats
   // (hundreds of messages) otherwise make opening a thread visibly slow on
   // mobile. "Показать ещё" expands the window; SSE appends work unchanged.
@@ -72,6 +74,7 @@ export function GodMessenger({
   // Stable so the memoised ChatListPane doesn't re-render on every draft
   // keystroke (its other props are unchanged while typing).
   const openCreate = useCallback(() => setCreateOpen(true), [])
+  const openAnalytics = useCallback(() => setAnalyticsOpen(true), [])
 
   const thread = useGodThread({ deepLinkId, search, onThreadSwitch })
 
@@ -172,6 +175,7 @@ export function GodMessenger({
           selectedId={thread.selectedId}
           onSelect={thread.selectThread}
           onCreate={openCreate}
+          onAnalytics={openAnalytics}
           managerNameOf={managerNameOf}
         />
 
@@ -232,6 +236,12 @@ export function GodMessenger({
           onClose={() => composer.setMenuFor(null)}
         />
       )}
+
+      <AnalyticsDialog
+        open={analyticsOpen}
+        onOpenChange={setAnalyticsOpen}
+        onGenerated={() => void thread.loadList({ silent: true })}
+      />
 
       <NewChatDialog
         open={createOpen}
