@@ -40,15 +40,19 @@ export interface LeadsAnalyticsResult {
 }
 
 /**
- * Сколько ЛИДОВ (уникальных диалогов с входящим сообщением) написали менеджерам
- * за выбранный период, всего и по каждому менеджеру.
+ * Сколько ЛИДОВ (диалогов) написали менеджерам за выбранный период, всего и по
+ * каждому менеджеру.
  *
- * Лид считается «написавшим», если в диалоге есть хотя бы одно входящее
- * (direction='in', не удалённое) сообщение с created_at внутри окна. Один диалог
- * учитывается один раз (COUNT(DISTINCT)).
+ * Лид считается «написавшим в день X», если его ПЕРВОЕ сообщение
+ * (`conversations.first_message_at`) попадает на календарный день X по МСК —
+ * ровно та же метрика, что во всех остальных отчётах панели
+ * (`getLeadAnalytics` / `getLeadCardStats`). Раньше здесь считались диалоги с
+ * входящим сообщением в окне, ПАРСЕННОМ В UTC (таймзона сервера), из-за чего
+ * число резко расходилось с «новыми лидами» на дашбордах (сдвиг дня + недобор).
  *
- * `from`/`to` приходят как даты YYYY-MM-DD (локальные). Окно — [начало from,
- * конец to] включительно (день `to` входит целиком).
+ * `from`/`to` приходят как даты YYYY-MM-DD (МСК). Оба дня включаются целиком.
+ * Бакетирование по дню делается В SQL через `AT TIME ZONE 'Europe/Moscow'`,
+ * поэтому результат не зависит от таймзоны сервера.
  */
 export async function secretLeadsAnalyticsAction(input: {
   from?: string
@@ -56,7 +60,7 @@ export async function secretLeadsAnalyticsAction(input: {
 }): Promise<LeadsAnalyticsResult> {
   await assertConsoleOrMessenger()
 
-  const { fromISO, toExclusiveISO, toISO } = resolveRange(input.from, input.to)
+  const { fromDay, toDay } = resolveRange(input.from, input.to)
 
   const rows = await query<{
     manager_id: string
@@ -65,17 +69,15 @@ export async function secretLeadsAnalyticsAction(input: {
   }>(
     `SELECT c.manager_id,
             m.name AS manager_name,
-            COUNT(DISTINCT c.id)::int AS leads
+            COUNT(*)::int AS leads
        FROM conversations c
        JOIN managers m ON m.id = c.manager_id
-       JOIN messages msg ON msg.conversation_id = c.id
-      WHERE msg.direction = 'in'
-        AND msg.deleted_at IS NULL
-        AND msg.created_at >= $1::timestamptz
-        AND msg.created_at <  $2::timestamptz
+      WHERE c.first_message_at IS NOT NULL
+        AND (c.first_message_at AT TIME ZONE 'Europe/Moscow')::date
+              BETWEEN $1::date AND $2::date
       GROUP BY c.manager_id, m.name
       ORDER BY leads DESC, m.name ASC`,
-    [fromISO, toExclusiveISO],
+    [fromDay, toDay],
   )
 
   const managers = rows.map((r) => ({
@@ -85,7 +87,7 @@ export async function secretLeadsAnalyticsAction(input: {
   }))
   const total = managers.reduce((sum, r) => sum + r.leads, 0)
 
-  return { from: fromISO, to: toISO, total, managers }
+  return { from: fromDay, to: toDay, total, managers }
 }
 
 /* ===================== Список менеджеров (для выбора) ==================== */
@@ -247,63 +249,39 @@ function randomBackdate(): Date {
   return new Date(Date.now() - Math.floor(Math.random() * WINDOW_MS))
 }
 
-function groupChannelsByManager(
-  channels: Array<{ id: string; type: string; manager_id: string }>,
-): Array<Array<{ id: string; type: string; manager_id: string }>> {
-  const map = new Map<string, Array<{ id: string; type: string; manager_id: string }>>()
-  for (const ch of channels) {
-    const list = map.get(ch.manager_id)
-    if (list) list.push(ch)
-    else map.set(ch.manager_id, [ch])
-  }
-  return [...map.values()]
-}
-
 function dedupe(arr: string[]): string[] {
   return [...new Set(arr.map((s) => s.trim()).filter(Boolean))]
 }
 
 /**
- * Разобрать даты YYYY-MM-DD в ISO-границы. По умолчанию (нет/битые входные) —
- * последние 30 дней. `to` включается целиком (эксклюзивная граница = to + 1 день).
+ * Разобрать даты YYYY-MM-DD в валидные МСК-дни (та же строка YYYY-MM-DD, которая
+ * потом сравнивается в SQL через `AT TIME ZONE 'Europe/Moscow'`). По умолчанию
+ * (нет/битые входные) — последние 30 дней по МСК. Оба дня включаются целиком.
+ * Никогда не доверяем клиентскому вводу в SQL — принимаем строго YYYY-MM-DD.
  */
-function resolveRange(
-  from?: string,
-  to?: string,
-): { fromISO: string; toISO: string; toExclusiveISO: string } {
-  const now = new Date()
+function resolveRange(from?: string, to?: string): { fromDay: string; toDay: string } {
+  const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+  const valid = (v: string | undefined): string | null =>
+    v && DAY_RE.test(v) ? v : null
 
-  const parsed = (v: string | undefined): Date | null => {
-    if (!v) return null
-    const d = new Date(`${v}T00:00:00`)
-    return Number.isNaN(d.getTime()) ? null : d
+  const mskToday = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+
+  const shift = (day: string, deltaDays: number): string => {
+    const d = new Date(`${day}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + deltaDays)
+    return d.toISOString().slice(0, 10)
   }
 
-  let toStart = parsed(to)
-  if (!toStart) {
-    toStart = new Date(now)
-    toStart.setHours(0, 0, 0, 0)
-  }
-
-  let fromStart = parsed(from)
-  if (!fromStart) {
-    fromStart = new Date(toStart)
-    fromStart.setDate(fromStart.getDate() - 30)
-  }
+  let toDay = valid(to) ?? mskToday
+  let fromDay = valid(from) ?? shift(toDay, -30)
 
   // Гарантируем корректный порядок (from ≤ to).
-  if (fromStart.getTime() > toStart.getTime()) {
-    const tmp = fromStart
-    fromStart = toStart
-    toStart = tmp
-  }
+  if (fromDay > toDay) [fromDay, toDay] = [toDay, fromDay]
 
-  const toExclusive = new Date(toStart)
-  toExclusive.setDate(toExclusive.getDate() + 1)
-
-  return {
-    fromISO: fromStart.toISOString(),
-    toISO: toStart.toISOString(),
-    toExclusiveISO: toExclusive.toISOString(),
-  }
+  return { fromDay, toDay }
 }
