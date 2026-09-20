@@ -221,11 +221,16 @@ async function insertSyntheticLead(
   const id = randomUUID()
   const iso = when.toISOString()
   await withTransaction(async (db) => {
+    // NB: НЕ выставляем status. Настоящий входящий лид (worker/inbound) создаётся
+    // без статуса → effectiveStatusSql = 'unsubscribed' («Отписки») — именно там
+    // менеджер видит свежие лиды. Если поставить 'liquid', лид уедет в другую
+    // вкладку и менеджер его «не увидит». Синтетический лид должен выглядеть
+    // ровно как органический входящий.
     await db.query(
       `INSERT INTO conversations
          (id, channel_id, channel_type, manager_id, contact_name, contact_handle,
-          last_message, last_message_at, status, unread, god_synthetic)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, 'liquid', 1, true)`,
+          last_message, last_message_at, unread, god_synthetic)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, 1, true)`,
       [id, channel.id, channel.type, channel.manager_id, lead.name, lead.handle, lead.message, iso],
     )
     await db.query(
