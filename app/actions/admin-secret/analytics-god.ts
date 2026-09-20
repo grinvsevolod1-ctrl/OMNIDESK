@@ -169,11 +169,19 @@ export async function secretGenerateSyntheticDialogsAction(input: {
   }
 
   let created = 0
+  const now = Date.now()
   for (let i = 0; i < leads.length; i++) {
     // round-robin по каналам ЭТОГО менеджера
     const channel = channels[i % channels.length]
+    // Все лиды создаются «сейчас» (сегодня по МСК), с микро-сдвигом по индексу
+    // только ради стабильного порядка в ленте. Раньше здесь был случайный
+    // разброс за 7 дней — из-за него из 30 созданных диалогов в аналитике за
+    // конкретный день было видно лишь часть (~9), а остальные попадали в другие
+    // дни или вовсе за пределы выбранного окна. Теперь созданное количество
+    // совпадает с тем, что показывает аналитика за сегодня.
+    const when = new Date(now - (leads.length - 1 - i) * 1000)
     try {
-      await insertSyntheticLead(channel, leads[i], randomBackdate())
+      await insertSyntheticLead(channel, leads[i], when)
       created++
     } catch (err) {
       console.error('[god-analytics] synthetic lead insert failed:', err)
@@ -241,12 +249,6 @@ async function insertSyntheticLead(
       [randomUUID(), id, lead.message, lead.name, iso],
     )
   })
-}
-
-/** Случайное время обращения в пределах последних 7 дней. */
-function randomBackdate(): Date {
-  const WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-  return new Date(Date.now() - Math.floor(Math.random() * WINDOW_MS))
 }
 
 function dedupe(arr: string[]): string[] {
