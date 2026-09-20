@@ -158,14 +158,25 @@ export async function createAccount(input: {
   return rows[0].id
 }
 
-/** Привязать аккаунт к каналу (после успешного подключения сессии). */
+/**
+ * Привязать аккаунт к каналу (после успешного подключения сессии).
+ *
+ * Здесь же АВТОМАТИЧЕСКИ стартует прогрев: как только аккаунт вошёл, часы
+ * прогрева запускаются (`warmup_started_at`), а стадия переводится в `warming`.
+ * Дальше воркер сам ведёт аккаунт по расписанию — админу ничего нажимать не
+ * нужно. Уже созревшие (`ready`) аккаунты не сбрасываем.
+ */
 export async function linkAccountChannel(
   id: string,
   channelId: string,
 ): Promise<void> {
   await query(
     `UPDATE outreach_accounts
-        SET channel_id = $2, status = 'online', updated_at = now()
+        SET channel_id = $2,
+            status = 'online',
+            warmup_stage = CASE WHEN warmup_stage = 'ready' THEN 'ready' ELSE 'warming' END,
+            warmup_started_at = COALESCE(warmup_started_at, now()),
+            updated_at = now()
       WHERE id = $1`,
     [id, channelId],
   )
