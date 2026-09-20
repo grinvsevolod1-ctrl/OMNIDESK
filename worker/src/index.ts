@@ -14,6 +14,11 @@ import { processDeployJob, drainDeployQueue } from './hosting/jobs.js'
 import { sweepServerHealth } from './hosting/ops.js'
 import { recoverStuckDeployments } from './hosting/repo.js'
 import { runBroadcastTick } from './broadcast-runner.js'
+import { runOutreachWarmupTick } from './outreach-warmup-runner.js'
+import {
+  resetHourlyCounters,
+  resetDailyCounters,
+} from './repo-outreach.js'
 
 /** How often the autopilot 'no_response' scheduler scans for silent threads. */
 const NO_RESPONSE_SWEEP_MS = 60_000
@@ -86,6 +91,20 @@ const PROXY_HEALTH_SWEEP_MS = 5 * 60 * 1000
  */
 const BROADCAST_TICK_MS = 10_000
 
+/**
+ * Outreach warm-up cadence: advances the bought-account pool through its
+ * day-based ramp and drives safe presence imitation. The real pace is the DB
+ * day schedule (accounts mature over days), so a 60s scan only keeps the ramp
+ * responsive and the per-account activity human-like.
+ */
+const OUTREACH_WARMUP_TICK_MS = 60_000
+
+/** Hourly reset of outreach per-hour send counters. */
+const OUTREACH_HOURLY_RESET_MS = 60 * 60 * 1000
+
+/** Daily reset of outreach per-day send/join counters. */
+const OUTREACH_DAILY_RESET_MS = 24 * 60 * 60 * 1000
+
 let heartbeatTimer: NodeJS.Timeout | null = null
 let broadcastTimer: NodeJS.Timeout | null = null
 let noResponseTimer: NodeJS.Timeout | null = null
@@ -96,6 +115,9 @@ let fallbackDrainTimer: NodeJS.Timeout | null = null
 let jobsRetentionTimer: NodeJS.Timeout | null = null
 let mediaOffloadTimer: NodeJS.Timeout | null = null
 let proxyHealthTimer: NodeJS.Timeout | null = null
+let outreachWarmupTimer: NodeJS.Timeout | null = null
+let outreachHourlyResetTimer: NodeJS.Timeout | null = null
+let outreachDailyResetTimer: NodeJS.Timeout | null = null
 
 async function main(): Promise<void> {
   logger.info('Omnidesk worker starting')
@@ -255,6 +277,38 @@ async function main(): Promise<void> {
     )
   }, BROADCAST_TICK_MS)
   broadcastTimer.unref?.()
+
+  // 9. Outreach warm-up: ramp the bought-account pool through its day-based
+  //    schedule (anti-ban) and drive safe presence imitation. Reuses the same
+  //    registry warm adapter as the session warm-up sweep, so it can only act
+  //    on live sessions and never sends messages to strangers.
+  outreachWarmupTimer = setInterval(() => {
+    runOutreachWarmupTick((channelId, opts) =>
+      registry.warm(channelId, opts),
+    ).catch((err) => logger.error({ err }, 'outreach warmup tick failed'))
+  }, OUTREACH_WARMUP_TICK_MS)
+  outreachWarmupTimer.unref?.()
+
+  // 9a. Counter resets: per-hour and per-day send/join caps are enforced by the
+  //     send pipeline; these ticks roll the windows over. Cheap indexed
+  //     UPDATEs that no-op when nothing has been sent.
+  outreachHourlyResetTimer = setInterval(() => {
+    resetHourlyCounters()
+      .then((n) => {
+        if (n > 0) logger.info({ reset: n }, 'reset outreach hourly counters')
+      })
+      .catch((err) => logger.warn({ err }, 'outreach hourly reset failed'))
+  }, OUTREACH_HOURLY_RESET_MS)
+  outreachHourlyResetTimer.unref?.()
+
+  outreachDailyResetTimer = setInterval(() => {
+    resetDailyCounters()
+      .then((n) => {
+        if (n > 0) logger.info({ reset: n }, 'reset outreach daily counters')
+      })
+      .catch((err) => logger.warn({ err }, 'outreach daily reset failed'))
+  }, OUTREACH_DAILY_RESET_MS)
+  outreachDailyResetTimer.unref?.()
 
   logger.info('Omnidesk worker ready')
 }

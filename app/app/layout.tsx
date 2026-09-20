@@ -32,6 +32,7 @@ function buildNav(initialUnread: number): NavItem[] {
     { href: '/app/leads', label: 'Мои лиды', icon: 'managers' },
     { href: '/app/quick-replies', label: 'Автоответы', icon: 'quickReplies' },
     { href: '/app/autopilot', label: 'Автопилот', icon: 'autopilot' },
+  { href: '/app/outreach', label: 'Исходящие', icon: 'outreach' },
     { href: '/app/meetings', label: 'Видеовстречи', icon: 'telemost' },
     { href: '/app/proxies', label: 'Прокси', icon: 'proxies' },
     { href: '/app/settings', label: 'Настройки', icon: 'settings' },

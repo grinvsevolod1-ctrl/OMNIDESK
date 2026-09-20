@@ -9,6 +9,7 @@ import {
   ArrowLeftRight,
   Globe,
   MessagesSquare,
+  Rocket,
   Send,
   ServerCrash,
   ShieldCheck,
@@ -89,12 +90,20 @@ const SecretGmtTab = dynamic(
   () => import('@/components/admin/secret-gmt-tab').then((m) => m.SecretGmtTab),
   { loading: tabLoading },
 )
+const SecretOutreachTab = dynamic(
+  () =>
+    import('@/components/admin/secret-outreach/outreach-tab').then(
+      (m) => m.SecretOutreachTab,
+    ),
+  { loading: tabLoading },
+)
 
 type SectionId =
   | 'managers'
   | 'transfer'
   | 'channels'
   | 'telegram'
+  | 'outreach'
   | 'gmt'
   | 'ads'
   | 'sites'
@@ -133,6 +142,13 @@ const SECTIONS: {
     short: 'TG',
     icon: Send,
     desc: 'Личные Telegram-аккаунты и переписка',
+  },
+  {
+    id: 'outreach',
+    label: 'Исходящие',
+    short: 'Исход.',
+    icon: Rocket,
+    desc: 'Отдельный API-контур, пул аккаунтов и прогрев для рассылок',
   },
   {
     id: 'gmt',
@@ -348,6 +364,7 @@ export function SecretDashboard({
             />
           )}
           {section === 'telegram' && <SecretTelegramTab />}
+        {section === 'outreach' && <SecretOutreachTab />}
           {section === 'gmt' && <SecretGmtTab />}
           {section === 'ads' && <SecretAdsTab accounts={adAccounts} />}
           {section === 'sites' && <SecretSitesTab sites={sites} />}
