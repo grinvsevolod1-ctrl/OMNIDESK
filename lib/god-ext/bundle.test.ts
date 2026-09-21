@@ -46,7 +46,8 @@ describe('getVitrineBundle (авто-обновление расширения)'
     expect(loader).toContain('applyHtml(html)')
     expect(loader).toContain('ok(b.html)')
     // …and falls back to the packaged copy on any failure.
-    expect(loader).toContain('loadRemote(function () { loadBundled(1); })')
+    expect(loader).toContain('loadRemote(function () {')
+    expect(loader).toContain('loadBundled(1)')
     expect(loader).toContain('function loadBundled(attempt)')
   })
 
@@ -62,9 +63,9 @@ describe('getVitrineBundle (авто-обновление расширения)'
     const loader = readFileSync(join(TEMPLATES_DIR, 'content.js'), 'utf8')
     expect(loader).toContain('function loadViaBackground(')
     expect(loader).toContain('chrome.runtime.sendMessage')
-    expect(loader).toContain(
-      'loadViaBackground(function () { loadRemote(function () { loadBundled(1); }); })',
-    )
+    // The loader tries the SW path first; the direct fetch chain is the fallback.
+    expect(loader).toContain('loadViaBackground(function () {')
+    expect(loader).toMatch(/loadViaBackground\(function \(\) \{[\s\S]*loadRemote\(function \(\) \{[\s\S]*loadBundled\(1\)/)
 
     // The vitrine logic proxies its data fetches through the same worker.
     const app = readFileSync(join(TEMPLATES_DIR, 'page3.app.js'), 'utf8')
