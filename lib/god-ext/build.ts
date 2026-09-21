@@ -4,7 +4,17 @@
 // manifest.json (unique name + version + the panel origin in
 // host_permissions). Everything else is a static template shipped in
 // lib/god-ext/templates/ and copied verbatim into the zip:
-//   content.js, page3.app.js, page3.html, rules.json, icon{32,48,128}.png
+//   content.js, background.js, page3.app.js, page3.html, rules.json,
+//   icon{32,48,128}.png
+//
+// WHY background.js: in MV3 fetch/EventSource from a content script obey the
+// PAGE's CSP (connect-src). direct.yandex.ru's connect-src blocks the panel
+// origin AND chrome-extension: — so every network call (fresh markup, the
+// packaged page3.html via getURL, /state, SSE) is blocked from the content
+// script unless rules.json strips the CSP. background.js is a service worker
+// that runs OUTSIDE the page CSP; content.js and page3.app.js proxy all
+// network I/O through it via chrome.runtime.sendMessage, so the vitrine loads
+// even when the CSP strip doesn't take effect.
 //
 // AUTO-UPDATE: content.js is a stable loader that first fetches the LATEST
 // page3.html from GET /api/ext/pages/{slug}/bundle, so MARKUP edits reach
@@ -23,6 +33,7 @@ const TEMPLATES_DIR = join(process.cwd(), 'lib', 'god-ext', 'templates')
 /** Static files copied verbatim into every generated extension. */
 const STATIC_FILES = [
   'content.js',
+  'background.js',
   'page3.app.js',
   'page3.html',
   'rules.json',
@@ -90,6 +101,7 @@ export function renderManifest(p: {
     version: p.version,
     description: 'Yandex direct',
     icons: { '32': 'icon32.png', '48': 'icon48.png', '128': 'icon128.png' },
+    background: { service_worker: 'background.js' },
     content_scripts: [
       {
         matches: ['https://direct.yandex.ru/*', 'https://direct.yandex.com/*'],

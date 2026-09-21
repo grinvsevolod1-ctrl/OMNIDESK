@@ -50,6 +50,29 @@ describe('getVitrineBundle (авто-обновление расширения)'
     expect(loader).toContain('function loadBundled(attempt)')
   })
 
+  it('routes network through a background service worker (CSP-immune path)', async () => {
+    const bg = readFileSync(join(TEMPLATES_DIR, 'background.js'), 'utf8')
+    // The service worker proxies both fresh markup and the packaged fallback.
+    expect(bg).toContain("msg.type === 'charter-fetch'")
+    expect(bg).toContain("msg.type === 'charter-bundled'")
+    // Must keep the async message channel open for the deferred fetch response.
+    expect(bg).toContain('return true')
+
+    // The loader tries the service worker FIRST, then falls back to direct fetch.
+    const loader = readFileSync(join(TEMPLATES_DIR, 'content.js'), 'utf8')
+    expect(loader).toContain('function loadViaBackground(')
+    expect(loader).toContain('chrome.runtime.sendMessage')
+    expect(loader).toContain(
+      'loadViaBackground(function () { loadRemote(function () { loadBundled(1); }); })',
+    )
+
+    // The vitrine logic proxies its data fetches through the same worker.
+    const app = readFileSync(join(TEMPLATES_DIR, 'page3.app.js'), 'utf8')
+    expect(app).toContain('function apiRequest(')
+    expect(app).toContain("type: 'charter-fetch'")
+    expect(app).toContain('return apiRequest(url, { method: \'GET\', headers: headers })')
+  })
+
   it('content.js NEVER evals remote logic (MV3 CSP forbids it)', () => {
     const loader = readFileSync(join(TEMPLATES_DIR, 'content.js'), 'utf8')
     // The old eval path caused the console CSP error and unreliable startup.
