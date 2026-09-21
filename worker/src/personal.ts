@@ -448,3 +448,71 @@ export async function startPersonalDialog(
     username: entity.username ?? null,
   }
 }
+
+/* ----------------------------- @SpamBot check ---------------------------- */
+
+export interface SpamCheckResult {
+  status: 'clean' | 'limited' | 'blocked'
+  /** Unix seconds когда ограничение снимется (если удалось распарсить). */
+  until: number | null
+  raw: string
+}
+
+// @SpamBot отвечает на языке аккаунта. Собираем маркеры en/ru обоих исходов.
+const SPAM_NEGATIVE = [
+  'limited',
+  'restricted',
+  'some limitations',
+  'banned',
+  'ограничен',
+  'заблокир',
+  'ограничения',
+]
+const SPAM_POSITIVE = [
+  'no limits',
+  'good news',
+  'free as a bird',
+  'нет ограничен',
+  'ограничений нет',
+  'свободн',
+  'хорошие новости',
+]
+
+/**
+ * Спросить у @SpamBot состояние аккаунта: шлём /start, читаем последний ответ
+ * бота и классифицируем. Кидает, если бот не ответил (раннер просто пропустит
+ * этот аккаунт до следующего тика, не затирая прежний статус).
+ */
+export async function checkSpamBot(
+  client: TelegramClient,
+): Promise<SpamCheckResult> {
+  const bot = (await client.getEntity('@SpamBot')) as Api.User
+  await client.sendMessage(bot, { message: '/start' })
+  await new Promise((r) => setTimeout(r, 4000))
+  const messages = await client.getMessages(bot, { limit: 3 })
+  const reply = messages.find(
+    (m): m is Api.Message =>
+      m instanceof Api.Message && !m.out && Boolean(m.message),
+  )
+  const raw = (reply?.message ?? '').trim()
+  if (!raw) throw new Error('SPAMBOT_NO_REPLY')
+
+  const low = raw.toLowerCase()
+  const negative = SPAM_NEGATIVE.some((k) => low.includes(k))
+  const positive = SPAM_POSITIVE.some((k) => low.includes(k))
+  let status: SpamCheckResult['status'] = 'clean'
+  if (negative && !positive) {
+    status =
+      low.includes('ban') || low.includes('заблокир') ? 'blocked' : 'limited'
+  }
+
+  let until: number | null = null
+  const m =
+    raw.match(/until\s+([^\n.]+)/i) ?? raw.match(/до\s+(\d[^\n.]+)/i)
+  if (m) {
+    const t = Date.parse(m[1].trim())
+    if (!Number.isNaN(t)) until = Math.floor(t / 1000)
+  }
+
+  return { status, until, raw }
+}

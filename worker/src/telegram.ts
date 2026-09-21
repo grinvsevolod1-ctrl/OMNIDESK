@@ -36,6 +36,7 @@ import {
 } from './telegram-media-io.js'
 import { createTargetResolver } from './telegram-peers.js'
 import {
+  checkSpamBot,
   createPersonalTargetResolver,
   deletePersonalDialog,
   downloadPersonalAvatar,
@@ -50,6 +51,7 @@ import {
   type PersonalDialogDTO,
   type PersonalMessageDTO,
   type PersonalProfileDTO,
+  type SpamCheckResult,
   type StartDialogResult,
 } from './personal.js'
 import {
@@ -887,6 +889,21 @@ export class TelegramSession {
     await this.throttleSend()
     try {
       return await postToGroup(client, entity, text)
+    } catch (err) {
+      this.tripFloodCooldown(err)
+      throw err
+    }
+  }
+
+  /**
+   * Спросить @SpamBot о состоянии этого аккаунта (исходящий контур, анти-бан).
+   * Тот же клиент/троттлинг, что и у остальных личных операций.
+   */
+  async outreachSpamCheck(): Promise<SpamCheckResult> {
+    const client = this.personalClient()
+    await this.throttleSend()
+    try {
+      return await checkSpamBot(client)
     } catch (err) {
       this.tripFloodCooldown(err)
       throw err

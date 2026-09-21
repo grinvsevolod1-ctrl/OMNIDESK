@@ -264,6 +264,7 @@ export async function listSendableAccounts(opts: {
         AND a.warmup_stage = 'ready'
         AND a.spamblock_status = 'clean'
         AND (a.spamblock_until IS NULL OR a.spamblock_until < now())
+        AND (a.not_before IS NULL OR a.not_before < now())
         AND a.daily_sent < $2
         AND a.hourly_sent < $3
         AND (
@@ -287,5 +288,47 @@ export async function markAccountSent(id: string): Promise<void> {
             updated_at = now()
       WHERE id = $1`,
     [id],
+  )
+}
+
+/**
+ * Аккаунт получил спам-блок (PEER_FLOOD / отчёт @SpamBot при отправке) — сразу
+ * выводим из ротации: спам-статус `blocked`, карантин, и опциональная дата
+ * снятия. listSendableAccounts перестаёт его отдавать до ручной/авто-проверки.
+ */
+export async function markAccountSpamblocked(
+  id: string,
+  until: Date | null,
+): Promise<void> {
+  await query(
+    `UPDATE outreach_accounts
+        SET spamblock_status = 'blocked',
+            spamblock_until = $2,
+            spamblock_checked_at = now(),
+            status = 'quarantined',
+            last_error = 'PEER_FLOOD / спам-блок при отправке',
+            updated_at = now()
+      WHERE id = $1`,
+    [id, until],
+  )
+}
+
+/**
+ * Временная «парковка» аккаунта до момента `until` (FLOOD_WAIT, человеческая
+ * пауза). Аккаунт остаётся здоровым, но не подбирается для отправки, пока
+ * `not_before` в будущем — по образцу broadcast_targets.not_before.
+ */
+export async function parkAccount(
+  id: string,
+  until: Date,
+  reason?: string,
+): Promise<void> {
+  await query(
+    `UPDATE outreach_accounts
+        SET not_before = $2,
+            last_error = COALESCE($3, last_error),
+            updated_at = now()
+      WHERE id = $1`,
+    [id, until, reason ?? null],
   )
 }

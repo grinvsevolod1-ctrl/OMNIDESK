@@ -18,8 +18,11 @@ import {
 import {
   listSendableAccounts,
   markAccountSent,
+  markAccountSpamblocked,
+  parkAccount,
 } from '@/lib/data/outreach-accounts'
 import { writeAudit } from '@/lib/data/audit'
+import { varyFirstTouch } from '@/lib/outreach-vary'
 
 export interface OutreachSendResult {
   ok: boolean
@@ -96,6 +99,14 @@ export async function sendFirstOutreachMessageAction(input: {
     }
   }
 
+  // Анти-бан: уникализируем текст под конкретного лида (Telegram банит
+  // байт-в-байт одинаковые первые сообщения незнакомцам).
+  const outbound = varyFirstTouch(text, {
+    id: lead.id,
+    displayName: lead.displayName,
+    username: lead.username,
+  })
+
   const data = await postJsonToWorker<{
     started?: boolean
     peerId?: string
@@ -103,10 +114,13 @@ export async function sendFirstOutreachMessageAction(input: {
   }>('/personal/start-dialog', {
     channelId: account.channelId,
     target,
-    text,
+    text: outbound,
   })
 
   if (!data?.started) {
+    // Аккаунт сам себя «лечит»: спам-блок → карантин, FLOOD_WAIT → парковка,
+    // чтобы следующий подбор взял другой аккаунт, а этот вышел из ротации.
+    await penalizeAccountOnError(account.id, data?.error).catch(() => {})
     return {
       ok: false,
       message:
@@ -119,7 +133,7 @@ export async function sendFirstOutreachMessageAction(input: {
     leadId: lead.id,
     accountId: account.id,
     direction: 'out',
-    body: text,
+    body: outbound,
     providerMsgId: data.peerId ?? null,
   })
   await markLeadContacted(lead.id, account.id)
@@ -153,6 +167,32 @@ export async function setOutreachLeadStatusAction(
   await setLeadStatus(leadId, status)
   revalidatePath('/app/outreach')
   return { ok: true, message: 'Статус обновлён.' }
+}
+
+/**
+ * Реакция пула на ошибку отправки: спам-блок → карантин (с датой снятия, если
+ * её видно), FLOOD_WAIT → парковка на распарсенное окно (или дефолтный час).
+ * Best-effort: любая ошибка апдейта не должна ломать ответ менеджеру.
+ */
+async function penalizeAccountOnError(
+  accountId: string,
+  error: string | undefined,
+): Promise<void> {
+  if (!error) return
+  const e = error.toLowerCase()
+  if (e.includes('peer flood') || (e.includes('spam') && e.includes('block'))) {
+    // Дата снятия из отчёта неизвестна на этом слое — оставляем открытой,
+    // spamcheck-раннер воркера позже вернёт аккаунт в строй, увидев 'clean'.
+    await markAccountSpamblocked(accountId, null)
+    return
+  }
+  const flood = e.match(/flood_wait_(\d+)/) ?? e.match(/flood.*?(\d+)/)
+  if (e.includes('flood') || flood) {
+    const seconds = flood ? Number(flood[1]) : 3600
+    const jitter = Math.floor(Math.random() * 60)
+    const until = new Date(Date.now() + (seconds + jitter) * 1000)
+    await parkAccount(accountId, until, `FLOOD_WAIT ${seconds}s`)
+  }
 }
 
 function humanizeWorkerError(error: string | undefined): string | null {

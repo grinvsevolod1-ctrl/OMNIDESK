@@ -187,3 +187,108 @@ export async function getOutreachSetting<T = unknown>(
   if (!row) return null
   return row.value as T
 }
+
+/* --------------------------- reply ingest (item 2) ------------------------ */
+
+export interface OutreachOpenThreadRow {
+  lead_id: string
+  account_id: string
+  channel_id: string
+  target: string
+  last_in_provider_msg_id: string | null
+}
+
+/**
+ * Leads that were contacted (have an outbound message) and are not yet closed,
+ * with the account/channel that owns the dialog and the last inbound provider
+ * message id we already stored. The reply poller walks these, pulls fresh
+ * history from MTProto and appends anything newer as an inbound message.
+ */
+export async function listOpenOutreachThreads(
+  limit: number,
+): Promise<OutreachOpenThreadRow[]> {
+  return query<OutreachOpenThreadRow>(
+    `SELECT DISTINCT ON (l.id)
+            l.id                              AS lead_id,
+            a.id                              AS account_id,
+            a.channel_id                      AS channel_id,
+            COALESCE(l.username, l.tg_user_id, l.phone) AS target,
+            (
+              SELECT m.provider_msg_id
+                FROM outreach_messages m
+               WHERE m.lead_id = l.id AND m.direction = 'in'
+               ORDER BY m.created_at DESC
+               LIMIT 1
+            )                                 AS last_in_provider_msg_id
+       FROM outreach_leads l
+       JOIN outreach_accounts a ON a.id = l.account_id
+      WHERE l.status IN ('contacted', 'replied')
+        AND a.channel_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM outreach_messages o
+           WHERE o.lead_id = l.id AND o.direction = 'out'
+        )
+      ORDER BY l.id, l.updated_at DESC
+      LIMIT $1`,
+    [limit],
+  )
+}
+
+/**
+ * Append an inbound reply captured from MTProto, idempotently (same provider
+ * message id is never stored twice), and flip the lead to 'replied'. Returns
+ * true when a NEW message was inserted.
+ */
+export async function ingestOutreachReply(args: {
+  leadId: string
+  accountId: string
+  providerMsgId: string
+  body: string
+}): Promise<boolean> {
+  const inserted = await one<{ id: string }>(
+    `INSERT INTO outreach_messages
+        (lead_id, account_id, direction, body, provider_msg_id)
+     VALUES ($1, $2, 'in', $3, $4)
+     ON CONFLICT (lead_id, provider_msg_id) WHERE provider_msg_id IS NOT NULL
+     DO NOTHING
+     RETURNING id`,
+    [args.leadId, args.accountId, args.body, args.providerMsgId],
+  )
+  if (!inserted) return false
+  await query(
+    `UPDATE outreach_leads
+        SET status = CASE WHEN status = 'contacted' THEN 'replied' ELSE status END,
+            updated_at = now()
+      WHERE id = $1`,
+    [args.leadId],
+  )
+  return true
+}
+
+/* ------------------------ mutual warming (item 4) ------------------------- */
+
+export interface WarmPeerRow {
+  id: string
+  channel_id: string
+  username: string | null
+}
+
+/**
+ * Ready/warming accounts that can act as safe conversation partners for mutual
+ * warming: chatting inside the owned pool generates organic, low-risk activity
+ * without touching real leads. Returns accounts with a resolvable @username.
+ */
+export async function listWarmPeers(limit: number): Promise<WarmPeerRow[]> {
+  return query<WarmPeerRow>(
+    `SELECT a.id, a.channel_id, c.config->>'username' AS username
+       FROM outreach_accounts a
+       JOIN channels c ON c.id = a.channel_id
+      WHERE a.channel_id IS NOT NULL
+        AND a.status NOT IN ('banned', 'quarantined', 'logged_out', 'error')
+        AND a.spamblock_status <> 'blocked'
+        AND c.config->>'username' IS NOT NULL
+      ORDER BY random()
+      LIMIT $1`,
+    [limit],
+  )
+}

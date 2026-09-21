@@ -14,7 +14,11 @@ import { processDeployJob, drainDeployQueue } from './hosting/jobs.js'
 import { sweepServerHealth } from './hosting/ops.js'
 import { recoverStuckDeployments } from './hosting/repo.js'
 import { runBroadcastTick } from './broadcast-runner.js'
-import { runOutreachWarmupTick } from './outreach-warmup-runner.js'
+import {
+  runOutreachWarmupTick,
+  runOutreachMutualWarmTick,
+} from './outreach-warmup-runner.js'
+import { runOutreachReplyTick } from './outreach-reply-runner.js'
 import {
   resetHourlyCounters,
   resetDailyCounters,
@@ -99,6 +103,21 @@ const BROADCAST_TICK_MS = 10_000
  */
 const OUTREACH_WARMUP_TICK_MS = 60_000
 
+/**
+ * Outreach reply poller cadence: pulls fresh MTProto history for open threads
+ * and appends inbound replies. 20s keeps the manager's view near-live without
+ * hammering Telegram (each thread reads one small history page).
+ */
+const OUTREACH_REPLY_TICK_MS = 20_000
+
+/**
+ * Mutual-warming cadence: our own pool accounts exchange a short casual line so
+ * profiles show organic two-way traffic before touching real leads. The tick
+ * itself is probabilistic and does at most one pairing, so a short scan keeps
+ * timing human-like without bursting.
+ */
+const OUTREACH_MUTUAL_WARM_TICK_MS = 5 * 60 * 1000
+
 /** Hourly reset of outreach per-hour send counters. */
 const OUTREACH_HOURLY_RESET_MS = 60 * 60 * 1000
 
@@ -116,6 +135,8 @@ let jobsRetentionTimer: NodeJS.Timeout | null = null
 let mediaOffloadTimer: NodeJS.Timeout | null = null
 let proxyHealthTimer: NodeJS.Timeout | null = null
 let outreachWarmupTimer: NodeJS.Timeout | null = null
+let outreachReplyTimer: NodeJS.Timeout | null = null
+let outreachMutualWarmTimer: NodeJS.Timeout | null = null
 let outreachHourlyResetTimer: NodeJS.Timeout | null = null
 let outreachDailyResetTimer: NodeJS.Timeout | null = null
 
@@ -289,6 +310,27 @@ async function main(): Promise<void> {
   }, OUTREACH_WARMUP_TICK_MS)
   outreachWarmupTimer.unref?.()
 
+  // 9'. Outreach reply poller: pull fresh MTProto history for open threads and
+  //     append inbound lead replies (the outbound contour runs accounts in
+  //     personal mode, so replies never hit the normal update pipeline). Uses
+  //     live sessions from the registry; offline accounts are skipped.
+  outreachReplyTimer = setInterval(() => {
+    runOutreachReplyTick((channelId) => registry.get(channelId)).catch((err) =>
+      logger.error({ err }, 'outreach reply tick failed'),
+    )
+  }, OUTREACH_REPLY_TICK_MS)
+  outreachReplyTimer.unref?.()
+
+  // 9''. Mutual warming: our own pool accounts exchange a short line so profiles
+  //      show organic two-way traffic before touching real leads. Probabilistic
+  //      and at most one pairing per tick; uses live sessions only.
+  outreachMutualWarmTimer = setInterval(() => {
+    runOutreachMutualWarmTick((channelId) => registry.get(channelId)).catch(
+      (err) => logger.error({ err }, 'outreach mutual warm tick failed'),
+    )
+  }, OUTREACH_MUTUAL_WARM_TICK_MS)
+  outreachMutualWarmTimer.unref?.()
+
   // 9a. Counter resets: per-hour and per-day send/join caps are enforced by the
   //     send pipeline; these ticks roll the windows over. Cheap indexed
   //     UPDATEs that no-op when nothing has been sent.
@@ -326,6 +368,11 @@ async function shutdown(signal: string): Promise<void> {
     if (jobsRetentionTimer) clearInterval(jobsRetentionTimer)
     if (mediaOffloadTimer) clearInterval(mediaOffloadTimer)
     if (proxyHealthTimer) clearInterval(proxyHealthTimer)
+    if (outreachWarmupTimer) clearInterval(outreachWarmupTimer)
+    if (outreachReplyTimer) clearInterval(outreachReplyTimer)
+    if (outreachMutualWarmTimer) clearInterval(outreachMutualWarmTimer)
+    if (outreachHourlyResetTimer) clearInterval(outreachHourlyResetTimer)
+    if (outreachDailyResetTimer) clearInterval(outreachDailyResetTimer)
     await registry.shutdownAll()
     await pool.end()
   } finally {

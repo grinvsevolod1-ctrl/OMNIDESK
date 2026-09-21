@@ -4,8 +4,28 @@ import {
   bumpWarmupDay,
   markAccountAction,
   getOutreachSetting,
+  listWarmPeers,
   type OutreachAccountRow,
 } from './repo-outreach.js'
+
+/** Minimal session surface for mutual warming (satisfied by TelegramSession). */
+export interface WarmSendSession {
+  personalStartDialog(
+    target: string,
+    text: string,
+  ): Promise<{ peerId: string }>
+}
+
+/** Short, human, low-signal openers exchanged between our OWN pool accounts. */
+const MUTUAL_LINES = [
+  'привет, как дела?',
+  'здарова!',
+  'ты тут?',
+  'как оно?',
+  'хэй) что нового',
+  'доброго дня',
+  'привет, давно не виделись',
+]
 
 /**
  * Outreach warm-up runner (anti-ban core).
@@ -138,5 +158,68 @@ export async function runOutreachWarmupTick(
     logger.error({ err }, 'outreach warmup sweep failed')
   } finally {
     sweepInFlight = false
+  }
+}
+
+let mutualInFlight = false
+
+/**
+ * Mutual warming (item 4): our own pool accounts exchange a short casual line
+ * so each profile shows organic outgoing/incoming traffic BEFORE it ever
+ * messages a real lead. This is far safer than sending to strangers — every
+ * peer is an account we own, so there is no report/spam risk, yet Telegram sees
+ * genuine two-way dialog activity.
+ *
+ * Conservative by design: runs only inside active hours, one pairing per tick,
+ * with a low probability so the pool doesn't light up in a burst. Best-effort;
+ * a FLOOD_WAIT or offline session is swallowed.
+ */
+export async function runOutreachMutualWarmTick(
+  getSession: (channelId: string) => WarmSendSession | undefined,
+): Promise<void> {
+  if (mutualInFlight) return
+  mutualInFlight = true
+  try {
+    const cfg = await loadConfig()
+    const hour = mskHour()
+    const awake =
+      cfg.activeHourStart <= cfg.activeHourEnd
+        ? hour >= cfg.activeHourStart && hour < cfg.activeHourEnd
+        : hour >= cfg.activeHourStart || hour < cfg.activeHourEnd
+    if (!awake) return
+
+    // Only occasionally — keeps the pool's activity sparse and human-like.
+    if (Math.random() > 0.5) return
+
+    const peers = await listWarmPeers(8)
+    if (peers.length < 2) return // need at least a sender and a recipient
+
+    // Pick a random sender that has a live session and a distinct recipient.
+    const shuffled = peers.slice().sort(() => Math.random() - 0.5)
+    for (const sender of shuffled) {
+      const session = getSession(sender.channel_id)
+      if (!session) continue
+      const recipient = shuffled.find(
+        (p) => p.id !== sender.id && p.username,
+      )
+      if (!recipient?.username) continue
+
+      const line = MUTUAL_LINES[Math.floor(Math.random() * MUTUAL_LINES.length)]
+      try {
+        await session.personalStartDialog(`@${recipient.username}`, line)
+        await markAccountAction(sender.id)
+        logger.info(
+          { from: sender.id, to: recipient.id },
+          'outreach mutual warm exchange',
+        )
+      } catch (err) {
+        logger.warn({ from: sender.id, err }, 'mutual warm send failed (non-fatal)')
+      }
+      break // one pairing per tick
+    }
+  } catch (err) {
+    logger.error({ err }, 'outreach mutual warm sweep failed')
+  } finally {
+    mutualInFlight = false
   }
 }
