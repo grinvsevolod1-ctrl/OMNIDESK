@@ -40,8 +40,11 @@ describe('getVitrineBundle (авто-обновление расширения)'
     // Remote-first: fetches /bundle with the Bearer token from config.js…
     expect(loader).toContain("'/bundle'")
     expect(loader).toContain("'Bearer ' + c.token")
-    // …renders the fresh MARKUP…
-    expect(loader).toContain('applyHtml(b.html)')
+    // …renders the fresh MARKUP (via the `ok(html)` wrapper that guards against
+    // double-settle, which in turn calls applyHtml)…
+    expect(loader).toContain('function ok(html) {')
+    expect(loader).toContain('applyHtml(html)')
+    expect(loader).toContain('ok(b.html)')
     // …and falls back to the packaged copy on any failure.
     expect(loader).toContain('loadRemote(function () { loadBundled(1); })')
     expect(loader).toContain('function loadBundled(attempt)')
