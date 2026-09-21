@@ -99,17 +99,22 @@ describe('getVitrineBundle (авто-обновление расширения)'
     // until it works").
     expect(loader).toContain('function applyHtml(html)')
     expect(loader).toContain('function swapIn()')
-    expect(loader).toContain('swapIn(); /* подменяем немедленно')
+    expect(loader).toContain('swapIn(); /* переносим head/body в живой <html>')
     // The old event-gated swap must be gone.
     expect(loader).not.toContain('function whenDomReady')
-    // A MutationObserver re-asserts OUR root if the parser ever replaces the
-    // documentElement — same node, so init state is preserved (no re-init).
+    // CRITICAL: the loader must NOT replace the root <html>. On antidetect
+    // Chromium forks (Linken Sphere) replaceChild(documentElement) leaves the
+    // new root as a blind black layer — DOM alive, screen black forever. We
+    // move head/body INTO the existing painted <html> instead.
+    expect(loader).not.toContain('document.replaceChild(ourRoot')
+    expect(loader).toContain("cur.setAttribute('data-charter-applied', '1')")
+    expect(loader).toContain('function isApplied()')
+    // A MutationObserver rebuilds the vitrine from savedHtml if the parser ever
+    // replaces the documentElement wholesale (marker disappears).
     expect(loader).toContain('new MutationObserver(')
-    expect(loader).toContain('if (document.documentElement !== ourRoot) { swapIn(); forceRepaint(); }')
-    // Root layer must be forcibly recomposited after swap — antidetect Chromium
-    // forks with spoofed GPU leave the new documentElement as a blind black layer.
+    expect(loader).toContain('if (!isApplied()) {')
+    expect(loader).toContain('ourRoot = buildRoot(savedHtml)')
     expect(loader).toContain('function forceRepaint()')
-    expect(loader).toContain('forceRepaint(); /* пересобираем корневой слой')
     expect(loader).toContain("guardObserver.observe(document, { childList: true })")
     // init runs exactly once.
     expect(loader).toContain('if (inited) return;')
