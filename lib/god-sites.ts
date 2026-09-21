@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { createHash, randomBytes } from 'crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto'
 import { query } from './db'
 import { autoDayKey, daysBetween, round2 } from './god-sites-sim'
 import { simulateAutoDay } from './god-sites-projection'
@@ -125,7 +125,104 @@ export async function getSiteBySlugAndKey(
   return rows[0] ? toSite(rows[0]) : null
 }
 
+/* --------------------------- SSE stream tickets -------------------------- */
+
+/**
+ * Short-lived, single-purpose ticket for the SSE `/stream` endpoint (#7).
+ *
+ * EventSource cannot send an Authorization header, so the legacy stream URL
+ * carries the raw API token as `?token=` — which then lands in nginx/CDN
+ * access logs. A ticket replaces the raw token in that URL: the page mints one
+ * with a normal header-authenticated request, then opens the stream with
+ * `?ticket=`. The ticket is:
+ *   - short-lived (TICKET_TTL_MS) — useless in logs seconds later;
+ *   - signed with an HMAC over the site's api_key_hash (a server-only secret),
+ *     so it can't be forged and it auto-invalidates the instant the key is
+ *     rotated;
+ *   - stateless — no DB/Redis row, verification only re-derives the HMAC.
+ *
+ * The stream endpoint still accepts a raw `?token=` for already-installed
+ * extensions (their packaged client predates tickets), so this is purely
+ * additive; new downloads use tickets and keep the token out of the URL.
+ */
+const TICKET_TTL_MS = 60_000
+
+/** Mint a stream ticket after validating slug+key. Null if the pair is wrong. */
+export async function issueStreamTicket(
+  slug: string,
+  key: string,
+): Promise<string | null> {
+  const site = await getSiteBySlugAndKey(slug, key)
+  if (!site) return null
+  const exp = Date.now() + TICKET_TTL_MS
+  const payload = `${site.slug}.${exp}`
+  const sig = createHmac('sha256', hashApiKey(key)).update(payload).digest('base64url')
+  return `${exp}.${sig}`
+}
+
+/**
+ * Verify a stream ticket for a slug and return the site (no touch). Null if the
+ * ticket is malformed, expired, for another slug, or its signature doesn't
+ * match the site's CURRENT key hash (rotation invalidates outstanding tickets).
+ */
+export async function verifyStreamTicket(
+  slug: string,
+  ticket: string,
+): Promise<GodSite | null> {
+  const s = (slug ?? '').trim().toLowerCase()
+  if (!s) return null
+  const dot = ticket.indexOf('.')
+  if (dot <= 0) return null
+  const exp = Number(ticket.slice(0, dot))
+  const sig = ticket.slice(dot + 1)
+  if (!Number.isFinite(exp) || exp < Date.now() || !sig) return null
+
+  const rows = await query<SiteRow & { api_key_hash: string }>(
+    `SELECT *, api_key_hash FROM god_sites WHERE slug = $1`,
+    [s],
+  )
+  if (!rows[0]) return null
+  const expected = createHmac('sha256', rows[0].api_key_hash)
+    .update(`${s}.${exp}`)
+    .digest('base64url')
+  const a = Buffer.from(sig)
+  const b = Buffer.from(expected)
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null
+  return toSite(rows[0])
+}
+
 /* ------------------------------ Auto-spend ------------------------------ */
+
+/**
+ * In-process "already tried to commit this (site, day)" gate. The auto-spend
+ * commit only has DB work to do on the FIRST read of a new day, but the public
+ * /state endpoint is hit by every poller/SSE reconnect, so a burst of
+ * concurrent first-reads of a new day would each fire a SELECT+UPDATE
+ * (mutateSite) — one wins, the rest lose the revision race but still paid for
+ * two round-trips. This gate collapses that burst: once a commit has been
+ * attempted for a (siteId, dayKey) on this instance, further attempts within
+ * COMMIT_GATE_MS skip the DB entirely and return the caller's snapshot (which
+ * is already correct — today's spend is live-projected, not stored). The gate
+ * is a best-effort optimisation, never a correctness boundary: the real
+ * guarantee stays the revision-guarded UPDATE, and the map self-prunes.
+ */
+const commitGate = new Map<string, { day: string; at: number }>()
+const COMMIT_GATE_MS = 60_000
+const COMMIT_GATE_MAX = 20_000
+
+function commitRecentlyTried(siteId: string, day: string, now: number): boolean {
+  const hit = commitGate.get(siteId)
+  return hit != null && hit.day === day && now - hit.at < COMMIT_GATE_MS
+}
+
+function markCommitTried(siteId: string, day: string, now: number): void {
+  if (commitGate.size > COMMIT_GATE_MAX) {
+    for (const [k, v] of commitGate) {
+      if (now - v.at >= COMMIT_GATE_MS) commitGate.delete(k)
+    }
+  }
+  commitGate.set(siteId, { day, at: now })
+}
 
 /**
  * Lazily commit finished auto-spend days into the stored balance. Called on
@@ -141,6 +238,12 @@ export async function commitAutoSpend(
   if (!a?.enabled || a.dailyBudget <= 0) return site
   const today = autoDayKey(now, a.tzOffsetHours ?? 3)
   if (a.lastCommittedDay === today) return site
+
+  // Collapse the concurrent-first-read burst to a single DB attempt per
+  // (site, day) per instance (see commitGate above). Snapshot is still valid.
+  const nowMs = now.getTime()
+  if (commitRecentlyTried(site.id, today, nowMs)) return site
+  markCommitTried(site.id, today, nowMs)
 
   const res = await mutateSite(site.id, null, (s) => {
     const cfg = s.autoSpend
