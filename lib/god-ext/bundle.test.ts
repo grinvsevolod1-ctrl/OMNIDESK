@@ -49,6 +49,14 @@ describe('local-only extension boot', () => {
     expect(code).toContain("retry.addEventListener('click', function () { location.reload(); })")
   })
 
+  it('validates local files before stopping the parser and waits only on an un-aborted error path', () => {
+    expect(code.indexOf("if (typeof html !== 'string'")).toBeLessThan(code.indexOf('window.stop()'))
+    expect(code.indexOf("if (typeof init !== 'function')")).toBeLessThan(code.indexOf('window.stop()'))
+    expect(code.indexOf('var parsed = cleanHtml(html)')).toBeLessThan(code.indexOf('window.stop()'))
+    expect(code.match(/window\.stop\(\)/g)).toHaveLength(1)
+    expect(code).toContain("document.addEventListener('DOMContentLoaded', showError, { once: true })")
+  })
+
   it('never executes stringified code or inserts script elements', () => {
     expect(code).not.toMatch(/(^|[^.\w])eval\s*\(/)
     expect(code).not.toContain('new Function')

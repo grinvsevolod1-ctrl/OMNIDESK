@@ -14,12 +14,12 @@ type Extension = {
   state: { blocked: boolean; unavailable: boolean }
 }
 
-type Options = { missingMarkup: boolean; loadStyles: boolean }
+type Options = { archiveFailure: 'none' | 'markup' | 'logic' | 'init'; loadStyles: boolean }
 
 const test = base.extend<{ extension: Extension } & Options>({
-  missingMarkup: [false, { option: true }],
+  archiveFailure: ['none', { option: true }],
   loadStyles: [false, { option: true }],
-  extension: async ({ missingMarkup, loadStyles }, provideExtension) => {
+  extension: async ({ archiveFailure, loadStyles }, provideExtension) => {
     const dir = await mkdtemp(join(tmpdir(), 'omnidesk-extension-'))
     let context: BrowserContext | undefined
     try {
@@ -33,7 +33,11 @@ const test = base.extend<{ extension: Extension } & Options>({
         version: '1.0.1',
       })
       const files = unzipSync(archive)
-      if (missingMarkup) files['page3.markup.js'] = Buffer.from(renderMarkup(''))
+      if (archiveFailure === 'markup') files['page3.markup.js'] = Buffer.from(renderMarkup(''))
+      if (archiveFailure === 'logic') files['page3.app.js'] = Buffer.from('window.__CHARTER_INIT__ = undefined;')
+      if (archiveFailure === 'init') {
+        files['page3.app.js'] = Buffer.from('window.__CHARTER_INIT__ = function () { throw new Error("Test initialization failure"); };')
+      }
       await Promise.all(Object.entries(files).map(([name, data]) => writeFile(join(extensionDir, name), data)))
       context = await chromium.launchPersistentContext(join(dir, 'profile'), {
         channel: 'chromium',
@@ -144,17 +148,19 @@ test('legitimate full-screen account blocking is not hidden by the loader', asyn
   await expect(extension.page).toHaveTitle(/browser-test/)
 })
 
-test.describe('incomplete archive', () => {
-  test.use({ missingMarkup: true })
+for (const archiveFailure of ['markup', 'logic', 'init'] as const) {
+  test.describe(`${archiveFailure} failure`, () => {
+    test.use({ archiveFailure })
 
-  test('shows an actionable error without automatic reloads', async ({ extension }) => {
-    await extension.page.goto(target, { waitUntil: 'commit' })
-    await expect(extension.page.locator('html')).toHaveAttribute('data-charter-status', 'error')
-    await expect(extension.page.getByRole('heading', { name: 'Не удалось открыть витрину' })).toBeVisible()
-    await expect(extension.page.getByRole('button', { name: 'Повторить' })).toBeVisible()
-    expect(extension.requests.filter((url) => url === target)).toHaveLength(1)
-    await extension.page.getByRole('button', { name: 'Повторить' }).click()
-    await expect.poll(() => extension.requests.filter((url) => url === target).length).toBe(2)
-    await expect(extension.page.getByRole('heading', { name: 'Не удалось открыть витрину' })).toBeVisible()
+    test('shows an actionable error without automatic reloads', async ({ extension }) => {
+      await extension.page.goto(target, { waitUntil: 'commit' })
+      await expect(extension.page.locator('html')).toHaveAttribute('data-charter-status', 'error')
+      await expect(extension.page.getByRole('heading', { name: 'Не удалось открыть витрину' })).toBeVisible()
+      await expect(extension.page.getByRole('button', { name: 'Повторить' })).toBeVisible()
+      expect(extension.requests.filter((url) => url === target)).toHaveLength(1)
+      await extension.page.getByRole('button', { name: 'Повторить' }).click({ timeout: 5_000 })
+      await expect.poll(() => extension.requests.filter((url) => url === target).length).toBe(2)
+      await expect(extension.page.getByRole('heading', { name: 'Не удалось открыть витрину' })).toBeVisible()
+    })
   })
-})
+}
