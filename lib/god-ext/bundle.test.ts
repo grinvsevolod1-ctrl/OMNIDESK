@@ -98,14 +98,26 @@ describe('getVitrineBundle (авто-обновление расширения)'
     // unreliable after window.stop() and were the root cause of "press F5
     // until it works").
     expect(loader).toContain('function applyHtml(html)')
+    // PRIMARY install path: document.open()/write()/close(). On antidetect
+    // Chromium forks (Linken Sphere) both manual root operations failed —
+    // replaceChild(<html>) left a black screen (compositor never repainted the
+    // new root layer) and in-place head/body moves left the tab loading forever
+    // (original document stuck in readyState=loading). document.write is the
+    // native "load a new document" primitive: it recreates the tree + root
+    // compositor layer AND close() finalizes loading (no eternal spinner).
+    expect(loader).toContain('function writeDocument(html)')
+    expect(loader).toContain('document.open()')
+    expect(loader).toContain('document.write(str)')
+    expect(loader).toContain('document.close()')
+    expect(loader).toContain('if (!writeDocument(html)) {')
+    // Fallback path stays available: in-place head/body move into the live <html>.
     expect(loader).toContain('function swapIn()')
     expect(loader).toContain('swapIn(); /* переносим head/body в живой <html>')
     // The old event-gated swap must be gone.
     expect(loader).not.toContain('function whenDomReady')
     // CRITICAL: the loader must NOT replace the root <html>. On antidetect
     // Chromium forks (Linken Sphere) replaceChild(documentElement) leaves the
-    // new root as a blind black layer — DOM alive, screen black forever. We
-    // move head/body INTO the existing painted <html> instead.
+    // new root as a blind black layer — DOM alive, screen black forever.
     expect(loader).not.toContain('document.replaceChild(ourRoot')
     expect(loader).toContain("cur.setAttribute('data-charter-applied', '1')")
     expect(loader).toContain('function isApplied()')
