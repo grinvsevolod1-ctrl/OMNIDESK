@@ -105,7 +105,11 @@ describe('getVitrineBundle (авто-обновление расширения)'
     // A MutationObserver re-asserts OUR root if the parser ever replaces the
     // documentElement — same node, so init state is preserved (no re-init).
     expect(loader).toContain('new MutationObserver(')
-    expect(loader).toContain('if (document.documentElement !== ourRoot) swapIn()')
+    expect(loader).toContain('if (document.documentElement !== ourRoot) { swapIn(); forceRepaint(); }')
+    // Root layer must be forcibly recomposited after swap — antidetect Chromium
+    // forks with spoofed GPU leave the new documentElement as a blind black layer.
+    expect(loader).toContain('function forceRepaint()')
+    expect(loader).toContain('forceRepaint(); /* пересобираем корневой слой')
     expect(loader).toContain("guardObserver.observe(document, { childList: true })")
     // init runs exactly once.
     expect(loader).toContain('if (inited) return;')
