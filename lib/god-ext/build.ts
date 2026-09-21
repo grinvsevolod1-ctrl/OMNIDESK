@@ -1,28 +1,7 @@
-// Assembles a ready-to-install Chrome extension for one managed god-site.
-//
-// Only TWO files are generated per site — config.js (api/page/token) and
-// manifest.json (unique name + version + the panel origin in
-// host_permissions). Everything else is a static template shipped in
-// lib/god-ext/templates/ and copied verbatim into the zip:
-//   content.js, background.js, page3.app.js, page3.html, rules.json,
-//   icon{32,48,128}.png
-//
-// WHY background.js: in MV3 fetch/EventSource from a content script obey the
-// PAGE's CSP (connect-src). direct.yandex.ru's connect-src blocks the panel
-// origin AND chrome-extension: — so every network call (fresh markup, the
-// packaged page3.html via getURL, /state, SSE) is blocked from the content
-// script unless rules.json strips the CSP. background.js is a service worker
-// that runs OUTSIDE the page CSP; content.js and page3.app.js proxy all
-// network I/O through it via chrome.runtime.sendMessage, so the vitrine loads
-// even when the CSP strip doesn't take effect.
-//
-// AUTO-UPDATE: content.js is a stable loader that first fetches the LATEST
-// page3.html from GET /api/ext/pages/{slug}/bundle, so MARKUP edits reach
-// installed extensions without a reinstall. Logic (page3.app.js) stays
-// packaged and runs from the isolated world — MV3 forbids eval, so logic
-// edits still require re-downloading the archive. The bundled page3.html is
-// the offline fallback — config.js leaves pageUrl empty so on any bundle
-// failure content.js loads the packaged copy.
+// The document and its logic are packaged together. page3.markup.js carries
+// the HTML as a string in the isolated world, so startup needs neither a
+// network request nor a service-worker round trip. background.js is only
+// needed for panel data; UI changes require downloading a new archive.
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -47,7 +26,7 @@ export interface ExtensionParams {
   origin: string
   /** Site slug — becomes config.page and the /pages/{slug}/state path. */
   slug: string
-  /** Fresh plaintext API token (only known right after create/rotate). */
+  /** The site's persistent API token; downloads do not rotate it. */
   token: string
   /** manifest name, e.g. "яндекс 11". */
   name: string
@@ -55,12 +34,7 @@ export interface ExtensionParams {
   version: string
 }
 
-/**
- * config.js — overrides the fallback constants baked into page3.app.js via
- * window.__CHARTER_CFG__. pageUrl:'' → use the page3.html bundled in the zip.
- * All values go through JSON.stringify so a quote or backslash in the token
- * can never break out of the string.
- */
+/** JSON serialization keeps credentials inert in the generated script. */
 export function renderConfig(p: {
   apiBase: string
   page: string
@@ -70,26 +44,27 @@ export function renderConfig(p: {
    НЕ редактируйте вручную — перекачайте расширение из панели («Сайты»).
 
    Токен постоянный: все скачанные архивы этого сайта работают одновременно,
-   пока в панели не нажата «Заменить токен». Разметка витрины (page3.html)
-   подтягивается с панели автоматически (см. content.js), вшитая копия —
-   офлайн-fallback; логика (page3.app.js) вшитая, её правки требуют
-   перекачки архива. */
+   пока в панели не нажата «Заменить токен». Разметка и логика вшиты в пакет:
+   их обновление требует перекачки архива.
+   Данные из панели продолжают обновляться обычным опросом. */
 window.__CHARTER_CFG__ = {
-  pageUrl: '',
   api: ${JSON.stringify(p.apiBase)},
   page: ${JSON.stringify(p.page)},
   token: ${JSON.stringify(p.token)},
+  transport: 'poll',
   debug: false
 };
 `
 }
 
-/**
- * manifest.json — MV3. name/version are unique per download; the panel origin
- * is injected into host_permissions so the content script may call the API
- * cross-origin from direct.yandex.ru. The yandex hosts and CSP ruleset stay
- * exactly as the template needs them.
- */
+export function renderMarkup(html: string): string {
+  const literal = JSON.stringify(html)
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+  return `window.__CHARTER_HTML__ = ${literal};\n`
+}
+
+/** Permissions apply only to the panel and the two supported Direct hosts. */
 export function renderManifest(p: {
   name: string
   version: string
@@ -105,38 +80,26 @@ export function renderManifest(p: {
     content_scripts: [
       {
         matches: ['https://direct.yandex.ru/*', 'https://direct.yandex.com/*'],
-        js: ['config.js', 'page3.app.js', 'content.js'],
+        js: ['config.js', 'page3.markup.js', 'page3.app.js', 'content.js'],
         run_at: 'document_start',
       },
     ],
-    permissions: ['declarativeNetRequest'],
+    permissions: ['declarativeNetRequestWithHostAccess'],
     host_permissions: [
       `${p.origin}/*`,
-      'https://*.yandex.ru/*',
-      'https://*.yandex.com/*',
+      'https://direct.yandex.ru/*',
+      'https://direct.yandex.com/*',
     ],
     declarative_net_request: {
       rule_resources: [
         { id: 'ruleset_csp', enabled: true, path: 'rules.json' },
       ],
     },
-    web_accessible_resources: [
-      {
-        resources: ['page3.html', 'page3.app.js'],
-        matches: [
-          'https://direct.yandex.ru/*',
-          'https://direct.yandex.com/*',
-        ],
-      },
-    ],
   }
   return JSON.stringify(manifest, null, 2)
 }
 
-/**
- * Build the full extension zip for a site. Reads the static templates from
- * disk, generates config.js + manifest.json, and returns the archive Buffer.
- */
+/** Builds the complete archive without network requests or token changes. */
 export async function assembleExtensionZip(
   params: ExtensionParams,
 ): Promise<Buffer> {
@@ -149,16 +112,13 @@ export async function assembleExtensionZip(
       data: await readFile(join(TEMPLATES_DIR, name)),
     })),
   )
+  const markup = staticEntries.find((entry) => entry.name === 'page3.html')!
 
   const entries: ZipEntry[] = [
     {
       name: 'manifest.json',
       data: Buffer.from(
-        renderManifest({
-          name: params.name,
-          version: params.version,
-          origin,
-        }),
+        renderManifest({ name: params.name, version: params.version, origin }),
         'utf8',
       ),
     },
@@ -168,6 +128,10 @@ export async function assembleExtensionZip(
         renderConfig({ apiBase, page: params.slug, token: params.token }),
         'utf8',
       ),
+    },
+    {
+      name: 'page3.markup.js',
+      data: Buffer.from(renderMarkup(markup.data.toString('utf8')), 'utf8'),
     },
     ...staticEntries,
   ]

@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts --passWithNoTests",
     "test:browser": "playwright test",
+    "test:extension": "playwright test --config tests/extension/playwright.config.ts",
     "db:migrate": "node --env-file-if-exists=.env --env-file-if-exists=.env.production.local --env-file-if-exists=.env.local --env-file-if-exists=.env.development.local scripts/migrate.mjs up",
     "db:status": "node --env-file-if-exists=.env --env-file-if-exists=.env.production.local --env-file-if-exists=.env.local --env-file-if-exists=.env.development.local scripts/migrate.mjs status",
     "db:size": "node --env-file-if-exists=.env --env-file-if-exists=.env.production.local --env-file-if-exists=.env.local --env-file-if-exists=.env.development.local scripts/db-size-report.mjs",

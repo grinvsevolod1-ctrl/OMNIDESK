@@ -12,8 +12,8 @@
       ]
     },
     "condition": {
-      "requestDomains": ["yandex.ru", "yandex.com"],
-      "resourceTypes": ["main_frame", "sub_frame"]
+      "requestDomains": ["direct.yandex.ru", "direct.yandex.com"],
+      "resourceTypes": ["main_frame"]
     }
   }
 ]
