@@ -187,7 +187,7 @@ export async function loadOlderCuratorMessagesAction(
  *  scheduled sends. Each mirrors the manager action verbatim but resolves     *
  *  ownership through the curator scope (`curator_id`) and enqueues the worker *
  *  job under the OWNING manager (the curator has no Telegram session/channel  *
- *  of their own — the account owner's session delivers everything).          *
+ *  of their own �� the account owner's session delivers everything).          *
  * -------------------------------------------------------------------------- */
 
 /** Toggle an emoji reaction on a message (Telegram only, curator-scoped). */
@@ -462,13 +462,39 @@ export async function sendCuratorVoiceAction(
   return { ok: true, message: 'Голосовое отправлено.' }
 }
 
-/** Hard cap on Telegram media routed through the MTProto session (pre-base64). */
-const CURATOR_TG_MEDIA_MAX_BYTES = 15 * 1024 * 1024
+/**
+ * Small files ride the job payload as base64 (proven path). Anything larger is
+ * delivered BY REFERENCE: the bytes are archived and the worker loads them from
+ * the archive by messageId, so there is no practical size limit on videos/files.
+ */
+const CURATOR_TG_INLINE_MAX_BYTES = 8 * 1024 * 1024
 
 /**
- * Send a photo/document to a Telegram conversation the curator owns. Bytes ride
- * the worker job (base64) exactly like a voice note; delivery runs under the
- * channel owner-manager. WA/VK media uses the CDN upload route instead.
+ * Classify a Telegram upload by MIME so the panel renders the right bubble and
+ * the worker delivers video as a playable video (not a bare document). Mirrors
+ * the manager's classifyTelegramUpload.
+ */
+function classifyCuratorUpload(mime: string): {
+  asPhoto: boolean
+  mediaType: 'image' | 'video' | 'audio' | 'document'
+  label: string
+} {
+  if (mime.startsWith('image/') && mime !== 'image/webp' && mime !== 'image/gif') {
+    return { asPhoto: true, mediaType: 'image', label: '[Фото]' }
+  }
+  if (mime.startsWith('video/')) {
+    return { asPhoto: false, mediaType: 'video', label: '[Видео]' }
+  }
+  if (mime.startsWith('audio/')) {
+    return { asPhoto: false, mediaType: 'audio', label: '[Аудио]' }
+  }
+  return { asPhoto: false, mediaType: 'document', label: '[Файл]' }
+}
+
+/**
+ * Send a photo/video/document to a Telegram conversation the curator owns.
+ * Delivery runs under the channel owner-manager. WA/VK media uses the CDN upload
+ * route instead.
  */
 export async function sendCuratorTelegramMediaAction(
   conversationId: string,
@@ -477,10 +503,6 @@ export async function sendCuratorTelegramMediaAction(
 ): Promise<SimpleResult> {
   const session = await requireCurator()
   if (!file?.base64) return { ok: false, message: 'Пустой файл.' }
-  const approxBytes = Math.floor(file.base64.length * 0.75)
-  if (approxBytes > CURATOR_TG_MEDIA_MAX_BYTES) {
-    return { ok: false, message: 'Файл слишком большой для Telegram (~15 МБ).' }
-  }
 
   const conv = await getConversationForCurator(conversationId, session.sub)
   if (!conv) return { ok: false, message: 'Диалог не найден.' }
@@ -488,30 +510,43 @@ export async function sendCuratorTelegramMediaAction(
     return { ok: false, message: 'Этот способ доступен только для Telegram.' }
   }
 
-  const isImage = file.mime.startsWith('image/')
+  const mime = file.mime || 'application/octet-stream'
+  const { asPhoto, mediaType, label } = classifyCuratorUpload(mime)
   const trimmed = caption.trim()
   const msg = await addMessage({
     conversationId,
     managerId: conv.managerId,
     curatorId: session.sub,
-    body: trimmed || (isImage ? '[Фото]' : `[Файл] ${file.name}`),
+    body: trimmed || (asPhoto ? label : `${label} ${file.name}`.trim()),
     author: session.name,
-    mediaType: isImage ? 'image' : 'document',
-    mediaMime: file.mime || 'application/octet-stream',
+    mediaType,
+    mediaMime: mime,
     mediaName: file.name,
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
 
-  // Same as voice: archive the bytes now so the photo/file shows from our copy
-  // right away and survives whatever happens to the Telegram original.
-  await storeMessageMediaBytes(
-    msg.id,
-    Buffer.from(file.base64, 'base64'),
-    file.mime || 'application/octet-stream',
-    file.name || null,
-  ).catch((err) => {
+  // Archive the bytes now: the bubble shows from our copy right away, AND for
+  // large files this archive is the transport (the worker loads these bytes to
+  // deliver them). allowLarge bypasses the inbound-only size cap; this MUST
+  // succeed for large sends.
+  const bytes = Buffer.from(file.base64, 'base64')
+  let archived = true
+  await storeMessageMediaBytes(msg.id, bytes, mime, file.name || null, {
+    allowLarge: true,
+  }).catch((err) => {
+    archived = false
     console.error('[panel] curator file archive failed:', err)
   })
+
+  const inline = bytes.byteLength <= CURATOR_TG_INLINE_MAX_BYTES
+  if (!inline && !archived) {
+    await markMessageFailed(
+      msg.id,
+      'Не удалось подготовить файл к отправке. Попробуйте ещё раз.',
+    ).catch(() => {})
+    revalidatePath(CURATOR_CHATS_PATH)
+    return { ok: false, message: 'Не удалось отправить файл.' }
+  }
 
   try {
     await enqueueJob({
@@ -520,11 +555,12 @@ export async function sendCuratorTelegramMediaAction(
       action: 'send_file',
       payload: {
         target: conv.contactHandle,
-        file: file.base64,
-        mime: file.mime || null,
+        ...(inline ? { file: file.base64 } : {}),
+        mime,
         name: file.name,
         caption: trimmed || undefined,
-        asPhoto: isImage,
+        asPhoto,
+        mediaType,
         messageId: msg.id,
       },
     })

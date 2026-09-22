@@ -27,7 +27,12 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
-const TG_MAX_BYTES = 15 * 1024 * 1024
+/**
+ * Telegram media rides by reference now (bytes archived server-side, loaded by
+ * the worker), so the old ~15 MB base64 cap is gone — the bound is Telegram's
+ * own ~2 GB limit.
+ */
+const TG_MAX_BYTES = 2 * 1024 * 1024 * 1024
 /** Matches the app's largest server-side allowance (VK docs). */
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 

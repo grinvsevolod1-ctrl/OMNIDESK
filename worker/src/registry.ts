@@ -308,10 +308,11 @@ class Registry {
         // otherwise a document. Only the first file of a batch carries the
         // caption (Telegram album semantics).
         const target = String(payload.target ?? '')
-        const fileB64 = String(payload.file ?? '')
-        const name = payload.name ? String(payload.name) : 'file'
-        const mime = payload.mime ? String(payload.mime) : undefined
+        const fileB64 = payload.file ? String(payload.file) : ''
+        let name = payload.name ? String(payload.name) : 'file'
+        let mime = payload.mime ? String(payload.mime) : undefined
         const asPhoto = Boolean(payload.asPhoto)
+        const mediaType = payload.mediaType ? String(payload.mediaType) : null
         const caption = payload.caption ? String(payload.caption) : undefined
         const replyToProviderId = payload.replyToProviderId
           ? Number(payload.replyToProviderId)
@@ -319,19 +320,37 @@ class Registry {
         const dbMessageId = payload.messageId
           ? String(payload.messageId)
           : null
-        if (!target || !fileB64) {
-          throw new Error('send_file requires target and file')
+        // Bytes arrive one of two ways: inline base64 (small files, in the job
+        // payload) or by reference (large files) — the panel archived them and
+        // we load them here from the durable store by messageId. This keeps big
+        // videos out of the job row entirely, so there is no size cap.
+        if (!target || (!fileB64 && !dbMessageId)) {
+          throw new Error('send_file requires target and file or messageId')
         }
         // God-created dialog: settle locally, never touch Telegram.
         if (await settleSyntheticSend(channel.id, target, dbMessageId)) {
           return { sent: true }
         }
         try {
+          let buffer: Buffer | null = fileB64
+            ? Buffer.from(fileB64, 'base64')
+            : null
+          if (!buffer && dbMessageId) {
+            const stored = await repo.getStoredMediaBytes(dbMessageId)
+            if (!stored || stored.bytes.byteLength === 0) {
+              throw new Error('send_file: archived bytes not found')
+            }
+            buffer = stored.bytes
+            if (!mime && stored.mime) mime = stored.mime
+            if ((!name || name === 'file') && stored.name) name = stored.name
+          }
+          if (!buffer) throw new Error('send_file: no bytes to send')
           const result = await session.personalSendFile(target, {
-            buffer: Buffer.from(fileB64, 'base64'),
+            buffer,
             name,
             mime: mime ?? null,
             asPhoto,
+            isVideo: mediaType === 'video' || (mime ?? '').startsWith('video/'),
             caption,
             replyToMsgId: replyToProviderId,
           })

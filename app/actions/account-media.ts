@@ -275,10 +275,12 @@ export async function sendVkMediaAction(
  * the Telegram original still existing. Live download stays as a fallback for
  * legacy rows without a blob.
  *
- * base64-in-jsonb is heavy, so the cap here is deliberately conservative — it
- * comfortably covers photos and everyday documents while keeping job rows sane.
+ * base64-in-jsonb is heavy, so we only inline SMALL files in the job payload.
+ * Anything larger is delivered by reference: the bytes are archived (below) and
+ * the worker loads them from the archive by messageId, so there is no practical
+ * size limit on videos/files (the real bound is disk + Telegram's own limit).
  */
-const TG_MEDIA_MAX_BYTES = 15 * 1024 * 1024
+const TG_INLINE_MAX_BYTES = 8 * 1024 * 1024
 
 function classifyTelegramUpload(mime: string): {
   asPhoto: boolean
@@ -303,10 +305,6 @@ export async function sendTelegramMediaAction(
 ): Promise<SimpleResult> {
   const session = await requireManager()
   if (!file?.base64) return { ok: false, message: 'Пустой файл.' }
-  const approxBytes = Math.floor(file.base64.length * 0.75)
-  if (approxBytes > TG_MEDIA_MAX_BYTES) {
-    return { ok: false, message: 'Файл слишком большой (лимит ~15 МБ).' }
-  }
   const mime = file.mime || 'application/octet-stream'
   const trimmedCaption = caption.trim()
 
@@ -333,17 +331,32 @@ export async function sendTelegramMediaAction(
   })
   if (!msg) return { ok: false, message: 'Диалог не найден.' }
 
-  // Archive before enqueueing: the bubble is already visible and its first
-  // /api/media hit must find our copy, not race the worker (no provider id yet
-  // → 410 → tile stuck on «Медиа недоступно»). Best-effort, never blocks send.
-  await storeMessageMediaBytes(
-    msg.id,
-    Buffer.from(file.base64, 'base64'),
-    mime,
-    file.name || null,
-  ).catch((err) => {
+  // Archive before enqueueing. Two jobs at once: (1) the bubble is already
+  // visible and its first /api/media hit must find our copy, not race the worker
+  // (no provider id yet → 410 → tile stuck on «Медиа недоступно»); (2) for large
+  // files this archive IS the transport — the worker loads these bytes to deliver
+  // them, since we no longer inline them in the job payload. allowLarge bypasses
+  // the inbound-only size cap. This one MUST succeed for large sends.
+  const bytes = Buffer.from(file.base64, 'base64')
+  let archived = true
+  await storeMessageMediaBytes(msg.id, bytes, mime, file.name || null, {
+    allowLarge: true,
+  }).catch((err) => {
+    archived = false
     console.error('[panel] outbound file archive failed:', err)
   })
+
+  // Small files ride the job payload as before (proven path). Large files are
+  // delivered by reference — the worker reads them from the archive by messageId.
+  const inline = bytes.byteLength <= TG_INLINE_MAX_BYTES
+  if (!inline && !archived) {
+    await markMessageFailed(
+      msg.id,
+      'Не удалось подготовить файл к отправке. Попробуйте ещё раз.',
+    ).catch(() => {})
+    revalidatePath('/app/inbox')
+    return { ok: false, message: 'Не удалось отправить файл.' }
+  }
 
   try {
     await enqueueJob({
@@ -352,10 +365,11 @@ export async function sendTelegramMediaAction(
       action: 'send_file',
       payload: {
         target: conv.contactHandle,
-        file: file.base64,
+        ...(inline ? { file: file.base64 } : {}),
         name: file.name || 'file',
         mime,
         asPhoto,
+        mediaType,
         caption: trimmedCaption || undefined,
         replyToProviderId: replyToProviderId || undefined,
         messageId: msg.id,

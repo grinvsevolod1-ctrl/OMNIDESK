@@ -830,6 +830,7 @@ export class TelegramSession {
       name: string
       mime: string | null
       asPhoto: boolean
+      isVideo?: boolean
       caption?: string
       replyToMsgId?: number
     },

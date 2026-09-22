@@ -40,9 +40,16 @@ export async function storeMessageMediaBytes(
   bytes: Buffer,
   mime: string | null,
   name: string | null,
+  opts?: { allowLarge?: boolean },
 ): Promise<string | null> {
   if (!MEDIA_ARCHIVE_ENABLED) return null
-  if (bytes.byteLength === 0 || bytes.byteLength > MEDIA_MAX_STORE_BYTES) {
+  // Outbound sends (`allowLarge`) MUST be stored regardless of size: the worker
+  // loads these very bytes from the archive to deliver a large video/file to
+  // Telegram (the job payload no longer carries them). The MEDIA_MAX_STORE_BYTES
+  // cap only guards INBOUND copying, where fetch-on-demand is an acceptable
+  // fallback — for our own outbound bytes there is no other source.
+  if (bytes.byteLength === 0) return null
+  if (!opts?.allowLarge && bytes.byteLength > MEDIA_MAX_STORE_BYTES) {
     return null
   }
 

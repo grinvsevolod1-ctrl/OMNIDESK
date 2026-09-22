@@ -307,6 +307,8 @@ export async function sendPersonalFile(
     name: string
     mime: string | null
     asPhoto: boolean
+    /** Deliver as a streamable, in-app-playable video instead of a document. */
+    isVideo?: boolean
     caption?: string
     replyToMsgId?: number
   },
@@ -317,11 +319,28 @@ export async function sendPersonalFile(
     '',
     file.buffer,
   )
+  // A video sent with forceDocument=false + an explicit DocumentAttributeVideo
+  // arrives as a playable, streamable video (with the client generating its own
+  // preview) rather than a bare file attachment. Dimensions/duration are unknown
+  // server-side — Telegram fills them in on the client; supportsStreaming is what
+  // matters for inline playback. Photos keep the inline-image path; everything
+  // else stays a document.
+  const attributes = file.isVideo
+    ? [
+        new Api.DocumentAttributeVideo({
+          w: 0,
+          h: 0,
+          duration: 0,
+          supportsStreaming: true,
+        }),
+      ]
+    : undefined
   const sent = await client.sendFile(entity, {
     file: custom,
-    forceDocument: !file.asPhoto,
+    forceDocument: file.isVideo ? false : !file.asPhoto,
     caption: file.caption || undefined,
     replyTo: file.replyToMsgId,
+    ...(attributes ? { attributes } : {}),
   })
   return { providerMessageId: sent?.id != null ? String(sent.id) : null }
 }

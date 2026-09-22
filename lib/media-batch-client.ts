@@ -34,9 +34,14 @@ export function reportBatchOutcome(outcome: BatchOutcome): void {
 
 export type BatchChannel = 'telegram' | 'whatsapp' | 'vk'
 
-/** Per-channel single-file caps, mirrored from the server actions. */
+/**
+ * Per-channel single-file caps. Telegram media is delivered by reference (bytes
+ * archived server-side, loaded by the worker), so there is no small base64 cap
+ * anymore — the bound is Telegram's own ~2 GB limit. WA/VK still upload to their
+ * CDN, keeping their provider caps.
+ */
 const SIZE_CAPS: Record<BatchChannel, number> = {
-  telegram: 15 * 1024 * 1024,
+  telegram: 2 * 1024 * 1024 * 1024,
   whatsapp: 200 * 1024 * 1024,
   vk: 200 * 1024 * 1024,
 }
