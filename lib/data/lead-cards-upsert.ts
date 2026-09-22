@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'crypto'
 import { query, withTransaction, type DbExecutor } from '../db'
+import { isReworkStatus } from '../lead-status'
 import { normalizeCityName, rememberCity } from './cities'
 import type { LeadCard } from './lead-cards-core'
 import { recordStatusHistory, recordTransfer } from './lead-history'
@@ -118,8 +119,12 @@ export async function upsertLeadCard(
     id: string
     curator_id: string | null
     team_id: string | null
+    status: string | null
+    archived_at: string | Date | null
+    rework_trashed_at: string | Date | null
   }>(
-    `SELECT id, curator_id, team_id FROM lead_cards WHERE conversation_id = $1 LIMIT 1`,
+    `SELECT id, curator_id, team_id, status, archived_at, rework_trashed_at
+       FROM lead_cards WHERE conversation_id = $1 LIMIT 1`,
     [input.conversationId],
   )
 
@@ -136,6 +141,12 @@ export async function upsertLeadCard(
           id: contactMatch.id,
           curator_id: contactMatch.curatorId,
           team_id: contactMatch.teamId,
+          status: contactMatch.status,
+          archived_at: contactMatch.archivedAt,
+          // LeadCard не несёт признак «корзины доработок» — для дедупа по
+          // другому диалогу это неважно (re-pool доработки идёт по своему
+          // диалогу через прямую выборку выше).
+          rework_trashed_at: null,
         },
       ]
     }
@@ -155,36 +166,83 @@ export async function upsertLeadCard(
     // Свежая маршрутизация — только если лид не закреплён за куратором и ещё
     // не в пуле (повторное сохранение менеджером не плодит передачи).
     if (teamId) {
-      const isFreshPool = prevCuratorId === null && prevTeamId === null
-      await query(
-        `UPDATE lead_cards
-            SET full_name = $2, phone = $3, telegram_username = $4,
-                telegram_id = $5, city = $6, address = $7, vacancy = $8,
-                manager_id = $9,
-                team_id = CASE WHEN $11::boolean THEN $10 ELSE team_id END,
-                transferred_at = CASE WHEN $11::boolean THEN now() ELSE transferred_at END,
-                status = CASE WHEN $11::boolean THEN 'new' ELSE status END,
-                previous_status = CASE
-                  WHEN $11::boolean THEN COALESCE(status, previous_status)
-                  ELSE previous_status END,
-                status_confirmed_at = CASE WHEN $11::boolean THEN NULL ELSE status_confirmed_at END,
-                status_confirmed_date = CASE WHEN $11::boolean THEN NULL ELSE status_confirmed_date END,
-                updated_at = now()
-          WHERE id = $1`,
-        [
-          existing[0].id,
-          fullName,
-          phone,
-          telegramUsername,
-          telegramId,
-          city,
-          address,
-          vacancy,
-          input.managerId,
-          teamId,
-          isFreshPool,
-        ],
-      )
+      // Лид вернулся к менеджеру: куратор сдал его на доработку (Игнор /
+      // Отказался / Не связался), отправил в архив ИЛИ менеджер убрал его в
+      // корзину доработок. В этом состоянии менеджер снова ведёт клиента и
+      // вправе ПОВТОРНО отправить лид в пул — тот же критерий, что у
+      // managerBucket() → 'rework' | 'archived' в инбоксе. Без этого повторная
+      // передача была no-op (curator_id/team_id уже заполнены).
+      const returnedToManager =
+        prevCuratorId !== null &&
+        (existing[0].archived_at != null ||
+          existing[0].rework_trashed_at != null ||
+          isReworkStatus(existing[0].status))
+      const isFreshPool =
+        (prevCuratorId === null && prevTeamId === null) || returnedToManager
+
+      const runPoolUpdate = (exec: DbExecutor) =>
+        exec.query(
+          `UPDATE lead_cards
+              SET full_name = $2, phone = $3, telegram_username = $4,
+                  telegram_id = $5, city = $6, address = $7, vacancy = $8,
+                  manager_id = $9,
+                  team_id = CASE WHEN $11::boolean THEN $10 ELSE team_id END,
+                  -- Повторная отправка вернувшегося лида в пул: снимаем куратора,
+                  -- архив и «корзину доработок», чтобы лид снова стал пуловым и
+                  -- был виден кураторам команды к разбору (claim).
+                  curator_id = CASE WHEN $12::boolean THEN NULL ELSE curator_id END,
+                  archived_at = CASE WHEN $12::boolean THEN NULL ELSE archived_at END,
+                  rework_trashed_at = CASE WHEN $12::boolean THEN NULL ELSE rework_trashed_at END,
+                  transferred_at = CASE WHEN $11::boolean THEN now() ELSE transferred_at END,
+                  status = CASE WHEN $11::boolean THEN 'new' ELSE status END,
+                  previous_status = CASE
+                    WHEN $11::boolean THEN COALESCE(status, previous_status)
+                    ELSE previous_status END,
+                  status_confirmed_at = CASE WHEN $11::boolean THEN NULL ELSE status_confirmed_at END,
+                  status_confirmed_date = CASE WHEN $11::boolean THEN NULL ELSE status_confirmed_date END,
+                  updated_at = now()
+            WHERE id = $1`,
+          [
+            existing[0].id,
+            fullName,
+            phone,
+            telegramUsername,
+            telegramId,
+            city,
+            address,
+            vacancy,
+            input.managerId,
+            teamId,
+            isFreshPool,
+            returnedToManager,
+          ],
+        )
+
+      if (returnedToManager) {
+        // Две ссылки на куратора — один факт (миграция 162): раз лид снова в
+        // пуле, синхронно снимаем связь ДИАЛОГА с прошлым куратором и системный
+        // статус «Передан». Иначе диалог остался бы у куратора в «Чатах», ИИ
+        // молчал бы (гейт curator_id IS NULL), а в инбоксе менеджера висел бы
+        // старый бейдж куратора. При claim новым куратором recordTransfer
+        // проставит связь и статус заново.
+        await withTransaction(async (db) => {
+          await runPoolUpdate(db)
+          await db.query(
+            `UPDATE conversations c
+                SET curator_id = NULL,
+                    transferred_to_curator_at = NULL,
+                    status = 'open',
+                    status_detail = NULL,
+                    status_updated_at = now()
+               FROM lead_cards lc
+              WHERE lc.id = $1 AND lc.conversation_id = c.id`,
+            [existing[0].id],
+          )
+        })
+      } else {
+        await runPoolUpdate({ query })
+      }
+
       const card = await getLeadCardById(existing[0].id)
       if (!card) throw new Error('Lead card update failed')
       return {
