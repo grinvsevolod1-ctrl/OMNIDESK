@@ -229,11 +229,11 @@ export async function upsertLeadCard(
           await runPoolUpdate(db)
           await db.query(
             `UPDATE conversations c
-                SET curator_id = NULL,
-                    transferred_to_curator_at = NULL,
-                    status = 'open',
-                    status_detail = NULL,
-                    status_updated_at = now()
+    SET curator_id = NULL,
+           transferred_to_curator_at = NULL,
+           status = NULL,
+           status_detail = NULL,
+           status_updated_at = now()
                FROM lead_cards lc
               WHERE lc.id = $1 AND lc.conversation_id = c.id`,
             [existing[0].id],
