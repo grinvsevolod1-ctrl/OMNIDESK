@@ -193,7 +193,13 @@ export async function upsertLeadCard(
                   curator_id = CASE WHEN $12::boolean THEN NULL ELSE curator_id END,
                   archived_at = CASE WHEN $12::boolean THEN NULL ELSE archived_at END,
                   rework_trashed_at = CASE WHEN $12::boolean THEN NULL ELSE rework_trashed_at END,
-                  transferred_at = CASE WHEN $11::boolean THEN now() ELSE transferred_at END,
+                  -- Дата передачи фиксируется ТОЛЬКО при первой передаче.
+                  -- Повторная отправка из доработок (лид уже был передан ранее)
+                  -- не должна задваивать «Передан» в статистике (lead-stats
+                  -- считает по transferred_at), поэтому оригинальную дату храним.
+                  transferred_at = CASE
+                    WHEN $11::boolean AND transferred_at IS NULL THEN now()
+                    ELSE transferred_at END,
                   status = CASE WHEN $11::boolean THEN 'new' ELSE status END,
                   previous_status = CASE
                     WHEN $11::boolean THEN COALESCE(status, previous_status)
