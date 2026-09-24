@@ -187,7 +187,7 @@ export async function loadOlderCuratorMessagesAction(
  *  scheduled sends. Each mirrors the manager action verbatim but resolves     *
  *  ownership through the curator scope (`curator_id`) and enqueues the worker *
  *  job under the OWNING manager (the curator has no Telegram session/channel  *
- *  of their own �� the account owner's session delivers everything).          *
+ *  of their own; the account owner's session delivers everything).            *
  * -------------------------------------------------------------------------- */
 
 /** Toggle an emoji reaction on a message (Telegram only, curator-scoped). */

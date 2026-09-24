@@ -28,13 +28,46 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 | `admin` | `/admin` | `components/admin/` | руководитель: все лиды, финансы, настройка ИИ, копилот, аккаунты, серверы |
 | `manager` | `/app` | `components/manager/` | менеджер продаж: инбокс диалогов, автопилот, свои лиды |
 | `curator` | `/curator` | `components/curator/` | **менеджер по кадрам** (в UI и разговоре его называют так): свои лид-карточки, статусы, комментарии |
-| `head` | `/head` | `components/head/` | **руководитель** группы (миграции 141, 143): ведёт кураторов (`head_curators`) И/ИЛИ менеджеров продаж (`head_managers`), видит их лиды (кураторские — только переданные, менеджерские — любые, кроме архива); право `managers.head_can_edit` — «просмотр» / «просмотр и редактирование» (поля, статусы, комментарии; передача — только между кураторами). Создаётся админом на `/admin/heads`, свои настройки — `/head/settings` |
+| `head` | `/head` | `components/head/` | **руководитель** группы (миграции 141, 143): ведёт кураторов (`head_curators`) И/ИЛИ менеджеров продаж (`head_managers`), видит их лиды (кураторские — только переданные, менеджерские — любые, кроме архива); право `managers.head_can_edit` — «просмотр» / «просмотр и редактирование» (поля, статусы, комментарии; передача — только между кураторами). Раздел «Диалоги» (`/head/chats`) — ТОЛЬКО ПРОСМОТР переписки кураторов его команд(ы) с кандидатами, живьём, без права писать/править/удалять; оттуда же выгрузка диалога файлом (см. «Диалоги руководителя и выгрузка» ниже). Создаётся админом на `/admin/heads`, свои настройки — `/head/settings` |
 | `buyer` | `/buyer` | `components/buyer/` | **медиабайер** (миграция 145): приводит трафик, ведёт источники (`traffic_sources`, один байер на источник). Раздел строго read-only: карточки СВОИХ источников со статистикой «день/долёты» (окно [day_start, day_end) в минутах МСК у каждого источника своё) + все лиды его источников с клиентскими фильтрами/поиском. Скоуп каждого запроса — `buyer_id = session.sub`. Создаётся админом на `/admin/buyers`; источники и состав менеджеров — `/admin/sources` (менеджер подключён максимум к одному источнику; лид фиксирует источник НА МОМЕНТ обращения — денормализация сознательная, перенос менеджера историю не переписывает) |
 
 Гейты ролей — `lib/auth.ts` (`requireAdmin` / `requireManager` /
 `requireCurator` / `requireHead` / `requireBuyer`); чужая роль редиректится
 в свой раздел (`roleHome`). Право head_can_edit перечитывается из БД на каждый запрос
 (`assertHeadCanEdit` в `app/actions/lead-cards/shared.ts`).
+
+**Диалоги руководителя и выгрузка диалога.** `/head/chats`
+(`components/head/chats/`) показывает диалоги кураторов команд руководителя
+(тот же скоуп, что у `listCuratorIdsOfHead` в `lib/data/heads.ts`: кураторы
+с `team_id` в командах, где `teams.head_id = руководитель`). В
+`lib/data/head-conversations.ts` КАЖДЫЙ запрос несёт этот фрагмент
+`HEAD_CURATORS` в `WHERE c.curator_id IN …` — закреплено
+`head-conversations.test.ts`. Никакого `head_can_edit` тут нет — раздел
+всегда read-only: `ThreadPane` в режиме `viewOnly` (лента без контекстных
+действий, кроме «Копировать»; композер заменён плашкой через
+`composerReplacement`), `head-thread-adapter.ts` реализует только
+`loadThread`/`loadOlder`, все мутации закорочены на отказ. «Прочитано»
+руководитель НЕ ставит — счётчик unread принадлежит куратору. Realtime — тот
+же `/api/stream`: для роли `head` события фильтруются по `curator_id` его
+кураторов (набор перечитывается раз в `HEAD_CURATORS_REFRESH_MS` = 120 с,
+чтобы перевод куратора в другую команду не требовал переподключения).
+Выгрузка диалога файлом
+доступна куратору (`/curator/chats`) и руководителю: одна модалка
+`components/shared/inbox/dialog-export-dialog.tsx` → server action
+`exportDialogAction` (`app/actions/dialog-export.ts`), который решает право
+через role-scoped getter (`getConversationForCurator` /
+`getConversationForHead`) и только потом читает ПОЛНУЮ историю
+(`lib/data/dialog-export.ts`, потолок `EXPORT_MESSAGE_CAP` = 20 000, флаг
+`truncated`). Рендер — чистая функция `lib/dialog-export/render-html.ts`
+(автономный HTML без внешних ресурсов, порядок/дата/время МСК/отправитель,
+цитаты, правки, удалённые, реакции, вложения; покрыто `render-html.test.ts`);
+клиент `lib/dialog-export/client.ts` качает медиа через тот же
+`/api/media/{id}` (общие `prepareFiles`/`packZip` из
+`lib/media-download-client.ts` — owner-гейт роли, ограниченный параллелизм,
+отказ одного файла не валит выгрузку — в HTML остаётся пометка), пакует ZIP
+(`fflate`, `dialog.html` + `media/`) или отдаёт один HTML без вложений. Имя файла —
+`lib/dialog-export/naming.ts`. Факт выгрузки пишется в audit
+(`dialog.export`).
 
 ## 3. Технологический стек
 
@@ -569,8 +602,15 @@ components/curator/      UI менеджера по кадрам
 components/buyer/        UI медиабайера: buyer-overview.tsx — карточки
                          источников (клик = фильтр), единый поиск, статусы,
                          сортировка, Excel-экспорт; всё read-only
-components/shared/inbox/ ОБЩЕЕ ядро инбокса менеджера и куратора (единый
-                         код, роль подключается адаптером):
+components/head/         UI руководителя; chats/ — раздел «Диалоги»
+                         (head-chats.tsx: выбор куратора + поиск + список,
+                         тред на общем ThreadPane в `viewOnly`;
+                         use-head-chats.ts — состояние/realtime без
+                         «прочитано»; head-thread-adapter.ts — только чтение,
+                         мутации закорочены). Данные — lib/data/head-conversations.ts
+components/shared/inbox/ ОБЩЕЕ ядро инбокса менеджера, куратора и (только
+                         просмотр) руководителя — единый код, роль
+                         подключается адаптером:
                          thread-adapter.ts — интерфейс `ThreadAdapter`
                          (loadThread/loadOlder/send*/edit/react/delete/
                          forward…); реализации —
@@ -582,8 +622,14 @@ components/shared/inbox/ ОБЩЕЕ ядро инбокса менеджера �
                          AI-гейт — через колбэк `canSend`);
                          use-thread-history.ts — холодная гидратация треда +
                          «Загрузить ранние»; thread-pane.tsx — правая панель
-                         (шапка + лента + композер). Новая фича треда =
-                         сюда, НЕ в дубли по ролям.
+                         (шапка + лента + композер; проп `viewOnly` прячет
+                         контекстные действия ленты кроме «Копировать», а
+                         `composerReplacement` подменяет композер плашкой —
+                         так работает /head/chats);
+                         dialog-export-dialog.tsx — модалка «Выгрузить
+                         диалог» (HTML / ZIP с медиа), общая для куратора и
+                         руководителя, логика — lib/dialog-export/.
+                         Новая фича треда = сюда, НЕ в дубли по ролям.
 components/manager/      UI менеджера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
                          use-inbox-realtime.ts — ОДНА подписка на /api/stream:
