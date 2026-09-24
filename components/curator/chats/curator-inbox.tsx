@@ -20,6 +20,7 @@ import {
   ArrowLeft,
   ArrowDownUp,
   Check,
+  Download,
   Info,
   MessageCircle,
   Search,
@@ -40,6 +41,7 @@ import { useThreadScroll } from '@/components/manager/inbox/use-thread-scroll'
 import { CHANNEL_VISUAL } from '@/components/manager/inbox/visual'
 import type { ForwardTarget } from '@/components/manager/message-context-menu'
 import { ThreadPane } from '@/components/shared/inbox/thread-pane'
+import { DialogExportDialog } from '@/components/shared/inbox/dialog-export-dialog'
 import type { useMessageActions } from '@/components/shared/inbox/use-message-actions'
 import { LeadStatusBadge } from '@/components/curator/lead-status-badge'
 import { CuratorOutreachButton } from '@/components/curator/chats/curator-outreach'
@@ -365,6 +367,8 @@ function CuratorThread({
   // Персистентные черновики (как у менеджера): unsent-текст переживает смену
   // диалога, refresh и краш — зеркалится в localStorage. Ключ — id диалога.
   const { getDraft, persistDraft } = useDrafts()
+  // Модалка «Выгрузить диалог» (HTML / ZIP с медиа) — кнопка в шапке треда.
+  const [exportOpen, setExportOpen] = useState(false)
   const channelShort =
     CHANNEL_VISUAL[active.channelType as PanelChannelType]?.short ??
     active.channelType
@@ -416,6 +420,15 @@ function CuratorThread({
         />
       ) : null}
       <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setExportOpen(true)}
+        aria-label="Выгрузить диалог файлом"
+        title="Выгрузить диалог"
+      >
+        <Download className="size-4" />
+      </Button>
+      <Button
         variant={infoOpen ? 'secondary' : 'ghost'}
         size="icon"
         onClick={onToggleInfo}
@@ -432,6 +445,12 @@ function CuratorThread({
       {shellHeader?.slotEl
         ? createPortal(headerNode, shellHeader.slotEl)
         : null}
+
+      <DialogExportDialog
+        conversation={active}
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+      />
 
       {/* Лента + баннеры ответа/правки + композер — общее ядро с менеджером
           (components/shared/inbox/thread-pane). Менеджерские фичи (ИИ-гейт,

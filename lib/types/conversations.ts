@@ -114,6 +114,12 @@ export interface Conversation {
    * этом молчит (гейт curator_id IS NULL).
    */
   transferred?: boolean
+  /**
+   * Id куратора, которому передан диалог (conversations.curator_id).
+   * Заполняется только в выборках, где нужен фильтр по куратору на клиенте
+   * (раздел «Диалоги» руководителя); в остальных — undefined.
+   */
+  curatorId?: string
   /** Имя куратора, которому передан диалог (для бейджа у менеджера). */
   curatorName?: string
   /** ISO-время передачи диалога куратору. */

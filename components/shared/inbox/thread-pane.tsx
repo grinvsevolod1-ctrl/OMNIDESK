@@ -73,6 +73,7 @@ export function ThreadPane({
   highlightedId,
   onBubbleClick,
   hideDeliveryStatus = false,
+  viewOnly = false,
   emptyLabel = 'Сообщений пока нет.',
   beforeComposer,
   composer,
@@ -99,6 +100,8 @@ export function ThreadPane({
   highlightedId?: string | null
   onBubbleClick?: (message: Message) => void
   hideDeliveryStatus?: boolean
+  /** Чистый просмотр (руководитель): лента без действий, кроме копирования. */
+  viewOnly?: boolean
   emptyLabel?: string
   /** Rendered between the list and the banners (role-specific notices). */
   beforeComposer?: ReactNode
@@ -165,6 +168,7 @@ export function ThreadPane({
           highlightedId={highlightedId}
           onBubbleClick={onBubbleClick}
           hideDeliveryStatus={hideDeliveryStatus}
+          viewOnly={viewOnly}
         />
       )}
 

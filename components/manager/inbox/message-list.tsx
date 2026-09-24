@@ -66,6 +66,7 @@ export function MessageList({
   highlightedId,
   onBubbleClick,
   readOnlyActions = false,
+  viewOnly = false,
   hideDeliveryStatus = false,
 }: {
   active: Conversation
@@ -97,6 +98,12 @@ export function MessageList({
    * Реакции при этом всё равно ОТОБРАЖАЮТСЯ (они пришли от собеседника).
    */
   readOnlyActions?: boolean
+  /**
+   * Чистый просмотр (руководитель в /head/chats): ни ответа, ни реакций, ни
+   * свайпа — из меню остаётся только «Копировать». Выбор фото для скачивания
+   * при этом работает: это чтение, а не действие над перепиской.
+   */
+  viewOnly?: boolean
   /**
    * Скрыть тики доставки/ошибки отправки у исходящих (роль без владения
    * отправкой — куратор по кадрам). Диалоги передаются человеку/ведутся из
@@ -311,8 +318,9 @@ export function MessageList({
                     !(hasMedia && isMediaPlaceholder(m.body))
                   const isTelegram = active.channelType === 'telegram'
                   // Полные провайдер-действия только у менеджера на Telegram;
-                  // у куратора (readOnlyActions) — базовое меню ниже.
-                  const canAct = isTelegram && !readOnlyActions
+                  // у куратора (readOnlyActions) — базовое меню ниже; в чистом
+                  // просмотре (viewOnly) — только копирование.
+                  const canAct = isTelegram && !readOnlyActions && !viewOnly
                   const reactions = m.reactions ?? []
 
                   const bubble = (
@@ -456,7 +464,7 @@ export function MessageList({
 
                   return (
                     <SwipeToReply
-                      enabled={isTelegram && !isDeleted}
+                      enabled={isTelegram && !isDeleted && !viewOnly}
                       align={isOut ? 'end' : 'start'}
                       onReply={() => onReply(m)}
                     >
@@ -488,6 +496,10 @@ export function MessageList({
                         >
                           {bubble}
                         </MessageContextMenu>
+                      ) : viewOnly ? (
+                        <BasicMessageMenu message={m} onCopy={onCopy}>
+                          {bubble}
+                        </BasicMessageMenu>
                       ) : readOnlyActions ? (
                         <BasicMessageMenu
                           message={m}

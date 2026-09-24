@@ -1,9 +1,13 @@
 import { getSession } from '@/lib/auth'
 import { getMessagesSince } from '@/lib/data'
+import { listCuratorIdsOfHead } from '@/lib/data/heads'
 import { type RealtimeEvent, subscribeRealtime } from '@/lib/realtime'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+/** Как часто перечитывать состав кураторов руководителя на живом SSE. */
+const HEAD_CURATORS_REFRESH_MS = 120_000
 
 /**
  * Server-Sent Events stream for the manager inbox.
@@ -42,6 +46,16 @@ export async function GET(request: Request): Promise<Response> {
   const isBuyer = session.role === 'buyer'
   const lastEventId = request.headers.get('last-event-id')
 
+  // Руководитель дополнительно получает message/conversation-события диалогов
+  // кураторов СВОИХ команд — так раздел /head/chats (только просмотр) видит
+  // новые сообщения живьём. Набор кураторов читается при подключении и
+  // обновляется по таймеру: сотрудник, добавленный в команду позже, начинает
+  // «стримиться» без переподключения. Set-lookup на каждое событие дёшев.
+  let headCuratorIds: Set<string> | null = isHead
+    ? new Set(await listCuratorIdsOfHead(viewerId))
+    : null
+  let headCuratorsRefresh: ReturnType<typeof setInterval> | null = null
+
   const encoder = new TextEncoder()
   let heartbeat: ReturnType<typeof setInterval> | null = null
   let unsubscribe: (() => void) | null = null
@@ -51,6 +65,7 @@ export async function GET(request: Request): Promise<Response> {
     if (closed) return
     closed = true
     if (heartbeat) clearInterval(heartbeat)
+    if (headCuratorsRefresh) clearInterval(headCuratorsRefresh)
     if (unsubscribe) unsubscribe()
   }
 
@@ -129,6 +144,18 @@ export async function GET(request: Request): Promise<Response> {
 
       // Comment heartbeat keeps proxies/load-balancers from closing the stream.
       heartbeat = setInterval(() => safeEnqueue(`: ping\n\n`), 25_000)
+
+      if (isHead) {
+        headCuratorsRefresh = setInterval(() => {
+          void listCuratorIdsOfHead(viewerId)
+            .then((ids) => {
+              if (!closed) headCuratorIds = new Set(ids)
+            })
+            .catch(() => {
+              // Оставляем прежний набор: пропуск одного обновления не критичен.
+            })
+        }, HEAD_CURATORS_REFRESH_MS)
+      }
 
       unsubscribe = subscribeRealtime((event: RealtimeEvent) => {
         // Hub-level resync: the LISTEN connection dropped and reconnected, so
@@ -209,6 +236,15 @@ export async function GET(request: Request): Promise<Response> {
         if (isCurator) {
           if (event.type !== 'message' && event.type !== 'conversation') return
           if (event.curatorId !== viewerId) return
+          send('update', event, event.createdAt)
+          return
+        }
+        // Руководитель: message/conversation-события диалогов кураторов его
+        // команд (только просмотр в /head/chats). Всё остальное менеджерское —
+        // typing/presence/channel — ему не нужно.
+        if (isHead) {
+          if (event.type !== 'message' && event.type !== 'conversation') return
+          if (!event.curatorId || !headCuratorIds?.has(event.curatorId)) return
           send('update', event, event.createdAt)
           return
         }

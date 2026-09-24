@@ -141,7 +141,10 @@ export function DashboardShell({
 
   // Полноэкранные страницы (инбокс) занимают всю доступную высоту без полей и
   // прокрутки страницы — скроллится только их внутреннее содержимое.
-  const fullBleed = pathname.endsWith('/inbox') || pathname.endsWith('/curator/chats')
+  const fullBleed =
+    pathname.endsWith('/inbox') ||
+    pathname.endsWith('/curator/chats') ||
+    pathname.endsWith('/head/chats')
 
   // Restore the collapsed preference on mount (client-only) to avoid a
   // hydration mismatch, then persist any change the user makes.
@@ -179,7 +182,7 @@ export function DashboardShell({
 
   // Открытая карточка лида сворачивает сайдбар так же, как фокус-режим:
   // временно (сохранённое предпочтение пользователя не трогаем) — чтобы
-  // правая панель карточки не перекрывала контент диалога. При закрытии
+  // правая панель карточки не перекрывала контент ди��лога. При закрытии
   // карточки сайдбар возвращается в исходное состояние.
   const [leadCardOpen, setLeadCardOpen] = useState(false)
   useEffect(() => {

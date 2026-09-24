@@ -15,6 +15,7 @@ import {
   restoreMediaFromJobPayload,
   storeMessageMediaBytes,
 } from '@/lib/data'
+import { getMessageOwnerForHead } from '@/lib/data/head-conversations'
 import { proxiedFetch } from '@/lib/proxy-agent'
 import { assertPublicHttpUrl } from '@/lib/ssrf-guard'
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp-cloud'
@@ -148,13 +149,16 @@ async function handleMediaGet(
 
   // Ownership check: an unlocked god/messenger gate may stream ANY message; a
   // curator session is scoped to conversations transferred to THEM (recordTransfer
-  // sets curator_id; see getMessageOwnerForCurator); otherwise a manager session
-  // is scoped to conversations it owns.
+  // sets curator_id; see getMessageOwnerForCurator); a head session is scoped to
+  // dialogs of the curators in THEIR team(s) (read-only /head/chats + export);
+  // otherwise a manager session is scoped to conversations it owns.
   const owner = gateUnlocked
     ? await getMessageOwnerAdmin(id)
     : session!.role === 'curator'
       ? await getMessageOwnerForCurator(id, session!.sub)
-      : await getMessageOwner(id, session!.sub)
+      : session!.role === 'head'
+        ? await getMessageOwnerForHead(id, session!.sub)
+        : await getMessageOwner(id, session!.sub)
   if (!owner) return new Response('Not found', { status: 404 })
 
   const search = new URL(request.url).searchParams
