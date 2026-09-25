@@ -46,6 +46,7 @@ import {
   MEDIA_ACCEPT,
   type MediaStaging,
 } from '@/components/manager/inbox/media-staging'
+import { MessageMedia } from '@/components/manager/inbox/message-media'
 import { MessageBubble } from './message-bubble'
 import { snippetOf } from './reply'
 import { EmojiPicker } from './emoji-picker'
@@ -104,6 +105,11 @@ interface ThreadPaneProps {
   selectedId: string | null
   loadingThread: boolean
   messages: Message[]
+  /* Telegram-style greeting: a random already-received sticker offered in an
+   * empty thread. Null when none exist or the thread has messages. */
+  welcomeStickerMessage: Message | null
+  welcomeStickerPending: boolean
+  onSendWelcomeSticker: () => void
   visibleCount: number
   onShowMore: () => void
   managerNameOf: (id: string | null) => string
@@ -155,6 +161,9 @@ export function ThreadPane({
   selectedId,
   loadingThread,
   messages,
+  welcomeStickerMessage,
+  welcomeStickerPending,
+  onSendWelcomeSticker,
   visibleCount,
   onShowMore,
   managerNameOf,
@@ -370,9 +379,29 @@ export function ThreadPane({
                   <Loader2 className="size-5 animate-spin" />
                 </div>
               ) : messages.length === 0 ? (
-                <p className="py-16 text-center text-sm text-muted-foreground">
-                  Сообщений пока нет. Напишите первое.
-                </p>
+                welcomeStickerMessage ? (
+                  <div className="flex flex-col items-center gap-3 py-16 text-center">
+                    <button
+                      type="button"
+                      onClick={onSendWelcomeSticker}
+                      disabled={welcomeStickerPending}
+                      className="rounded-2xl transition-transform hover:scale-105 active:scale-95 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                      aria-label="Отправить приветственный стикер"
+                      title="Отправить приветственный стикер"
+                    >
+                      <MessageMedia message={welcomeStickerMessage} />
+                    </button>
+                    <p className="max-w-64 text-pretty text-xs text-muted-foreground">
+                      {welcomeStickerPending
+                        ? 'Отправляем стикер…'
+                        : 'Нажмите на стикер, чтобы поздороваться — или напишите первое сообщение.'}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="py-16 text-center text-sm text-muted-foreground">
+                    Сообщений пока нет. Напишите первое.
+                  </p>
+                )
               ) : (
                 <>
                   {messages.length > visibleCount && (

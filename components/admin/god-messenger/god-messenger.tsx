@@ -13,8 +13,13 @@ import { useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { useVisualViewportHeight } from '@/lib/hooks/use-visual-viewport-height'
 import { secretSetContactBlockedAction } from '@/app/actions/admin-secret/conversation-edits'
-import { secretReassignConversationManagerAction } from '@/app/actions/admin-secret/conversations'
-import type { Channel, Manager } from '@/lib/types'
+import {
+  secretReassignConversationManagerAction,
+  secretGetWelcomeStickerAction,
+  secretSendWelcomeStickerAction,
+  type WelcomeStickerPreview,
+} from '@/app/actions/admin-secret/conversations'
+import type { Channel, Manager, Message } from '@/lib/types'
 import { NewChatDialog } from './new-chat-dialog'
 import { AnalyticsDialog } from './analytics-dialog'
 import { ChatListPane } from './chat-list-pane'
@@ -145,6 +150,73 @@ export function GodMessenger({
     [thread],
   )
 
+  /* ----- Telegram-style greeting sticker -----
+   * An empty thread offers a RANDOM already-received sticker as a click-to-send
+   * greeting (never auto-sent). It's fetched once per empty thread and cleared
+   * the instant any message exists — exactly how Telegram's empty-chat sticker
+   * behaves. */
+  const [welcomeSticker, setWelcomeSticker] =
+    useState<WelcomeStickerPreview | null>(null)
+  const [welcomeStickerPending, startWelcomeSticker] = useTransition()
+
+  const emptyThread =
+    thread.selectedId !== null &&
+    !thread.loadingThread &&
+    thread.messages.length === 0
+
+  useEffect(() => {
+    if (!emptyThread) {
+      setWelcomeSticker(null)
+      return
+    }
+    let cancelled = false
+    void secretGetWelcomeStickerAction().then((res) => {
+      if (cancelled) return
+      setWelcomeSticker(res.ok ? res.sticker ?? null : null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [emptyThread, thread.selectedId])
+
+  const welcomeStickerMessage = useMemo<Message | null>(() => {
+    if (!welcomeSticker) return null
+    return {
+      id: welcomeSticker.sourceMessageId,
+      conversationId: thread.selectedId ?? '',
+      direction: 'in',
+      body: '',
+      author: '',
+      createdAt: new Date().toISOString(),
+      mediaType: 'sticker',
+      mediaMime: welcomeSticker.mediaMime ?? undefined,
+      mediaUrl: welcomeSticker.mediaUrl,
+    }
+  }, [welcomeSticker, thread.selectedId])
+
+  const sendWelcomeSticker = useCallback(() => {
+    const id = thread.selectedId
+    const sticker = welcomeSticker
+    if (!id || !sticker) return
+    startWelcomeSticker(async () => {
+      const res = await secretSendWelcomeStickerAction({
+        conversationId: id,
+        sourceMessageId: sticker.sourceMessageId,
+      })
+      if (res.ok) {
+        // Hide the placeholder immediately, then reconcile from the server:
+        // a silent thread refetch is the source of truth for the sticker's
+        // full media descriptor, and the list refresh updates the preview.
+        setWelcomeSticker(null)
+        scroll.pinOnNextGrowth()
+        thread.loadThreadRef.current(id, { silent: true })
+        thread.loadList({ silent: true })
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }, [thread, welcomeSticker, scroll])
+
   const showThread = thread.selectedId !== null
 
   const replyLabel = composer.replyTo
@@ -184,6 +256,9 @@ export function GodMessenger({
           selectedId={thread.selectedId}
           loadingThread={thread.loadingThread}
           messages={thread.messages}
+          welcomeStickerMessage={welcomeStickerMessage}
+          welcomeStickerPending={welcomeStickerPending}
+          onSendWelcomeSticker={sendWelcomeSticker}
           visibleCount={visibleCount}
           onShowMore={() => setVisibleCount((c) => c + MESSAGES_WINDOW)}
           managerNameOf={managerNameOf}

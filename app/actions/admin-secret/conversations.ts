@@ -87,38 +87,16 @@ export async function secretCreateConversationAction(input: {
   const id = randomUUID()
   const firstMessage = input.message?.trim() ?? ''
 
-  // Приветственный стикер, как в Telegram: берём СЛУЧАЙНЫЙ уже полученный
-  // стикер (никаких самодельных) и переиспользуем его сохранённый blob, поэтому
-  // он рендерится в инбоксе абсолютно так же, как настоящий. Если в системе ещё
-  // ни одного стикера нет — просто пропускаем, диалог создаётся как раньше.
-  const stickerRows = await query<{
-    media_blob_id: string
-    media_mime: string | null
-    media_name: string | null
-    body: string | null
-  }>(
-    `SELECT media_blob_id, media_mime, media_name, body
-       FROM messages
-      WHERE media_type = 'sticker'
-        AND media_blob_id IS NOT NULL
-        AND deleted_at IS NULL
-      ORDER BY random()
-      LIMIT 1`,
-  )
-  const welcomeSticker = stickerRows[0] ?? null
-
-  // Единая шкала времени: стикер идёт первым, текст (если есть) — секундой позже,
-  // чтобы порядок в ленте и превью в списке были согласованы.
   const baseTime = createdAt ?? new Date()
-  const stickerAt = baseTime
-  const textAt = new Date(baseTime.getTime() + 1000)
-  const lastMessage = firstMessage || (welcomeSticker ? '[Стикер]' : '')
-  const lastMessageAt = firstMessage ? textAt : stickerAt
-  // Оба приветственных сообщения — входящие, поэтому увеличивают unread.
-  const unread = (welcomeSticker ? 1 : 0) + (firstMessage ? 1 : 0)
+  const lastMessage = firstMessage
+  const lastMessageAt = baseTime
+  const unread = firstMessage ? 1 : 0
 
-  // Conversation + первые сообщения — один атомарный блок: сбой между вставками
-  // не должен оставить тред, чьё превью ссылается на потерянное сообщение.
+  // Conversation (+ optional first message) — one atomic block so a partial
+  // failure can't leave a thread whose preview points at a lost message. NB: no
+  // welcome sticker is inserted here — the greeting sticker is Telegram-style,
+  // shown as a click-to-send placeholder in the empty thread (see
+  // secretSendWelcomeStickerAction), never sent automatically.
   await withTransaction(async (db) => {
     await db.query(
       // god_synthetic = true: this thread was authored in the god messenger and
@@ -141,33 +119,136 @@ export async function secretCreateConversationAction(input: {
         unread,
       ],
     )
-    if (welcomeSticker) {
-      await db.query(
-        `INSERT INTO messages
-           (id, conversation_id, direction, body, author, media_type, media_mime, media_name, media_blob_id, created_at)
-         VALUES ($1, $2, 'in', $3, $4, 'sticker', $5, $6, $7, $8::timestamptz)`,
-        [
-          randomUUID(),
-          id,
-          welcomeSticker.body ?? '',
-          contactName,
-          welcomeSticker.media_mime,
-          welcomeSticker.media_name,
-          welcomeSticker.media_blob_id,
-          stickerAt.toISOString(),
-        ],
-      )
-    }
     if (firstMessage) {
       await db.query(
         `INSERT INTO messages (id, conversation_id, direction, body, author, created_at)
          VALUES ($1, $2, 'in', $3, $4, $5::timestamptz)`,
-        [randomUUID(), id, firstMessage, contactName, textAt.toISOString()],
+        [randomUUID(), id, firstMessage, contactName, baseTime.toISOString()],
       )
     }
   })
 
   return { ok: true, message: `Диалог с «${contactName}» создан`, id }
+}
+
+export interface WelcomeStickerPreview {
+  /** Id of an EXISTING sticker message whose blob we preview and reuse. */
+  sourceMessageId: string
+  /** Panel proxy URL that streams the sticker bytes for the preview. */
+  mediaUrl: string
+  /** Container mime so the client picks the right renderer (tgs/webm/webp). */
+  mediaMime: string | null
+}
+
+export interface WelcomeStickerResult extends ActionResult {
+  /** A random already-received sticker to greet with, or null if none exist. */
+  sticker?: WelcomeStickerPreview | null
+}
+
+/**
+ * Pick a RANDOM already-received sticker to offer as a Telegram-style greeting
+ * in an empty thread. We never invent stickers — only real ones the account has
+ * actually received are eligible, so the preview and the eventual send render
+ * exactly like a genuine incoming sticker. Returns null when the system has no
+ * stickers yet (the empty thread then just shows the "write first" hint).
+ */
+export async function secretGetWelcomeStickerAction(): Promise<WelcomeStickerResult> {
+  await assertConsoleOrMessenger()
+
+  const rows = await query<{ id: string; media_mime: string | null }>(
+    `SELECT id, media_mime
+       FROM messages
+      WHERE media_type = 'sticker'
+        AND media_blob_id IS NOT NULL
+        AND deleted_at IS NULL
+      ORDER BY random()
+      LIMIT 1`,
+  )
+  const r = rows[0]
+  if (!r) return { ok: true, message: '', sticker: null }
+  return {
+    ok: true,
+    message: '',
+    sticker: {
+      sourceMessageId: r.id,
+      mediaUrl: `/api/media/${r.id}`,
+      mediaMime: r.media_mime,
+    },
+  }
+}
+
+/**
+ * Send the greeting sticker into a thread — ONLY when the operator taps it in
+ * the empty conversation (Telegram behaviour: the greeting sticker is never
+ * auto-sent, and disappears the moment any message exists). Reuses the source
+ * sticker's stored blob so it lands in the manager inbox identical to a real
+ * incoming sticker. Inbound direction: it reads as the client's first message.
+ */
+export async function secretSendWelcomeStickerAction(input: {
+  conversationId: string
+  sourceMessageId: string
+}): Promise<SendMessageResult> {
+  await assertConsoleOrMessenger()
+  if (!input.conversationId || !input.sourceMessageId)
+    return { ok: false, message: 'Не указан стикер' }
+
+  const conv = await query<{ contact_name: string }>(
+    'SELECT contact_name FROM conversations WHERE id = $1 LIMIT 1',
+    [input.conversationId],
+  )
+  if (!conv[0]) return { ok: false, message: 'Диалог не найден' }
+
+  const src = await query<{
+    media_blob_id: string | null
+    media_mime: string | null
+    media_name: string | null
+    body: string | null
+  }>(
+    `SELECT media_blob_id, media_mime, media_name, body
+       FROM messages
+      WHERE id = $1
+        AND media_type = 'sticker'
+        AND media_blob_id IS NOT NULL
+        AND deleted_at IS NULL
+      LIMIT 1`,
+    [input.sourceMessageId],
+  )
+  if (!src[0]?.media_blob_id) return { ok: false, message: 'Стикер недоступен' }
+
+  const author = conv[0].contact_name || 'Клиент'
+  const messageId = randomUUID()
+
+  const created = await withTransaction(async (db) => {
+    const rows = await db.query<{ created_at: string | Date }>(
+      `INSERT INTO messages
+         (id, conversation_id, direction, body, author, media_type, media_mime, media_name, media_blob_id)
+       VALUES ($1, $2, 'in', $3, $4, 'sticker', $5, $6, $7)
+       RETURNING created_at`,
+      [
+        messageId,
+        input.conversationId,
+        src[0].body ?? '',
+        author,
+        src[0].media_mime,
+        src[0].media_name,
+        src[0].media_blob_id,
+      ],
+    )
+    await db.query(
+      `UPDATE conversations
+          SET last_message = '[Стикер]', last_message_at = now(), unread = unread + 1
+        WHERE id = $1`,
+      [input.conversationId],
+    )
+    return rows[0]
+  })
+
+  return {
+    ok: true,
+    message: 'Стикер отправлен',
+    id: messageId,
+    createdAt: new Date(created.created_at).toISOString(),
+  }
 }
 
 /**
