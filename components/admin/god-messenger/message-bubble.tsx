@@ -19,7 +19,6 @@ import { cn } from '@/lib/utils'
 import type { Message } from '@/lib/types'
 import { albumCellSpansRow, albumGridCols } from '@/lib/media-albums'
 import { VideoNotePlayer } from '@/components/shared/video-note-player'
-import { TgsSticker } from '@/components/manager/inbox/tgs-sticker'
 import { fmtDayChip, fmtTime } from './utils'
 import { parseReply } from './reply'
 
@@ -264,12 +263,8 @@ export const MessageBubble = memo(function MessageBubble({
                   )
                 )}
 
-          {/* Hide auto-generated "[Фото]"-style bodies under real media, and
-              the emoji body that rides along with a sticker (the sticker itself
-              conveys it). */}
-          {text &&
-            message.mediaType !== 'sticker' &&
-            !(message.mediaType && text.startsWith('[')) && (
+                {/* Hide auto-generated "[Фото]"-style bodies under real media. */}
+                {text && !(message.mediaType && text.startsWith('[')) && (
                   <p className="whitespace-pre-wrap break-words leading-relaxed">
                     {text}
                   </p>
@@ -411,65 +406,14 @@ function AlbumCell({
   )
 }
 
-/**
- * Sticker renderer mirroring the manager inbox: animated Telegram .tgs stickers
- * play through the lottie canvas player, WebM stickers loop as muted video, and
- * static (webp/png) stickers fall back to an <img>. Any decode failure degrades
- * to the emoji glyph stored in the message body.
- */
-function StickerContent({ message }: { message: Message }) {
-  const [failed, setFailed] = useState(false)
-  const url = (message.localPreviewUrl || message.mediaUrl) as string | undefined
-  const mime = message.mediaMime ?? ''
-  const alt = message.body || '🎯'
-
-  if (failed || !url) {
-    return (
-      <span className="text-5xl leading-none" role="img" aria-label={alt}>
-        {alt}
-      </span>
-    )
-  }
-  if (mime.includes('tgs') || mime === 'application/gzip') {
-    return (
-      <TgsSticker url={url} alt={alt} onError={() => setFailed(true)} />
-    )
-  }
-  if (mime.startsWith('video/')) {
-    return (
-      <video
-        src={url}
-        autoPlay
-        loop
-        muted
-        playsInline
-        aria-label={alt}
-        className="size-32 object-contain"
-        onError={() => setFailed(true)}
-      />
-    )
-  }
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={url}
-      alt={alt}
-      loading="lazy"
-      className="size-32 object-contain"
-      onError={() => setFailed(true)}
-    />
-  )
-}
-
 /** Inline media renderer: photos, video, voice/audio players, file cards. */
 function MediaContent({ message, mine }: { message: Message; mine: boolean }) {
   // Prefer the local optimistic preview so a just-sent file shows instantly and
   // never fires an /api/media request until it's actually persisted.
   const url = (message.localPreviewUrl || message.mediaUrl) as string
   switch (message.mediaType) {
-    case 'sticker':
-      return <StickerContent message={message} />
-    case 'image': {
+    case 'image':
+    case 'sticker': {
       const img = (
         <ImageWithSkeleton
           url={url}

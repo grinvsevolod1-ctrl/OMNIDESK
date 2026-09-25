@@ -12,7 +12,6 @@ import {
 } from '@/lib/data/media-archive'
 import { applyLunchSubstitution, enqueueJob, markMessageFailed } from '@/lib/data'
 import { saveMediaFile } from '@/lib/media-store'
-import { WELCOME_STICKERS } from '@/lib/god/welcome-stickers'
 import {
   assertConsoleOrMessenger,
   type ActionResult,
@@ -88,23 +87,7 @@ export async function secretCreateConversationAction(input: {
   const id = randomUUID()
   const firstMessage = input.message?.trim() ?? ''
 
-  // The thread ALWAYS opens with a random animated welcome sticker (Telegram's
-  // greeting-sticker behaviour). It's the client's opener, so it comes in as an
-  // inbound message; an optional typed first message lands 1s later so the
-  // sticker sorts first. Bytes are decoded from the bundled palette — no worker
-  // or Telegram round-trip needed.
-  const sticker =
-    WELCOME_STICKERS[Math.floor(Math.random() * WELCOME_STICKERS.length)]
-  const stickerBytes = Buffer.from(sticker.base64, 'base64')
-
-  const base = createdAt ?? new Date()
-  const textTime = new Date(base.getTime() + 1000)
-  const lastMessage = firstMessage || '[Стикер]'
-  const lastMessageAt = firstMessage ? textTime : base
-  // Both openers (sticker + optional text) are unread inbound messages.
-  const unread = firstMessage ? 2 : 1
-
-  // Conversation + opening messages are one atomic unit: a crash between the
+  // Conversation + first message are one atomic unit: a crash between the two
   // inserts must never leave a thread whose preview references a lost message.
   await withTransaction(async (db) => {
     await db.query(
@@ -115,7 +98,7 @@ export async function secretCreateConversationAction(input: {
       // ONLY affects send simulation — never visibility/analytics (AGENTS §4.3).
       `INSERT INTO conversations
          (id, channel_id, channel_type, manager_id, contact_name, contact_handle, last_message, last_message_at, status, unread, god_synthetic)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'liquid', $9, true)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($9::timestamptz, now()), 'liquid', $8, true)`,
       [
         id,
         channel[0].id,
@@ -123,41 +106,22 @@ export async function secretCreateConversationAction(input: {
         effectiveManagerId,
         contactName,
         contactHandle,
-        lastMessage,
-        lastMessageAt.toISOString(),
-        unread,
+        firstMessage,
+        firstMessage ? 1 : 0,
+        createdAt ? createdAt.toISOString() : null,
       ],
     )
-
-    // Durable bytea copy in Postgres (like secretSendMediaMessageAction): a
-    // synthetic dialog has no provider message to restore from, so keeping the
-    // bytes in the DB guarantees /api/media always resolves the sticker.
-    const blob = await db.query<{ id: string }>(
-      `INSERT INTO media_blobs (bytes, mime, name, byte_size)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id`,
-      [stickerBytes, sticker.mime, 'welcome.tgs', stickerBytes.byteLength],
-    )
-    await db.query(
-      `INSERT INTO messages
-         (id, conversation_id, direction, body, author, media_type, media_mime, media_name, media_blob_id, created_at)
-       VALUES ($1, $2, 'in', $3, $4, 'sticker', $5, 'welcome.tgs', $6, $7)`,
-      [
-        randomUUID(),
-        id,
-        sticker.emoji,
-        contactName,
-        sticker.mime,
-        blob[0].id,
-        base.toISOString(),
-      ],
-    )
-
     if (firstMessage) {
       await db.query(
         `INSERT INTO messages (id, conversation_id, direction, body, author, created_at)
-         VALUES ($1, $2, 'in', $3, $4, $5)`,
-        [randomUUID(), id, firstMessage, contactName, textTime.toISOString()],
+         VALUES ($1, $2, 'in', $3, $4, COALESCE($5::timestamptz, now()))`,
+        [
+          randomUUID(),
+          id,
+          firstMessage,
+          contactName,
+          createdAt ? createdAt.toISOString() : null,
+        ],
       )
     }
   })
