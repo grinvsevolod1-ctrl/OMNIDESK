@@ -9,6 +9,7 @@ import {
   Loader2,
   Megaphone,
   MessageCircle,
+  MonitorSmartphone,
   MoreVertical,
   Pause,
   Pencil,
@@ -39,7 +40,12 @@ import {
   type PersonalAccountItem,
 } from '@/app/actions/admin-secret/telegram-personal'
 import { AccountConnectDialog } from './account-connect'
-import { RenameDialog, SettingsDialog, StartDialog } from './account-dialogs'
+import {
+  RenameDialog,
+  SessionsDialog,
+  SettingsDialog,
+  StartDialog,
+} from './account-dialogs'
 
 const STATUS_META: Record<string, { label: string; dot: string }> = {
   online: { label: 'В сети', dot: 'bg-success' },
@@ -96,6 +102,7 @@ export function AccountsList({
   const [busyId, setBusyId] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<PersonalAccountItem | null>(null)
   const [settingsFor, setSettingsFor] = useState<PersonalAccountItem | null>(null)
+  const [sessionsFor, setSessionsFor] = useState<PersonalAccountItem | null>(null)
   const [writingFor, setWritingFor] = useState<PersonalAccountItem | null>(null)
   const [q, setQ] = useState('')
   const [page, setPage] = useState(0)
@@ -332,6 +339,10 @@ export function AccountsList({
                                   <Megaphone className="size-4" />
                                   Рассылка по группам
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setSessionsFor(a)}>
+                                  <MonitorSmartphone className="size-4" />
+                                  Сессии
+                                </DropdownMenuItem>
                                 <DropdownMenuItem
                                   onClick={() => setSettingsFor(a)}
                                 >
@@ -447,6 +458,14 @@ export function AccountsList({
           if (!open) setSettingsFor(null)
         }}
         onSaved={onRefresh}
+      />
+
+      <SessionsDialog
+        key={sessionsFor ? `sess-${sessionsFor.id}` : 'sess-closed'}
+        account={sessionsFor}
+        onOpenChange={(open) => {
+          if (!open) setSessionsFor(null)
+        }}
       />
 
       <StartDialog

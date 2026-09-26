@@ -44,6 +44,8 @@ import {
   getPersonalHistory,
   getPersonalProfile,
   listPersonalDialogs,
+  listPersonalSessions,
+  resetPersonalSession,
   sendPersonalFile,
   startPersonalDialog,
   updatePersonalProfile,
@@ -51,6 +53,7 @@ import {
   type PersonalDialogDTO,
   type PersonalMessageDTO,
   type PersonalProfileDTO,
+  type PersonalSessionDTO,
   type SpamCheckResult,
   type StartDialogResult,
 } from './personal.js'
@@ -805,6 +808,16 @@ export class TelegramSession {
   /** Update own @username (empty string removes it). Personal mode. */
   async personalSetUsername(username: string): Promise<void> {
     return updatePersonalUsername(this.personalClient(), username)
+  }
+
+  /** Live list of active sessions/authorizations (personal mode). Pure read. */
+  async personalSessions(): Promise<PersonalSessionDTO[]> {
+    return listPersonalSessions(this.personalClient())
+  }
+
+  /** Terminate another session by its authorization hash (personal mode). */
+  async personalResetSession(hash: string): Promise<boolean> {
+    return resetPersonalSession(this.personalClient(), hash)
   }
 
   /** Message a brand-new peer first, by @username or phone. Throttled. */

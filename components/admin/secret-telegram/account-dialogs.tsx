@@ -6,8 +6,18 @@
  * Вынесено из accounts-list.tsx. Часть god-панели — инварианты AGENTS.md §4.
  */
 
-import { useEffect, useState, useTransition } from 'react'
-import { AtSign, Loader2, Send } from 'lucide-react'
+import { useCallback, useEffect, useState, useTransition } from 'react'
+import {
+  AtSign,
+  Loader2,
+  Monitor,
+  MonitorSmartphone,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  Smartphone,
+  X,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,10 +34,13 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   personalGetProfileAction,
   personalRenameAction,
+  personalResetSessionAction,
+  personalSessionsAction,
   personalSetUsernameAction,
   personalStartDialogAction,
   personalUpdateProfileAction,
   type PersonalAccountItem,
+  type PersonalSessionItem,
 } from '@/app/actions/admin-secret/telegram-personal'
 
 /** Диалог переименования аккаунта — меняет только имя карточки в панели. */
@@ -346,6 +359,200 @@ export function StartDialog({
             )}
             Отправить
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Иконка устройства по платформе/модели сессии. */
+function deviceIcon(session: PersonalSessionItem) {
+  const p = `${session.platform} ${session.systemVersion} ${session.deviceModel}`.toLowerCase()
+  if (/android|ios|iphone|ipad|mobile|phone/.test(p)) return Smartphone
+  if (/desktop|windows|macos|mac os|linux|tdesktop/.test(p)) return Monitor
+  return MonitorSmartphone
+}
+
+/** Человекочитаемое «последняя активность»: только что / N мин / дата. */
+function formatActive(unixSec: number): string {
+  if (!unixSec) return '—'
+  const diffMs = Date.now() - unixSec * 1000
+  const min = Math.floor(diffMs / 60_000)
+  if (min < 1) return 'только что'
+  if (min < 60) return `${min} мин назад`
+  const hours = Math.floor(min / 60)
+  if (hours < 24) return `${hours} ч назад`
+  return new Date(unixSec * 1000).toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+/**
+ * Активные сессии аккаунта: живой список авторизаций из Telegram
+ * (account.getAuthorizations) с возможностью завершить любую чужую
+ * (account.resetAuthorization). Текущая сессия помечается и не завершается —
+ * Telegram запрещает reset собственной авторизации. Требует online-сессию.
+ */
+export function SessionsDialog({
+  account,
+  onOpenChange,
+}: {
+  account: PersonalAccountItem | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const [loading, setLoading] = useState(true)
+  const [sessions, setSessions] = useState<PersonalSessionItem[]>([])
+  const [resettingHash, setResettingHash] = useState<string | null>(null)
+  const [, startTransition] = useTransition()
+
+  const load = useCallback(() => {
+    if (!account) return
+    const accountId = account.id
+    startTransition(async () => {
+      const res = await personalSessionsAction(accountId)
+      if (res.ok) {
+        setSessions(res.sessions)
+      } else {
+        toast.error(res.error ?? 'Не удалось загрузить сессии.')
+        setSessions([])
+      }
+      setLoading(false)
+    })
+  }, [account])
+
+  // Диалог пересоздаётся по key на месте вызова, поэтому загрузка стартует
+  // при каждом новом аккаунте. startTransition уводит setState из тела эффекта.
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const reset = (session: PersonalSessionItem) => {
+    if (!account) return
+    if (
+      !confirm(
+        `Завершить сессию «${session.deviceModel || session.appName || 'устройство'}»? Устройство выйдет из аккаунта.`,
+      )
+    ) {
+      return
+    }
+    setResettingHash(session.hash)
+    startTransition(async () => {
+      const res = await personalResetSessionAction(account.id, session.hash)
+      setResettingHash(null)
+      if (res.ok) {
+        toast.success(res.message)
+        setSessions((prev) => prev.filter((s) => s.hash !== session.hash))
+      } else {
+        toast.error(res.message)
+      }
+    })
+  }
+
+  const others = sessions.filter((s) => !s.current).length
+
+  return (
+    <Dialog open={account !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Активные сессии</DialogTitle>
+          <DialogDescription>
+            Устройства, на которых сейчас выполнен вход в этот аккаунт Telegram.
+            Любую чужую сессию можно завершить.
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Загружаем сессии…
+          </div>
+        ) : sessions.length === 0 ? (
+          <div className="py-12 text-center text-sm text-muted-foreground">
+            Активных сессий не найдено.
+          </div>
+        ) : (
+          <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto pr-1">
+            {sessions.map((s) => {
+              const Icon = deviceIcon(s)
+              const busy = resettingHash === s.hash
+              const location = [s.country, s.region].filter(Boolean).join(', ')
+              return (
+                <div
+                  key={s.hash}
+                  className="flex items-start gap-3 rounded-lg border border-border bg-card p-3"
+                >
+                  <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                    <Icon className="size-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="truncate font-medium">
+                        {s.deviceModel || s.appName || 'Устройство'}
+                      </p>
+                      {s.current && (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                          <ShieldCheck className="size-3" />
+                          Текущая
+                        </span>
+                      )}
+                    </div>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {[s.appName, s.appVersion].filter(Boolean).join(' ')}
+                      {s.platform ? ` · ${s.platform}` : ''}
+                      {s.systemVersion ? ` ${s.systemVersion}` : ''}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                      {[s.ip, location].filter(Boolean).join(' · ') || '—'}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Активность: {formatActive(s.dateActive)}
+                    </p>
+                  </div>
+                  {!s.current && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={() => reset(s)}
+                      disabled={busy}
+                      aria-label="Завершить сессию"
+                      title="Завершить сессию"
+                    >
+                      {busy ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <X className="size-4" />
+                      )}
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <DialogFooter className="sm:justify-between">
+          <span className="text-xs text-muted-foreground">
+            {loading
+              ? ''
+              : `Всего: ${sessions.length}${others > 0 ? ` · других: ${others}` : ''}`}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="bg-transparent"
+              onClick={() => void load()}
+              disabled={loading}
+            >
+              <RefreshCw className={loading ? 'size-4 animate-spin' : 'size-4'} />
+              Обновить
+            </Button>
+            <Button onClick={() => onOpenChange(false)}>Закрыть</Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

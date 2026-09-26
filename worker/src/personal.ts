@@ -468,6 +468,68 @@ export async function startPersonalDialog(
   }
 }
 
+/* --------------------- Активные сессии аккаунта ------------------------ */
+
+export interface PersonalSessionDTO {
+  /** Stringified authorization hash — идентификатор для сброса. */
+  hash: string
+  /** True для сессии этой панели (её нельзя завершить). */
+  current: boolean
+  deviceModel: string
+  platform: string
+  systemVersion: string
+  appName: string
+  appVersion: string
+  ip: string
+  country: string
+  region: string
+  /** Unix seconds. */
+  dateCreated: number
+  dateActive: number
+  officialApp: boolean
+}
+
+/**
+ * Живой список активных авторизаций (сессий) аккаунта — account.getAuthorizations.
+ * Pure read: ничего не пишется в Postgres. Текущая сессия помечается `current`
+ * и не может быть завершена (Telegram запрещает reset собственной авторизации).
+ */
+export async function listPersonalSessions(
+  client: TelegramClient,
+): Promise<PersonalSessionDTO[]> {
+  const res = await client.invoke(new Api.account.GetAuthorizations())
+  return res.authorizations.map((a) => ({
+    hash: String(a.hash),
+    current: Boolean(a.current),
+    deviceModel: a.deviceModel ?? '',
+    platform: a.platform ?? '',
+    systemVersion: a.systemVersion ?? '',
+    appName: a.appName ?? '',
+    appVersion: a.appVersion ?? '',
+    ip: a.ip ?? '',
+    country: a.country ?? '',
+    region: a.region ?? '',
+    dateCreated: a.dateCreated ?? 0,
+    dateActive: a.dateActive ?? 0,
+    officialApp: Boolean(a.officialApp),
+  }))
+}
+
+/**
+ * Завершить чужую сессию по её hash (account.resetAuthorization). Telegram не
+ * даёт сбросить текущую авторизацию и свежие (<24ч) — такие вызовы бросают, и
+ * action переводит ошибку в человекочитаемый текст. Возвращает true при успехе.
+ */
+export async function resetPersonalSession(
+  client: TelegramClient,
+  hash: string,
+): Promise<boolean> {
+  const result = await client.invoke(
+    new Api.account.ResetAuthorization({ hash: returnBigInt(hash) }),
+  )
+  return Boolean(result)
+}
+
 /* ----------------------------- @SpamBot check ---------------------------- */
 
 export interface SpamCheckResult {

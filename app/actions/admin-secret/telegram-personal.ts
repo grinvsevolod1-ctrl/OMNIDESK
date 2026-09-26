@@ -403,6 +403,10 @@ function humanizeWorkerError(code: string | undefined, fallback: string): string
         return 'Настройки приватности собеседника запрещают писать первым.'
       if (code.includes('TARGET_REQUIRED'))
         return 'Укажите @username или номер телефона.'
+      if (code.includes('FRESH_RESET_AUTHORISATION_FORBIDDEN'))
+        return 'Свежую сессию нельзя завершить первые 24 часа — попробуйте позже.'
+      if (code.includes('HASH_INVALID'))
+        return 'Сессия уже завершена или недоступна.'
       return code
   }
 }
@@ -841,6 +845,66 @@ export async function personalStartDialogAction(
       username: data.username ?? null,
     },
   }
+}
+
+/* ------------------------------ Сессии -------------------------------- */
+
+/** Активная сессия (авторизация) аккаунта — зеркалит worker/src/personal.ts. */
+export interface PersonalSessionItem {
+  hash: string
+  /** True для текущей сессии панели — её нельзя завершить. */
+  current: boolean
+  deviceModel: string
+  platform: string
+  systemVersion: string
+  appName: string
+  appVersion: string
+  ip: string
+  country: string
+  region: string
+  dateCreated: number
+  dateActive: number
+  officialApp: boolean
+}
+
+/** Живой список активных сессий аккаунта. Ничего не пишется в БД. */
+export async function personalSessionsAction(
+  channelId: string,
+): Promise<{ ok: boolean; sessions: PersonalSessionItem[]; error?: string }> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  const data = await postJsonToWorkerSafeGet<{ sessions: PersonalSessionItem[] }>(
+    `/personal/sessions?channelId=${encodeURIComponent(channelId)}`,
+  )
+  if (!data) {
+    return {
+      ok: false,
+      sessions: [],
+      error: 'Аккаунт не в сети — запустите его, чтобы увидеть сессии.',
+    }
+  }
+  return { ok: true, sessions: data.sessions ?? [] }
+}
+
+/** Завершить чужую сессию аккаунта по её authorization hash. */
+export async function personalResetSessionAction(
+  channelId: string,
+  hash: string,
+): Promise<PersonalActionResult> {
+  await requireGod()
+  await requirePersonalChannel(channelId)
+  if (!hash) return { ok: false, message: 'Не указана сессия.' }
+  const data = await postJsonToWorker<{ reset?: boolean; error?: string }>(
+    '/personal/sessions/reset',
+    { channelId, hash },
+  )
+  if (!data?.reset) {
+    return {
+      ok: false,
+      message: humanizeWorkerError(data?.error, 'Не удалось завершить сессию.'),
+    }
+  }
+  return { ok: true, message: 'Сессия завершена.' }
 }
 
 /**

@@ -467,6 +467,23 @@ export function startHttpServer(): void {
           return json(res, 200, { updated: true })
         }
 
+        // Активные сессии аккаунта (живой снапшот авторизаций).
+        if (url.pathname === '/personal/sessions' && req.method === 'GET') {
+          const sessions = await session.personalSessions()
+          return json(res, 200, { sessions })
+        }
+
+        // Завершить чужую сессию по её authorization hash.
+        if (
+          url.pathname === '/personal/sessions/reset' &&
+          req.method === 'POST'
+        ) {
+          const hash = String(body.hash ?? '')
+          if (!hash) return json(res, 400, { error: 'hash required' })
+          const reset = await session.personalResetSession(hash)
+          return json(res, 200, { reset })
+        }
+
         // Написать первым новому собеседнику (@username или телефон).
         if (url.pathname === '/personal/start-dialog' && req.method === 'POST') {
           const target = String(body.target ?? '')
