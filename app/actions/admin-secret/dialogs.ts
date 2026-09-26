@@ -78,6 +78,12 @@ export interface DialogSearchResult {
   total: number
   /** Hard cap applied to the returned rows. */
   limit: number
+  /**
+   * Human-readable failure reason. When present the search could not run
+   * (usually a DB connectivity / missing-column problem) — the UI shows this
+   * instead of a blank 500 so the real cause is visible.
+   */
+  error?: string
 }
 
 const SEARCH_LIMIT = 300
@@ -171,73 +177,94 @@ export async function secretSearchConversationsAction(
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
-  const countRows = await query<{ total: number }>(
-    `SELECT COUNT(*)::int AS total
-       FROM conversations c
-       LEFT JOIN channels ch ON ch.id = c.channel_id
-       LEFT JOIN managers mgr ON mgr.id = c.manager_id
-       ${whereSql}`,
-    params,
-  )
-  const total = countRows[0]?.total ?? 0
+  try {
+    const countRows = await query<{ total: number }>(
+      `SELECT COUNT(*)::int AS total
+         FROM conversations c
+         LEFT JOIN channels ch ON ch.id = c.channel_id
+         LEFT JOIN managers mgr ON mgr.id = c.manager_id
+         ${whereSql}`,
+      params,
+    )
+    const total = countRows[0]?.total ?? 0
 
-  const rows = await query<{
-    id: string
-    contact_name: string
-    contact_handle: string
-    contact_username: string | null
-    channel_type: ChannelType
-    channel_name: string | null
-    manager_id: string | null
-    manager_name: string | null
-    curator_name: string | null
-    last_message: string
-    last_message_at: string
-    created_at: string
-    unread: number
-    status: string | null
-    god_synthetic: boolean
-    is_simulated: boolean
-    message_count: number
-  }>(
-    `SELECT c.id, c.contact_name, c.contact_handle, c.contact_username,
-            c.channel_type, ch.name AS channel_name,
-            c.manager_id, mgr.name AS manager_name, cur.name AS curator_name,
-            c.last_message, c.last_message_at, c.created_at, c.unread,
-            c.status, c.god_synthetic, c.is_simulated,
-            (SELECT COUNT(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count
-       FROM conversations c
-       LEFT JOIN channels ch ON ch.id = c.channel_id
-       LEFT JOIN managers mgr ON mgr.id = c.manager_id
-       LEFT JOIN managers cur ON cur.id = c.curator_id
-       ${whereSql}
-      ORDER BY c.${dateField} DESC
-      LIMIT ${SEARCH_LIMIT}`,
-    params,
-  )
+    const rows = await query<{
+      id: string
+      contact_name: string
+      contact_handle: string
+      contact_username: string | null
+      channel_type: ChannelType
+      channel_name: string | null
+      manager_id: string | null
+      manager_name: string | null
+      curator_name: string | null
+      last_message: string
+      last_message_at: string
+      created_at: string
+      unread: number
+      status: string | null
+      god_synthetic: boolean
+      is_simulated: boolean
+      message_count: number
+    }>(
+      `SELECT c.id, c.contact_name, c.contact_handle, c.contact_username,
+              c.channel_type, ch.name AS channel_name,
+              c.manager_id, mgr.name AS manager_name, cur.name AS curator_name,
+              c.last_message, c.last_message_at, c.created_at, c.unread,
+              c.status, c.god_synthetic, c.is_simulated,
+              (SELECT COUNT(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count
+         FROM conversations c
+         LEFT JOIN channels ch ON ch.id = c.channel_id
+         LEFT JOIN managers mgr ON mgr.id = c.manager_id
+         LEFT JOIN managers cur ON cur.id = c.curator_id
+         ${whereSql}
+        ORDER BY c.${dateField} DESC
+        LIMIT ${SEARCH_LIMIT}`,
+      params,
+    )
 
-  return {
-    rows: rows.map((r) => ({
-      id: r.id,
-      contactName: r.contact_name,
-      contactHandle: r.contact_handle,
-      contactUsername: r.contact_username,
-      channelType: r.channel_type,
-      channelName: r.channel_name,
-      managerId: r.manager_id,
-      managerName: r.manager_name,
-      curatorName: r.curator_name,
-      lastMessage: r.last_message,
-      lastMessageAt: r.last_message_at,
-      createdAt: r.created_at,
-      unread: r.unread,
-      status: r.status,
-      godSynthetic: r.god_synthetic,
-      isSimulated: r.is_simulated,
-      messageCount: r.message_count,
-    })),
-    total,
-    limit: SEARCH_LIMIT,
+    return {
+      rows: rows.map((r) => ({
+        id: r.id,
+        contactName: r.contact_name,
+        contactHandle: r.contact_handle,
+        contactUsername: r.contact_username,
+        channelType: r.channel_type,
+        channelName: r.channel_name,
+        managerId: r.manager_id,
+        managerName: r.manager_name,
+        curatorName: r.curator_name,
+        lastMessage: r.last_message,
+        lastMessageAt: r.last_message_at,
+        createdAt: r.created_at,
+        unread: r.unread,
+        status: r.status,
+        godSynthetic: r.god_synthetic,
+        isSimulated: r.is_simulated,
+        messageCount: r.message_count,
+      })),
+      total,
+      limit: SEARCH_LIMIT,
+    }
+  } catch (err) {
+    // Never let this bubble to an opaque 500: surface the real reason so the
+    // operator can see it (missing column after a skipped migration, DB
+    // connectivity, etc.) instead of a blank "no results".
+    const message = err instanceof Error ? err.message : String(err)
+    const code =
+      typeof (err as { code?: unknown })?.code === 'string'
+        ? (err as { code: string }).code
+        : undefined
+    console.error('[v0] secretSearchConversationsAction failed:', code, message)
+    return {
+      rows: [],
+      total: 0,
+      limit: SEARCH_LIMIT,
+      error:
+        code === '42703'
+          ? `В базе нет ожидаемого столбца (${message}). Похоже, не применена одна из миграций — выполните pnpm db:migrate на этой БД.`
+          : `Ошибка поиска: ${message}`,
+    }
   }
 }
 
@@ -263,42 +290,49 @@ export async function secretHardDeleteConversationsAction(input: {
   if (ids.length > 500)
     return { ok: false, message: 'За один раз можно удалить не более 500 диалогов' }
 
-  // Snapshot a little context BEFORE deletion so the audit trail is meaningful
-  // even though the rows themselves are about to vanish forever.
-  const snapshot = await query<{
-    id: string
-    contact_name: string
-    contact_handle: string
-    channel_type: string
-    manager_name: string | null
-  }>(
-    `SELECT c.id, c.contact_name, c.contact_handle, c.channel_type, mgr.name AS manager_name
-       FROM conversations c
-       LEFT JOIN managers mgr ON mgr.id = c.manager_id
-      WHERE c.id = ANY($1::uuid[])`,
-    [ids],
-  )
+  let deletedIds: string[]
+  try {
+    // Snapshot a little context BEFORE deletion so the audit trail is meaningful
+    // even though the rows themselves are about to vanish forever.
+    const snapshot = await query<{
+      id: string
+      contact_name: string
+      contact_handle: string
+      channel_type: string
+      manager_name: string | null
+    }>(
+      `SELECT c.id, c.contact_name, c.contact_handle, c.channel_type, mgr.name AS manager_name
+         FROM conversations c
+         LEFT JOIN managers mgr ON mgr.id = c.manager_id
+        WHERE c.id = ANY($1::uuid[])`,
+      [ids],
+    )
 
-  const deleted = await query<{ id: string }>(
-    'DELETE FROM conversations WHERE id = ANY($1::uuid[]) RETURNING id',
-    [ids],
-  )
-  const deletedIds = deleted.map((r) => r.id)
+    const deleted = await query<{ id: string }>(
+      'DELETE FROM conversations WHERE id = ANY($1::uuid[]) RETURNING id',
+      [ids],
+    )
+    deletedIds = deleted.map((r) => r.id)
 
-  audit(admin, 'conversation.hard_delete', {
-    summary: `Навсегда удалено диалогов: ${deletedIds.length}`,
-    detail: {
-      requested: ids.length,
-      deleted: deletedIds.length,
-      conversations: snapshot.map((s) => ({
-        id: s.id,
-        contact: s.contact_name,
-        handle: s.contact_handle,
-        channel: s.channel_type,
-        manager: s.manager_name,
-      })),
-    },
-  })
+    audit(admin, 'conversation.hard_delete', {
+      summary: `Навсегда удалено диалогов: ${deletedIds.length}`,
+      detail: {
+        requested: ids.length,
+        deleted: deletedIds.length,
+        conversations: snapshot.map((s) => ({
+          id: s.id,
+          contact: s.contact_name,
+          handle: s.contact_handle,
+          channel: s.channel_type,
+          manager: s.manager_name,
+        })),
+      },
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[v0] secretHardDeleteConversationsAction failed:', message)
+    return { ok: false, message: `Не удалось удалить: ${message}` }
+  }
 
   revalidatePath(ADMIN_PATH)
 

@@ -138,6 +138,7 @@ export function SecretDialogsTab({ managers }: { managers: Manager[] }) {
         setLimit(res.limit)
         setSelected(new Set())
         setHasSearched(true)
+        if (res.error) toast.error(res.error)
       } catch {
         toast.error('Не удалось выполнить поиск')
       } finally {
