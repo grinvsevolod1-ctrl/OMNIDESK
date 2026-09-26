@@ -257,5 +257,16 @@ function sanitizeLedger(a: Record<string, unknown>): Partial<AutoSpend> {
       }
     }
   }
+  if (a.allTime && typeof a.allTime === 'object') {
+    const t = a.allTime as Record<string, unknown>
+    const setAt = str(t.setAt).trim()
+    if (setAt && !Number.isNaN(Date.parse(setAt))) {
+      out.allTime = {
+        setAt,
+        base: sanitizeMetricsMap(t.base),
+        minus: sanitizeMetricsMap(t.minus),
+      }
+    }
+  }
   return out
 }

@@ -107,6 +107,19 @@ export interface AutoSpend {
    * settings — so a settings change / disable never rewrites what's shown.
    */
   bank?: AutoDayBank
+  /**
+   * «Всё время» baseline set by hand: per campaign, `base` is the operator's
+   * authoritative all-time figure at `setAt`, `minus` is what the ledger's
+   * all-time sum was at that moment. Shown = base + (ledger now − minus), so
+   * only spend AFTER the baseline accrues on top of it.
+   */
+  allTime?: AllTimeBaseline
+}
+
+export interface AllTimeBaseline {
+  setAt: string
+  base: Record<string, DayMetrics>
+  minus: Record<string, DayMetrics>
 }
 
 /** Per-campaign metrics of one day (or a sum of days). */

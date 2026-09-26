@@ -19,10 +19,13 @@ import {
   liveBalance,
   renameSite,
   rotateSiteKey,
+  saveAllTimeBaseline,
   saveSiteState,
   setSiteBlocked,
   topUpBalance,
+  type AllTimeEntry,
   type GodSite,
+  type SiteState,
 } from '@/lib/god-sites'
 import { rateLimit } from '@/lib/rate-limit'
 import { ADMIN_PATH, type ActionResult } from './shared'
@@ -139,6 +142,39 @@ export async function secretTopUpSiteAction(
     ok: true,
     message: 'Баланс пополнен',
     balance: res.state.balance,
+    revision: res.revision,
+  }
+}
+
+/**
+ * Set the «Всё время» figures by hand: the entered numbers become the only
+ * truth for all-time, and everything spent afterwards is added on top.
+ * Commits pending rollover first so the baseline lands on committed history.
+ */
+export async function secretSetAllTimeBaselineAction(
+  id: string,
+  entries: Record<string, AllTimeEntry>,
+): Promise<ActionResult & { state?: SiteState; revision?: number }> {
+  await requireGod()
+  if (!entries || typeof entries !== 'object' || Object.keys(entries).length === 0) {
+    return { ok: false, message: 'Нечего сохранять' }
+  }
+  const site = await getSiteById(id)
+  if (!site) return { ok: false, message: 'Сайт не найден' }
+  await commitAutoSpend(site)
+  const res = await saveAllTimeBaseline(id, entries)
+  if (!res.ok) {
+    if (res.error === 'invalid') return { ok: false, message: res.message }
+    if (res.error === 'conflict') {
+      return { ok: false, message: 'Данные изменились — повторите действие' }
+    }
+    return { ok: false, message: 'Сайт не найден' }
+  }
+  revalidatePath(ADMIN_PATH)
+  return {
+    ok: true,
+    message: '«Всё время» зафиксировано',
+    state: res.state,
     revision: res.revision,
   }
 }

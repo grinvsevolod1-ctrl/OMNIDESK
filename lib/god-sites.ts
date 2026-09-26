@@ -8,6 +8,8 @@ import {
   freezeToday,
   rolloverAutoSpend,
   rolloverDue,
+  setAllTimeBaseline,
+  type AllTimeEntry,
 } from './god-sites-projection'
 import { MAX_NUM, sanitizeState, str } from './god-sites-validation'
 import type { GodSite, MutationResult, SiteState } from './god-sites-types'
@@ -291,6 +293,19 @@ export async function topUpBalance(
       balance: round2(Math.min(frozen.balance + a, MAX_NUM)),
     }
   })
+}
+
+/**
+ * Set the «Всё время» baseline (see setAllTimeBaseline). No revision check —
+ * like the top-up it only touches server-owned fields, so the editor adopts
+ * the returned state/revision in place.
+ */
+export async function saveAllTimeBaseline(
+  id: string,
+  entries: Record<string, AllTimeEntry>,
+): Promise<MutationResult> {
+  const now = new Date()
+  return mutateSite(id, null, (s) => setAllTimeBaseline(s, entries, now))
 }
 
 /**

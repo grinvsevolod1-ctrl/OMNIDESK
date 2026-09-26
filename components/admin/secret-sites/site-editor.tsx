@@ -5,6 +5,7 @@ import { useSiteEditor } from '@/components/admin/secret-sites/use-site-editor'
 import { SiteEditorHeader } from '@/components/admin/secret-sites/site-editor-header'
 import { SiteCabinetCard } from '@/components/admin/secret-sites/site-cabinet-card'
 import { SiteAutoSpendCard } from '@/components/admin/secret-sites/site-autospend-card'
+import { SiteAllTimeCard } from '@/components/admin/secret-sites/site-alltime-card'
 import { SiteRecommendationsCard } from '@/components/admin/secret-sites/site-recommendations-card'
 import { SiteCampaignsSection } from '@/components/admin/secret-sites/site-campaigns-section'
 
@@ -55,6 +56,12 @@ export function SiteEditor({
         setState={editor.setState}
         autoEnabled={editor.autoEnabled}
         autoPreviewFraction={editor.autoPreviewFraction}
+      />
+
+      <SiteAllTimeCard
+        state={editor.state}
+        pending={editor.pending}
+        onSubmit={editor.saveAllTime}
       />
 
       <SiteRecommendationsCard

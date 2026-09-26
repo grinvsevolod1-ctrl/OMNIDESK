@@ -600,6 +600,7 @@ const LEDGER_KEYS = [
   'days',
   'archive',
   'bank',
+  'allTime',
 ] as const
 
 function pickLedger(a: AutoSpend | undefined): Partial<AutoSpend> {
@@ -782,7 +783,124 @@ function ledgerPeriod(
     }
   }
   accAdd(acc, today.campaigns)
+  if (period === 'all' && a.allTime) applyAllTimeBaseline(acc, a.allTime)
   return acc
+}
+
+/** Raw ledger «Всё время» sum (no baseline) — also the baseline's `minus`. */
+function rawAllTime(state: SiteState, now: Date): Acc {
+  const a = state.autoSpend as AutoSpend
+  return ledgerPeriod(
+    { ...state, autoSpend: { ...a, allTime: undefined } },
+    'all',
+    now,
+    liveToday(state, now),
+  )
+}
+
+/** shown = base + max(0, ledger now − ledger at baseline time), per campaign. */
+function applyAllTimeBaseline(acc: Acc, b: NonNullable<AutoSpend['allTime']>): void {
+  for (const [id, base] of Object.entries(b.base)) {
+    const cur = acc.get(id) ?? { cost: 0, shows: 0, clicks: 0, goals: 0, revenue: 0, bw: 0 }
+    const m = b.minus[id] ?? ZERO_METRICS
+    acc.set(id, {
+      cost: base.cost + Math.max(0, cur.cost - m.cost),
+      shows: base.shows + Math.max(0, cur.shows - m.shows),
+      clicks: base.clicks + Math.max(0, cur.clicks - m.clicks),
+      goals: base.goals + Math.max(0, cur.goals - m.goals),
+      revenue: base.revenue + Math.max(0, cur.revenue - m.revenue),
+      bw: base.bounce * base.cost + Math.max(0, cur.bw - m.bounce * m.cost),
+    })
+  }
+}
+
+function accToMetrics(acc: Acc): Record<string, DayMetrics> {
+  const out: Record<string, DayMetrics> = {}
+  for (const [id, t] of acc) {
+    out[id] = {
+      cost: round2(t.cost),
+      shows: Math.round(t.shows),
+      clicks: Math.round(t.clicks),
+      goals: Math.round(t.goals),
+      revenue: round2(t.revenue),
+      bounce: round2(t.cost > 0 ? Math.min(100, t.bw / t.cost) : 0),
+    }
+  }
+  return out
+}
+
+export type AllTimeEntry = Partial<Omit<DayMetrics, 'bounce'>> & { bounce?: number }
+
+/**
+ * Set the «Всё время» figures by hand. Each entry becomes the authoritative
+ * all-time total as of `now`; everything the ledger accrues afterwards is
+ * added on top. Only listed fields change — omitted ones keep the number the
+ * vitrine shows right now. Campaigns not listed keep their previous
+ * baseline. Other periods (today/yesterday/week/month) and the balance are
+ * untouched. Legacy states are frozen into the ledger first (invisible —
+ * same as any other ledger switch).
+ */
+export function setAllTimeBaseline(
+  input: SiteState,
+  entries: Record<string, AllTimeEntry>,
+  now: Date,
+): SiteState {
+  let state = rolloverAutoSpend(input, now) ?? input
+  if (!state.autoSpend?.historyFrom) {
+    if (isOn(state.autoSpend)) {
+      state = freezeToday(state, now)
+    } else {
+      const prev = state.autoSpend ?? { enabled: false, dailyBudget: 0 }
+      state = {
+        ...state,
+        autoSpend: {
+          ...prev,
+          historyFrom: autoDayKey(now, tzOf(prev as AutoSpend)),
+          days: prev.days ?? {},
+        },
+      }
+    }
+  }
+  const a = state.autoSpend as AutoSpend
+  const ids = new Set(state.campaigns.map((c) => c.id))
+  // What the vitrine shows for «Всё время» right now (incl. old baseline +
+  // hand overrides) — the default for any field the operator left blank.
+  const shown = new Map(
+    stateForPeriod(state, 'all', now).campaigns.map((c) => [c.id, c]),
+  )
+  const raw = accToMetrics(rawAllTime(state, now))
+  const base = { ...(a.allTime?.base ?? {}) }
+  const minus = { ...(a.allTime?.minus ?? {}) }
+  const overridesAll = { ...(state.periodOverrides?.all ?? {}) }
+  for (const [id, e] of Object.entries(entries)) {
+    if (!ids.has(id)) continue
+    const cur = shown.get(id)
+    const pick = (k: keyof DayMetrics) => {
+      const v = e[k]
+      return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : (cur?.[k] ?? 0)
+    }
+    base[id] = {
+      cost: round2(pick('cost')),
+      shows: Math.round(pick('shows')),
+      clicks: Math.round(pick('clicks')),
+      goals: Math.round(pick('goals')),
+      revenue: round2(pick('revenue')),
+      bounce: round2(Math.min(100, pick('bounce'))),
+    }
+    minus[id] = raw[id] ?? ZERO_METRICS
+    // The baseline is the single source of truth — drop the old overlay
+    // that would otherwise mask it.
+    delete overridesAll[id]
+  }
+  const po = { ...(state.periodOverrides ?? {}) }
+  if (Object.keys(overridesAll).length > 0) po.all = overridesAll
+  else delete po.all
+  const { periodOverrides: _po, ...rest } = state
+  return {
+    ...rest,
+    ...(Object.keys(po).length > 0 ? { periodOverrides: po } : {}),
+    autoSpend: { ...a, allTime: { setAt: now.toISOString(), base, minus } },
+  }
 }
 
 function projectLedgerCampaign(

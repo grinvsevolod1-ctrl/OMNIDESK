@@ -6,6 +6,7 @@ import {
   secretDownloadExtensionAction,
   secretGetSiteAction,
   secretSaveSiteStateAction,
+  secretSetAllTimeBaselineAction,
   secretSetSiteBlockedAction,
   secretTopUpSiteAction,
 } from '@/app/actions/admin-secret'
@@ -16,6 +17,7 @@ import {
   nf,
   previewDayFraction,
 } from '@/components/admin/secret-sites/site-editor-helpers'
+import type { AllTimeEntry } from '@/lib/god-sites-projection'
 import type {
   GodSite,
   PeriodMetricField,
@@ -270,6 +272,52 @@ export function useSiteEditor(site: GodSite, onClose: () => void) {
   }
 
   /**
+   * «Всё время» baseline. Adopts only the server-owned pieces it touched
+   * (autoSpend ledger + periodOverrides.all) so other unsaved edits survive.
+   */
+  function saveAllTime(entries: Record<string, AllTimeEntry>): Promise<boolean> {
+    return new Promise((resolve) => {
+      startTransition(async () => {
+        try {
+          const res = await secretSetAllTimeBaselineAction(site.id, entries)
+          if (!res.ok || !res.state || res.revision === undefined) {
+            toast.error(res.message)
+            resolve(false)
+            return
+          }
+          const fresh = res.state
+          const adopt = (s: SiteState): SiteState => {
+            const po = { ...(s.periodOverrides ?? {}) }
+            if (fresh.periodOverrides?.all) po.all = fresh.periodOverrides.all
+            else delete po.all
+            const { periodOverrides: _po, ...rest } = s
+            return {
+              ...rest,
+              ...(Object.keys(po).length > 0 ? { periodOverrides: po } : {}),
+              balance: fresh.balance,
+              autoSpend: fresh.autoSpend,
+            }
+          }
+          setRevision(res.revision)
+          setState(adopt)
+          setSavedSnapshot((snap) => {
+            try {
+              return JSON.stringify(adopt(JSON.parse(snap) as SiteState))
+            } catch {
+              return snap
+            }
+          })
+          toast.success(res.message)
+          resolve(true)
+        } catch {
+          toast.error('Внутренняя ошибка сервера')
+          resolve(false)
+        }
+      })
+    })
+  }
+
+  /**
    * «Аккаунт заблокирован» kill switch — instant server flip (same pattern
    * as the top-up: no revision race, snapshot synced in place so the toggle
    * alone never flags the editor dirty). The vitrine wipes itself to the
@@ -360,6 +408,7 @@ export function useSiteEditor(site: GodSite, onClose: () => void) {
     downloadExtension,
     save,
     topUp,
+    saveAllTime,
     toggleBlocked,
     reloadFresh,
   }
