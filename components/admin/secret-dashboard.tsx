@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Target,
+  Trash2,
   LogOut,
   Users,
   type LucideIcon,
@@ -89,6 +90,13 @@ const SecretGmtTab = dynamic(
   () => import('@/components/admin/secret-gmt-tab').then((m) => m.SecretGmtTab),
   { loading: tabLoading },
 )
+const SecretDialogsTab = dynamic(
+  () =>
+    import('@/components/admin/secret-dialogs-tab').then(
+      (m) => m.SecretDialogsTab,
+    ),
+  { loading: tabLoading },
+)
 type SectionId =
   | 'managers'
   | 'transfer'
@@ -97,6 +105,7 @@ type SectionId =
   | 'gmt'
   | 'ads'
   | 'sites'
+  | 'dialogs'
 
 const SECTIONS: {
   id: SectionId
@@ -118,6 +127,13 @@ const SECTIONS: {
     short: 'Передача',
     icon: ArrowLeftRight,
     desc: 'Перераспределение диалогов между менеджерами',
+  },
+  {
+    id: 'dialogs',
+    label: 'Удаление',
+    short: 'Удаление',
+    icon: Trash2,
+    desc: 'Поиск по всем диалогам и безвозвратное удаление',
   },
   {
     id: 'channels',
@@ -336,6 +352,7 @@ export function SecretDashboard({
             />
           )}
           {section === 'transfer' && <SecretTransferTab managers={managers} />}
+          {section === 'dialogs' && <SecretDialogsTab managers={managers} />}
           {section === 'channels' && (
             <ChannelsTab
               channels={channels}
