@@ -9,6 +9,7 @@ import {
   rolloverAutoSpend,
   rolloverDue,
   setAllTimeBaseline,
+  shiftDay,
   type AllTimeEntry,
 } from './god-sites-projection'
 import { MAX_NUM, sanitizeState, str } from './god-sites-validation'
@@ -328,6 +329,23 @@ export async function setSiteBlocked(
 /* ------------------------- Revision-safe mutation ----------------------- */
 
 /**
+ * Give a ledger-mode site its own simulation seed (= site id) starting
+ * TOMORROW in its panel TZ — today and every earlier day keep the seeds
+ * they were shown with, so nothing on the vitrine moves. A copied site gets
+ * a different id and therefore its own rhythm from the next day on.
+ */
+function stampSeed(state: SiteState, siteId: string, now: Date): SiteState {
+  const a = state.autoSpend
+  if (!a?.historyFrom || (a.seedSalt && a.seedFrom)) return state
+  const today = autoDayKey(now, a.tzOffsetHours ?? 3)
+  const base = a.lastCommittedDay && a.lastCommittedDay > today ? a.lastCommittedDay : today
+  return {
+    ...state,
+    autoSpend: { ...a, seedSalt: siteId, seedFrom: shiftDay(base, 1) },
+  }
+}
+
+/**
  * Apply a state transformation under optimistic locking. `expected` is the
  * revision the caller believes is current (from If-Match / body); pass null
  * to skip the check (contract §5 allows clients that don't track revisions).
@@ -348,10 +366,11 @@ async function mutateSite(
     return { ok: false, error: 'conflict', revision: current.revision }
   }
 
-  const next = transform(current.state)
-  if ('invalid' in next) {
-    return { ok: false, error: 'invalid', message: next.invalid }
+  const transformed = transform(current.state)
+  if ('invalid' in transformed) {
+    return { ok: false, error: 'invalid', message: transformed.invalid }
   }
+  const next = stampSeed(transformed, siteId, new Date())
 
   const updated = await query<SiteRow>(
     `UPDATE god_sites

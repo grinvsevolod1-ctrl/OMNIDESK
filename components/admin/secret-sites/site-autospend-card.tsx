@@ -19,12 +19,15 @@ export function SiteAutoSpendCard({
   setState,
   autoEnabled,
   autoPreviewFraction,
+  todaySpent,
 }: {
   state: SiteState
   setState: Dispatch<SetStateAction<SiteState>>
   autoEnabled: boolean
   autoPreviewFraction: number
+  todaySpent: number
 }) {
+  const budget = state.autoSpend?.dailyBudget ?? 0
   return (
     <Card className="flex flex-col gap-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -124,11 +127,13 @@ export function SiteAutoSpendCard({
                 К этому часу скручено
               </p>
               <p className="font-mono text-lg font-semibold leading-none">
-                {nf.format(autoPreviewFraction * 100)}%
+                {nf.format(todaySpent)} {state.currency}
                 <span className="ml-2 text-sm font-normal text-muted-foreground">
-                  ≈ {nf.format(autoPreviewFraction * (state.autoSpend?.dailyBudget ?? 0))}{' '}
-                  {state.currency}
+                  {budget > 0 ? `${nf.format((todaySpent / budget) * 100)}% бюджета` : ''}
                 </span>
+              </p>
+              <p className="text-xs text-muted-foreground">
+                как на витрине · кривая дня {nf.format(autoPreviewFraction * 100)}%
               </p>
             </div>
           </div>

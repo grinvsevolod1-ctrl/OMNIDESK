@@ -17,7 +17,7 @@ import {
   nf,
   previewDayFraction,
 } from '@/components/admin/secret-sites/site-editor-helpers'
-import type { AllTimeEntry } from '@/lib/god-sites-projection'
+import { stateForPeriod, type AllTimeEntry } from '@/lib/god-sites-projection'
 import type {
   GodSite,
   PeriodMetricField,
@@ -52,19 +52,19 @@ export function useSiteEditor(site: GodSite, onClose: () => void) {
     [state.autoSpend],
   )
   const [topUpAmount, setTopUpAmount] = useState('')
-  // Balance the vitrine shows right now: stored minus today's partial burn.
-  // Same curve as the server (god-sites-sim is shared) — an estimate only in
-  // the rare capped case when the balance runs out mid-day.
-  const vitrineBalance = autoEnabled
-    ? Math.max(
-        0,
-        state.balance -
-          Math.min(
-            autoPreviewFraction * (state.autoSpend?.dailyBudget ?? 0),
-            state.balance,
-          ),
-      )
-    : state.balance
+  // Exactly what the vitrine shows for «Сегодня»: the same projection the
+  // /state endpoint runs (weekend dip, day jitter, per-campaign split,
+  // balance cap, frozen bank) — no separate estimate that could disagree.
+  // autoPreviewFraction is a dependency so the figure refreshes with the clock.
+  const { vitrineBalance, todaySpent } = useMemo(() => {
+    const now = new Date()
+    const today = stateForPeriod(state, 'today', now)
+    const spent = today.campaigns
+      .filter((c) => c.status === 'running')
+      .reduce((sum, c) => sum + c.cost, 0)
+    return { vitrineBalance: today.balance, todaySpent: Math.round(spent * 100) / 100 }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, autoPreviewFraction])
 
   const recommendations = state.recommendations ?? []
 
@@ -395,6 +395,7 @@ export function useSiteEditor(site: GodSite, onClose: () => void) {
     running,
     autoEnabled,
     autoPreviewFraction,
+    todaySpent,
     vitrineBalance,
     recommendations,
     topUpAmount,

@@ -56,6 +56,7 @@ export function SiteEditor({
         setState={editor.setState}
         autoEnabled={editor.autoEnabled}
         autoPreviewFraction={editor.autoPreviewFraction}
+        todaySpent={editor.todaySpent}
       />
 
       <SiteAllTimeCard

@@ -78,6 +78,20 @@ export function simulateAutoDay(
   const running = state.campaigns.filter((c) => c.status === 'running')
   if (running.length === 0) return { campaigns: state.campaigns, totalSpent: 0 }
 
+  // Days from `seedFrom` on (ledger mode only) use per-site seeds — two sites
+  // (or a copy with the same campaign ids) no longer share one daily rhythm —
+  // keep fractional counts (rounding happens once, on the period total) and
+  // vary the per-$ ratios more, so CTR/CPC differ day to day. Earlier days
+  // keep the historical seeds, so nothing already shown moves.
+  const v2 = Boolean(
+    cfg.historyFrom && cfg.seedSalt && cfg.seedFrom && dayKey >= cfg.seedFrom,
+  )
+  const seedDay = v2 ? `${cfg.seedSalt}:${dayKey}` : dayKey
+  const count = (x: number) => (v2 ? Math.round(x * 10_000) / 10_000 : Math.round(x))
+  const spreadOf = v2
+    ? { shows: 0.12, clicks: 0.18, goals: 0.3, revenue: 0.2 }
+    : { shows: 0.05, clicks: 0.05, goals: 0.12, revenue: 0.1 }
+
   // Effective budget follows a weekly rhythm (weekends dip) plus a small
   // per-date jitter, so aggregate curves look alive instead of identical
   // days. Deterministic from the date — every reader agrees. Dip and jitter
@@ -85,7 +99,7 @@ export function simulateAutoDay(
   // Budget shares: base cost → weekly budget → equal, jittered ±8% per day.
   const weightOf = (c: SiteCampaign) =>
     (c.cost > 0 ? c.cost : c.weeklyBudget > 0 ? c.weeklyBudget / 7 : 1) *
-    jitter(`${dayKey}:${c.id}:w`, 0.08)
+    jitter(`${seedDay}:${c.id}:w`, 0.08)
   const weights = running.map(weightOf)
   const weightSum = weights.reduce((a, b) => a + b, 0)
   // Ledger mode: a stopped campaign keeps its share of the daily budget
@@ -102,7 +116,7 @@ export function simulateAutoDay(
     cfg.dailyBudget *
     share *
     weekdayFactor(dayKey, cfg.weekendDip ?? DEFAULT_WEEKEND_DIP) *
-    jitter(`${dayKey}:day`, cfg.dayJitter ?? DEFAULT_DAY_JITTER)
+    jitter(`${seedDay}:day`, cfg.dayJitter ?? DEFAULT_DAY_JITTER)
   const totalSpent = round2(
     Math.min(effectiveBudget * fraction, Math.max(0, budgetCap)),
   )
@@ -120,17 +134,19 @@ export function simulateAutoDay(
             revenue: c.revenue / c.cost,
           }
         : DEFAULT_PROFILE
-    const m = (metric: keyof typeof perDollar, spread: number) =>
-      spent * perDollar[metric] * jitter(`${dayKey}:${c.id}:${metric}`, spread)
+    const m = (metric: keyof typeof perDollar) =>
+      spent *
+      perDollar[metric] *
+      jitter(`${seedDay}:${c.id}:${metric}`, spreadOf[metric])
     byId.set(c.id, {
       ...c,
       cost: spent,
-      shows: Math.round(m('shows', 0.05)),
-      clicks: Math.round(m('clicks', 0.05)),
-      goals: Math.round(m('goals', 0.12)),
-      revenue: round2(m('revenue', 0.1)),
+      shows: count(m('shows')),
+      clicks: count(m('clicks')),
+      goals: count(m('goals')),
+      revenue: round2(m('revenue')),
       bounce: round2(
-        Math.min(100, Math.max(0, c.bounce * jitter(`${dayKey}:${c.id}:b`, 0.06))),
+        Math.min(100, Math.max(0, c.bounce * jitter(`${seedDay}:${c.id}:b`, 0.06))),
       ),
     })
   })
@@ -601,6 +617,8 @@ const LEDGER_KEYS = [
   'archive',
   'bank',
   'allTime',
+  'seedSalt',
+  'seedFrom',
 ] as const
 
 function pickLedger(a: AutoSpend | undefined): Partial<AutoSpend> {
@@ -691,6 +709,56 @@ function resumeAutoSpend(a: AutoSpend, now: Date): AutoSpend {
  * field is applied as the operator's delta over the snapshot they loaded.
  */
 export function applyAutoSpendSave(
+  next: SiteState,
+  prevRaw: SiteState,
+  now: Date,
+): SiteState {
+  return foldYesterdayOverrides(mergeAutoSpendSave(next, prevRaw, now), prevRaw, now)
+}
+
+/**
+ * A «Вчера» override the operator just CHANGED (ledger mode, day already
+ * frozen) is written into yesterday's day record instead of staying a
+ * display-only overlay — so «Неделя», «Месяц» and «Всё время» include the
+ * corrected numbers too. «Вчера» itself shows exactly the same figures as
+ * before. Only the statistics move: the balance (money actually deducted)
+ * is never rewritten retroactively. Untouched overrides stay as they are,
+ * so nothing already shown shifts on deploy.
+ */
+function foldYesterdayOverrides(
+  out: SiteState,
+  prevRaw: SiteState,
+  now: Date,
+): SiteState {
+  const a = out.autoSpend
+  const ov = out.periodOverrides?.yesterday
+  if (!a?.historyFrom || !ov) return out
+  const yKey = shiftDay(ledgerTodayKey(a, now), -1)
+  const rec = a.days?.[yKey]
+  if (!rec) return out
+  const prevOv = prevRaw.periodOverrides?.yesterday ?? {}
+  const remaining = { ...ov }
+  const campaigns = { ...rec.campaigns }
+  let changed = false
+  for (const [id, o] of Object.entries(ov)) {
+    if (JSON.stringify(o) === JSON.stringify(prevOv[id] ?? null)) continue
+    campaigns[id] = { ...(campaigns[id] ?? ZERO_METRICS), ...o }
+    delete remaining[id]
+    changed = true
+  }
+  if (!changed) return out
+  const po = { ...(out.periodOverrides ?? {}) }
+  if (Object.keys(remaining).length > 0) po.yesterday = remaining
+  else delete po.yesterday
+  const { periodOverrides: _po, ...rest } = out
+  return {
+    ...rest,
+    ...(Object.keys(po).length > 0 ? { periodOverrides: po } : {}),
+    autoSpend: { ...a, days: { ...a.days, [yKey]: { ...rec, campaigns } } },
+  }
+}
+
+function mergeAutoSpendSave(
   next: SiteState,
   prevRaw: SiteState,
   now: Date,

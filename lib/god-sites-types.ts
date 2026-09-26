@@ -114,6 +114,13 @@ export interface AutoSpend {
    * only spend AFTER the baseline accrues on top of it.
    */
   allTime?: AllTimeBaseline
+  /**
+   * Per-site seed salt (= site id, stamped by the DB layer). Days on/after
+   * `seedFrom` are simulated with it — own daily rhythm per site, fractional
+   * counts, livelier ratios. Earlier days keep the historical seeds.
+   */
+  seedSalt?: string
+  seedFrom?: string
 }
 
 export interface AllTimeBaseline {

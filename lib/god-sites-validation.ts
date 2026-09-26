@@ -201,12 +201,18 @@ function sanitizeMetrics(raw: unknown): DayMetrics {
   const m = (raw ?? {}) as Record<string, unknown>
   return {
     cost: round2(num(m.cost)),
-    shows: Math.round(num(m.shows)),
-    clicks: Math.round(num(m.clicks)),
-    goals: Math.round(num(m.goals)),
+    // Ledger records keep fractional counts (rounded once, on the period
+    // total) — whole numbers from older records pass through unchanged.
+    shows: round4(num(m.shows)),
+    clicks: round4(num(m.clicks)),
+    goals: round4(num(m.goals)),
     revenue: round2(num(m.revenue)),
     bounce: Math.min(100, round2(num(m.bounce))),
   }
+}
+
+function round4(v: number): number {
+  return Math.round(v * 10_000) / 10_000
 }
 
 function sanitizeMetricsMap(raw: unknown): Record<string, DayMetrics> {
@@ -267,6 +273,12 @@ function sanitizeLedger(a: Record<string, unknown>): Partial<AutoSpend> {
         minus: sanitizeMetricsMap(t.minus),
       }
     }
+  }
+  const seedSalt = str(a.seedSalt).trim().slice(0, 64)
+  const seedFrom = str(a.seedFrom).trim()
+  if (seedSalt && DAY_RE.test(seedFrom)) {
+    out.seedSalt = seedSalt
+    out.seedFrom = seedFrom
   }
   return out
 }
