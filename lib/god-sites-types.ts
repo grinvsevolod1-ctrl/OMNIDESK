@@ -87,6 +87,47 @@ export interface AutoSpend {
   weekendDip?: number
   /** Deterministic day-to-day budget jitter amplitude 0..0.2. */
   dayJitter?: number
+  /* ---- Frozen ledger (server-owned, never taken from the editor) ---- */
+  /**
+   * Day (panel TZ) the frozen ledger started. Present = "ledger mode": past
+   * days come from `days`/`archive` (never re-simulated with new settings),
+   * today = `bank` + live delta, and a stopped campaign's budget share is
+   * NOT redistributed to the others. Absent = legacy projection (bit-exact
+   * with the numbers the vitrine showed before the ledger existed).
+   */
+  historyFrom?: string
+  /** Finished days (last LEDGER_DAYS) — exactly what the vitrine showed. */
+  days?: Record<string, AutoDayRecord>
+  /** Per-campaign totals of finished days older than the `days` window. */
+  archive?: Record<string, DayMetrics>
+  /**
+   * Today's already-fixed part (deducted from `balance` at bank time):
+   * spend up to `fraction` of the day under the settings in force until the
+   * last change. Live today = bank + delta(fraction → now) under current
+   * settings — so a settings change / disable never rewrites what's shown.
+   */
+  bank?: AutoDayBank
+}
+
+/** Per-campaign metrics of one day (or a sum of days). */
+export interface DayMetrics {
+  cost: number
+  shows: number
+  clicks: number
+  goals: number
+  revenue: number
+  /** Spend-weighted average. */
+  bounce: number
+}
+
+export interface AutoDayRecord {
+  spent: number
+  campaigns: Record<string, DayMetrics>
+}
+
+export interface AutoDayBank extends AutoDayRecord {
+  day: string
+  fraction: number
 }
 
 /**

@@ -2,8 +2,13 @@ import 'server-only'
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto'
 import { query } from './db'
-import { autoDayKey, daysBetween, round2 } from './god-sites-sim'
-import { simulateAutoDay } from './god-sites-projection'
+import { autoDayKey, round2 } from './god-sites-sim'
+import {
+  applyAutoSpendSave,
+  freezeToday,
+  rolloverAutoSpend,
+  rolloverDue,
+} from './god-sites-projection'
 import { MAX_NUM, sanitizeState, str } from './god-sites-validation'
 import type { GodSite, MutationResult, SiteState } from './god-sites-types'
 
@@ -235,55 +240,29 @@ export async function commitAutoSpend(
   now: Date = new Date(),
 ): Promise<GodSite> {
   const a = site.state.autoSpend
-  if (!a?.enabled || a.dailyBudget <= 0) return site
+  if (!a || !rolloverDue(site.state, now)) return site
   const today = autoDayKey(now, a.tzOffsetHours ?? 3)
-  if (a.lastCommittedDay === today) return site
 
   // Collapse the concurrent-first-read burst to a single DB attempt per
-  // (site, day) per instance (see commitGate above). Snapshot is still valid.
+  // (site, day) per instance (see commitGate above).
   const nowMs = now.getTime()
-  if (commitRecentlyTried(site.id, today, nowMs)) return site
+  if (commitRecentlyTried(site.id, today, nowMs)) {
+    // Lost the burst: re-read instead of serving the pre-rollover snapshot
+    // (it would show yesterday not yet deducted → the midnight balance jump).
+    return (await getSiteById(site.id)) ?? site
+  }
   markCommitTried(site.id, today, nowMs)
 
-  const res = await mutateSite(site.id, null, (s) => {
-    const cfg = s.autoSpend
-    if (!cfg?.enabled || cfg.dailyBudget <= 0) return { invalid: 'auto off' }
-    const t = autoDayKey(now, cfg.tzOffsetHours ?? 3)
-    if (cfg.lastCommittedDay === t) return { invalid: 'already committed' }
-    const days = cfg.lastCommittedDay
-      ? Math.min(daysBetween(cfg.lastCommittedDay, t), 366)
-      : 0 // first enable: start the clock, nothing to commit yet
-    // Sum the SAME per-day simulations the vitrine showed for each finished
-    // day (weekday rhythm + jitter included) — the deduction always matches
-    // what the page displayed, instead of a flat days × dailyBudget.
-    let owed = 0
-    if (days > 0 && cfg.lastCommittedDay) {
-      const startMs = Date.parse(`${cfg.lastCommittedDay}T12:00:00Z`)
-      for (let j = 0; j < days; j++) {
-        const dayKey = new Date(startMs + j * 86_400_000)
-          .toISOString()
-          .slice(0, 10)
-        owed += simulateAutoDay(s, dayKey, 1, Number.POSITIVE_INFINITY)
-          .totalSpent
-      }
-    }
-    const spent = round2(Math.min(owed, s.balance))
-    return {
-      ...s,
-      balance: round2(s.balance - spent),
-      autoSpend: {
-        ...cfg,
-        lastCommittedDay: t,
-        // Anchor for aggregates: normally stamped by saveSiteState at enable;
-        // legacy sites adopt the earliest day we know about.
-        startDay: cfg.startDay ?? cfg.lastCommittedDay ?? t,
-        spentToDate: round2((cfg.spentToDate ?? 0) + spent),
-      },
-    }
-  })
-  return res.ok
-    ? { ...site, state: res.state, revision: res.revision }
-    : site // benign no-op or lost race — snapshot is still valid
+  // Day math lives in rolloverAutoSpend (pure): the deduction equals exactly
+  // what the vitrine showed for each finished day, and the day is frozen
+  // into the ledger so later edits never rewrite it. Never moves the
+  // committed day backwards (TZ shifted back) — no double charge.
+  const res = await mutateSite(site.id, null, (s) =>
+    rolloverAutoSpend(s, now) ?? { invalid: 'already committed' },
+  )
+  if (res.ok) return { ...site, state: res.state, revision: res.revision }
+  if (res.error === 'conflict') return (await getSiteById(site.id)) ?? site
+  return site
 }
 
 /**
@@ -300,10 +279,18 @@ export async function topUpBalance(
   if (!Number.isFinite(a) || a <= 0 || a > MAX_NUM) {
     return { ok: false, error: 'invalid', message: 'Некорректная сумма' }
   }
-  return mutateSite(id, null, (s) => ({
-    ...s,
-    balance: round2(Math.min(s.balance + a, MAX_NUM)),
-  }))
+  const now = new Date()
+  return mutateSite(id, null, (s) => {
+    // Bank today's burnt part first: with an empty balance the live spend is
+    // capped, and new money must only fund spend from NOW on — otherwise the
+    // whole day's curve would "catch up" instantly on top-up.
+    const rolled = rolloverAutoSpend(s, now) ?? s
+    const frozen = freezeToday(rolled, now)
+    return {
+      ...frozen,
+      balance: round2(Math.min(frozen.balance + a, MAX_NUM)),
+    }
+  })
 }
 
 /**
@@ -408,7 +395,7 @@ export async function createSite(
   const apiKey = generateApiKey()
   // A brand-new site with auto-spend already on gets its anchor immediately
   // (prev = empty state → off→on transition).
-  const state = stampAutoSpendStart(
+  const state = applyAutoSpendSave(
     sanitizeState(initialState),
     sanitizeState(undefined),
     new Date(),
@@ -483,37 +470,10 @@ export async function deleteSite(id: string): Promise<boolean> {
 }
 
 /**
- * Stamp the auto-spend anchor on the off→on transition. Re-enabling is a
- * FRESH START by design: new startDay (= today), commit clock reset to today
- * (today's partial is live-projected, tomorrow's first read commits it) and
- * the spent counter zeroed — aggregates begin from the moment of the switch,
- * never from stale history of a previous run.
- */
-function stampAutoSpendStart(
-  next: SiteState,
-  prev: SiteState,
-  now: Date,
-): SiteState {
-  const a = next.autoSpend
-  if (!a?.enabled || a.dailyBudget <= 0) return next
-  const wasEnabled =
-    prev.autoSpend?.enabled === true && (prev.autoSpend?.dailyBudget ?? 0) > 0
-  if (wasEnabled) return next // already running — keep its anchor untouched
-  const today = autoDayKey(now, a.tzOffsetHours ?? 3)
-  return {
-    ...next,
-    autoSpend: {
-      ...a,
-      startDay: today,
-      lastCommittedDay: today,
-      spentToDate: 0,
-    },
-  }
-}
-
-/**
  * God-panel full-state save (the "Сайты" tab editor). Same optimistic locking
  * as page mutations so a panel edit can't silently clobber a page edit.
+ * applyAutoSpendSave freezes today's burnt part before any setting / campaign
+ * change and keeps the server-owned ledger — see god-sites-projection.ts.
  */
 export async function saveSiteState(
   id: string,
@@ -522,7 +482,7 @@ export async function saveSiteState(
 ): Promise<MutationResult> {
   const now = new Date()
   return mutateSite(id, expected, (prev) =>
-    stampAutoSpendStart(sanitizeState(rawState), prev, now),
+    applyAutoSpendSave(sanitizeState(rawState), prev, now),
   )
 }
 

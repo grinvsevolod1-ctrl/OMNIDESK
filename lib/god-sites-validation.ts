@@ -2,6 +2,9 @@ import { round2, SPEND_PROFILES, type SpendProfile } from './god-sites-sim'
 import {
   PERIOD_METRIC_FIELDS,
   SITE_PERIODS,
+  type AutoDayRecord,
+  type AutoSpend,
+  type DayMetrics,
   type PeriodOverride,
   type SiteCampaign,
   type SiteRecommendation,
@@ -186,7 +189,73 @@ export function sanitizeState(raw: unknown): SiteState {
       ...(a.dayJitter !== undefined
         ? { dayJitter: clamp01(a.dayJitter, 0.2) }
         : {}),
+      ...sanitizeLedger(a),
     }
   }
   return state
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+function sanitizeMetrics(raw: unknown): DayMetrics {
+  const m = (raw ?? {}) as Record<string, unknown>
+  return {
+    cost: round2(num(m.cost)),
+    shows: Math.round(num(m.shows)),
+    clicks: Math.round(num(m.clicks)),
+    goals: Math.round(num(m.goals)),
+    revenue: round2(num(m.revenue)),
+    bounce: Math.min(100, round2(num(m.bounce))),
+  }
+}
+
+function sanitizeMetricsMap(raw: unknown): Record<string, DayMetrics> {
+  const out: Record<string, DayMetrics> = {}
+  if (!raw || typeof raw !== 'object') return out
+  for (const [id, m] of Object.entries(raw as Record<string, unknown>).slice(
+    0,
+    MAX_CAMPAIGNS * 2,
+  )) {
+    if (m && typeof m === 'object') out[str(id)] = sanitizeMetrics(m)
+  }
+  return out
+}
+
+function sanitizeDayRecord(raw: unknown): AutoDayRecord {
+  const r = (raw ?? {}) as Record<string, unknown>
+  return { spent: round2(num(r.spent)), campaigns: sanitizeMetricsMap(r.campaigns) }
+}
+
+/**
+ * Frozen auto-spend ledger (server-owned). Kept ONLY when present, so
+ * pre-ledger states stay byte-identical after a sanitize round-trip.
+ */
+function sanitizeLedger(a: Record<string, unknown>): Partial<AutoSpend> {
+  const out: Partial<AutoSpend> = {}
+  const historyFrom = str(a.historyFrom).trim()
+  if (DAY_RE.test(historyFrom)) out.historyFrom = historyFrom
+  if (a.days && typeof a.days === 'object') {
+    const days: Record<string, AutoDayRecord> = {}
+    for (const [k, v] of Object.entries(a.days as Record<string, unknown>)) {
+      if (DAY_RE.test(k) && v && typeof v === 'object') {
+        days[k] = sanitizeDayRecord(v)
+      }
+    }
+    out.days = days
+  }
+  if (a.archive && typeof a.archive === 'object') {
+    out.archive = sanitizeMetricsMap(a.archive)
+  }
+  if (a.bank && typeof a.bank === 'object') {
+    const b = a.bank as Record<string, unknown>
+    const day = str(b.day).trim()
+    if (DAY_RE.test(day)) {
+      out.bank = {
+        day,
+        fraction: Math.max(0, Math.min(1, num(b.fraction))),
+        ...sanitizeDayRecord(b),
+      }
+    }
+  }
+  return out
 }
