@@ -5,6 +5,7 @@ import { query } from './db'
 import { autoDayKey, round2 } from './god-sites-sim'
 import {
   applyAutoSpendSave,
+  SiteSaveInvalid,
   freezeToday,
   rolloverAutoSpend,
   rolloverDue,
@@ -433,6 +434,7 @@ export async function createSite(
     sanitizeState(initialState),
     sanitizeState(undefined),
     new Date(),
+    { fold: false },
   )
   const rows = await query<SiteRow>(
     `INSERT INTO god_sites (slug, title, api_key_hash, api_key_plain, state)
@@ -515,9 +517,14 @@ export async function saveSiteState(
   expected: number | null,
 ): Promise<MutationResult> {
   const now = new Date()
-  return mutateSite(id, expected, (prev) =>
-    applyAutoSpendSave(sanitizeState(rawState), prev, now),
-  )
+  return mutateSite(id, expected, (prev) => {
+    try {
+      return applyAutoSpendSave(sanitizeState(rawState), prev, now)
+    } catch (e) {
+      if (e instanceof SiteSaveInvalid) return { invalid: e.message }
+      throw e
+    }
+  })
 }
 
 export async function renameSite(

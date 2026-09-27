@@ -3,7 +3,11 @@
 import { useMemo, useState } from 'react'
 import { History, Loader2 } from 'lucide-react'
 import { nf } from '@/components/admin/secret-sites/site-editor-helpers'
-import { stateForPeriod, type AllTimeEntry } from '@/lib/god-sites-projection'
+import {
+  resolveAllTimeEntries,
+  stateForPeriod,
+  type AllTimeEntry,
+} from '@/lib/god-sites-projection'
 import type { SiteState } from '@/lib/god-sites-types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -77,6 +81,16 @@ export function SiteAllTimeCard({
   const entries = buildEntries()
   const invalid = entries === null
   const empty = !invalid && Object.keys(entries).length === 0
+  const preview = useMemo(
+    () =>
+      entries && !empty
+        ? resolveAllTimeEntries(state, entries, new Date())
+        : { totals: {}, errors: {} },
+    // entries is rebuilt from draft each render; draft is the real dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state, draft],
+  )
+  const hasErrors = Object.keys(preview.errors).length > 0
 
   return (
     <Card className="flex flex-col gap-4 p-4">
@@ -87,9 +101,10 @@ export function SiteAllTimeCard({
         </div>
         <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
           Впишите итог за всё время — он станет единственно верным, а всё, что
-          скрутится после, будет прибавляться к нему. Пустое поле оставляет
-          текущее значение. «Сегодня», «Вчера», «Неделя», «Месяц» и баланс не
-          меняются.
+          скрутится после, будет прибавляться к нему. Достаточно вписать
+          расход — показы, клики, конверсии и доход пересчитаются в той же
+          пропорции (CTR, CPC, CR не меняются). Итог не может быть меньше, чем
+          за месяц. «Сегодня», «Вчера», «Неделя», «Месяц» и баланс не меняются.
           {setAt && (
             <>
               {' '}
@@ -112,6 +127,8 @@ export function SiteAllTimeCard({
         <div className="flex flex-col gap-3">
           {state.campaigns.map((c) => {
             const cur = current.get(c.id)
+            const planned = preview.totals[c.id]
+            const error = preview.errors[c.id]
             return (
               <div
                 key={c.id}
@@ -132,7 +149,7 @@ export function SiteAllTimeCard({
                         <Input
                           id={inputId}
                           inputMode="decimal"
-                          placeholder={nf.format(cur?.[f.key] ?? 0)}
+                          placeholder={nf.format(planned?.[f.key] ?? cur?.[f.key] ?? 0)}
                           value={draft[c.id]?.[f.key] ?? ''}
                           onChange={(e) =>
                             setDraft((d) => ({
@@ -146,6 +163,11 @@ export function SiteAllTimeCard({
                     )
                   })}
                 </div>
+                {error && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {error}
+                  </p>
+                )}
               </div>
             )
           })}
@@ -156,13 +178,15 @@ export function SiteAllTimeCard({
         <p className="text-xs text-muted-foreground">
           {invalid
             ? 'Только неотрицательные числа'
-            : 'Подсказка в поле — то, что витрина показывает сейчас'}
+            : empty
+              ? 'Подсказка в поле — то, что витрина показывает сейчас'
+              : 'Подсказка в пустых полях — что будет после фиксации'}
         </p>
         <Button
           type="button"
           size="sm"
           onClick={submit}
-          disabled={pending || invalid || empty}
+          disabled={pending || invalid || empty || hasErrors}
         >
           {pending && <Loader2 className="size-4 animate-spin" />}
           Зафиксировать

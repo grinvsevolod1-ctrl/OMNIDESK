@@ -186,19 +186,20 @@ describe('all-time baseline', () => {
     const { setAllTimeBaseline } = await import('./god-sites-projection')
     const s0 = legacy()
     const before = snapshot(s0, evening)
-    const s1 = setAllTimeBaseline(s0, { '111': { cost: 12345 } }, evening)
+    const s1 = setAllTimeBaseline(s0, { '111': { cost: 12345 } }, evening) as SiteState
     const after = snapshot(s1, evening)
     // today/yesterday/week/month identical
     expect(after.slice(0, 4)).toEqual(before.slice(0, 4))
     const all = stateForPeriod(s1, 'all', evening).campaigns
     expect(all.find((c) => c.id === '111')!.cost).toBe(12345)
-    // untouched campaign and untouched fields keep what was shown
+    // untouched campaign keeps what was shown
     expect(all.find((c) => c.id === '222')).toEqual(
       before[4].campaigns.find((c) => c.id === '222'),
     )
-    expect(all.find((c) => c.id === '111')!.shows).toBe(
-      before[4].campaigns.find((c) => c.id === '111')!.shows,
-    )
+    // blank fields follow the typed cost — same CPM as before
+    const old = before[4].campaigns.find((c) => c.id === '111')!
+    const k = 12345 / old.cost
+    expect(all.find((c) => c.id === '111')!.shows).toBe(Math.round(old.shows * k))
     expect(liveBalance(s1, evening)).toBe(liveBalance(s0, evening))
     // next day: all-time grows by exactly what the ledger adds
     const later = new Date('2026-08-14T17:30:00Z')
@@ -217,7 +218,7 @@ describe('all-time baseline', () => {
 
   it('survives sanitize round-trip', async () => {
     const { setAllTimeBaseline } = await import('./god-sites-projection')
-    const s1 = setAllTimeBaseline(legacy(), { '111': { cost: 999 } }, evening)
+    const s1 = setAllTimeBaseline(legacy(), { '111': { cost: 99999 } }, evening) as SiteState
     const s2 = sanitizeState(JSON.parse(JSON.stringify(s1)))
     expect(stateForPeriod(s2, 'all', evening)).toEqual(
       stateForPeriod(s1, 'all', evening),

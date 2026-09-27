@@ -712,49 +712,231 @@ export function applyAutoSpendSave(
   next: SiteState,
   prevRaw: SiteState,
   now: Date,
+  opts: { fold?: boolean } = {},
 ): SiteState {
-  return foldYesterdayOverrides(mergeAutoSpendSave(next, prevRaw, now), prevRaw, now)
+  const merged = mergeAutoSpendSave(next, prevRaw, now)
+  if (opts.fold === false) return merged
+  const folded = foldPeriodOverrides(merged, prevRaw, now)
+  if ('invalid' in folded) throw new SiteSaveInvalid(folded.invalid)
+  return folded
+}
+
+/** A save that would make periods contradict each other (e.g. week < yesterday). */
+export class SiteSaveInvalid extends Error {}
+
+/* ------------------- Consistent metrics («всё сходится») ----------------- */
+
+const ADDITIVE = ['cost', 'shows', 'clicks', 'goals', 'revenue'] as const
+type Additive = (typeof ADDITIVE)[number]
+type PerDollar = Record<Exclude<Additive, 'cost'>, number>
+
+/** The campaign's own per-$ shape (same source simulateAutoDay uses). */
+function profileOf(c: SiteCampaign): PerDollar {
+  return c.cost > 0
+    ? {
+        shows: c.shows / c.cost,
+        clicks: c.clicks / c.cost,
+        goals: c.goals / c.cost,
+        revenue: c.revenue / c.cost,
+      }
+    : DEFAULT_PROFILE
+}
+
+/** Unrounded sum with spend-weighted bounce (ledger keeps fractional counts). */
+function sumRaw(list: (DayMetrics | undefined)[]): DayMetrics {
+  const out = { ...ZERO_METRICS }
+  let bw = 0
+  for (const m of list) {
+    if (!m) continue
+    for (const f of ADDITIVE) out[f] += m[f]
+    bw += m.bounce * m.cost
+  }
+  out.bounce = out.cost > 0 ? Math.min(100, bw / out.cost) : 0
+  return out
 }
 
 /**
- * A «Вчера» override the operator just CHANGED (ledger mode, day already
- * frozen) is written into yesterday's day record instead of staying a
- * display-only overlay — so «Неделя», «Месяц» and «Всё время» include the
- * corrected numbers too. «Вчера» itself shows exactly the same figures as
- * before. Only the statistics move: the balance (money actually deducted)
- * is never rewritten retroactively. Untouched overrides stay as they are,
- * so nothing already shown shifts on deploy.
+ * Complete a partial target so the untouched metrics follow the one the
+ * operator typed: set «Расход» = 3000 and shows/clicks/goals/revenue scale by
+ * the same factor, so CTR, CPC, CR and ДРР stay what they were. Anchor =
+ * the first typed field in cost → shows → clicks → goals → revenue order that
+ * has a non-zero current value. With nothing to scale from (all zeros) the
+ * campaign's own per-$ profile is used.
  */
-function foldYesterdayOverrides(
-  out: SiteState,
+export function consistentTarget(
+  typed: Partial<DayMetrics>,
+  cur: DayMetrics,
+  profile: PerDollar,
+): DayMetrics {
+  const given = (f: keyof DayMetrics) =>
+    typeof typed[f] === 'number' && Number.isFinite(typed[f]) && (typed[f] as number) >= 0
+  const anchor = ADDITIVE.find((f) => given(f) && cur[f] > 0)
+  const k = anchor ? (typed[anchor] as number) / cur[anchor] : null
+  let cost: number
+  if (given('cost')) cost = typed.cost as number
+  else if (k !== null) cost = cur.cost * k
+  else {
+    const f = (['shows', 'clicks', 'goals', 'revenue'] as const).find(
+      (x) => given(x) && profile[x] > 0,
+    )
+    cost = f ? (typed[f] as number) / profile[f] : cur.cost
+  }
+  const out: DayMetrics = { ...ZERO_METRICS, cost }
+  for (const f of ['shows', 'clicks', 'goals', 'revenue'] as const) {
+    out[f] = given(f)
+      ? (typed[f] as number)
+      : k !== null
+        ? cur[f] * k
+        : cost * profile[f]
+  }
+  out.bounce = given('bounce') ? Math.min(100, typed.bounce as number) : cur.bounce
+  return out
+}
+
+/**
+ * Spread `need` over the given days proportionally to what each day already
+ * had (evenly when they had nothing), keeping money to the cent: rounding
+ * leftovers land on the biggest day so the period total is exact.
+ */
+function distribute(
+  list: (DayMetrics | undefined)[],
+  need: DayMetrics,
+  bounce: number | undefined,
+): DayMetrics[] {
+  const n = list.length
+  const out = list.map((m) => ({ ...(m ?? ZERO_METRICS) }))
+  for (const f of ADDITIVE) {
+    const want = Math.max(0, need[f])
+    const total = out.reduce((s, m) => s + m[f], 0)
+    for (const m of out) m[f] = total > 0 ? (m[f] * want) / total : want / n
+    if (f === 'cost' || f === 'revenue') {
+      for (const m of out) m[f] = round2(m[f])
+      const diff = round2(want - out.reduce((s, m) => s + m[f], 0))
+      if (diff !== 0) {
+        const big = out.reduce((b, m) => (m[f] > b[f] ? m : b), out[0])
+        big[f] = Math.max(0, round2(big[f] + diff))
+      }
+    } else {
+      for (const m of out) m[f] = Math.round(m[f] * 10_000) / 10_000
+    }
+  }
+  for (const m of out) m.bounce = round2(bounce ?? (m.bounce || need.bounce))
+  return out
+}
+
+/**
+ * Nested period windows (days back from today). Editing a longer period
+ * rewrites only the days that are NOT part of a shorter one, so what the
+ * operator already sees for «Вчера» / «Неделя» never moves when they fix
+ * «Неделя» / «Месяц»: week = today + yesterday + days 2..6, month = week +
+ * days 7..29. «Всё время» contains them all, so it follows automatically.
+ */
+const FOLD_WINDOWS = [
+  { period: 'yesterday', label: 'Вчера', from: 1, to: 1, today: false },
+  { period: 'week', label: 'Неделя', from: 2, to: 6, today: true },
+  { period: 'month', label: 'Месяц', from: 7, to: 29, today: true },
+] as const
+
+const FIELD_LABEL: Record<Additive, string> = {
+  cost: 'расход',
+  shows: 'показы',
+  clicks: 'клики',
+  goals: 'конверсии',
+  revenue: 'доход',
+}
+
+/**
+ * Period overrides the operator just CHANGED for «Вчера / Неделя / Месяц»
+ * become real history instead of display-only overlays: the target is made
+ * self-consistent (consistentTarget) and written into the frozen day
+ * records, so every longer period — up to «Всё время» — includes it and the
+ * numbers agree everywhere. Untouched overrides stay as they are (nothing
+ * already shown moves on deploy). The balance — money actually deducted — is
+ * never rewritten retroactively; only the statistics change.
+ */
+function foldPeriodOverrides(
+  input: SiteState,
   prevRaw: SiteState,
   now: Date,
-): SiteState {
-  const a = out.autoSpend
-  const ov = out.periodOverrides?.yesterday
-  if (!a?.historyFrom || !ov) return out
-  const yKey = shiftDay(ledgerTodayKey(a, now), -1)
-  const rec = a.days?.[yKey]
-  if (!rec) return out
-  const prevOv = prevRaw.periodOverrides?.yesterday ?? {}
-  const remaining = { ...ov }
-  const campaigns = { ...rec.campaigns }
-  let changed = false
-  for (const [id, o] of Object.entries(ov)) {
-    if (JSON.stringify(o) === JSON.stringify(prevOv[id] ?? null)) continue
-    campaigns[id] = { ...(campaigns[id] ?? ZERO_METRICS), ...o }
-    delete remaining[id]
-    changed = true
+): SiteState | { invalid: string } {
+  const changed = new Map<string, string[]>()
+  for (const w of FOLD_WINDOWS) {
+    const ov = input.periodOverrides?.[w.period] ?? {}
+    const prev = prevRaw.periodOverrides?.[w.period] ?? {}
+    const ids = Object.keys(ov).filter(
+      (id) =>
+        Object.keys(ov[id] ?? {}).length > 0 &&
+        JSON.stringify(ov[id]) !== JSON.stringify(prev[id] ?? null),
+    )
+    if (ids.length > 0) changed.set(w.period, ids)
   }
-  if (!changed) return out
-  const po = { ...(out.periodOverrides ?? {}) }
-  if (Object.keys(remaining).length > 0) po.yesterday = remaining
-  else delete po.yesterday
-  const { periodOverrides: _po, ...rest } = out
+  if (changed.size === 0) return input
+
+  let state = input
+  if (!state.autoSpend?.historyFrom) {
+    // Legacy site: nothing frozen to fold into unless auto-spend runs —
+    // switch it to the ledger first (invisible, same as any other switch).
+    if (!isOn(state.autoSpend)) return input
+    state = freezeToday(state, now)
+  }
+  const a = state.autoSpend as AutoSpend
+  const todayKey = ledgerTodayKey(a, now)
+  const today = liveToday(state, now).campaigns
+  const on = isOn(a)
+  const days: Record<string, AutoDayRecord> = { ...(a.days ?? {}) }
+  const po: NonNullable<SiteState['periodOverrides']> = { ...(state.periodOverrides ?? {}) }
+  const byId = new Map(state.campaigns.map((c) => [c.id, c]))
+  const keysOf = (from: number, to: number) =>
+    Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => shiftDay(todayKey, -(from + i)))
+
+  for (const w of FOLD_WINDOWS) {
+    for (const id of changed.get(w.period) ?? []) {
+      const c = byId.get(id)
+      const typed = po[w.period]?.[id]
+      if (!c || !typed) continue
+      const get = (k: string) => days[k]?.campaigns[id]
+      const free = keysOf(w.from, w.to)
+      const locked = keysOf(1, w.from - 1)
+      const todayM = w.today ? today[id] : undefined
+      const hasData = [...free, ...locked].some((k) => get(k)) || Boolean(todayM)
+      // Auto-spend never touched this campaign → it shows hand-edited base
+      // numbers everywhere; keep the plain overlay there (old behaviour).
+      if (!hasData && !(on && c.status === 'running')) continue
+
+      const fixed = sumRaw([todayM, ...locked.map(get)])
+      const cur = sumRaw([fixed, sumRaw(free.map(get))])
+      const target = consistentTarget(typed, cur, profileOf(c))
+      for (const f of ADDITIVE) {
+        const explicit = typeof typed[f] === 'number'
+        if ((f === 'cost' || explicit) && target[f] + 0.005 < fixed[f]) {
+          const shorter = w.from > 1 ? FOLD_WINDOWS.find((x) => x.to === w.from - 1)?.label : null
+          const parts = [shorter ? `«${shorter}»` : null, w.today ? '«Сегодня»' : null]
+            .filter(Boolean)
+            .join(' + ')
+          return {
+            invalid: `«${w.label}» · ${c.name || id}: ${FIELD_LABEL[f]} не может быть меньше ${round2(fixed[f])} — столько уже есть в ${parts}`,
+          }
+        }
+      }
+      const need: DayMetrics = { ...target }
+      for (const f of ADDITIVE) need[f] = target[f] - fixed[f]
+      const spread = distribute(free.map(get), need, typed.bounce)
+      free.forEach((k, i) => {
+        const rec = days[k] ?? { spent: 0, campaigns: {} }
+        days[k] = { ...rec, campaigns: { ...rec.campaigns, [id]: spread[i] } }
+      })
+      const rest = { ...(po[w.period] ?? {}) }
+      delete rest[id]
+      if (Object.keys(rest).length > 0) po[w.period] = rest
+      else delete po[w.period]
+    }
+  }
+
+  const { periodOverrides: _po, ...base } = state
   return {
-    ...rest,
+    ...base,
     ...(Object.keys(po).length > 0 ? { periodOverrides: po } : {}),
-    autoSpend: { ...a, days: { ...a.days, [yKey]: { ...rec, campaigns } } },
+    autoSpend: { ...a, days },
   }
 }
 
@@ -866,18 +1048,23 @@ function rawAllTime(state: SiteState, now: Date): Acc {
   )
 }
 
-/** shown = base + max(0, ledger now − ledger at baseline time), per campaign. */
+/**
+ * shown = base + (ledger now − ledger at baseline time), per campaign. The
+ * delta may be negative: a later «Неделя / Месяц» correction that LOWERS
+ * past days lowers «Всё время» by the same amount, so all ≥ month ≥ week
+ * keeps holding. Clamped at 0 only as a floor.
+ */
 function applyAllTimeBaseline(acc: Acc, b: NonNullable<AutoSpend['allTime']>): void {
   for (const [id, base] of Object.entries(b.base)) {
     const cur = acc.get(id) ?? { cost: 0, shows: 0, clicks: 0, goals: 0, revenue: 0, bw: 0 }
     const m = b.minus[id] ?? ZERO_METRICS
     acc.set(id, {
-      cost: base.cost + Math.max(0, cur.cost - m.cost),
-      shows: base.shows + Math.max(0, cur.shows - m.shows),
-      clicks: base.clicks + Math.max(0, cur.clicks - m.clicks),
-      goals: base.goals + Math.max(0, cur.goals - m.goals),
-      revenue: base.revenue + Math.max(0, cur.revenue - m.revenue),
-      bw: base.bounce * base.cost + Math.max(0, cur.bw - m.bounce * m.cost),
+      cost: Math.max(0, base.cost + cur.cost - m.cost),
+      shows: Math.max(0, base.shows + cur.shows - m.shows),
+      clicks: Math.max(0, base.clicks + cur.clicks - m.clicks),
+      goals: Math.max(0, base.goals + cur.goals - m.goals),
+      revenue: Math.max(0, base.revenue + cur.revenue - m.revenue),
+      bw: Math.max(0, base.bounce * base.cost + cur.bw - m.bounce * m.cost),
     })
   }
 }
@@ -900,19 +1087,73 @@ function accToMetrics(acc: Acc): Record<string, DayMetrics> {
 export type AllTimeEntry = Partial<Omit<DayMetrics, 'bounce'>> & { bounce?: number }
 
 /**
+ * Resolve typed «Всё время» entries into full, self-consistent totals: blank
+ * fields follow the typed ones (same CTR/CPC/CR/ДРР as shown now) and can
+ * never drop below «Месяц» (all time contains the month). A typed value
+ * below the month is an error — returned per campaign so the UI can show it
+ * before submitting. Pure: the panel card and the server use the same math.
+ */
+export function resolveAllTimeEntries(
+  state: SiteState,
+  entries: Record<string, AllTimeEntry>,
+  now: Date,
+): { totals: Record<string, DayMetrics>; errors: Record<string, string> } {
+  const shownAll = new Map(stateForPeriod(state, 'all', now).campaigns.map((c) => [c.id, c]))
+  const shownMonth = new Map(
+    stateForPeriod(state, 'month', now).campaigns.map((c) => [c.id, c]),
+  )
+  const totals: Record<string, DayMetrics> = {}
+  const errors: Record<string, string> = {}
+  for (const c of state.campaigns) {
+    const e = entries[c.id]
+    if (!e) continue
+    const typed = Object.fromEntries(
+      Object.entries(e).filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && v >= 0),
+    ) as Partial<DayMetrics>
+    if (Object.keys(typed).length === 0) continue
+    const cur = shownAll.get(c.id)
+    const month = shownMonth.get(c.id)
+    const t = consistentTarget(typed, cur ? metricsOf(cur) : ZERO_METRICS, profileOf(c))
+    for (const f of ADDITIVE) {
+      const floor = month?.[f] ?? 0
+      if (typeof typed[f] === 'number' && (typed[f] as number) + 0.005 < floor) {
+        errors[c.id] = `${FIELD_LABEL[f]} за всё время не может быть меньше, чем за месяц (${round2(floor)})`
+        break
+      }
+      t[f] = Math.max(t[f], floor)
+    }
+    totals[c.id] = {
+      cost: round2(t.cost),
+      shows: Math.round(t.shows),
+      clicks: Math.round(t.clicks),
+      goals: Math.round(t.goals),
+      revenue: round2(t.revenue),
+      bounce: round2(Math.min(100, t.bounce)),
+    }
+  }
+  return { totals, errors }
+}
+
+/**
  * Set the «Всё время» figures by hand. Each entry becomes the authoritative
  * all-time total as of `now`; everything the ledger accrues afterwards is
- * added on top. Only listed fields change — omitted ones keep the number the
- * vitrine shows right now. Campaigns not listed keep their previous
- * baseline. Other periods (today/yesterday/week/month) and the balance are
- * untouched. Legacy states are frozen into the ledger first (invisible —
- * same as any other ledger switch).
+ * added on top. Blank fields are derived from the typed ones so ratios stay
+ * consistent (see resolveAllTimeEntries). Campaigns not listed keep their
+ * previous baseline. Other periods (today/yesterday/week/month) and the
+ * balance are untouched. Legacy states are frozen into the ledger first
+ * (invisible — same as any other ledger switch).
  */
 export function setAllTimeBaseline(
   input: SiteState,
   entries: Record<string, AllTimeEntry>,
   now: Date,
-): SiteState {
+): SiteState | { invalid: string } {
+  const pre = resolveAllTimeEntries(input, entries, now)
+  const firstError = Object.entries(pre.errors)[0]
+  if (firstError) {
+    const c = input.campaigns.find((x) => x.id === firstError[0])
+    return { invalid: `${c?.name || firstError[0]}: ${firstError[1]}` }
+  }
   let state = rolloverAutoSpend(input, now) ?? input
   if (!state.autoSpend?.historyFrom) {
     if (isOn(state.autoSpend)) {
@@ -930,31 +1171,15 @@ export function setAllTimeBaseline(
     }
   }
   const a = state.autoSpend as AutoSpend
-  const ids = new Set(state.campaigns.map((c) => c.id))
-  // What the vitrine shows for «Всё время» right now (incl. old baseline +
-  // hand overrides) — the default for any field the operator left blank.
-  const shown = new Map(
-    stateForPeriod(state, 'all', now).campaigns.map((c) => [c.id, c]),
-  )
+  // Re-resolve on the ledger-switched state (identical numbers — the switch
+  // is invisible — but keeps one source of truth).
+  const { totals } = resolveAllTimeEntries(state, entries, now)
   const raw = accToMetrics(rawAllTime(state, now))
   const base = { ...(a.allTime?.base ?? {}) }
   const minus = { ...(a.allTime?.minus ?? {}) }
   const overridesAll = { ...(state.periodOverrides?.all ?? {}) }
-  for (const [id, e] of Object.entries(entries)) {
-    if (!ids.has(id)) continue
-    const cur = shown.get(id)
-    const pick = (k: keyof DayMetrics) => {
-      const v = e[k]
-      return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : (cur?.[k] ?? 0)
-    }
-    base[id] = {
-      cost: round2(pick('cost')),
-      shows: Math.round(pick('shows')),
-      clicks: Math.round(pick('clicks')),
-      goals: Math.round(pick('goals')),
-      revenue: round2(pick('revenue')),
-      bounce: round2(Math.min(100, pick('bounce'))),
-    }
+  for (const [id, total] of Object.entries(totals)) {
+    base[id] = total
     minus[id] = raw[id] ?? ZERO_METRICS
     // The baseline is the single source of truth — drop the old overlay
     // that would otherwise mask it.
