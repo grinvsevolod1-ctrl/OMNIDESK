@@ -46,6 +46,7 @@ import {
 import { EmptyState } from '@/components/page-parts'
 import { SiteEditor } from '@/components/admin/secret-sites/site-editor'
 import { ReportDialog } from '@/components/admin/secret-sites/report-dialog'
+import { SitesContactCard } from '@/components/admin/secret-sites/sites-contact-card'
 import { ApiKeyDialog, CreateSiteDialog } from '@/components/admin/secret-sites/site-dialogs'
 
 /**
@@ -236,6 +237,7 @@ export function SecretSitesTab({
 
   return (
     <div className="flex flex-col gap-4">
+      <SitesContactCard />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <p className="max-w-xl text-sm text-muted-foreground text-pretty">
           Внешние страницы-витрины. Витрина только читает данные — всё, что вы

@@ -241,6 +241,11 @@ export interface PageStatePayload {
    * «Аккаунт заблокирован» screen. Absent = normal render.
    */
   blocked?: true
+  /**
+   * Global admin email (god-panel «Сайты» setting) shown in the modal the
+   * page opens on a balance click. Omitted when not configured.
+   */
+  contactEmail?: string
 }
 
 export function normalizePeriod(v: unknown): SitePeriod {

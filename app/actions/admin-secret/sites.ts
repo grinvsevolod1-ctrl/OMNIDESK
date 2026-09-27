@@ -27,6 +27,7 @@ import {
   type GodSite,
   type SiteState,
 } from '@/lib/god-sites'
+import { getSitesContactEmail, setSitesContactEmail } from '@/lib/god-sites-contact'
 import { rateLimit } from '@/lib/rate-limit'
 import { ADMIN_PATH, type ActionResult } from './shared'
 
@@ -184,6 +185,25 @@ export async function secretSetAllTimeBaselineAction(
  * itself to a white «Аккаунт заблокирован» screen at the next poll/SSE tick.
  * No revision needed — this is an emergency flip that must always win.
  */
+/** Global admin email shown by every vitrine on a balance click. */
+export async function secretGetSitesContactEmailAction(): Promise<string> {
+  await requireGod()
+  return getSitesContactEmail()
+}
+
+export async function secretSetSitesContactEmailAction(
+  email: string,
+): Promise<ActionResult & { email?: string }> {
+  await requireGod()
+  const res = await setSitesContactEmail(email)
+  if (!res.ok) return { ok: false, message: res.message }
+  return {
+    ok: true,
+    message: res.email ? 'Email сохранён' : 'Email очищен',
+    email: res.email,
+  }
+}
+
 export async function secretSetSiteBlockedAction(
   id: string,
   blocked: boolean,

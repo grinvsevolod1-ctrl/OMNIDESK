@@ -4,6 +4,7 @@ import {
   normalizePeriod,
   stateForPeriod,
 } from '@/lib/god-sites'
+import { getSitesContactEmail, withContactEmail } from '@/lib/god-sites-contact'
 import {
   bare401,
   bare404,
@@ -43,7 +44,8 @@ export async function GET(
   const period = normalizePeriod(
     new URL(req.url).searchParams.get('period') ?? undefined,
   )
-  return NextResponse.json(stateForPeriod(site.state, period), {
+  const contactEmail = await getSitesContactEmail()
+  return NextResponse.json(withContactEmail(stateForPeriod(site.state, period), contactEmail), {
     headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store' },
   })
 }

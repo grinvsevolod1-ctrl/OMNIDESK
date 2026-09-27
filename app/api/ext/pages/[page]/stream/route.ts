@@ -8,6 +8,7 @@ import {
   type GodSite,
   type SitePeriod,
 } from '@/lib/god-sites'
+import { getSitesContactEmail, withContactEmail } from '@/lib/god-sites-contact'
 import { clientIpFromHeaders } from '@/lib/client-ip'
 import { acquireStreamSlot } from '@/lib/sse-gauge'
 import {
@@ -106,6 +107,7 @@ export async function GET(
 
   const enc = new TextEncoder()
   let lastRevision = site.revision
+  let contactEmail = await getSitesContactEmail()
 
   const stream = new ReadableStream({
     start(controller) {
@@ -115,7 +117,7 @@ export async function GET(
         )
       }
       // Initial snapshot so the page renders immediately.
-      send(stateForPeriod(site.state, period))
+      send(withContactEmail(stateForPeriod(site.state, period), contactEmail))
 
       // Subscribe to the shared per-(slug, key) poller instead of running our
       // own DB loop, so many viewers of one vitrine share a single poll.
@@ -138,10 +140,22 @@ export async function GET(
         // bumps) resend it.
         const autoTicking =
           fresh.state.autoSpend?.enabled === true && period !== 'yesterday'
-        if (fresh.revision !== lastRevision || autoTicking) {
-          lastRevision = fresh.revision
-          send(stateForPeriod(fresh.state, period))
-        }
+        // The contact email is global (not part of the site revision), so a
+        // change to it must also trigger a resend. Read is cached (15 s).
+        void getSitesContactEmail()
+          .catch(() => contactEmail)
+          .then((email) => {
+            const emailChanged = email !== contactEmail
+            contactEmail = email
+            if (fresh.revision !== lastRevision || autoTicking || emailChanged) {
+              lastRevision = fresh.revision
+              try {
+                send(withContactEmail(stateForPeriod(fresh.state, period), contactEmail))
+              } catch {
+                /* stream already closed */
+              }
+            }
+          })
       })
 
       const heartbeat = setInterval(() => {
