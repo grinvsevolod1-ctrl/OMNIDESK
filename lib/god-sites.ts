@@ -2,6 +2,7 @@ import 'server-only'
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto'
 import { query } from './db'
+import { godOpen, godOpenNullable, godSeal } from './god-crypto'
 import { autoDayKey, round2 } from './god-sites-sim'
 import {
   applyAutoSpendSave,
@@ -440,7 +441,7 @@ export async function createSite(
     `INSERT INTO god_sites (slug, title, api_key_hash, api_key_plain, state)
      VALUES ($1, $2, $3, $4, $5::jsonb)
      RETURNING *`,
-    [slug, title, hashApiKey(apiKey), apiKey, JSON.stringify(state)],
+    [slug, title, hashApiKey(apiKey), godSeal(apiKey), JSON.stringify(state)],
   )
   return { site: toSite(rows[0]), apiKey }
 }
@@ -460,23 +461,23 @@ export async function getOrCreateSiteKey(id: string): Promise<string | null> {
     [id],
   )
   if (!existing[0]) return null
-  if (existing[0].api_key_plain) return existing[0].api_key_plain
+  if (existing[0].api_key_plain) return godOpen(existing[0].api_key_plain)
 
   const candidate = generateApiKey()
-  const updated = await query<{ api_key_plain: string }>(
+  const updated = await query<{ id: string }>(
     `UPDATE god_sites
         SET api_key_plain = $2, api_key_hash = $3, updated_at = now()
       WHERE id = $1 AND api_key_plain IS NULL
-      RETURNING api_key_plain`,
-    [id, candidate, hashApiKey(candidate)],
+      RETURNING id`,
+    [id, godSeal(candidate), hashApiKey(candidate)],
   )
-  if (updated[0]) return updated[0].api_key_plain
+  if (updated[0]) return candidate
   // Lost the race — another request minted first; use theirs.
   const winner = await query<{ api_key_plain: string | null }>(
     `SELECT api_key_plain FROM god_sites WHERE id = $1`,
     [id],
   )
-  return winner[0]?.api_key_plain ?? null
+  return godOpenNullable(winner[0]?.api_key_plain ?? null)
 }
 
 /**
@@ -492,7 +493,7 @@ export async function rotateSiteKey(
     `UPDATE god_sites
         SET api_key_hash = $2, api_key_plain = $3, updated_at = now()
       WHERE id = $1 RETURNING id`,
-    [id, hashApiKey(apiKey), apiKey],
+    [id, hashApiKey(apiKey), godSeal(apiKey)],
   )
   return rows[0] ? { apiKey } : null
 }

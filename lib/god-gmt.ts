@@ -22,6 +22,7 @@ import 'server-only'
  */
 
 import { query } from './db'
+import { godOpen, godSeal } from './god-crypto'
 
 const GMT_BASE_URL = 'https://api.getmytg.com'
 
@@ -48,7 +49,7 @@ export async function getGmtApiKey(): Promise<string | null> {
       `SELECT value FROM god_settings WHERE key = $1`,
       [GMT_KEY_SETTING],
     )
-    dbKey = rows[0]?.value?.trim() || null
+    dbKey = rows[0]?.value ? godOpen(rows[0].value).trim() || null : null
   } catch {
     // Таблицы ещё нет (миграция не применена) — работаем через env.
   }
@@ -65,7 +66,7 @@ export async function setGmtApiKey(key: string): Promise<void> {
     `INSERT INTO god_settings (key, value, updated_at)
      VALUES ($1, $2, now())
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-    [GMT_KEY_SETTING, trimmed],
+    [GMT_KEY_SETTING, godSeal(trimmed)],
   )
   keyCache = null
 }
@@ -90,7 +91,7 @@ export async function getGmtKeyInfo(): Promise<{
       `SELECT value FROM god_settings WHERE key = $1`,
       [GMT_KEY_SETTING],
     )
-    dbKey = rows[0]?.value?.trim() || null
+    dbKey = rows[0]?.value ? godOpen(rows[0].value).trim() || null : null
   } catch {
     /* таблицы нет — env-only режим */
   }

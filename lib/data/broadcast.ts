@@ -8,8 +8,18 @@
  * владельца (контекст + тексты), публичные хэндлы групп и статусы кампании —
  * это операционные данные рассылки, а не приватные контакты/история. Списки
  * участников и чужие сообщения не сохраняются никогда.
+ *
+ * Все текстовые поля лежат в БД зашифрованными (`g1.`-конверт,
+ * lib/god-envelope.ts) — шифруются на записи, расшифровываются в toCampaign /
+ * toTarget. Зеркально в worker/src/broadcast-repo.ts.
  */
 import { query } from '../db'
+import {
+  godOpen,
+  godOpenNullable,
+  godSeal,
+  godSealNullable,
+} from '../god-crypto'
 
 export type CampaignStatus =
   | 'draft'
@@ -93,14 +103,14 @@ function toCampaign(r: CampaignRow): BroadcastCampaign {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     channelId: r.channel_id,
-    context: r.context,
-    baseText: r.base_text,
+    context: godOpen(r.context),
+    baseText: godOpen(r.base_text),
     status: r.status,
     minDelaySec: r.min_delay_sec,
     maxDelaySec: r.max_delay_sec,
-    captchaReply: r.captcha_reply,
+    captchaReply: godOpen(r.captcha_reply),
     consecErrors: r.consec_errors,
-    lastError: r.last_error,
+    lastError: godOpenNullable(r.last_error),
     batchId: r.batch_id,
   }
 }
@@ -109,12 +119,12 @@ function toTarget(r: TargetRow): BroadcastTarget {
   return {
     id: r.id,
     campaignId: r.campaign_id,
-    rawInput: r.raw_input,
-    resolvedPeerId: r.resolved_peer_id,
-    resolvedTitle: r.resolved_title,
-    draftText: r.draft_text,
+    rawInput: godOpen(r.raw_input),
+    resolvedPeerId: godOpenNullable(r.resolved_peer_id),
+    resolvedTitle: godOpenNullable(r.resolved_title),
+    draftText: godOpen(r.draft_text),
     status: r.status,
-    error: r.error,
+    error: godOpenNullable(r.error),
     attempts: r.attempts,
     sentAt: r.sent_at,
   }
@@ -144,8 +154,8 @@ export async function createCampaign(input: {
      RETURNING *`,
     [
       input.channelId,
-      input.context,
-      input.captchaReply ?? '',
+      godSeal(input.context),
+      godSeal(input.captchaReply ?? ''),
       input.minDelaySec ?? null,
       input.maxDelaySec ?? null,
       input.batchId ?? null,
@@ -160,7 +170,7 @@ export async function createCampaign(input: {
     const params: unknown[] = [campaign.id]
     cleaned.forEach((raw, i) => {
       values.push(`($1, $${i + 2})`)
-      params.push(raw)
+      params.push(godSeal(raw))
     })
     await query(
       `INSERT INTO broadcast_targets (campaign_id, raw_input)
@@ -216,7 +226,7 @@ export async function setCampaignBaseText(
     `UPDATE broadcast_campaigns
      SET base_text = $2, updated_at = now()
      WHERE id = $1`,
-    [id, baseText],
+    [id, godSeal(baseText)],
   )
 }
 
@@ -267,7 +277,7 @@ export async function setTargetResolved(
     `UPDATE broadcast_targets
      SET resolved_peer_id = $2, resolved_title = $3, updated_at = now()
      WHERE id = $1`,
-    [id, resolved.peerId, resolved.title],
+    [id, godSealNullable(resolved.peerId), godSealNullable(resolved.title)],
   )
 }
 
@@ -279,7 +289,7 @@ export async function setTargetDraft(
     `UPDATE broadcast_targets
      SET draft_text = $2, updated_at = now()
      WHERE id = $1`,
-    [id, draftText],
+    [id, godSeal(draftText)],
   )
 }
 

@@ -43,6 +43,11 @@ function key(): Buffer {
   return cachedKey
 }
 
+/** Raw 32-byte master key — used only to derive purpose-bound subkeys (HKDF). */
+export function encryptionKeyBytes(): Buffer {
+  return key()
+}
+
 export function encrypt(plaintext: string): string {
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key(), iv)

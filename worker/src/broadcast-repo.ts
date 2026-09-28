@@ -5,8 +5,12 @@
  * runner: claim the next due campaign, claim the next due target with
  * FOR UPDATE SKIP LOCKED (so concurrent ticks never grab the same row), and
  * settle results with pacing / backoff timestamps.
+ *
+ * Text columns are stored encrypted (`g1.` envelope, lib/god-envelope.ts):
+ * decrypted right after reading, encrypted right before writing.
  */
 import { query, one } from './db.js'
+import { godOpen, godOpenNullable, godSeal } from './god-crypto.js'
 
 export interface DueCampaign {
   id: string
@@ -34,7 +38,7 @@ export interface ClaimedTarget {
  * two sends back-to-back.
  */
 export async function listDueCampaigns(): Promise<DueCampaign[]> {
-  return query<DueCampaign>(
+  const rows = await query<DueCampaign>(
     `SELECT id, channel_id AS "channelId", base_text AS "baseText",
             min_delay_sec AS "minDelaySec", max_delay_sec AS "maxDelaySec",
             captcha_reply AS "captchaReply", consec_errors AS "consecErrors"
@@ -44,6 +48,11 @@ export async function listDueCampaigns(): Promise<DueCampaign[]> {
      ORDER BY updated_at
      LIMIT 20`,
   )
+  return rows.map((r) => ({
+    ...r,
+    baseText: godOpen(r.baseText),
+    captchaReply: godOpen(r.captchaReply),
+  }))
 }
 
 /**
@@ -72,7 +81,14 @@ export async function claimNextTarget(
                draft_text AS "draftText", attempts`,
     [campaignId],
   )
-  return row
+  if (!row) return null
+  return {
+    ...row,
+    rawInput: godOpen(row.rawInput),
+    resolvedPeerId: godOpenNullable(row.resolvedPeerId),
+    resolvedTitle: godOpenNullable(row.resolvedTitle),
+    draftText: godOpen(row.draftText),
+  }
 }
 
 /** Are there any targets left that will ever be actionable? */
@@ -104,7 +120,7 @@ export async function markTargetResolved(
     `UPDATE broadcast_targets
      SET resolved_peer_id = $2, resolved_title = $3, updated_at = now()
      WHERE id = $1`,
-    [id, peerId, title],
+    [id, godSeal(peerId), godSeal(title)],
   )
 }
 
@@ -126,7 +142,7 @@ export async function markTargetStuck(
   await query(
     `UPDATE broadcast_targets SET status = $2, error = $3, updated_at = now()
      WHERE id = $1`,
-    [id, status, error],
+    [id, status, godSeal(error)],
   )
 }
 
@@ -144,7 +160,7 @@ export async function requeueTarget(
      SET status = 'pending', error = $3,
          not_before = now() + ($2 || ' seconds')::interval, updated_at = now()
      WHERE id = $1`,
-    [id, String(Math.max(1, Math.round(backoffSec))), error],
+    [id, String(Math.max(1, Math.round(backoffSec))), godSeal(error)],
   )
 }
 
@@ -182,7 +198,7 @@ export async function bumpCampaignErrors(
      SET consec_errors = consec_errors + 1, last_error = $2, updated_at = now()
      WHERE id = $1
      RETURNING consec_errors`,
-    [id, error],
+    [id, godSeal(error)],
   )
   return row?.consec_errors ?? 0
 }
@@ -196,6 +212,6 @@ export async function stopCampaign(
     `UPDATE broadcast_campaigns
      SET status = $2, last_error = COALESCE($3, last_error), updated_at = now()
      WHERE id = $1`,
-    [id, status, error ?? null],
+    [id, status, error ? godSeal(error) : null],
   )
 }

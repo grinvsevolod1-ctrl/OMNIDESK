@@ -70,4 +70,18 @@ export async function registerNode(): Promise<void> {
 
   const { startPushDispatcher } = await import('./lib/push-dispatcher')
   startPushDispatcher()
+
+  // Encrypt any god-panel values still stored as plaintext (idempotent).
+  // Fire-and-forget: a failure is logged and retried on the next start.
+  void import('./lib/god-encrypt-backfill')
+    .then(({ backfillGodEncryption }) => backfillGodEncryption())
+    .then((counts) => {
+      if (Object.keys(counts).length > 0) {
+        log.info('god-crypto', 'backfill encrypted rows', counts)
+      }
+    })
+    .catch((err) => {
+      log.error('god-crypto', 'backfill failed', { err })
+      captureException(err, { scope: 'god-crypto.backfill' })
+    })
 }

@@ -69,6 +69,11 @@ function key(): Buffer {
   return cachedKey
 }
 
+/** Raw 32-byte master key — used only to derive purpose-bound subkeys (HKDF). */
+export function encryptionKeyBytes(): Buffer {
+  return key()
+}
+
 /** Encrypt a UTF-8 string. Returns a portable base64 envelope string. */
 export function encrypt(plaintext: string): string {
   const iv = randomBytes(12)
