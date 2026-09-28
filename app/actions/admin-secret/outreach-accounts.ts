@@ -1,8 +1,6 @@
 'use server'
 
-import { notFound } from 'next/navigation'
-import { requireAdmin } from '@/lib/auth'
-import { isGodUnlocked } from '@/lib/god-gate'
+import { requireGod } from '@/lib/god-gate'
 import { createChannel, enqueueJob } from '@/lib/data'
 import { query } from '@/lib/db'
 import {
@@ -30,11 +28,6 @@ import {
 /*  QR/телефон/код/2FA-флоу воркера работает без изменений, а сам аккаунт  */
 /*  скрыт из обычной вкладки «Telegram» (фильтр по config.outreach).       */
 /* ===================================================================== */
-
-async function requireGod(): Promise<void> {
-  await requireAdmin()
-  if (!(await isGodUnlocked())) notFound()
-}
 
 export interface OutreachConnectResult {
   ok: boolean

@@ -1,8 +1,7 @@
 'use server'
 
 import { notFound } from 'next/navigation'
-import { requireAdmin } from '@/lib/auth'
-import { isGodUnlocked } from '@/lib/god-gate'
+import { requireGod } from '@/lib/god-gate'
 import { getChannelById } from '@/lib/data'
 import { randomUUID } from 'node:crypto'
 import { generateBase, generateDistinctBases, varyForGroup } from '@/lib/broadcast/draft'
@@ -32,11 +31,6 @@ import {
  * Заблокированный/ненастроенный гейт → 404. Сознательно без audit()-следов
  * (СВЯЩЕННЫЙ ИНВАРИАНТ, AGENTS.md §4).
  */
-async function requireGod(): Promise<void> {
-  await requireAdmin()
-  if (!(await isGodUnlocked())) notFound()
-}
-
 /** Канал существует И это именно личный аккаунт. Иначе — 404. */
 async function requirePersonalChannel(channelId: string): Promise<void> {
   const channel = await getChannelById(channelId)

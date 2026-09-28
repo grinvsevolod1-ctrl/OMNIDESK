@@ -1,8 +1,6 @@
 'use server'
 
-import { notFound } from 'next/navigation'
-import { requireAdmin } from '@/lib/auth'
-import { isGodUnlocked } from '@/lib/god-gate'
+import { requireGod } from '@/lib/god-gate'
 import {
   GmtApiError,
   gmtBulkStatus,
@@ -56,11 +54,6 @@ export type {
  * Сознательно НЕТ audit()-вызовов: admin-видимый журнал не должен нести
  * следов этого модуля (СВЯЩЕННЫЙ ИНВАРИАНТ, AGENTS.md §4).
  */
-async function requireGod(): Promise<void> {
-  await requireAdmin()
-  if (!(await isGodUnlocked())) notFound()
-}
-
 export interface GmtActionResult<T> {
   ok: boolean
   message: string

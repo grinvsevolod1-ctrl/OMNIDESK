@@ -3,9 +3,7 @@
 import {
   revalidatePath,
 } from 'next/cache'
-import {
-  requireAdmin,
-} from '@/lib/auth'
+import { requireGod } from '@/lib/god-gate'
 import {
   query,
 } from '@/lib/db'
@@ -41,7 +39,7 @@ export async function secretSetManagerStatusAction(
   id: string,
   status: string,
 ): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   if (!id || (status !== 'active' && status !== 'blocked'))
     return { ok: false, message: 'Некорректный статус менеджера' }
   await updateManagerStatus(id, status as ManagerStatus)
@@ -79,7 +77,7 @@ function toIso(v: string | Date | null): string | null {
 export async function secretRevealManagerTempPasswordAction(
   managerId: string,
 ): Promise<TempPasswordResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   if (!managerId) return { ok: false, message: 'Не указан менеджер' }
   const manager = await getManagerById(managerId)
   if (!manager) return { ok: false, message: 'Менеджер не найден' }
@@ -102,7 +100,7 @@ export async function secretSetManagerTempPasswordAction(input: {
   managerId: string
   password?: string
 }): Promise<TempPasswordResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   const { managerId } = input
   if (!managerId) return { ok: false, message: 'Не указан менеджер' }
   const manager = await getManagerById(managerId)
@@ -131,7 +129,7 @@ export async function secretSetManagerTempPasswordAction(input: {
 export async function secretClearManagerTempPasswordAction(
   managerId: string,
 ): Promise<TempPasswordResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   if (!managerId) return { ok: false, message: 'Не указан менеджер' }
   const manager = await getManagerById(managerId)
   if (!manager) return { ok: false, message: 'Менеджер не найден' }
@@ -160,7 +158,7 @@ export interface ManagerTwofaInfo extends ActionResult {
 export async function secretGetManagerTwofaAction(
   managerId: string,
 ): Promise<ManagerTwofaInfo> {
-  await requireAdmin()
+  await requireGod()
   if (!managerId) return { ok: false, message: 'Не указан сотрудник' }
   const manager = await getManagerById(managerId)
   if (!manager) return { ok: false, message: 'Сотрудник не найден' }
@@ -184,7 +182,7 @@ export async function secretGetManagerTwofaAction(
 export async function secretResetManagerTwofaAction(
   managerId: string,
 ): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   if (!managerId) return { ok: false, message: 'Не указан сотрудник' }
   const manager = await getManagerById(managerId)
   if (!manager) return { ok: false, message: 'Сотрудник не найден' }
@@ -224,7 +222,7 @@ export interface ReassignConversation {
 export async function secretListManagerConversationsAction(
   managerId: string,
 ): Promise<ReassignConversation[]> {
-  await requireAdmin()
+  await requireGod()
   if (!managerId) return []
   const rows = await query<{
     id: string
@@ -263,7 +261,7 @@ export async function secretReassignConversationsAction(input: {
   conversationIds: string[]
   toManagerId: string
 }): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   const ids = (input.conversationIds ?? []).filter(Boolean)
   if (ids.length === 0)
     return { ok: false, message: 'Не выбрано ни одного диалога' }
@@ -301,7 +299,7 @@ export async function secretTransferAllConversationsAction(input: {
   fromManagerId: string
   toManagerId: string
 }): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   if (!input.fromManagerId || !input.toManagerId)
     return { ok: false, message: 'Выберите отправителя и получателя' }
   if (input.fromManagerId === input.toManagerId)
@@ -341,7 +339,7 @@ export async function secretDistributeConversationsAction(input: {
   conversationIds: string[]
   toManagerIds: string[]
 }): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   const ids = (input.conversationIds ?? []).filter(Boolean)
   const targets = [...new Set((input.toManagerIds ?? []).filter(Boolean))]
   if (ids.length === 0)
@@ -396,7 +394,7 @@ export interface TransferHistoryEntry {
 export async function secretListTransferHistoryAction(): Promise<
   TransferHistoryEntry[]
 > {
-  await requireAdmin()
+  await requireGod()
   const rows = await listAdminAudit(300)
   return rows
     .filter((r) => r.action === 'conversation.reassign')

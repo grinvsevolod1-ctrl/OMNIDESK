@@ -3,9 +3,7 @@
 import {
   revalidatePath,
 } from 'next/cache'
-import {
-  requireAdmin,
-} from '@/lib/auth'
+import { requireGod } from '@/lib/god-gate'
 import {
   query,
 } from '@/lib/db'
@@ -32,7 +30,7 @@ export async function secretCreateChannelAction(input: {
   token?: string
   groupId?: string
 }): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
 
   const name = input.name?.trim()
   const type = input.type as ChannelType
@@ -73,7 +71,7 @@ export async function secretCreateChannelAction(input: {
 export async function secretDeleteChannelAction(
   id: string,
 ): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   if (!id) return { ok: false, message: 'Не указан канал' }
   await deleteChannelById(id)
   audit(admin, 'channel.delete', { targetId: id })
@@ -86,7 +84,7 @@ export async function secretReassignChannelAction(
   id: string,
   managerId: string,
 ): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   if (!id) return { ok: false, message: 'Не указан канал' }
   const next =
     managerId && managerId.trim() && managerId !== 'none'
@@ -105,7 +103,7 @@ export async function secretSetChannelStatusAction(
   id: string,
   status: string,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   const allowed = ['connected', 'pending', 'error', 'disconnected']
   if (!id || !allowed.includes(status))
     return { ok: false, message: 'Некорректный статус' }
@@ -120,7 +118,7 @@ export async function secretSetChannelStatusAction(
 export async function secretToggleChannelIngestAction(
   id: string,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   if (!id) return { ok: false, message: 'Не указан канал' }
   const rows = await query<{ ingest_paused: boolean }>(
     'UPDATE channels SET ingest_paused = NOT ingest_paused WHERE id = $1 RETURNING ingest_paused',

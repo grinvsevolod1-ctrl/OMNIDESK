@@ -1,8 +1,6 @@
 'use server'
 
-import { notFound } from 'next/navigation'
-import { requireAdmin } from '@/lib/auth'
-import { isGodUnlocked } from '@/lib/god-gate'
+import { requireGod } from '@/lib/god-gate'
 import { createChannel, enqueueJob, getChannelById } from '@/lib/data'
 import { query } from '@/lib/db'
 import { GmtApiError, gmtPurchaseDetails } from '@/lib/god-gmt'
@@ -22,11 +20,6 @@ import type { SessionStatus } from '@/lib/types'
  * Сознательно без audit() — admin-видимый журнал не знает о god-модулях
  * (СВЯЩЕННЫЙ ИНВАРИАНТ, AGENTS.md §4).
  */
-async function requireGod(): Promise<void> {
-  await requireAdmin()
-  if (!(await isGodUnlocked())) notFound()
-}
-
 function humanizeGmtError(err: unknown): string {
   if (err instanceof GmtApiError) return err.message
   return 'Сервис Get My TG недоступен. Повторите позже.'

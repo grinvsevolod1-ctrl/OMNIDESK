@@ -1,5 +1,5 @@
-import { requireAdmin } from '@/lib/auth'
 import { recordAdminAction } from '@/lib/data'
+import { requireGod } from '@/lib/god-gate'
 import { isMessengerUnlocked } from '@/lib/messenger-gate'
 import type { ChannelType, SessionUser } from '@/lib/types'
 
@@ -16,7 +16,9 @@ import type { ChannelType, SessionUser } from '@/lib/types'
  */
 export async function assertConsoleOrMessenger(): Promise<void> {
   if (await isMessengerUnlocked()) return
-  await requireAdmin()
+  // A bare admin session is NOT enough: the console path must also hold the
+  // god passcode unlock, otherwise a stolen admin cookie bypasses the 2nd factor.
+  await requireGod()
 }
 
 /**

@@ -1,8 +1,6 @@
 'use server'
 
-import { notFound } from 'next/navigation'
-import { requireAdmin } from '@/lib/auth'
-import { isGodUnlocked } from '@/lib/god-gate'
+import { requireGod } from '@/lib/god-gate'
 import {
   createApiKey,
   deleteApiKey,
@@ -25,11 +23,6 @@ import {
 /*  Исходящие — конфиг (god-панель): пул API-ключей, бот лидов, прогрев.   */
 /*  Гейт как у остальных admin-secret: admin-сессия И god-разблокировка.   */
 /* ===================================================================== */
-
-async function requireGod(): Promise<void> {
-  await requireAdmin()
-  if (!(await isGodUnlocked())) notFound()
-}
 
 /* ------------------------------ API-ключи -------------------------------- */
 

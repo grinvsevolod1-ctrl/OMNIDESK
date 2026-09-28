@@ -3,9 +3,7 @@
 import {
   revalidatePath,
 } from 'next/cache'
-import {
-  requireAdmin,
-} from '@/lib/auth'
+import { requireGod } from '@/lib/god-gate'
 import {
   AD_METRIC_KEYS,
   AD_METRIC_LABELS,
@@ -35,7 +33,7 @@ export async function secretSetAdOverrideAction(
   metric: string,
   value: number,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   if (!accountId) return { ok: false, message: 'Кабинет не найден.' }
   if (!AD_METRIC_KEYS.includes(metric as AdMetricKey)) {
     return { ok: false, message: 'Неизвестная метрика.' }
@@ -57,7 +55,7 @@ export async function secretClearAdOverrideAction(
   accountId: string,
   metric: string,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   if (!accountId) return { ok: false, message: 'Кабинет не найден.' }
   if (!AD_METRIC_KEYS.includes(metric as AdMetricKey)) {
     return { ok: false, message: 'Неизвестная метрика.' }
@@ -75,7 +73,7 @@ export async function secretClearAdOverrideAction(
 export async function secretSyncAdAccountAction(
   accountId: string,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   if (!accountId) return { ok: false, message: 'Кабинет не найден.' }
   const result = await syncAdAccount(accountId)
   revalidatePath(ADMIN_PATH)

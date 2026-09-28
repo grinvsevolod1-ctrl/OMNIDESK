@@ -1,4 +1,5 @@
 import 'server-only'
+import { createHash } from 'crypto'
 import { safeEqual } from '@/lib/safe-equal'
 import { jwtVerify, SignJWT } from 'jose'
 import { cookies } from 'next/headers'
@@ -33,9 +34,21 @@ export function verifyMessengerPasscode(passcode: string): boolean {
   return safeEqual(passcode, MESSENGER_PASSWORD)
 }
 
+/**
+ * Truncated SHA-256 of the current passcode, baked into every token. Rotating
+ * MESSENGER_PASSWORD changes it, so every previously unlocked device is logged
+ * out immediately instead of staying in for the remaining 30 days.
+ */
+function passcodeFingerprint(): string {
+  return createHash('sha256')
+    .update(`messenger:${MESSENGER_PASSWORD}`)
+    .digest('hex')
+    .slice(0, 16)
+}
+
 /** Mint the signed unlock token to store in the cookie. */
 export async function signMessengerToken(): Promise<string> {
-  return new SignJWT({ scope: 'messenger' })
+  return new SignJWT({ scope: 'messenger', pfp: passcodeFingerprint() })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime(`${MESSENGER_MAX_AGE}s`)
@@ -47,12 +60,13 @@ export async function signMessengerToken(): Promise<string> {
  * the ONLY factor for the messenger — no admin/god fallback here.
  */
 export async function isMessengerUnlocked(): Promise<boolean> {
+  if (!isMessengerPasswordConfigured()) return false
   const store = await cookies()
   const token = store.get(MESSENGER_COOKIE)?.value
   if (!token) return false
   try {
     const { payload } = await jwtVerify(token, getAuthSecret())
-    return payload.scope === 'messenger'
+    return payload.scope === 'messenger' && payload.pfp === passcodeFingerprint()
   } catch {
     return false
   }

@@ -3,7 +3,9 @@ import { createHash } from 'crypto'
 import { safeEqual } from '@/lib/safe-equal'
 import { jwtVerify, SignJWT } from 'jose'
 import { cookies } from 'next/headers'
+import { notFound } from 'next/navigation'
 import { requireAdmin } from './auth'
+import type { SessionUser } from './types'
 import { getAuthSecret } from './session'
 
 /**
@@ -123,6 +125,19 @@ export async function isGodUnlocked(): Promise<boolean> {
  *   const denied = await guardGodApi()
  *   if (denied) return denied
  */
+/**
+ * Guard for EVERY god-panel server action. A server action is its own POST
+ * endpoint and can be invoked without ever rendering the page, so each one must
+ * re-check BOTH factors: an admin session AND the passcode unlock cookie.
+ * Denial is `notFound()` — indistinguishable from a missing route. Enforced for
+ * all exported actions by `app/actions/admin-secret/require-god.test.ts`.
+ */
+export async function requireGod(): Promise<SessionUser> {
+  const admin = await requireAdmin()
+  if (!(await isGodUnlocked())) notFound()
+  return admin
+}
+
 export async function guardGodApi(): Promise<Response | null> {
   await requireAdmin()
   if (!(await isGodUnlocked())) {

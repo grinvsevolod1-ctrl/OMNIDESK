@@ -3,10 +3,10 @@
 import {
   endImpersonation,
   readImpersonation,
-  requireAdmin,
   roleHome,
   startImpersonation,
 } from '@/lib/auth'
+import { requireGod } from '@/lib/god-gate'
 import { getManagerAuthState, getManagerById } from '@/lib/data'
 import type { AccountRole, SessionUser } from '@/lib/types'
 import { audit, type ActionResult } from './shared'
@@ -39,7 +39,7 @@ const ROLE_LABEL: Record<AccountRole, string> = {
 export async function startImpersonationAction(
   accountId: string,
 ): Promise<ImpersonationStartResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   if (!accountId) return { ok: false, message: 'Не указан аккаунт' }
 
   const account = await getManagerById(accountId)

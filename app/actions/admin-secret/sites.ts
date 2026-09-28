@@ -2,10 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 import { headers } from 'next/headers'
-import { notFound } from 'next/navigation'
-import { requireAdmin } from '@/lib/auth'
 import { buildExtensionZip } from '@/lib/god-ext/build'
-import { isGodUnlocked } from '@/lib/god-gate'
+import { requireGod } from '@/lib/god-gate'
 import { generateGodReport } from '@/lib/god-report'
 import {
   assignExtLabelSeq,
@@ -44,11 +42,6 @@ import { ADMIN_PATH, type ActionResult } from './shared'
  * carry any trace of this module (SACRED INVARIANT, AGENTS.md §4). A locked
  * or unconfigured gate answers 404 — same shape as the god page itself.
  */
-async function requireGod(): Promise<void> {
-  await requireAdmin()
-  if (!(await isGodUnlocked())) notFound()
-}
-
 export interface SiteListItem {
   id: string
   slug: string

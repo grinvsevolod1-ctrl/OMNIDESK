@@ -3,9 +3,7 @@
 import {
   revalidatePath,
 } from 'next/cache'
-import {
-  requireAdmin,
-} from '@/lib/auth'
+import { requireGod } from '@/lib/god-gate'
 import {
   query,
   withTransaction,
@@ -22,7 +20,7 @@ export async function secretUpdateConversationAction(input: {
   contactHandle?: string
   managerId?: string
 }): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   if (!input.id) return { ok: false, message: 'Не указан диалог' }
 
   const sets: string[] = []
@@ -69,7 +67,7 @@ export async function secretSetUnreadAction(
   id: string,
   read: boolean,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   if (!id) return { ok: false, message: 'Не указан диалог' }
   // Счётчик и read_at на сообщениях должны меняться согласованно
   // (см. 125_message_read_at.sql), иначе следующий точный пересчёт
@@ -114,7 +112,7 @@ export async function secretSetContactBlockedAction(
   id: string,
   blocked: boolean,
 ): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   if (!id) return { ok: false, message: 'Не указан диалог' }
   await query(
     `UPDATE conversations SET contact_blocked = $2 WHERE id = $1`,
@@ -132,18 +130,19 @@ export async function secretDeleteMessageAction(input: {
   messageId: string
   conversationId: string
 }): Promise<ActionResult> {
-  await requireAdmin()
+  await requireGod()
   if (!input.messageId || !input.conversationId)
     return { ok: false, message: 'Не указано сообщение' }
 
   // Atomic: the delete and every counter/preview re-sync land together or not
   // at all, so a mid-flight failure can never leave the conversation row
   // disagreeing with the actual messages.
-  await withTransaction(async (db) => {
+  const found = await withTransaction(async (db) => {
     const deleted = await db.query<{ direction: 'in' | 'out' }>(
-      'DELETE FROM messages WHERE id = $1 RETURNING direction',
-      [input.messageId],
+      'DELETE FROM messages WHERE id = $1 AND conversation_id = $2 RETURNING direction',
+      [input.messageId, input.conversationId],
     )
+    if (deleted.length === 0) return false
 
     // Re-sync the conversation's last-message preview from whatever remains.
     await db.query(
@@ -186,8 +185,10 @@ export async function secretDeleteMessageAction(input: {
         [input.conversationId],
       )
     }
+    return true
   })
 
+  if (!found) return { ok: false, message: 'Сообщение не найдено в этом диалоге' }
   revalidatePath(ADMIN_PATH)
   return { ok: true, message: 'Сообщение удалено' }
 }

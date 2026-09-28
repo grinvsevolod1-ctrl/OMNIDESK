@@ -7,7 +7,7 @@ import {
   listAllChannels,
   setTelegramExclusiveSession,
 } from '@/lib/data'
-import { requireAdmin } from '@/lib/auth'
+import { requireGod } from '@/lib/god-gate'
 import { audit, ADMIN_PATH } from './shared'
 import type { ActionResult } from './shared'
 
@@ -20,7 +20,7 @@ import type { ActionResult } from './shared'
 export async function secretGetTelegramExclusiveAction(): Promise<
   ActionResult & { enabled: boolean }
 > {
-  await requireAdmin()
+  await requireGod()
   const enabled = await getTelegramExclusiveSession()
   return { ok: true, message: '', enabled }
 }
@@ -34,7 +34,7 @@ export async function secretGetTelegramExclusiveAction(): Promise<
 export async function secretKickForeignSessionsAction(
   channelId?: string,
 ): Promise<ActionResult & { queued: number }> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
 
   const channels = await listAllChannels()
   const targets = channels.filter(
@@ -91,7 +91,7 @@ export async function secretKickForeignSessionsAction(
 export async function secretSetTelegramExclusiveAction(
   enabled: boolean,
 ): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   await setTelegramExclusiveSession(enabled)
   audit(admin, 'telegram_security.exclusive_session.set', { detail: { enabled } })
   revalidatePath(ADMIN_PATH)

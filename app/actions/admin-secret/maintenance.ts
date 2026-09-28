@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { requireAdmin } from '@/lib/auth'
+import { requireGod } from '@/lib/god-gate'
 import { setFake502 } from '@/lib/data'
 import { ADMIN_PATH, audit, type ActionResult } from './shared'
 
@@ -14,7 +14,7 @@ import { ADMIN_PATH, audit, type ActionResult } from './shared'
 export async function secretSetFake502Action(
   enabled: boolean,
 ): Promise<ActionResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
 
   await setFake502(enabled)
   audit(admin, enabled ? 'maintenance.fake502.on' : 'maintenance.fake502.off', {

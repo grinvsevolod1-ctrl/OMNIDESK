@@ -1,6 +1,6 @@
 'use server'
 
-import { requireAdmin } from '@/lib/auth'
+import { requireGod } from '@/lib/god-gate'
 import { query } from '@/lib/db'
 import type { ChannelType } from '@/lib/types'
 import { ADMIN_PATH, audit, type ActionResult } from './shared'
@@ -97,7 +97,7 @@ const SEARCH_LIMIT = 300
 export async function secretSearchConversationsAction(
   filters: DialogSearchFilters,
 ): Promise<DialogSearchResult> {
-  await requireAdmin()
+  await requireGod()
 
   const where: string[] = []
   const params: unknown[] = []
@@ -283,7 +283,7 @@ export interface HardDeleteResult extends ActionResult {
 export async function secretHardDeleteConversationsAction(input: {
   conversationIds: string[]
 }): Promise<HardDeleteResult> {
-  const admin = await requireAdmin()
+  const admin = await requireGod()
   const ids = Array.from(new Set((input.conversationIds ?? []).filter(Boolean)))
   if (ids.length === 0)
     return { ok: false, message: 'Не выбрано ни одного диалога' }

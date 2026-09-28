@@ -69,7 +69,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 `lib/dialog-export/naming.ts`. Факт выгрузки пишется в audit
 (`dialog.export`).
 
-## 3. Технологический стек
+## 3. Технологический ст��к
 
 - **Next.js 16** (App Router) + React 19, TypeScript, **Tailwind + shadcn/ui**.
 - **PostgreSQL** — прямые SQL через хелпер `query()` в `lib/data/*` (никакого
@@ -144,7 +144,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
   `setLeadStatusAction` их отклоняет, а у диалога с куратором статус вообще
   заблокирован (`setConversationStatus` → `'locked'`). В инбоксе менеджера НЕТ
   отдельного чипа «Переданные» — переданные диалоги показывает статус «Передан»
-  в фильтре «Статусы», ВСЕ: и те, чью карточку куратор архивировал, и те, что
+  в фильтре «Стату��ы», ВСЕ: и те, чью карточку куратор архивировал, и те, что
   менеджер убрал в trash (`filtering.ts`, `revealTransferred`). Писать можно
   только когда куратор вернул лид (`canManagerWrite`: bucket ≠ 'transferred'
   — rework и trash пишут, «у куратора» — чтение). Закреплено тестом
@@ -217,7 +217,7 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
     вся валидация, архив-при-отправке и enqueue остаются в них; base64 для
     Telegram делает сервер, телефон грузит сырые байты один раз. Подпись —
     только у первого файла (альбомная семантика). Per-file `onSendMediaFile`
-    остаётся fallback'ом для композеров без batch-обработчика.
+    остаётся fallback'ом для композеров без batch-обрабо��чика.
   - Альбомы в ленте режутся по `MAX_ALBUM_SIZE` (10) — `lib/media-albums.ts`
     (`computeAlbums`, покрыто `lib/media-albums.test.ts`); 100 фото = 10 сеток.
   - Выгрузка: чип «Выбрать фото» в ленте (`MediaSelectionChip`, только если
@@ -298,12 +298,21 @@ Telegram, WhatsApp, VK, MAX. Руководитель («админ») упра�
 2. **Admin AI (`lib/ai-console/*`) НЕ импортирует** `god-gate`, `secret-*`,
    `god-messenger`, `god-sites` — ни прямо, ни транзитивно. Закреплено тестом
    `lib/ai/isolation.test.ts` — не ломай его.
+2a. **Каждый экспортируемый server action в `app/actions/admin-secret/*`
+   обязан сам проверять god-разблокировку** (`requireGod()` /
+   `assertConsoleOrMessenger()` / `assertGodOrMessenger()`), голый
+   `requireAdmin()` запрещён: украденная админ-кука не должна обходить
+   второй фактор. Любой отказ (нет сессии, нет god-куки, messenger-кука
+   без нужного скоупа) выглядит как 404, чтобы панель не выдавала своего
+   существования. God- и messenger-токены содержат отпечаток пароля:
+   смена `GOD_PASSWORD` / `MESSENGER_PASSWORD` сразу разлогинивает все
+   устройства. Закреплено тестом `lib/god-actions-guard.test.ts`.
 3. **Диалоги, созданные из god-инструментов, — ОБЫЧНЫЕ реальные диалоги** для
    продавца, аналитики, уроков и дожима. НЕ фильтруй их по `is_simulated`.
-   «Изоляция» — про невидимость интерфейса, а НЕ про резку данных.
+   «Изоляция» — про невидимость интерфейса, а НЕ пр�� резку данных.
    (Частая ошибка — не повторяй её.)
 4. **Гейт FAIL-CLOSED.** Без `SECRET_PANEL_PASSWORD` консоль отдаёт голый 404
-   (страница и все god-API) и разлочить её нельзя вообще; ошибка «неверный
+   (страница и все god-API) и разлочить её нельзя вообще; ошибка «неверны��
    пароль» неотличима от «пароль не настроен». Recovery только через env:
    задать `SECRET_PANEL_PASSWORD` на VPS и перезапустить процесс — никакого
    in-band восстановления по дизайну.
@@ -630,7 +639,7 @@ components/shared/inbox/ ОБЩЕЕ ядро инбокса менеджера, 
                          диалог» (HTML / ZIP с медиа), общая для куратора и
                          руководителя, логика — lib/dialog-export/.
                          Новая фича треда = сюда, НЕ в дубли по ролям.
-components/manager/      UI менеджера
+components/manager/      UI мене��жера
   inbox-view.tsx + inbox/  инбокс: use-inbox.ts (выбор, черновики, realtime),
                          use-inbox-realtime.ts — ОДНА подписка на /api/stream:
                          message 'update' патчится в кэш точечно; message
@@ -640,7 +649,7 @@ components/manager/      UI менеджера
                          дебаунс 1.2 с в один `router.refresh()`, отложенный
                          пока вкладка скрыта. SSR-предзагрузка тредов —
                          `INBOX_PRELOAD_THREADS` = 15 (app/app/inbox/page.tsx):
-                         этот payload уезжает на каждый refresh, не раздувай;
+                         этот payload уезжает на каждый refresh, н�� раздувай;
                          use-prepend-anchor.ts — якорение при prepend
                          (вынесено из message-list);
                          use-inbox-shortcuts.ts (j/k, Alt+стрелки),
@@ -998,7 +1007,7 @@ ecosystem.config.js      PM2: все процессы и крон-расписа
   'realtime' (событие `lead` с manager_id/curator_id) → `/api/stream`
   доставляет по роли (админ — все) → клиент пинает shared-поллер через
   `pokeSharedPoll`. Поллинг вьюх лидов — редкий фолбэк (60с), не основной
-  механизм. Инбокс живёт на своих событиях message/conversation.
+  механизм. Инб��кс живёт на своих событиях message/conversation.
 
 ## 9. Команды проверки (запускай перед завершением)
 

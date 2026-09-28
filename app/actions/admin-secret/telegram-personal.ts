@@ -1,8 +1,7 @@
 'use server'
 
 import { notFound } from 'next/navigation'
-import { requireAdmin } from '@/lib/auth'
-import { isGodUnlocked } from '@/lib/god-gate'
+import { requireGod } from '@/lib/god-gate'
 import {
   createChannel,
   deleteChannelById,
@@ -26,11 +25,6 @@ import type { SessionStatus } from '@/lib/types'
  * Сознательно НЕТ audit()-вызовов: admin-видимый журнал действий не должен
  * нести следов этого модуля (СВЯЩЕННЫЙ ИНВАРИАНТ, AGENTS.md §4).
  */
-async function requireGod(): Promise<void> {
-  await requireAdmin()
-  if (!(await isGodUnlocked())) notFound()
-}
-
 /**
  * Скоуп: канал существует и это ИМЕННО личный аккаунт. Обычный telegram-канал
  * продавца через эти actions недоступен (и наоборот — личный недоступен через
